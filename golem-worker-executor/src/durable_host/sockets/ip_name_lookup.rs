@@ -18,7 +18,9 @@ use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
-use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
+use crate::durable_host::durability::{
+    CustomInvocationContext, HostFailureKind, InternalRetryResult,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
@@ -69,6 +71,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
+        let custom_invocation =
+            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+                .map_err(SocketError::trap)?;
         // `ReadRemote` with a one-shot/loop in-function retry. The eager `Start` captures the
         // request name; on replay a committed `Start` without its `End` is re-executable (read), so
         // the live side effect runs from a single shared block for both the live and
@@ -146,6 +151,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result.result {
             Ok(addresses) => {
+                self.link_resolved_addresses(
+                    custom_invocation.as_deref(),
+                    &name,
+                    addresses.0.iter().cloned().map(std::net::IpAddr::from),
+                )
+                .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
                 let addresses = addresses.0.into_iter().map(|a| a.into()).collect();
                 let stream = ResolveAddressStream::from_addresses(addresses);
                 Ok(self.table().push(stream)?)

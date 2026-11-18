@@ -100,6 +100,9 @@
       "$ref": "#/definitions/agent.oplog-export-coverage"
     },
     {
+      "$ref": "#/definitions/agent.oplog-page"
+    },
+    {
       "$ref": "#/definitions/agent.plugin-toggle"
     },
     {
@@ -260,6 +263,9 @@
     },
     {
       "$ref": "#/definitions/tool.invoke-session"
+    },
+    {
+      "$ref": "#/definitions/tool.invoke-help"
     },
     {
       "$ref": "#/definitions/deploy.environment-setup-plan"
@@ -2114,9 +2120,14 @@
         },
         "cursors": {
           "type": "object",
+          "description": "Without `--page`: the scan cursor of each component that has more agents. Pass one back as `--scan-cursor` with that component selected.",
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "cursor": {
+          "type": "string",
+          "description": "With `--page`: the cursor of the next page, which names the component and its scan cursor. Pass it back unchanged as `--scan-cursor` with `--page`. Absent on the last page."
         }
       },
       "additionalProperties": false
@@ -3038,6 +3049,32 @@
       },
       "additionalProperties": false
     },
+    "agent.oplog-page": {
+      "type": "object",
+      "description": "One page of an agent's oplog, emitted by `golem agent oplog --page`. Each entry is the `agent.oplog` document that `golem agent oplog` streams for it. A page can be empty and still have a cursor, when the server's scan budget ended a search before a match.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent oplog",
+      "required": [
+        "$type",
+        "entries"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-page"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/agent.oplog"
+          }
+        },
+        "cursor": {
+          "type": "string",
+          "description": "The cursor of the next page, present when the oplog has entries after this page. Pass it back unchanged as `--cursor` with the same `--query`."
+        }
+      },
+      "additionalProperties": false
+    },
     "OmittedOplogEntryContent": {
       "type": "object",
       "description": "An oplog entry that the oplog page omitted because its encoded form is larger than the server limit. `golem agent oplog` emits it with `--omit-payloads`, or when it cannot read the full entry.",
@@ -3066,9 +3103,13 @@
     },
     "agent.plugin-toggle": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent plugin-toggle`.",
+      "description": "Single structured output document emitted by `golem agent activate-plugin` and `golem agent deactivate-plugin`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent plugin-toggle",
+      "x-golem-command": "agent activate-plugin",
+      "x-golem-commands": [
+        "agent activate-plugin",
+        "agent deactivate-plugin"
+      ],
       "required": [
         "$type",
         "activated",
@@ -3097,10 +3138,10 @@
     },
     "agent.redeploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent redeploy`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
+      "description": "Single structured output document emitted by `golem redeploy-agents` and `golem component redeploy-agents`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "agent redeploy",
-      "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
+      "x-golem-command": "redeploy-agents",
+      "x-golem-commands": ["redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
@@ -6569,6 +6610,7 @@
         { "$ref": "#/definitions/PublicOplogEntryToolAttachmentControl" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationStarted" },
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
+        { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFailed" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
         { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
@@ -6580,6 +6622,7 @@
         { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryFailedUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryGrowMemory" },
+        { "$ref": "#/definitions/PublicOplogEntryMemorySizeReconciled" },
         { "$ref": "#/definitions/PublicOplogEntryCreateResource" },
         { "$ref": "#/definitions/PublicOplogEntryDropResource" },
         { "$ref": "#/definitions/PublicOplogEntryLog" },
@@ -6742,6 +6785,18 @@
       },
       "additionalProperties": false
     },
+    "PublicOplogEntryAgentInvocationFailed": {
+      "type": "object",
+      "required": ["type", "timestamp", "invocationId", "error", "startIndex"],
+      "properties": {
+        "type": { "const": "AgentInvocationFailed" },
+        "timestamp": { "type": "string" },
+        "invocationId": { "type": "string" },
+        "error": { "type": "string" },
+        "startIndex": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "PublicOplogTimestampOnlyEntry": {
       "type": "object",
       "required": ["type", "timestamp"],
@@ -6805,6 +6860,12 @@
       "type": "object",
       "required": ["type", "timestamp", "delta"],
       "properties": { "type": { "const": "GrowMemory" }, "timestamp": { "type": "string" }, "delta": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntryMemorySizeReconciled": {
+      "type": "object",
+      "required": ["type", "timestamp", "bytes"],
+      "properties": { "type": { "const": "MemorySizeReconciled" }, "timestamp": { "type": "string" }, "bytes": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCreateResource": {
@@ -8553,6 +8614,18 @@
         "target": { "$ref": "#/definitions/PublicNativeToolTarget" },
         "idempotencyKey": { "type": "string" },
         "result": { "$ref": "#/definitions/PublicToolInvocationResult" }
+      },
+      "additionalProperties": false
+    },
+    "tool.invoke-help": {
+      "type": "object",
+      "description": "Help of a native external tool or of one of its subcommands, which `golem tool invoke` returns for `-- --help` instead of invoking the tool.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "help"],
+      "properties": {
+        "$type": { "const": "tool.invoke-help" },
+        "help": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -10674,6 +10747,10 @@
       "rustType": "AgentOplogExportCoverageView"
     },
     {
+      "type": "agent.oplog-page",
+      "rustType": "AgentOplogPageView"
+    },
+    {
       "type": "agent.plugin-toggle",
       "rustType": "AgentPluginToggleResult"
     },
@@ -10885,6 +10962,10 @@
     {
       "type": "tool.invoke-session",
       "rustType": "ToolInvocationSessionView"
+    },
+    {
+      "type": "tool.invoke-help",
+      "rustType": "ToolInvokeHelpView"
     },
     {
       "type": "deploy.environment-setup-plan",

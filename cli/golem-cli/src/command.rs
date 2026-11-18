@@ -22,6 +22,7 @@ use crate::command::card::CardSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
+use crate::command::mcp::McpSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
 use crate::command::resource_definition::ResourceDefinitionSubcommand;
@@ -90,6 +91,7 @@ impl GolemCliCommand {
                     vec!["clean"],
                     vec!["completion"],
                     vec!["generate-bridge"],
+                    vec!["mcp"],
                     vec!["new"],
                     vec!["output-schema"],
                     vec!["plugin"],
@@ -995,6 +997,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ResourceDefinitionSubcommand,
     },
+    /// Serve Golem management over the Model Context Protocol (MCP)
+    Mcp {
+        #[clap(subcommand)]
+        subcommand: McpSubcommand,
+    },
     /// Print the structured CLI output JSON schema to stdout
     #[command(after_help = crate::command_examples::OUTPUT_SCHEMA)]
     OutputSchema {
@@ -1623,6 +1630,7 @@ pub mod worker {
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
+    use golem_common::model::oplog::OplogCursor;
     use uuid::Uuid;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1772,13 +1780,28 @@ pub mod worker {
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
             ///
+            /// With `--page`, pass back the `cursor` of the previous page instead, with the
+            /// same component selection and filters.
+            ///
             /// Mutually exclusive with `--refresh`.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
             /// The maximum number of returned agents; returns all values if not specified.
             /// When multiple components are selected, the limit is applied separately.
+            /// With `--page`, the limit is the size of the page; see `--page` for Redis.
             #[arg(long, short)]
             max_count: Option<u64>,
+            /// Read one page of agents: at most `--max-count` agents (default: the HTTP batch
+            /// size, 50), from the selected components in the order of their names. On a server
+            /// whose indexed storage is Redis, `--max-count` is a target: Redis `SCAN` treats its
+            /// count as a hint, so a page can have more agents. The output has the `cursor` of the
+            /// next page when there can be more agents; pass it back as `--scan-cursor`. A page
+            /// ends early when the server's scan budget ends a component's scan, so a page with a
+            /// cursor can have fewer agents, or none.
+            ///
+            /// Mutually exclusive with `--refresh`.
+            #[arg(long, conflicts_with = "refresh")]
+            page: bool,
             /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
@@ -1861,14 +1884,15 @@ pub mod worker {
             agent_id: AgentIdArgs,
         },
         /// Queries and streams an agent's full oplog.
-        /// Structured formats emit one output document per oplog entry.
+        /// Structured formats emit one output document per oplog entry; with `--page`, one
+        /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
         /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query.
-            #[arg(long, conflicts_with = "query")]
+            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query and --cursor.
+            #[arg(long, conflicts_with_all = ["query", "cursor"])]
             from: Option<u64>,
             #[arg(
                 long,
@@ -1884,6 +1908,18 @@ pub mod worker {
             /// response. By default the CLI reads each omitted entry in full.
             #[arg(long, conflicts_with = "obfuscate")]
             omit_payloads: bool,
+            /// Read one page of at most the HTTP batch size (50) entries and print it as one
+            /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
+            /// entries after the page. A search page ends early when the server's scan budget ends
+            /// the search, so a page with a cursor can have fewer entries, or none.
+            #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
+            page: bool,
+            /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
+            /// with the same `--query`. The cursor is opaque; use `--from` to start at an oplog
+            /// index. A cursor of another query, or one past the end of the oplog, is refused as
+            /// stale (`STALE_CURSOR`).
+            #[arg(long, requires = "page")]
+            cursor: Option<OplogCursor>,
             #[command(flatten)]
             viewer: OplogViewerArgs,
             #[command(flatten)]
@@ -1987,6 +2023,33 @@ pub mod worker {
             #[arg(long)]
             plugin_priority: Option<i32>,
         },
+    }
+}
+
+pub mod mcp {
+    use clap::Subcommand;
+
+    #[derive(Debug, Subcommand)]
+    pub enum McpSubcommand {
+        /// Serve the management commands as MCP tools over stdio, for coding agents.
+        ///
+        /// This is the management server: one tool for each `golem agent` command and each
+        /// other management command that does not need a terminal, such as `golem agent list`
+        /// and `golem agent oplog`. A tool takes the command's arguments, runs the command as the
+        /// CLI does, with the CLI's signed-in identity, and returns the command's JSON output.
+        /// It is not the application MCP server that a deployment serves for its agents' tools.
+        ///
+        /// The server works in one environment, the one this command selects, for example with
+        /// `golem -E app/prod mcp serve` or from the application manifest. No tool takes an
+        /// environment, and a tool refuses an agent or component of another environment. Start
+        /// one server for each environment.
+        ///
+        /// The tool of a destructive command takes `confirm`, which confirms that one call as
+        /// `--yes` does on the CLI. Neither `--yes` nor `cli.autoConfirm` confirms a tool call.
+        /// stdin and stdout carry JSON-RPC; logs and progress go to stderr, and the server never
+        /// asks a question.
+        #[command(after_help = crate::command_examples::MCP_SERVE)]
+        Serve,
     }
 }
 
@@ -3398,10 +3461,16 @@ mod test {
     }
 
     #[test]
-    fn oplog_omit_payloads_conflicts_with_obfuscate() {
-        let error = parse_oplog(&["--omit-payloads", "--obfuscate"]).unwrap_err();
-        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
-        assert!(parse_oplog(&["--omit-payloads"]).is_ok());
+    fn oplog_omit_payloads_and_page_conflict_with_obfuscate() {
+        for flag in ["--omit-payloads", "--page"] {
+            let error = parse_oplog(&[flag, "--obfuscate"]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{flag}"
+            );
+            assert!(parse_oplog(&[flag]).is_ok(), "{flag}");
+        }
     }
 
     #[test]

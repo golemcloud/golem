@@ -31,8 +31,12 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::application::{Application, ApplicationId};
-use golem_common::model::card::parse_polymorphic_permission;
+use golem_common::model::card::owner::{EmptyOwnerPattern, PolymorphicEmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{
+    NetworkResourcePattern, PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
+    ResourcePattern, parse_polymorphic_permission,
+};
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
@@ -83,10 +87,27 @@ pub fn default_test_agent_initial_permissions_for_account(
     })
 }
 
+/// The default initial card of agents, plus grants that name the loopback addresses: test peers
+/// listen there, and the default `network` wildcard reaches only public addresses over raw sockets.
 pub fn default_test_agent_initial_permissions(
     recipient: RecipientPattern,
 ) -> AgentTypeInitialPermissions {
-    AgentTypeInitialPermissions::default_for_recipient(recipient)
+    let mut permissions = AgentTypeInitialPermissions::default_for_recipient(recipient.clone());
+    for loopback in ["127.0.0.1", "[::1]"] {
+        permissions
+            .lower_bound
+            .positive
+            .push(PolymorphicPermissionPattern::Network(
+                PolymorphicClassPermissionPattern {
+                    owner: PolymorphicEmptyOwnerPattern::Concrete(EmptyOwnerPattern),
+                    recipient: recipient.clone(),
+                    verb: None,
+                    resource: NetworkResourcePattern::parse_resource(loopback)
+                        .expect("loopback network grants are valid"),
+                },
+            ));
+    }
+    permissions
 }
 
 pub(crate) fn default_agent_type_provision_config_creation_for_account(
@@ -1294,7 +1315,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         ),
         error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
         | WorkerExecutorError::ComponentServiceRefused { .. }
-        | WorkerExecutorError::OplogFailed { .. }) => error.to_string(),
+        | WorkerExecutorError::OplogFailed { .. }
+        | WorkerExecutorError::StaleCursor { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,

@@ -23,7 +23,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query`. |
+| `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query` or `--cursor`. |
 | `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
 | `--omit-payloads` | Show the entries that oplog pages omit only by their type, timestamp and size. Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default), for example an entry with a large snapshot, invocation input or host call response. Without this flag the CLI reads each omitted entry in full. |
 | `--serve` | Serve an interactive HTML viewer on a local port and open it in the default browser. The viewer loads the oplog page by page through the API, runs Lucene queries on the server and can follow a running agent, so it works for oplogs of any size. `--from` and `--query` set the initial position and query. Runs until interrupted. |
@@ -36,8 +36,10 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--keep-shape` | Requires `--obfuscate`. Show discriminants, presence, and list, map and byte lengths; the values stay tokens. Leaks whether an optional value was present, which case occurred, item counts and payload sizes; map entries are sorted by value, so their order can show which token stands for which value. |
 | `--keep-error-text` | Requires `--obfuscate`. Keep the free text of error messages. Leaks any customer value that the text contains, such as a URL, an input value or a file name. |
 | `--max-entry-bytes <N>` | Requires `--obfuscate`. Read an entry that the oplog page omitted only when its size is at most `N` bytes (default 16777216). A larger entry stays omitted with its size. |
+| `--page` | Read one page of at most 50 entries (the HTTP batch size) and print it as one `agent.oplog-page` document, with a `cursor` when the oplog has entries after the page. A search page can end early at the server's scan budget, so it can have fewer entries, or none, and still have a cursor. Cannot be combined with `--html`, `--serve` or `--obfuscate`. |
+| `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, or one past the end of the oplog, with `STALE_CURSOR`. |
 
-If neither `--from` nor `--query` is provided, the entire oplog is streamed.
+If neither `--from` nor `--query` is provided, the entire oplog is streamed. Without `--page`, the CLI follows the cursors to the end of the oplog.
 
 ### Obfuscated export
 
@@ -55,12 +57,12 @@ Rules:
 - An omitted `Create` entry above `--max-entry-bytes` fails the export. Export again with a larger limit.
 - Agent references are `agent:<token>`, and the report holds only the named agent.
 - Tokens are equal only inside one export or one `--serve` session. Do not compare two reports by their tokens.
-- The `--keep-*` flags and `--max-entry-bytes` need `--obfuscate`. `--omit-payloads` cannot be used with it. `--serve --obfuscate` works; a served page that answers HTTP 409 means that the agent was created again, so start the viewer again.
+- The `--keep-*` flags and `--max-entry-bytes` need `--obfuscate`. `--omit-payloads` and `--page` cannot be used with it, so there is no paged obfuscated export. `--serve --obfuscate` works; a served page that answers HTTP 409 means that the agent was created again, so start the viewer again.
 - The user who exports reads the raw oplog with the `oplog : read` permission. Obfuscation protects the shared report, not the read.
 
 ### Output
 
-Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, `attribution`, and `entry`; parse stdout as a sequence of documents, not as one array or object. The entry types rendered are:
+Each text entry is printed with its index (e.g. `#00042:`) followed by a labeled header and fields. In structured formats (`json`, `yaml`, `toon`), `agent oplog` emits one output document per entry with `$type: "agent.oplog"`, `index`, `attribution`, and `entry`; parse stdout as a sequence of documents, not as one array or object. With `--page`, it emits one `agent.oplog-page` document: `entries` holds the page's `agent.oplog` documents, and `cursor`, when present, continues the read. The entry types rendered are:
 
 | Entry | Description |
 |-------|-------------|
@@ -110,6 +112,12 @@ golem agent oplog <AGENT_ID> --from 100
 Search for specific entries:
 ```shell
 golem agent oplog <AGENT_ID> --query "error"
+```
+
+Read a search page by page, passing back the `cursor` of each page until a page has none:
+```shell
+golem --format json agent oplog <AGENT_ID> --query "error" --page
+golem --format json agent oplog <AGENT_ID> --query "error" --page --cursor '<cursor-of-previous-page>'
 ```
 
 Explore the oplog in an interactive viewer (grouped by invocation, with foldable host calls, filters, server-side queries, decoded payloads and a follow mode) served locally and opened in the browser:

@@ -176,13 +176,15 @@ cargo make generate-configs
 ```
 
 ### Preparing the pull request
-Golem CI checks the pull requests with `rustfmt` and `cargo clippy`. To make sure these checks pass, before opening a pull request run
+Run the format, lint and tests for the affected packages before opening a pull request. For example, for a root Rust package:
 
 ```shell
-cargo make fix
+cargo fmt -p <crate> -- --check
+cargo clippy -p <crate> --all-targets --no-deps -- -D warnings
+cargo test -p <crate> --lib -- --report-time
 ```
 
-and fix any possible errors and warnings reported by it.
+Pull requests to `main` do not run the full CI suite. The continuous `Main validation` workflow selects the latest main commit and publishes its result on that exact commit. Skill-harness changes also run inexpensive path-filtered PR checks. Pull requests and pushes to maintenance branches keep full CI. The release gate requires validation of the exact release source; a green ancestor is not sufficient.
 
 ## Release process
 
@@ -284,8 +286,22 @@ authorize direct pushes or merges to the selected target branch.
    clean source, and the merged preparation PR. The PR must have the tagged commit
    as its exact head and target `golemcloud/golem`'s `main` or the maintenance
    branch matching the tag (for example, `1.6.x` for `v1.6.2`). Its merge commit
-   must remain reachable from that public target branch. It runs the full reusable
-   CI preflight with published SDK and shared-crate checks. Its protected
+   must remain reachable from that public target branch. With
+   `MAIN_VALIDATION_RELEASE_GATE_ENABLED` unset or not `true`, it runs the full reusable CI
+   preflight with published SDK and shared-crate checks.
+   The replacement remains inactive until runner acceptance and coordinated
+   cutover. After activation, open an issue with the `main-validation-request`
+   label and a JSON body containing the tag's full commit SHA as `source` and
+   its public tag as `release_tag`. Wait for a successful `Main validation`
+   commit status before dispatching preparation. Preparation requires the latest
+   status in that context from `github-actions[bot]` on the exact tagged commit.
+   A missing, failed or pending status stops preparation; it does
+   not start another validation run or fall back to full hosted CI.
+   The replacement then runs release-only checks for the published shared crates,
+   built-in release behavior and all six published SDKs. It rebuilds their local
+   prerequisites instead of restoring ordinary CI's binaries. Those checks use
+   their own Blacksmith runner, outside the validation concurrency group.
+   Its protected
    `golem-release` job creates or resumes the draft, builds and publishes all
    eight built-in inventory entries, and uploads the verified manifest. All
    built-in packages must finish before the first built-in upload. The existing native matrix then builds,
@@ -388,8 +404,8 @@ git push origin v1.6.2
 gh workflow run prepare-golem-release.yaml --repo golemcloud/golem --ref v1.6.2
 ```
 
-The CI workflows accept push events from `main` and any `<major>.<minor>.x`
-branch automatically.
+Full CI runs automatically for pushes and pull requests to `<major>.<minor>.x`
+maintenance branches. `Main validation` continuously samples the latest `main`.
 
 **Backports** between branches are done manually with `git cherry-pick`. The
 usual flow is: land the fix on `main` first, then cherry-pick the commit(s)

@@ -14,7 +14,6 @@
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::authorization::targets::udp_target;
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable, ResolvedCall};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
@@ -233,10 +232,7 @@ async fn authorize_addresses<Ctx: WorkerCtx>(
             ResolvedCall::Live(begun) => {
                 let targets = addresses
                     .iter()
-                    .map(|address| {
-                        ip_socket_target(address)
-                            .ok_or_else(|| "the address has no permission target".to_string())
-                    })
+                    .map(|address| ctx.socket_target(std::net::SocketAddr::from(*address)))
                     .collect::<Result<Vec<_>, _>>();
                 let denial = match targets {
                     Ok(targets) => ctx
@@ -268,20 +264,4 @@ async fn authorize_addresses<Ctx: WorkerCtx>(
             .map_err(SocketError::trap)?
     };
     response.result.map_err(|_| ErrorCode::AccessDenied.into())
-}
-
-fn ip_socket_target(
-    address: &IpSocketAddress,
-) -> Option<golem_common::model::card::PermissionTarget> {
-    match address {
-        IpSocketAddress::Ipv4(address) => {
-            let (a, b, c, d) = address.address;
-            udp_target(
-                &std::net::Ipv4Addr::new(a, b, c, d).to_string(),
-                address.port,
-            )
-            .ok()
-        }
-        IpSocketAddress::Ipv6(_) => None,
-    }
 }

@@ -32,9 +32,9 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableRpcError};
 use golem_common::model::oplog::{
-    HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
+    HostRequest, HostRequestGolemRpcCreate, HostResponse, HostResponseFileSystemStat,
     HostResponseGolemRpcCreate, HostResponseKVUnit, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsConnect,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3SocketsTcpConnect,
     HostResponsePermissionCheck, OplogEntry, OplogIndex, PublicOplogEntry,
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
@@ -52,6 +52,7 @@ use golem_worker_executor::services::card::{
     CardRevokeResult, CardService, CardState, RuntimeCardCreation,
 };
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
@@ -1387,7 +1388,8 @@ fn concrete_card_granting(parent: CardId, verb: &str) -> StoredCard {
 /// The live run applies the event at the second call only, so the two calls return different
 /// outcomes. Then a new executor reconstructs the agent, which must keep both outcomes: replay
 /// commits the entry before the first call and publishes every card event up to the next
-/// recorded entry, so a first decision that records nothing would observe the event.
+/// recorded entry, so a first decision that records nothing would observe the event. Each
+/// recorded decision names the invocation that made it, and replay accepts it for that invocation.
 async fn card_decisions_survive_reconstruction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1465,6 +1467,31 @@ async fn card_decisions_survive_reconstruction(
     );
 
     let entries = read_whole_oplog(&owner).await;
+    let recorded = RecordedCardDecisions::find(&entries, &stored_key, decision)
+        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
+    let oplog = owner.execution().oplog();
+    for start in &recorded.decisions {
+        let Some(OplogEntry::Start {
+            request: Some(request),
+            ..
+        }) = entries.get(start)
+        else {
+            anyhow::bail!("the decision at {start} has no request");
+        };
+        let request = oplog
+            .download_payload(request.clone())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let HostRequest::PermissionCardDecision(request) = request else {
+            anyhow::bail!("the decision at {start} has request {request:?}");
+        };
+        assert_eq!(
+            request.invocation_id,
+            Some(stored_key),
+            "the decision at {start} must name the invocation that made it"
+        );
+    }
+    drop(oplog);
     drop(owner);
     drop(executor);
 
@@ -1483,8 +1510,6 @@ async fn card_decisions_survive_reconstruction(
         "reconstruction must keep the outcome of each decision"
     );
 
-    let recorded = RecordedCardDecisions::find(&entries, &stored_key, decision)
-        .ok_or_else(|| anyhow::anyhow!("the invocation was not started"))?;
     let marker = recorded
         .marker
         .ok_or_else(|| anyhow::anyhow!("the gap marker was not logged"))?;
@@ -3393,8 +3418,9 @@ async fn p3_tcp_default_denial_is_durable_and_does_not_reach_the_backend(
             _ => None,
         })
         .expect("denial must have a durable connect End response");
-    let expected_response: HostResponse = HostResponseP3SocketsConnect {
+    let expected_response: HostResponse = HostResponseP3SocketsTcpConnect {
         result: Err(SerializableP3SocketErrorCode::AccessDenied),
+        closed: false,
     }
     .into();
     assert_eq!(
@@ -3587,7 +3613,7 @@ async fn p3_tcp_denial_survives_recovery_before_start_and_before_end(
             })
             .expect("recovery must complete the denied connect");
         assert_eq!(
-            HostResponseP3SocketsConnect::from_value(response.value())?.result,
+            HostResponseP3SocketsTcpConnect::from_value(response.value())?.result,
             Err(SerializableP3SocketErrorCode::AccessDenied),
             "the unfinished invocation must recover with a guest-visible denial"
         );
@@ -8146,6 +8172,7 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
 }
 
 mod moonbit;
+mod socket_policy;
 
 const CARD_LIVENESS_FUNCTION: &str = "golem::permissions::types::card-liveness";
 

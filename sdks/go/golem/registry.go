@@ -391,13 +391,17 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	}
 
 	me.invoke = func(inst *instance, principal Principal, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
-		// A panic traps the component, as in Rust: the executor fails the
-		// agent. The stage attributes it, so an SDK bug is not reported as if it were the agent's
-		// fault.
+		// Handler panics fail this invocation. SDK decoding and encoding
+		// faults still trap, with the stage identifying their origin.
 		stage := stageDecode
 		defer func() {
 			if r := recover(); r != nil {
-				trap(&panicError{Method: me.name, Stage: stage, Value: r})
+				failure := &panicError{Method: me.name, Stage: stage, Value: r}
+				if stage == stageHandler {
+					out, err = nil, failure
+				} else {
+					trap(failure)
+				}
 			}
 		}()
 

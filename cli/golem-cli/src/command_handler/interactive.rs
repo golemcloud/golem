@@ -15,8 +15,10 @@
 use crate::app::template::AppTemplateName;
 use crate::config::{AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
-use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
-use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln};
+use crate::error::{
+    HintError, InputRequired, NonSuccessfulExit, PromptAnswer, PromptKind, ShowClapHelpTarget,
+};
+use crate::log::{LogColorize, log_error, log_warn, log_warn_action, logln, message_for_output};
 use crate::model::agent::RawAgentId;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
@@ -38,9 +40,11 @@ use inquire::{
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::io::IsTerminal;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use strum::IntoEnumIterator;
 use url::Url;
 
@@ -451,7 +455,7 @@ impl InteractiveHandler {
             match Confirm::new("Do you want to create a new profile interactively?")
                 .with_help_message("If not, please specify the profile name as a command argument.")
                 .with_default(true)
-                .prompt()
+                .ask()
                 .none_if_not_interactive()?
             {
                 Some(true) => {}
@@ -469,31 +473,31 @@ impl InteractiveHandler {
                 }
                 Ok(Validation::Valid)
             })
-            .prompt()
+            .ask()
             .none_if_not_interactive()?
         else {
             bail!(profile_name_required());
         };
 
-        let registry_service_url = CustomType::<Url>::new("Registry service URL:").prompt()?;
+        let registry_service_url = CustomType::<Url>::new("Registry service URL:").ask()?;
 
         let worker_service_url = CustomType::<OptionalUrl>::new(
             "Worker service URL (empty to use component service url):",
         )
-        .prompt()?
+        .ask()?
         .0;
 
         let default_format =
             Select::new("Default output format:", Format::iter().collect::<Vec<_>>())
                 .with_starting_cursor(2)
-                .prompt()?;
+                .ask()?;
 
         let static_token =
             Password::new("Static token for authentication (leave empty for OAuth2):")
                 .with_display_mode(PasswordDisplayMode::Masked)
                 .without_confirmation()
                 .with_help_message("Mainly for testing or custom servers")
-                .prompt()?;
+                .ask()?;
 
         let auth = if static_token.is_empty() {
             AuthenticationConfig::empty_oauth2()
@@ -511,7 +515,7 @@ impl InteractiveHandler {
 
         let set_as_active = Confirm::new("Set as active profile?")
             .with_default(false)
-            .prompt()?;
+            .ask()?;
 
         Ok((profile_name.into(), profile, set_as_active))
     }
@@ -534,7 +538,7 @@ impl InteractiveHandler {
                     Ok(Validation::Valid)
                 }
             })
-            .prompt()
+            .ask()
             .none_if_not_interactive()?;
 
         match token {
@@ -569,7 +573,7 @@ impl InteractiveHandler {
                     Ok(Validation::Valid)
                 }
             })
-            .prompt()
+            .ask()
             .none_if_not_interactive()?;
 
         match value {
@@ -585,7 +589,7 @@ impl InteractiveHandler {
         &self,
         repl_languages: Vec<ReplLanguage>,
     ) -> anyhow::Result<ReplLanguage> {
-        Ok(Select::new("Select REPL language:", repl_languages).prompt()?)
+        Ok(Select::new("Select REPL language:", repl_languages).ask()?)
     }
 
     pub fn select_new_app_name(
@@ -604,7 +608,7 @@ impl InteractiveHandler {
                 }
                 Ok(Validation::Valid)
             })
-            .prompt()
+            .ask()
             .none_if_not_interactive_logged()?
         else {
             return Ok(None);
@@ -621,7 +625,7 @@ impl InteractiveHandler {
                 NewAppLocationOption::NewDirectory,
             ],
         )
-        .prompt()
+        .ask()
         .none_if_not_interactive_logged()?
         else {
             return Ok(None);
@@ -656,7 +660,7 @@ impl InteractiveHandler {
 
                         Ok(Validation::Valid)
                     })
-                    .prompt()
+                    .ask()
                     .none_if_not_interactive_logged()?
                 else {
                     return Ok(None);
@@ -678,7 +682,7 @@ impl InteractiveHandler {
             .collect::<Vec<_>>();
 
         let Some(language) = Select::new("Select languages:", available_languages)
-            .prompt()
+            .ask()
             .none_if_not_interactive_logged()?
         else {
             return Ok(None);
@@ -696,7 +700,7 @@ impl InteractiveHandler {
         loop {
             let Some(selected) = MultiSelect::new("Select templates:", template_options.clone())
                 .with_help_message("Use Space to select templates, then Enter to confirm")
-                .prompt()
+                .ask()
                 .none_if_not_interactive_logged()?
             else {
                 return Ok(None);
@@ -725,7 +729,7 @@ impl InteractiveHandler {
         let prompt = format!("Select component for template {}:", template_name.as_str());
 
         Select::new(&prompt, component_names)
-            .prompt()
+            .ask()
             .none_if_not_interactive_logged()
     }
 
@@ -854,6 +858,202 @@ fn is_interactive_not_available_inquire_error(err: &InquireError) -> bool {
     }
 }
 
+static PROMPTS_REFUSED: AtomicBool = AtomicBool::new(false);
+
+/// Makes every question that the CLI would ask its user fail at once with [`InputRequired`],
+/// for a process that has no user at a terminal and whose stdin carries a protocol, such as
+/// `golem mcp serve`. It covers the prompts asked through [`Ask`], the confirmations, and the
+/// reads of [`stdin`] and [`async_stdin`].
+pub fn refuse_prompts() {
+    PROMPTS_REFUSED.store(true, Ordering::Relaxed);
+}
+
+pub fn prompts_refused() -> bool {
+    PROMPTS_REFUSED.load(Ordering::Relaxed)
+}
+
+/// The only way to ask the user with an `inquire` prompt: `ask` asks, unless the process
+/// refuses prompts, when it fails at once with an [`InquireError::Custom`] that holds the
+/// [`InputRequired`] of the question. Clippy refuses a direct `prompt` call in this crate.
+pub trait Ask: Sized {
+    type Output;
+
+    fn kind(&self) -> PromptKind;
+    fn message(&self) -> &str;
+    fn options(&self) -> Vec<String> {
+        vec![]
+    }
+    fn prompt_now(self) -> InquireResult<Self::Output>;
+
+    fn ask(self) -> InquireResult<Self::Output> {
+        self.ask_answered_by(None)
+    }
+
+    /// Asks a question that `answer` answers in advance.
+    fn ask_answered_by(self, answer: Option<PromptAnswer>) -> InquireResult<Self::Output> {
+        if prompts_refused() {
+            return Err(InquireError::Custom(Box::new(InputRequired {
+                kind: self.kind(),
+                question: message_for_output(self.message()),
+                options: self.options(),
+                answer,
+            })));
+        }
+        self.prompt_now()
+    }
+}
+
+impl Ask for Confirm<'_> {
+    type Output = bool;
+
+    fn kind(&self) -> PromptKind {
+        PromptKind::Confirm
+    }
+
+    fn message(&self) -> &str {
+        self.message
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn prompt_now(self) -> InquireResult<bool> {
+        self.prompt()
+    }
+}
+
+impl Ask for Text<'_, '_> {
+    type Output = String;
+
+    fn kind(&self) -> PromptKind {
+        PromptKind::Text
+    }
+
+    fn message(&self) -> &str {
+        self.message
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn prompt_now(self) -> InquireResult<String> {
+        self.prompt()
+    }
+}
+
+impl Ask for Password<'_> {
+    type Output = String;
+
+    fn kind(&self) -> PromptKind {
+        PromptKind::Password
+    }
+
+    fn message(&self) -> &str {
+        self.message
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn prompt_now(self) -> InquireResult<String> {
+        self.prompt()
+    }
+}
+
+impl<T: Clone> Ask for CustomType<'_, T> {
+    type Output = T;
+
+    fn kind(&self) -> PromptKind {
+        PromptKind::Text
+    }
+
+    fn message(&self) -> &str {
+        self.message
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn prompt_now(self) -> InquireResult<T> {
+        self.prompt()
+    }
+}
+
+impl<T: Display> Ask for Select<'_, T> {
+    type Output = T;
+
+    fn kind(&self) -> PromptKind {
+        PromptKind::Select
+    }
+
+    fn message(&self) -> &str {
+        self.message
+    }
+
+    fn options(&self) -> Vec<String> {
+        self.options
+            .iter()
+            .map(|option| message_for_output(option.to_string()))
+            .collect()
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn prompt_now(self) -> InquireResult<T> {
+        self.prompt()
+    }
+}
+
+impl<T: Display> Ask for MultiSelect<'_, T> {
+    type Output = Vec<T>;
+
+    fn kind(&self) -> PromptKind {
+        PromptKind::MultiSelect
+    }
+
+    fn message(&self) -> &str {
+        self.message
+    }
+
+    fn options(&self) -> Vec<String> {
+        self.options
+            .iter()
+            .map(|option| message_for_output(option.to_string()))
+            .collect()
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    fn prompt_now(self) -> InquireResult<Vec<T>> {
+        self.prompt()
+    }
+}
+
+fn stdin_refused(reads: &str) -> anyhow::Error {
+    anyhow::Error::new(InputRequired {
+        kind: PromptKind::Stdin,
+        question: reads.to_string(),
+        options: vec![],
+        answer: None,
+    })
+}
+
+/// The process's stdin, for a command that reads `reads` from it. It fails at once with
+/// [`InputRequired`] when the process refuses prompts, because stdin then carries a protocol.
+/// Clippy refuses `std::io::stdin` elsewhere in this crate.
+#[allow(clippy::disallowed_methods)]
+pub fn stdin(reads: &str) -> anyhow::Result<std::io::Stdin> {
+    if prompts_refused() {
+        return Err(stdin_refused(reads));
+    }
+    Ok(std::io::stdin())
+}
+
+/// The process's stdin for async reads, as [`stdin`].
+#[allow(clippy::disallowed_methods)]
+pub fn async_stdin(reads: &str) -> anyhow::Result<tokio::io::Stdin> {
+    if prompts_refused() {
+        return Err(stdin_refused(reads));
+    }
+    Ok(tokio::io::stdin())
+}
+
+/// Whether stdin is a terminal. It reads nothing.
+#[allow(clippy::disallowed_methods)]
+pub fn stdin_is_terminal() -> bool {
+    std::io::stdin().is_terminal()
+}
+
 fn confirm<M: AsRef<str>>(
     yes: bool,
     default: bool,
@@ -872,6 +1072,15 @@ fn confirm<M: AsRef<str>>(
         return Ok(true);
     }
 
+    if prompts_refused() {
+        bail!(InputRequired {
+            kind: PromptKind::Confirm,
+            question: message_for_output(message.as_ref()),
+            options: vec![],
+            answer: Some(PromptAnswer::Yes),
+        });
+    }
+
     let hint = match extra_hint {
         Some(extra_hint) => format!("{YES_FLAG_HINT} {extra_hint}"),
         None => YES_FLAG_HINT.to_string(),
@@ -880,7 +1089,7 @@ fn confirm<M: AsRef<str>>(
     let result = match Confirm::new(message.as_ref())
         .with_help_message(&hint)
         .with_default(default)
-        .prompt()
+        .ask()
     {
         Ok(result) => Ok(result),
         Err(error) => {

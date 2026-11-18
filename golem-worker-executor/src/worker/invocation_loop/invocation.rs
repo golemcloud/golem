@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::DurabilityHost;
 use golem_common::model::InvocationId;
 
@@ -243,6 +244,55 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 }
             }
+            Ok(InvokeResult::MethodFailed {
+                consumed_fuel,
+                error,
+            }) => {
+                if let Some(interrupt) = self.parent.interrupt_signal.claim_pending_terminal().await
+                {
+                    interrupt.establishment.wait().await;
+                    return self
+                        .agent_invocation_failed(
+                            &display_name,
+                            &invocation_idempotency_key,
+                            Ok(InvokeResult::Interrupted {
+                                consumed_fuel,
+                                interrupt_kind: interrupt.kind,
+                            }),
+                        )
+                        .await;
+                }
+                match DurableWorkerCtx::<Ctx>::on_agent_method_failure(
+                    self.store,
+                    &display_name,
+                    error,
+                    self.uses_streams,
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(crate::worker::MethodFailureSettlementError::Invocation(error)) => {
+                        return self
+                            .agent_invocation_failed(
+                                &display_name,
+                                &invocation_idempotency_key,
+                                Err(error),
+                            )
+                            .await;
+                    }
+                    Err(crate::worker::MethodFailureSettlementError::Recovery(error)) => {
+                        self.parent.record_recovery_failure(&error).await;
+                        return self.invocation_failure_recovery(&error);
+                    }
+                }
+                match self.parent.agent_mode() {
+                    AgentMode::Durable => CommandOutcome::Continue,
+                    AgentMode::Ephemeral => CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(
+                        RetryDecision::None,
+                        None,
+                    ),
+                }
+            }
             _ => {
                 self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
                     .await
@@ -360,13 +410,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 if self.uses_streams {
                     let parent = self.parent.clone();
                     let idempotency_key = *idempotency_key;
+                    let attribution = self.store.data().durable_ctx().attribution.clone();
+                    let invocation_key = self.store.data().durable_ctx().invocation_key();
                     // Host stream operations can retain session locks across a pending poll.
                     // Keep driving the Store while protocol-only completion acquires them.
                     let result = self
                         .store
                         .run_concurrent(async move |_accessor| {
-                            parent
-                                .complete_durable_streaming_session(&idempotency_key)
+                            attribution
+                                .scoped(
+                                    Some(invocation_key),
+                                    parent.complete_durable_streaming_session(&idempotency_key),
+                                )
                                 .await
                         })
                         .await;

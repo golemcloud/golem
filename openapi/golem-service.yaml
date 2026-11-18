@@ -17936,9 +17936,15 @@ components:
         currentComponentRevision:
           type: integer
           format: uint64
+        queryHash:
+          description: |-
+            The hash of the search query of the pages that gave the cursor, or empty for the pages of
+            an oplog read without a query. A read refuses a cursor of another query.
+          type: string
       required:
       - nextOplogIndex
       - currentComponentRevision
+      - queryHash
     OplogErrorKind:
       type: string
       enum:
@@ -18723,6 +18729,7 @@ components:
           Cancelled: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+          AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -18734,6 +18741,7 @@ components:
           SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
           FailedUpdate: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
           GrowMemory: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+          MemorySizeReconciled: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
           CreateResource: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -18781,6 +18789,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -18792,6 +18801,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuccessfulUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#FailedUpdateParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#GrowMemoryParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#MemorySizeReconciledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
@@ -18892,6 +18902,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#ActivatePluginParams'
+    PublicOplogEntry_r#AgentInvocationFailedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AgentInvocationFailed
+            type: string
+            enum:
+            - AgentInvocationFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#AgentInvocationFailedParams'
     PublicOplogEntry_r#AgentInvocationFinishedParams:
       allOf:
       - type: object
@@ -19264,6 +19286,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#LogParams'
+    PublicOplogEntry_r#MemorySizeReconciledParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: MemorySizeReconciled
+            type: string
+            enum:
+            - MemorySizeReconciled
+        required:
+        - type
+      - $ref: '#/components/schemas/r#MemorySizeReconciledParams'
     PublicOplogEntry_r#OplogProcessorCheckpointParams:
       allOf:
       - type: object
@@ -22370,6 +22404,26 @@ components:
       required:
       - timestamp
       - plugin
+    r#AgentInvocationFailedParams:
+      title: r#AgentInvocationFailedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        error:
+          type: string
+        startIndex:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - invocationId
+      - error
+      - startIndex
     r#AgentInvocationFinishedParams:
       title: r#AgentInvocationFinishedParams
       type: object
@@ -22967,6 +23021,19 @@ components:
       - level
       - context
       - message
+    r#MemorySizeReconciledParams:
+      title: r#MemorySizeReconciledParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        bytes:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - bytes
     r#OplogProcessorCheckpointParams:
       title: r#OplogProcessorCheckpointParams
       type: object

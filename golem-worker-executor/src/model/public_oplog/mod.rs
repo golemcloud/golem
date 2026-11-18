@@ -28,8 +28,9 @@ use invocation::{
     enrich_golem_rpc_scheduled_invocation,
 };
 pub use reading::{
-    find_component_revision_at, get_public_oplog_chunk, get_public_oplog_entry,
-    get_public_oplog_page, search_public_oplog, search_public_oplog_page,
+    check_oplog_cursor_query, find_component_revision_at, get_public_oplog_chunk,
+    get_public_oplog_entry, get_public_oplog_page, oplog_page_cursor, oplog_page_start,
+    search_public_oplog, search_public_oplog_page,
 };
 use snapshots::raw_snapshot_to_public;
 
@@ -50,20 +51,21 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardDerivedParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
-    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, StreamTerminalParams, SuccessfulUpdateParams, SuspendParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
+    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
+    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StreamTerminalParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use golem_common::model::oplog::public_oplog_entry::{
     PublicSpanAttributes, PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome,

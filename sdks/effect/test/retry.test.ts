@@ -3,13 +3,21 @@ import { Duration, Effect, Exit, Layer } from "effect"
 import { RetryClient } from "../src/host/RetryClient.js"
 import * as Retry from "../src/Retry.js"
 import * as RetryMock from "./mocks/golem-api-retry.js"
+import * as RetryScopeMock from "./mocks/golem-api-retry-scope.js"
 
 beforeEach(() => {
   RetryMock.__reset()
+  RetryScopeMock.__reset()
 })
 afterEach(() => {
   RetryMock.__reset()
+  RetryScopeMock.__reset()
 })
+
+const openMockScope = (policy: RetryMock.NamedRetryPolicy) => {
+  const scope = new RetryScopeMock.RetryPolicyScope(policy)
+  return () => scope[Symbol.dispose]()
+}
 
 /**
  * Default `RetryClient` Live layer used by tests that exercise the host
@@ -32,6 +40,7 @@ const RetryStub = Layer.succeed(
       >),
     setRetryPolicy: (policy) => RetryMock.setRetryPolicy(policy),
     removeRetryPolicy: (name) => RetryMock.removeRetryPolicy(name),
+    openRetryPolicyScope: openMockScope,
   }),
 )
 
@@ -317,6 +326,7 @@ describe("Retry — host wrappers (set/remove/get)", () => {
             throw new Error("boom")
           },
           removeRetryPolicy: (name) => RetryMock.removeRetryPolicy(name),
+          openRetryPolicyScope: openMockScope,
         }),
       )
       const exit = yield* Effect.exit(
@@ -347,6 +357,7 @@ describe("Retry — host wrappers (set/remove/get)", () => {
           },
           setRetryPolicy: (policy) => RetryMock.setRetryPolicy(policy),
           removeRetryPolicy: (name) => RetryMock.removeRetryPolicy(name),
+          openRetryPolicyScope: openMockScope,
         }),
       )
       yield* Retry.resolvePolicy("GET", "https://example.com", [
@@ -364,55 +375,54 @@ describe("Retry — host wrappers (set/remove/get)", () => {
 })
 
 describe("Retry — scoped helpers", () => {
-  it.effect("withPolicy installs a fresh policy and removes it on exit", () =>
+  it.effect("withPolicy holds a scope while the effect runs and changes no agent-wide policy", () =>
     Effect.gen(function* () {
       const named = Retry.NamedPolicy.named("scoped", Retry.Policy.immediate())
-      let snapshotInside: ReadonlyArray<{ readonly name: string }> = []
+      let eventsInside: ReadonlyArray<string> = []
       yield* Retry.withPolicy(
         named,
         Effect.sync(() => {
-          snapshotInside = RetryMock.getRetryPolicies()
+          eventsInside = RetryScopeMock.__events()
         }),
       )
-      expect(snapshotInside.map((p) => p.name)).toEqual(["scoped"])
-      expect(RetryMock.getRetryPolicies().map((p) => p.name)).toEqual([])
+      expect(eventsInside).toEqual(["open scoped"])
+      expect(RetryScopeMock.__events()).toEqual(["open scoped", "close scoped"])
+      expect(RetryMock.getRetryPolicies()).toEqual([])
     }).pipe(Effect.provide(RetryStub)),
   )
 
-  it.effect("withPolicy restores a previously-existing policy on exit", () =>
+  it.effect("withPolicy leaves an agent-wide policy with the same name untouched", () =>
     Effect.gen(function* () {
-      // Pre-existing policy under the same name.
-      RetryMock.setRetryPolicy({
+      const agentWide = {
         name: "scoped",
         priority: 0,
-        predicate: { nodes: [{ tag: "pred-true" }] },
-        policy: { nodes: [{ tag: "immediate" }] },
-      })
-
+        predicate: { nodes: [{ tag: "pred-true" as const }] },
+        policy: { nodes: [{ tag: "immediate" as const }] },
+      }
+      RetryMock.setRetryPolicy(agentWide)
       const overlay = Retry.NamedPolicy.named(
         "scoped",
         Retry.Policy.exponential(Duration.seconds(1), 2),
       )
-      let insidePolicy: { readonly nodes: ReadonlyArray<{ readonly tag: string }> } | undefined
+      let insidePolicy: RetryMock.NamedRetryPolicy | undefined
       yield* Retry.withPolicy(
         overlay,
         Effect.sync(() => {
-          insidePolicy = RetryMock.getRetryPolicyByName("scoped")?.policy
+          insidePolicy = RetryMock.getRetryPolicyByName("scoped")
         }),
       )
-      expect(insidePolicy?.nodes[0]?.tag).toBe("exponential")
-      // After the scope closes, the original policy is restored.
-      const after = RetryMock.getRetryPolicyByName("scoped")
-      expect(after?.policy.nodes[0]?.tag).toBe("immediate")
+      expect(insidePolicy).toEqual(agentWide)
+      expect(RetryMock.getRetryPolicyByName("scoped")).toEqual(agentWide)
+      expect(RetryScopeMock.__events()).toEqual(["open scoped", "close scoped"])
     }).pipe(Effect.provide(RetryStub)),
   )
 
-  it.effect("withPolicy restores on failure too", () =>
+  it.effect("withPolicy closes the scope on failure too", () =>
     Effect.gen(function* () {
       const named = Retry.NamedPolicy.named("scoped", Retry.Policy.immediate())
       const exit = yield* Effect.exit(Retry.withPolicy(named, Effect.fail("boom" as const)))
       expect(Exit.isFailure(exit)).toBe(true)
-      expect(RetryMock.getRetryPolicies()).toEqual([])
+      expect(RetryScopeMock.__events()).toEqual(["open scoped", "close scoped"])
     }).pipe(Effect.provide(RetryStub)),
   )
 })

@@ -397,7 +397,8 @@ where
             bytes,
             descriptor,
         )?;
-        accessor.spawn(async move |accessor| job.run(accessor).await)?;
+        let captured = accessor.with(|mut access| access.get().attribution.capture());
+        accessor.spawn(async move |accessor| captured.run(job.run(accessor)).await)?;
         let delivery = restored.await??;
         if delivery.is_replay_discarded() {
             std::future::pending::<()>().await;

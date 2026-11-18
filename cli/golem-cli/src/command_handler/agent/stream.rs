@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::client::raw_reqwest_client_builder;
 use crate::command_handler::agent::parse_worker_error;
 use crate::command_handler::agent::stream_output::AgentStreamOutput;
+use crate::config::HttpClientConfig;
 use crate::model::agent::AgentLogStreamOptions;
 use crate::model::format::Format;
 use anyhow::{Context, anyhow};
@@ -235,6 +237,7 @@ fn event_invocation_id(event: &AgentEvent) -> Option<InvocationId> {
 pub struct AgentConnection {
     request: Request,
     connector: Option<Connector>,
+    http_client: reqwest::Client,
     output: AgentStreamOutput,
     agent_name: String,
     goal: Option<InvocationGoal>,
@@ -266,6 +269,12 @@ impl AgentConnection {
         Ok(Self {
             request,
             connector,
+            http_client: raw_reqwest_client_builder(&HttpClientConfig::new_for_service_calls(
+                allow_insecure,
+            ))
+            .http1_only()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?,
             output,
             agent_name: agent_id,
             goal: wait_for_invocation.then(InvocationGoal::new),
@@ -298,23 +307,46 @@ impl AgentConnection {
 
     /// Connects to the worker event stream and outputs incoming messages until the connection is dropped
     async fn run(&self) -> anyhow::Result<()> {
-        let (ws_stream, _) = connect_async_tls_with_config(
+        let (ws_stream, _) = match connect_async_tls_with_config(
             self.request.clone(),
             None,
             false,
             self.connector.clone(),
         )
         .await
-        .map_err(|e| match e {
-            tungstenite::error::Error::Http(http_error_response) => {
-                let status = http_error_response.status().as_u16();
-                match http_error_response.body().clone() {
-                    Some(body) => anyhow!(parse_worker_error(status, body)),
-                    None => anyhow!("Websocket connect failed, HTTP error: {}", status),
+        {
+            Ok(connection) => connection,
+            Err(tungstenite::error::Error::Http(response)) => {
+                if let Some(body) = response.body() {
+                    let error = parse_worker_error(response.status().as_u16(), body.clone());
+                    if matches!(
+                        error.kind,
+                        crate::error::service::ServiceErrorKind::ErrorResponse(_)
+                    ) {
+                        return Err(error.into());
+                    }
                 }
+                // Tungstenite retains only the body bytes read with the handshake headers.
+                // Repeat the read-only request with an HTTP client to read the complete error.
+                let mut url = Url::parse(&self.request.uri().to_string())?;
+                let scheme = if url.scheme() == "ws" {
+                    "http"
+                } else {
+                    "https"
+                };
+                url.set_scheme(scheme)
+                    .map_err(|()| anyhow!("Failed to set HTTP url scheme"))?;
+                let response = self
+                    .http_client
+                    .get(url)
+                    .headers(self.request.headers().clone())
+                    .send()
+                    .await?;
+                let status = response.status().as_u16();
+                return Err(parse_worker_error(status, response.bytes().await?.to_vec()).into());
             }
-            _ => anyhow!("Websocket connect failed, error: {}", e),
-        })?;
+            Err(error) => return Err(anyhow!("Websocket connect failed, error: {}", error)),
+        };
 
         let (write, read) = ws_stream.split();
 
@@ -824,6 +856,76 @@ mod tests {
             ]
         );
         assert_eq!(filter.held_bytes, 0);
+    }
+
+    #[test]
+    async fn stream_returns_fatal_errors_with_complete_or_fragmented_bodies() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for fragmented in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let connection = connection(url).await.unwrap();
+            let body = serde_json::to_vec(&golem_client::model::ErrorBodyWithOptionalWorkerError {
+                error: "Previous Invocation Failed".into(),
+                code: "INTERNAL_PREVIOUS_INVOCATION_FAILED".into(),
+                worker_error: Some(golem_client::model::WorkerErrorDetails {
+                    cause: "intentional invocation failure".into(),
+                    stderr: "failure details".repeat(if fragmented { 1024 } else { 1 }),
+                }),
+            })
+            .unwrap();
+            let server = AbortOnDropHandle::new(tokio::spawn(async move {
+                let mut responses = tokio::task::JoinSet::new();
+                for attempt in 0..100 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let (status, body) =
+                        if (fragmented && attempt < 2) || (!fragmented && attempt > 0) {
+                            ("503 Service Unavailable", b"server starting".to_vec())
+                        } else {
+                            ("500 Internal Server Error", body.clone())
+                        };
+                    responses.spawn(async move {
+                        let mut request = Vec::new();
+                        loop {
+                            let byte = socket.read_u8().await.unwrap();
+                            request.push(byte);
+                            if request.ends_with(b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        let headers = format!(
+                            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        if fragmented {
+                            socket.write_all(headers.as_bytes()).await.unwrap();
+                            time::sleep(Duration::from_millis(50)).await;
+                            // The websocket client can close as soon as it sees the headers.
+                            let _ = socket.write_all(&body).await;
+                        } else {
+                            socket
+                                .write_all(&[headers.as_bytes(), &body].concat())
+                                .await
+                                .unwrap();
+                        }
+                    });
+                }
+            }));
+
+            let error = time::timeout(Duration::from_secs(5), connection.run_forever())
+                .await
+                .expect("a fatal HTTP response must not reconnect forever")
+                .unwrap_err();
+            assert!(
+                error
+                    .downcast_ref::<crate::error::service::ServiceError>()
+                    .unwrap()
+                    .is_previous_invocation_failed()
+            );
+            assert!(error.to_string().contains("intentional invocation failure"));
+            drop(server);
+        }
     }
 
     #[test]

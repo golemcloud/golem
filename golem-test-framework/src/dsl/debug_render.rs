@@ -179,6 +179,13 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}consumed fuel:     {}", params.consumed_fuel,);
             let _ = writeln!(result, "{pad}result:            {:?}", params.result);
         }
+        PublicOplogEntry::AgentInvocationFailed(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION FAILED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
+            let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
+            let _ = writeln!(result, "{pad}error:             {}", params.error);
+        }
         PublicOplogEntry::Suspend(params) => {
             let _ = writeln!(result, "SUSPEND");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -315,6 +322,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "GROW MEMORY");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}increase:          {}", params.delta,);
+        }
+        PublicOplogEntry::MemorySizeReconciled(params) => {
+            let _ = writeln!(result, "MEMORY SIZE RECONCILED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}allocated bytes:   {}", params.bytes);
         }
         PublicOplogEntry::CreateResource(params) => {
             let _ = writeln!(result, "CREATE RESOURCE");

@@ -150,6 +150,24 @@ struct CtrfTest {
     duration: Option<f64>,
     retries: Option<u64>,
     flaky: Option<bool>,
+    extra: Option<CtrfTestExtra>,
+}
+
+#[derive(Deserialize)]
+struct CtrfTestExtra {
+    #[serde(rename = "testR")]
+    test_r: Option<TestRHistory>,
+}
+
+#[derive(Deserialize)]
+struct TestRHistory {
+    #[serde(default)]
+    attempts: Vec<TestRAttempt>,
+}
+
+#[derive(Deserialize)]
+struct TestRAttempt {
+    status: String,
 }
 
 pub fn observations_from_archive(
@@ -181,17 +199,32 @@ pub fn observations_from_archive(
         };
         found_report = true;
         for test in report.results.tests {
-            let retries = match test.retries.unwrap_or(0) {
+            let attempts = test
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.test_r.as_ref())
+                .map(|history| history.attempts.as_slice())
+                .unwrap_or_default();
+            // test-r records attempts in execution order. Use the last result,
+            // not a retained initial failure or the previous suite snapshots.
+            let status = attempts
+                .last()
+                .map(|attempt| attempt.status.clone())
+                .or(test.status)
+                .unwrap_or_else(|| "unknown".to_string())
+                .to_lowercase();
+            let retries = test
+                .retries
+                .unwrap_or(0)
+                .max(attempts.len().saturating_sub(1) as u64);
+            let retries = match retries {
                 _ if test.flaky == Some(false) => 0,
                 0 if test.flaky == Some(true) => 1,
                 retries => retries,
             };
             observations.push(Observation {
                 name: test.name.unwrap_or_else(|| "<unnamed test>".to_string()),
-                status: test
-                    .status
-                    .unwrap_or_else(|| "unknown".to_string())
-                    .to_lowercase(),
+                status,
                 duration: test.duration.filter(|value| *value >= 0.0).unwrap_or(0.0),
                 retries,
                 run_id: context.run_id,
@@ -490,6 +523,7 @@ pub fn render_report(
     existing_body: &str,
     limit: usize,
 ) -> String {
+    let existing_body = existing_body.replace("\r\n", "\n");
     let shown = candidates.iter().take(limit).collect::<Vec<_>>();
     let active = shown
         .iter()
@@ -501,7 +535,7 @@ pub fn render_report(
         .copied()
         .filter(|test| !test.is_active())
         .collect::<Vec<_>>();
-    let claimed = checked_tests(existing_body);
+    let claimed = checked_tests(&existing_body);
     let mut lines = vec![
         ISSUE_MARKER.to_string(),
         format!("# {ISSUE_TITLE}"),
@@ -509,6 +543,8 @@ pub fn render_report(
         format!(
             "Generated {generated} from **{analyzed_run_count} of {discovered_run_count}** CI runs and **{artifact_count}** consolidated test-report artifacts in the last **{days} days**. Runs before consolidated report collection was enabled are excluded."
         ),
+        String::new(),
+        "The generation time records the last successful collection. Check the Known flaky tests workflow for later failures; a failed collection leaves this report unchanged.".to_string(),
         String::new(),
         "Score = 5 × cross-attempt flips + 3 × runs with in-run retries + 2 × runs failing on `main`. Failures seen only on a feature branch are not treated as flaky unless they later pass in another attempt of the same run.".to_string(),
         String::new(),
@@ -560,6 +596,16 @@ pub fn render_report(
             ),
         ]);
     }
+    lines.extend([
+        String::new(),
+        "## Investigation notes".to_string(),
+        existing_body
+            .split_once("\n## Investigation notes\n")
+            .map(|(_, notes)| notes.trim_end_matches('\n').to_string())
+            .unwrap_or_else(|| {
+                "\nAdd findings and fix links here or in issue comments. The collector preserves this section; it regenerates the tables and claim list above.".to_string()
+            }),
+    ]);
     lines.join("\n") + "\n"
 }
 
@@ -639,6 +685,65 @@ mod tests {
         assert_eq!(result["suite::flip"].flips, 1);
         assert_eq!(result["suite::retry"].retries, 2);
         assert_eq!(result["suite::flaky-flag"].retries, 1);
+    }
+
+    #[test]
+    fn test_r_attempt_history_distinguishes_recovery_from_persistent_failure() {
+        let archive = report_archive(serde_json::json!([
+            {"name": "recovered", "status": "failed", "extra": {"testR": {"attempts": [
+                {"attempt": 1, "status": "failed"},
+                {"attempt": 2, "status": "failed"},
+                {"attempt": 3, "status": "passed"}
+            ]}}},
+            {"name": "persistent", "status": "failed", "retries": 2,
+                "extra": {"testR": {"attempts": [
+                    {"attempt": 1, "status": "failed"},
+                    {"attempt": 2, "status": "failed"},
+                    {"attempt": 3, "status": "failed"}
+                ]}}},
+            {"name": "normalized", "status": "passed", "retries": 1, "flaky": true,
+                "extra": {"testR": {"attempts": [
+                    {"attempt": 1, "status": "failed"},
+                    {"attempt": 2, "status": "passed"}
+                ]}}},
+            {"name": "non-flaky", "status": "passed", "flaky": false,
+                "extra": {"testR": {"attempts": [
+                    {"attempt": 1, "status": "passed"},
+                    {"attempt": 2, "status": "passed"}
+                ]}}}
+        ]));
+        let context = ArtifactContext {
+            run_id: 1,
+            attempt: 1,
+            branch: "main".into(),
+            seen_at: "2026-09-03T10:00:00Z".into(),
+            artifact_name: "main-validation-test-report-attempt1".into(),
+            run_url: "https://example.test/runs/1".into(),
+        };
+        let observations = observations_from_archive(&archive, &context).unwrap();
+        assert_eq!(observations.len(), 4);
+        assert_eq!(observations[0].status, "passed");
+        assert_eq!(observations[0].retries, 2);
+        assert_eq!(observations[1].status, "failed");
+        assert_eq!(observations[1].retries, 2);
+        assert_eq!(observations[2].retries, 1);
+        assert_eq!(observations[3].retries, 0);
+        let result = aggregate(observations)
+            .into_iter()
+            .map(|test| (test.name.clone(), test))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(result.len(), 3);
+        let recovered = &result["recovered"];
+        assert_eq!(recovered.failures, 0);
+        assert_eq!(recovered.main_failures, 0);
+        assert!(recovered.failure_jobs.is_empty());
+        assert_eq!(recovered.score(), 3);
+        assert_eq!(recovered.flips, 0);
+        assert_eq!(result["persistent"].failures, 1);
+        assert_eq!(result["persistent"].main_failures, 1);
+        assert_eq!(result["persistent"].score(), 5);
+        assert_eq!(result["normalized"].failures, 0);
+        assert_eq!(result["normalized"].score(), 3);
     }
 
     #[test]
@@ -886,6 +991,46 @@ mod tests {
         let second = render_report(&tests, 2, 2, 2, 30, "2026-09-10 12:00 UTC", &claimed, 100);
 
         assert!(second.contains("- [x] <code>suite::flaky</code>"));
+    }
+
+    #[test]
+    fn report_preserves_investigation_notes_after_a_test_leaves_the_window() {
+        let existing = concat!(
+            "<!-- known-flaky-tests:v1 -->\n",
+            "Old generated report\n\n",
+            "## Investigation notes\n\n",
+            "- Fixed `suite::old` in #123.\n\n",
+            "### Pending investigation\n\n",
+            "Keep this finding even when the table is empty.\n",
+        );
+        let rendered = render_report(&[], 2, 3, 2, 30, "2026-09-10 12:00 UTC", existing, 100);
+        assert!(!rendered.contains("Old generated report"));
+        assert!(rendered.contains("No active flaky tests in this window"));
+        assert_eq!(
+            rendered
+                .split_once("\n## Investigation notes\n")
+                .unwrap()
+                .1
+                .trim(),
+            existing
+                .split_once("\n## Investigation notes\n")
+                .unwrap()
+                .1
+                .trim()
+        );
+        let next = render_report(&[], 2, 3, 2, 30, "2026-09-10 12:00 UTC", &rendered, 100);
+        assert_eq!(next, rendered);
+        let from_browser = render_report(
+            &[],
+            2,
+            3,
+            2,
+            30,
+            "2026-09-10 12:00 UTC",
+            &existing.replace('\n', "\r\n"),
+            100,
+        );
+        assert_eq!(from_browser, rendered);
     }
 
     #[test]

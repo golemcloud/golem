@@ -15,19 +15,85 @@
 use super::*;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    fn cleanup_custom_durability_state(&mut self) {
-        let resources: Vec<_> = self
-            .state
-            .custom_invocation_scopes
-            .drain()
-            .map(|(_, scope)| scope.resource_rep)
-            .collect();
+    /// Settles a returned method error, including session work that must keep driving the Store.
+    pub(crate) async fn on_agent_method_failure(
+        store: &mut Store<Ctx>,
+        full_function_name: &str,
+        error: AgentError,
+        uses_streams: bool,
+    ) -> Result<(), crate::worker::MethodFailureSettlementError> {
+        use crate::worker::MethodFailureSettlementError;
+
+        store
+            .data_mut()
+            .record_agent_method_failure(full_function_name, error.clone())
+            .await
+            .map_err(MethodFailureSettlementError::Invocation)?;
+        if !store.data().durable_ctx().is_live() {
+            return Ok(());
+        }
+
+        let worker = store.data().durable_ctx().public_state.worker();
+        if uses_streams {
+            let key = store
+                .data()
+                .durable_ctx()
+                .state
+                .get_current_idempotency_key()
+                .expect("a settled method failure has an invocation key");
+            let session_worker = worker.clone();
+            store
+                .run_concurrent(async move |_accessor| {
+                    session_worker
+                        .fail_durable_streaming_session(&key, error.message().to_owned())
+                        .await
+                })
+                .await
+                .map_err(|error| {
+                    MethodFailureSettlementError::Recovery(WorkerExecutorError::runtime(
+                        error.to_string(),
+                    ))
+                })?
+                .map_err(MethodFailureSettlementError::Recovery)?;
+        }
+        worker.reset_infrastructure_recovery_backoff();
+        Ok(())
+    }
+
+    /// Whether `invocation` still has an open custom durable invocation or ownership scope. A
+    /// record whose owner's entry is gone belongs to the invocation the loop runs.
+    fn has_open_custom_durability_state(&self, invocation: attribution::InvocationKey) -> bool {
+        let invocations = &self.state.invocations;
+        self.state
+            .active_custom_invocations
+            .values()
+            .any(|active| invocations.key(Some(active.owner)) == invocation)
+            || self
+                .state
+                .custom_invocation_scopes
+                .values()
+                .any(|scope| invocations.key(Some(scope.owner)) == invocation)
+    }
+
+    /// Closes the custom durable invocations and ownership scopes of `invocation`.
+    fn cleanup_custom_durability_state(&mut self, invocation: attribution::InvocationKey) {
+        let invocations = &self.state.invocations;
+        let mut resources = Vec::new();
+        self.state.custom_invocation_scopes.retain(|_, scope| {
+            let owned = invocations.key(Some(scope.owner)) == invocation;
+            if owned {
+                resources.push(scope.resource_rep);
+            }
+            !owned
+        });
+        self.state
+            .active_custom_invocations
+            .retain(|_, active| invocations.key(Some(active.owner)) != invocation);
         for resource_rep in resources {
             let _ = self
                 .table()
                 .delete(Resource::<durability::LiveCustomDurableInvocation>::new_own(resource_rep));
         }
-        self.state.active_custom_invocations.clear();
     }
 
     /// The retry of an error trap during a speculative replay: the fixed decision of the trap
@@ -232,7 +298,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // named retry policies. The synthesized default-from-config has
         // `Predicate::True` so resolution is guaranteed to find a match for
         // any properties this branch produces.
-        let named_retry_policies = self.named_retry_policies().await;
+        let named_retry_policies = self.state.guest_trap_retry_policies().await;
 
         let mut properties = RetryContext::trap(
             Self::semantic_trap_type_name(error),
@@ -338,8 +404,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Call sites should invoke this at the very top of any host function that introduces a
     /// remote side effect (outgoing HTTP, RPC) before any durability machinery runs.
     pub fn check_read_only_allows(&self, host_function: &str) -> Result<(), GolemSpecificWasmTrap> {
-        if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
-            let method = self.state.read_only_method_name.clone().unwrap_or_default();
+        let state = self.state.invocation_state();
+        if state.strictness == InvocationStrictness::ReadOnly {
+            let method = state.read_only_method_name.clone().unwrap_or_default();
             Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
                 method,
                 host_function: host_function.to_string(),
@@ -351,7 +418,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Returns the current invocation strictness mode.
     pub fn invocation_strictness(&self) -> InvocationStrictness {
-        self.state.invocation_strictness
+        self.state.invocation_state().strictness
     }
 
     pub(crate) fn enter_operator_authorized_oplog_processor_invocation(
@@ -411,16 +478,18 @@ impl<Ctx: WorkerCtx> InvocationManagement for DurableWorkerCtx<Ctx> {
             InvocationContext::from_stack(invocation_context)
                 .map_err(WorkerExecutorError::runtime)?;
 
-        self.state.invocation_context.switch_to(invocation_context);
-        self.state.current_span_id = current_span_id;
+        let state = self.state.loop_invocation_state_mut();
+        state.invocation_context.switch_to(invocation_context);
+        state.current_span_id = current_span_id;
 
         Ok(())
     }
 
     async fn get_current_invocation_context(&self) -> InvocationContextStack {
         self.state
+            .invocation_state()
             .invocation_context
-            .get_stack(&self.state.current_span_id)
+            .get_stack(&self.state.invocation_state().current_span_id)
             .unwrap()
             .limit_depth(self.state.config.limits.max_invocation_context_stack_depth)
     }
@@ -652,12 +721,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let Some(start_index) = start_index else {
                 return Ok(false);
             };
-            self.primary_invocation_start_index = Some(start_index);
+            self.state.loop_invocation_state_mut().start_index = Some(start_index);
         }
         Ok(true)
     }
 
     async fn on_agent_invocation_finished(&mut self) {
+        self.state
+            .loop_invocation_state_mut()
+            .authority
+            .reach_final_outcome();
         self.clear_invocation_scope_card().await;
     }
 
@@ -887,6 +960,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             || decision == RetryDecision::None;
 
         if giving_up {
+            self.state
+                .loop_invocation_state_mut()
+                .authority
+                .reach_final_outcome();
+            self.rederive_agent_effective_surface_from_wallet();
             // Terminal worker failures also fail queued invocations. A rejected request completes
             // only its own idempotency key so later queued work remains available.
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
@@ -915,22 +993,116 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         InvocationFailureDecision::Retry(decision)
     }
 
+    async fn record_agent_method_failure(
+        &mut self,
+        full_function_name: &str,
+        error: AgentError,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.state.durability_is_suppressed() {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "recorded agent method failure",
+                "method failure while durability is suppressed",
+            ));
+        }
+        let invocation = self.invocation_key();
+        if self.has_open_custom_durability_state(invocation) {
+            self.cleanup_custom_durability_state(invocation);
+            return Err(WorkerExecutorError::runtime(
+                "agent invocation returned while a custom durable invocation ownership scope was still open",
+            ));
+        }
+        let anchor = self.invocation_anchor().ok_or_else(|| {
+            WorkerExecutorError::runtime("method failure has no invocation start")
+        })?;
+        let key = self
+            .state
+            .get_current_idempotency_key()
+            .ok_or_else(|| WorkerExecutorError::runtime("method failure has no idempotency key"))?;
+        if !self.state.is_live() {
+            concurrent::drain_queued_dropped_call_events(self)
+                .await
+                .map_err(|error| error.source)?;
+            if let Some(finished_index) = self
+                .state
+                .replay_state
+                .get_oplog_entry_agent_method_failure(
+                    &key,
+                    anchor,
+                    &error,
+                    self.entity_parent_start_index(),
+                )
+                .await?
+            {
+                if self
+                    .public_state
+                    .worker()
+                    .agent_method_invalidates_read_only_cache(full_function_name)
+                {
+                    self.state.last_state_change = Some(finished_index);
+                }
+                return Ok(());
+            }
+            // No terminal exists at the natural tail: complete this interrupted invocation live.
+            self.switch_to_live().await?;
+        }
+
+        // Both a fresh invocation and an incomplete replay now follow the same live path.
+        tool::durability::finish_producer_disposals(self).await?;
+        if matches!(self.state.store_replay_state, StoreReplayState::Primary) {
+            self.state
+                .replay_state
+                .release_retained_starts_at_live_invocation_end()
+                .await?;
+        }
+        let worker = self.public_state.worker();
+        let finished_index = worker
+            .add_to_oplog(OplogEntry::agent_invocation_failed(
+                self.entity_parent_start_index(),
+                key,
+                error.clone(),
+                anchor,
+            ))
+            .await?;
+        let commit_level = match worker.agent_mode() {
+            AgentMode::Durable => CommitLevel::Always,
+            AgentMode::Ephemeral => CommitLevel::Deferred,
+        };
+        worker
+            .commit_oplog_before_status_update(commit_level)
+            .await?;
+        // Mutations preceding a returned error are retained. Invalidate before publishing
+        // the failure so a following reader cannot reuse the pre-invocation state.
+        if worker.agent_method_invalidates_read_only_cache(full_function_name) {
+            worker.bump_read_only_cache_epoch();
+            self.state.last_state_change = Some(finished_index);
+        }
+        worker
+            .store_method_failure(&key, error, finished_index)
+            .await;
+        self.public_state
+            .event_service()
+            .emit_invocation_finished(full_function_name, &key, true);
+        Ok(())
+    }
+
     fn enter_read_only_mode(&mut self, method_name: String) {
-        if self.state.invocation_strictness == InvocationStrictness::ReadOnly {
+        let state = self.state.loop_invocation_state_mut();
+        if state.strictness == InvocationStrictness::ReadOnly {
             warn!(
                 "enter_read_only_mode called while already in read-only mode (current method: {:?}, new method: {})",
-                self.state.read_only_method_name, method_name
+                state.read_only_method_name, method_name
             );
         }
-        self.state.invocation_strictness = InvocationStrictness::ReadOnly;
-        self.state.read_only_method_name = Some(method_name);
+        state.strictness = InvocationStrictness::ReadOnly;
+        state.read_only_method_name = Some(method_name);
     }
 
     fn exit_read_only_mode(&mut self) {
-        match self.state.invocation_strictness {
+        let state = self.state.loop_invocation_state_mut();
+        match state.strictness {
             InvocationStrictness::ReadOnly => {
-                self.state.invocation_strictness = InvocationStrictness::Normal;
-                self.state.read_only_method_name = None;
+                state.strictness = InvocationStrictness::Normal;
+                state.read_only_method_name = None;
             }
             InvocationStrictness::Normal => {
                 warn!(
@@ -951,10 +1123,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         if is_live && !self.state.snapshotting_mode {
             tool::durability::finish_producer_disposals(self).await?;
         }
-        if !self.state.active_custom_invocations.is_empty()
-            || !self.state.custom_invocation_scopes.is_empty()
-        {
-            self.cleanup_custom_durability_state();
+        let invocation = self.invocation_key();
+        if self.has_open_custom_durability_state(invocation) {
+            self.cleanup_custom_durability_state(invocation);
             return Err(WorkerExecutorError::runtime(
                 "agent invocation returned while a custom durable invocation ownership scope was still open",
             ));
@@ -1111,22 +1282,37 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if &self.state.current_span_id == span_id {
+        if &self.state.invocation_state().current_span_id == span_id {
             // Walk up to the parent if it still exists in the invocation context;
             // otherwise fall back to the root.
             let parent_id = self
                 .state
+                .invocation_state()
                 .invocation_context
                 .get(span_id)
                 .ok()
                 .and_then(|span| span.parent().map(|p| p.span_id().clone()));
 
-            self.state.current_span_id = parent_id
-                .filter(|id| self.state.invocation_context.get(id).is_ok())
-                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
+            self.state.invocation_state_mut().current_span_id = parent_id
+                .filter(|id| {
+                    self.state
+                        .invocation_state()
+                        .invocation_context
+                        .get(id)
+                        .is_ok()
+                })
+                .unwrap_or_else(|| {
+                    self.state
+                        .invocation_state()
+                        .invocation_context
+                        .root
+                        .span_id()
+                        .clone()
+                });
         }
         let _ = self
             .state
+            .invocation_state_mut()
             .invocation_context
             .finish_span(span_id)
             .map_err(WorkerExecutorError::runtime);
@@ -1135,6 +1321,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.state
+            .invocation_state()
             .invocation_context
             .clone_as_inherited_stack(current_span_id)
             .limit_depth(self.state.config.limits.max_invocation_context_stack_depth)
