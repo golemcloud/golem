@@ -39,14 +39,14 @@ mod live_files;
 async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::schema::NamedField;
     use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+    use golem_common::schema::{AutoInjectedKind, NamedField};
     use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
     use golem_service_base::model::SafeIndex;
 
     let mut failures = Vec::new();
     for durable in [false, true] {
-        for binding in ["query", "header", "path"] {
+        for binding in ["query", "header", "path", "map", "optional-map"] {
             if durable && binding == "path" {
                 continue;
             }
@@ -60,21 +60,58 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
             let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
                 unreachable!()
             };
+            let map = binding.ends_with("map");
+            let input_type = if map {
+                let ty = SchemaType::map(SchemaType::string(), SchemaType::bool());
+                if binding == "optional-map" {
+                    SchemaType::option(SchemaType::option(ty))
+                } else {
+                    ty
+                }
+            } else {
+                SchemaType::U32 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(2)),
+                        max: None,
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                }
+            };
             call.method_input = CompiledInputSchema {
                 graph: SchemaGraph::empty(),
-                input_schema: InputSchema::parameters([NamedField::user_supplied(
-                    "amount",
-                    SchemaType::U32 {
-                        restrictions: Some(NumericRestrictions {
-                            min: Some(NumericBound::Unsigned(2)),
-                            max: None,
-                            unit: None,
-                        }),
-                        metadata: Default::default(),
-                    },
-                )]),
+                input_schema: InputSchema::parameters([
+                    NamedField::auto_injected(
+                        "principal",
+                        AutoInjectedKind::Principal,
+                        SchemaType::string(),
+                    ),
+                    NamedField::user_supplied("amount", input_type),
+                ]),
             };
             call.method_parameters = vec![match binding {
+                "map" | "optional-map" => {
+                    let ty = QueryOrHeaderType::Map {
+                        key: PathSegmentType::Str,
+                        value: PathSegmentType::Bool,
+                    };
+                    MethodParameter::Query {
+                        query_parameter_name: "wire".into(),
+                        parameter_type: if binding == "optional-map" {
+                            QueryOrHeaderType::Option {
+                                owner: None,
+                                name: None,
+                                inner: Box::new(QueryOrHeaderType::Option {
+                                    owner: None,
+                                    name: None,
+                                    inner: Box::new(ty),
+                                }),
+                            }
+                        } else {
+                            ty
+                        },
+                    }
+                }
                 "query" => MethodParameter::Query {
                     query_parameter_name: "wire".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
@@ -114,6 +151,15 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
             );
             let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
             let cases: &[(&str, &[&str], &str, &str)] = match binding {
+                "map" | "optional-map" => &[
+                    ("/run?wire=x", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?w%69re=x&wire[env]=true",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
+                ],
                 "query" => &[
                     ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
                     (
@@ -187,9 +233,18 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                             .any(|error| error.as_str().unwrap().contains(detail)),
                         "{body}"
                     );
+                    if map {
+                        assert!(
+                            body["errors"].as_array().unwrap().iter().any(|error| {
+                                error.as_str().unwrap().contains("maps require name[key]")
+                            }),
+                            "{body}"
+                        );
+                    }
                 }
             }
             assert!(harness.contexts.lock().unwrap().is_empty());
+            assert!(harness.metadata_reads.lock().unwrap().is_empty());
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");

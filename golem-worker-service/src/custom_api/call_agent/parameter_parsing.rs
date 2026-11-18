@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::custom_api::error::RequestHandlerError;
-use golem_common::schema::SchemaValue;
+use golem_common::schema::{FieldSource, SchemaType, SchemaValue};
 use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType};
 use std::collections::HashMap;
+
+const SCALAR_MAP_ERROR: &str = "maps require name[key] entries, not a scalar value";
 
 /// Recognize one decoded deepObject entry, without admitting nested brackets.
 fn map_entry_key<'a>(name: &str, wire_name: &'a str) -> Option<&'a str> {
@@ -32,20 +34,35 @@ pub(in crate::custom_api) fn validate_query_parameters(
     controls: &[&str],
 ) -> Result<(), RequestHandlerError> {
     use golem_service_base::custom_api::{MethodParameter, PhantomSelection};
-    for name in request.query_params().keys() {
+    let mut names: Vec<_> = request.query_params().keys().collect();
+    names.sort_unstable();
+    for name in names {
         if controls.contains(&name.as_str())
             || matches!(&behaviour.phantom_selection, PhantomSelection::Query { name: selector, .. } if selector == name)
         {
             continue;
         }
-        if behaviour.method_parameters.iter().any(|parameter| {
-            matches!(parameter, MethodParameter::Query { query_parameter_name, parameter_type }
-            if if parameter_type.is_map() {
-                map_entry_key(query_parameter_name, name).is_some()
-            } else {
-                query_parameter_name == name
+        if let Some((index, MethodParameter::Query { query_parameter_name, parameter_type })) =
+            behaviour.method_parameters.iter().enumerate().find(|(_, parameter)| {
+                matches!(parameter, MethodParameter::Query { query_parameter_name, parameter_type }
+                if query_parameter_name == name
+                    || (parameter_type.is_map() && map_entry_key(query_parameter_name, name).is_some()))
             })
-        }) {
+        {
+            if parameter_type.is_map() && query_parameter_name == name {
+                let field = behaviour.method_input.input_schema.fields().iter()
+                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                    .filter(|field| !matches!(
+                        behaviour.method_input.graph.resolve_ref(&field.schema),
+                        Ok(SchemaType::Stream { .. })
+                    ))
+                    .nth(index)
+                    .ok_or_else(|| RequestHandlerError::invariant_violated("Method parameter has no input field"))?;
+                return Err(RequestHandlerError::InvalidParameter {
+                    name: field.name.clone(),
+                    error: SCALAR_MAP_ERROR.into(),
+                });
+            }
             continue;
         }
         return Err(RequestHandlerError::UnknownQueryParameter { name: name.clone() });
@@ -81,7 +98,7 @@ pub(super) fn parse_query_parameter(
             if query.contains_key(name) {
                 return Err(RequestHandlerError::InvalidParameter {
                     name: name.into(),
-                    error: "maps require name[key] entries, not a scalar value".into(),
+                    error: SCALAR_MAP_ERROR.into(),
                 });
             }
             let mut entries: Vec<(SchemaValue, SchemaValue)> = Vec::new();

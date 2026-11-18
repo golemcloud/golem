@@ -721,6 +721,24 @@ mod tests {
         assert!(
             validate_query_parameters(&request, &behaviour, &["offset", "live", "cursor"]).is_ok()
         );
+        for _ in 0..32 {
+            for query in [
+                "z=1&b=2&%61=3&q=x&instance=x&offset=0",
+                "%61=3&offset=0&instance=x&q=x&b=2&z=1",
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/?{query}").parse().unwrap())
+                        .finish(),
+                );
+                let error =
+                    validate_query_parameters(&request, &behaviour, &["offset"]).unwrap_err();
+                assert!(
+                    matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "a"),
+                    "{error:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -814,41 +832,90 @@ mod tests {
     }
 
     #[test]
-    async fn unknown_query_fails_before_cache_metadata_or_body_reads() {
+    async fn invalid_query_fails_before_cache_metadata_or_body_reads() {
         use futures::stream;
         use golem_common::model::agent::CachePolicy;
+        use golem_common::schema::NamedField;
+        use golem_service_base::custom_api::{CompiledSchema, QueryOrHeaderType};
         let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
         let handler = CallAgentHandler::new(harness.worker_service.clone());
         for method in ["GET", "HEAD", "DELETE", "POST"] {
-            let resolver = test_resolver(vec![test_route(1, "/", Some(method), "typed")]);
-            let request = poem::Request::builder()
-                .uri("/?v=3".parse().unwrap())
-                .method(method.parse().unwrap())
-                .header("host", "example.com")
-                .header("if-none-match", "*")
-                .body(poem::Body::from_bytes_stream(stream::poll_fn(
-                    |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
-                        panic!("query rejection must not read body")
+            for query in ["v=3", "lbl=x", "lbl=x&lbl[env]=true"] {
+                let resolver = test_resolver(vec![test_route(1, "/", Some(method), "typed")]);
+                let request = poem::Request::builder()
+                    .uri(format!("/?{query}").parse().unwrap())
+                    .method(method.parse().unwrap())
+                    .header("host", "example.com")
+                    .header("content-type", "application/json")
+                    .header("if-none-match", "*")
+                    .body(poem::Body::from_bytes_stream(stream::poll_fn(
+                        |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                            panic!("query rejection must not read body")
+                        },
+                    )));
+                let route = resolver.resolve_matching_route(&request).await.unwrap();
+                let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+                else {
+                    panic!("not typed")
+                };
+                let mut behaviour = behaviour.clone();
+                behaviour.method_input = CompiledInputSchema {
+                    graph: SchemaGraph::empty(),
+                    input_schema: InputSchema::parameters([NamedField::user_supplied(
+                        "labels",
+                        SchemaType::map(SchemaType::string(), SchemaType::bool()),
+                    )]),
+                };
+                behaviour.method_parameters = vec![MethodParameter::Query {
+                    query_parameter_name: "lbl".into(),
+                    parameter_type: QueryOrHeaderType::Map {
+                        key: PathSegmentType::Str,
+                        value: PathSegmentType::Bool,
                     },
-                )));
-            let route = resolver.resolve_matching_route(&request).await.unwrap();
-            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
-            else {
-                panic!("not typed")
-            };
-            let mut behaviour = behaviour.clone();
-            behaviour.read_only = Some(ReadOnlyConfig {
-                cache_policy: CachePolicy::UntilWrite(Default::default()),
-                uses_principal: false,
-            });
-            let error = handler
-                .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
-                .await
-                .unwrap_err();
-            assert!(
-                matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "v")
-            );
-            assert!(harness.metadata_reads.lock().unwrap().is_empty());
+                }];
+                if method == "POST" {
+                    behaviour.method_input.input_schema = InputSchema::parameters([
+                        NamedField::user_supplied(
+                            "labels",
+                            SchemaType::map(SchemaType::string(), SchemaType::bool()),
+                        ),
+                        NamedField::user_supplied("payload", SchemaType::string()),
+                    ]);
+                    behaviour
+                        .method_parameters
+                        .push(MethodParameter::JsonObjectBodyField {
+                            field_index: 0.into(),
+                        });
+                    behaviour.body = RequestBodySchema::JsonBody {
+                        expected: CompiledSchema {
+                            graph: SchemaGraph::anonymous(SchemaType::record_from_fields([(
+                                "payload",
+                                SchemaType::string(),
+                            )])),
+                        },
+                    };
+                }
+                behaviour.read_only = Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Default::default()),
+                    uses_principal: false,
+                });
+                let error = handler
+                    .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
+                    .await
+                    .unwrap_err();
+                if query == "v=3" {
+                    assert!(
+                        matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "v")
+                    );
+                } else {
+                    assert!(
+                        matches!(error, RequestHandlerError::InvalidParameter { ref name, ref error } if name == "labels" && error.contains("maps require name[key]")),
+                        "{error:?}"
+                    );
+                }
+                assert!(harness.metadata_reads.lock().unwrap().is_empty());
+                assert!(harness.contexts.lock().unwrap().is_empty());
+            }
         }
     }
 
