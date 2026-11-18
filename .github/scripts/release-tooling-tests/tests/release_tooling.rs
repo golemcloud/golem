@@ -97,6 +97,42 @@ fn main_validation_lists_all_commits_since_the_previous_selected_run() {
 }
 
 #[test]
+fn main_validation_reuses_component_wasms_by_source_across_languages() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_fixtures.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_keeps_failed_workload_results_separate_from_cache_delivery() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_cache_lifecycle.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn release_preparation_requires_the_selected_preflight_and_never_publishes_after_a_failed_gate() {
     let workflow: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(workspace_path().join(".github/workflows/prepare-golem-release.yaml"))

@@ -118,6 +118,8 @@ jobs:
     timeout-minutes: 330
     permissions:
       contents: read
+    outputs:
+      workload_exit_code: ${{ steps.workload.outputs.exit_code }}
     env:
       CARGO_BUILD_JOBS: 20
       WASI_SDK_PATH: /opt/wasi-sdk
@@ -158,13 +160,20 @@ jobs:
           echo "SBT_OPTS=-Dsbt.ivy.home=$PWD/.validation-cache/ivy -Dsbt.global.base=$PWD/.validation-cache/sbt-global -Dsbt.boot.directory=$PWD/.validation-cache/sbt-boot" >> "$GITHUB_ENV"
       - uses: ./.validation-control/.github/actions/setup-main-validation
       - name: Validate the selected source
+        id: workload
         timeout-minutes: 300
         env:
           CI_DASHBOARD_URL: ${{ vars.CI_DASHBOARD_URL }}
           CI_DASHBOARD_PROGRESS_TOKEN: ${{ secrets.CI_DASHBOARD_PROGRESS_TOKEN }}
           MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
           MAIN_VALIDATION_CONTEXT: ${{ needs.select.outputs.context }}
-        run: python3 .validation-control/.github/main-validation/progress.py observe -- cargo make --profile ci main-validation
+        shell: bash
+        run: |
+          # Keep ordinary workload failures out of the cache-owning job's status.
+          # The result job requires this exit code as well as successful cache/report delivery.
+          status=0
+          python3 .validation-control/.github/main-validation/progress.py observe -- cargo make --profile ci main-validation || status=$?
+          printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
       - name: Retain Linux reports even after failure
         if: always()
         uses: actions/upload-artifact@v6
@@ -247,7 +256,7 @@ jobs:
           SOURCE: ${{ needs.select.outputs.source }}
           REQUEST: ${{ needs.select.outputs.request }}
           CONTEXT: ${{ needs.select.outputs.context }}
-          PASSED: ${{ needs.linux.result == 'success' && needs.apfs.result == 'success' && steps.linux-reports.outcome == 'success' && steps.apfs-reports.outcome == 'success' && steps.report.outcome == 'success' }}
+          PASSED: ${{ needs.linux.result == 'success' && needs.linux.outputs.workload_exit_code == '0' && needs.apfs.result == 'success' && steps.linux-reports.outcome == 'success' && steps.apfs-reports.outcome == 'success' && steps.report.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail

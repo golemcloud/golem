@@ -35,13 +35,37 @@ preflight. Unless it is `true`, preparation continues to call full reusable CI.
 An acceptance result cannot satisfy the production release gate.
 
 The Linux target is `blacksmith-32vcpu-ubuntu-2404`. Toolchains use existing setup
-actions. Sticky disks retain the root Cargo target and designated dependency
-caches, not the checkout or exported WASM fixtures. Each job checks out clean
-source. Fixture compilation uses `target/main-validation-fixture-target` on the
-same sticky disk, rather than fresh per-application Cargo targets. The build
-script still invalidates each independent Rust root package and rebuilds all
-fixtures, including update v3 and v4; compiled dependencies remain reusable.
-This is compiler-cache reuse, not a cache hit for completed fixture bundles.
+actions. Sticky disks retain the root Cargo target, designated dependency caches
+and completed fixture WASMs. Each job checks out clean source. Fixture compilation
+uses `target/main-validation-fixture-target` on the same sticky disk, rather than
+fresh per-application Cargo targets. A cache miss still invalidates each independent
+Rust root package before building; compiled dependencies remain reusable.
+
+Sticky disks save only when their owning job succeeds, even with `commit: true`.
+The Linux workload therefore reports its actual exit code as a job output. An
+ordinary test failure does not fail the cache-owning step. The result job still
+requires that exit code to be exactly zero, successful Linux/APFS jobs and all
+report deliveries before publishing success. Missing exit codes fail closed.
+Setup, upload, cancellation and runner timeout failures can still prevent saving.
+A green Linux job alone is not a green validation result.
+
+Completed WASMs are cached per application for every language, including benchmark
+builds. There is no separate application or output allowlist. Each successful build
+records the WASMs it exports. The key hashes the application's checked-in directory,
+referenced sibling fixture directories, SDK and WIT sources, the CLI and its local
+dependencies, shared build recipes and the build preset. Unrelated component and
+executor changes do not invalidate that application's entry. CLI binary Git-version
+strings are not input identities.
+
+This is a source-based reuse policy: external dependency or compiler updates alone
+do not refresh unchanged WASMs. Only exported WASMs are restored, not compiler
+targets, installed dependencies, generated bridge sources or task-result markers.
+Cache hits skip clean/build/copy but still run both fixture-check passes, all SDK
+validation and fixture assertions, including the distinct update-v3/v4 guard.
+Missing or corrupt bundles rebuild. Entries are staged under
+`.validation-cache/fixtures-v1/pending` and published atomically to `completed`
+only after fixture validation succeeds. A new cycle discards unvalidated staging.
+
 The outer Lima workload VM is parked on the local
 `gol-1971-own-machine-vm` branch; only the existing managed-XFS tests use Lima.
 The own-machine phase must accept its VM and mount controls separately.

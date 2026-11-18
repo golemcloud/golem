@@ -124,6 +124,8 @@ set_env GOLEM_CLI ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/dev-release-ci/golem
 set_env GOLEM_TS_PRESET quick
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-fixture-target
 root = pwd
+set_env GOLEM_FIXTURE_CACHE ${root}/.validation-cache/fixtures-v1/completed
+exec --fail-on-error python3 .github/main-validation/fixture-cache.py begin
 cd sdks/moonbit/golem_sdk_tools
 exec --fail-on-error moon update
 cd ${root}/test-components/tool-streaming-moonbit
@@ -141,6 +143,7 @@ different = exec --get-exit-code cmp --silent test-components/it_agent_update_v3
 if not eq ${different} 1
     trigger_error "Update v3/v4 fixtures must exist and have different contents"
 end
+exec --fail-on-error python3 .github/main-validation/fixture-cache.py publish
 '''
 
 # These wrappers collect ordinary failures and return normally so cargo-make joins
