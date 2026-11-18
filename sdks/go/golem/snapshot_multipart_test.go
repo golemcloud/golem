@@ -181,13 +181,16 @@ func TestMultipartBoundaryAvoidsCollisions(t *testing.T) {
 
 func TestMultipartRejectsMalformedFramingEnvelopesAndNames(t *testing.T) {
 	const mime = "multipart/mixed; boundary=b"
-	envelope := `{"version":2,"state":null}`
+	envelope := `{"version":1,"principal":{},"state":null}`
 	wrap := func(state, extra string) []byte {
 		return []byte("--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n" + state + "\r\n" + extra + "--b--\r\n")
 	}
 	valid := string(wrap(envelope, ""))
 	if _, err := decodeMultipart([]byte(valid), mime); err != nil {
 		t.Fatalf("valid: %v", err)
+	}
+	if _, err := decodeMultipart(wrap(`{"version":2,"state":null}`, ""), mime); err != nil {
+		t.Fatalf("2.0 envelope: %v", err)
 	}
 	if _, err := decodeMultipart(wrap(`{"version":3,"state":null}`, ""), mime); err == nil {
 		t.Error("version 3 was accepted")
@@ -197,12 +200,12 @@ func TestMultipartRejectsMalformedFramingEnvelopesAndNames(t *testing.T) {
 	}
 	for _, state := range []string{
 		`[1,{},null]`,
-		// The 1.6 envelope is an unknown version.
-		`{"version":1,"principal":{},"state":null}`,
-		strings.Replace(envelope, `"version":2`, `"version":2,"version":2`, 1),
-		strings.Replace(envelope, `"version":2`, `"version":2.0`, 1),
-		strings.Replace(envelope, `"version":2`, `"version":2e0`, 1),
-		`{"version":2}`,
+		`{"version":1,"principal":["anonymous"],"state":null}`,
+		strings.Replace(envelope, `"version":1`, `"version":1,"version":1`, 1),
+		strings.Replace(envelope, `"version":1`, `"version":1.0`, 1),
+		strings.Replace(envelope, `"version":1`, `"version":1e0`, 1),
+		strings.Replace(envelope, `"principal":{}`, `"principal":{"agent":{},"agent":{}}`, 1),
+		`{"version":1,"principal":{}}`,
 	} {
 		if _, err := decodeMultipart(wrap(state, ""), mime); err == nil {
 			t.Errorf("accepted envelope %s", state)

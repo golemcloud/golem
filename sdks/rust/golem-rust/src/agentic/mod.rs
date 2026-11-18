@@ -83,6 +83,7 @@ mod extended_tool_type;
 mod http;
 mod identity;
 mod multimodal;
+mod principal_serde;
 pub mod reflection;
 mod resolved_agent;
 mod schema;

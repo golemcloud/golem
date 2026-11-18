@@ -40,6 +40,8 @@ struct JsonSnapshotEnvelope<'a> {
     #[serde(borrow, default, deserialize_with = "present_json_field")]
     version: Option<&'a serde_json::value::RawValue>,
     #[serde(borrow, default, deserialize_with = "present_json_field")]
+    principal: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
     state: Option<&'a serde_json::value::RawValue>,
 }
 
@@ -61,9 +63,9 @@ fn encode_json_snapshot(state: &[u8]) -> Vec<u8> {
         .expect("Failed to serialize snapshot envelope")
 }
 
-/// Reads a snapshot envelope: JSON version 2, multipart version 2 or binary version 3. Any other
-/// version is refused. The envelope holds no caller: the caller of an invocation comes from the
-/// host, never from saved state.
+/// Reads a snapshot envelope: the 2.0 forms, and the 1.6 forms that this SDK has always read.
+/// The principal of a 1.6 envelope is checked as before and then dropped: the caller of an
+/// invocation comes from the host, never from saved state.
 fn decode_snapshot(
     snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
 ) -> Result<super::SnapshotData, String> {
@@ -88,8 +90,16 @@ fn decode_snapshot(
         let version = json
             .version
             .ok_or_else(|| "JSON snapshot missing 'version' field".to_string())?;
-        if version.get() != "2" {
-            return Err("JSON snapshot version must be 2".to_string());
+        match serde_json::from_str::<u64>(version.get()).ok() {
+            Some(1) => {
+                let principal = json
+                    .principal
+                    .ok_or_else(|| "JSON snapshot missing 'principal' field".to_string())?;
+                super::principal_serde::validate_json_bytes(principal.get().as_bytes())
+                    .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?;
+            }
+            Some(2) => {}
+            _ => return Err("JSON snapshot version must be 1 or 2".to_string()),
         }
         let state = json
             .state
@@ -98,10 +108,26 @@ fn decode_snapshot(
         Ok(super::SnapshotData::Json(agent_snapshot))
     } else {
         let version = bytes[0];
-        if version != BINARY_SNAPSHOT_VERSION {
-            return Err(format!("Unsupported snapshot version: {version}"));
+        match version {
+            1 | BINARY_SNAPSHOT_VERSION => Ok(super::SnapshotData::Bytes(bytes[1..].to_vec())),
+            2 => {
+                if bytes.len() < 5 {
+                    return Err("Version 2 snapshot too short for principal length".into());
+                }
+                let principal_len = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                let principal_start = 5usize;
+                let principal_end = principal_start
+                    .checked_add(principal_len)
+                    .ok_or_else(|| "Version 2 snapshot principal length overflow".to_string())?;
+                if bytes.len() < principal_end {
+                    return Err("Version 2 snapshot too short for principal data".into());
+                }
+                super::principal_serde::validate_json_bytes(&bytes[principal_start..principal_end])
+                    .map_err(|e| format!("Failed to deserialize principal: {e}"))?;
+                Ok(super::SnapshotData::Bytes(bytes[principal_end..].to_vec()))
+            }
+            _ => Err(format!("Unsupported snapshot version: {}", version)),
         }
-        Ok(super::SnapshotData::Bytes(bytes[1..].to_vec()))
     }
 }
 
@@ -426,6 +452,8 @@ mod tests {
         }
     }
 
+    const ANONYMOUS_1_6: &str = r#"{"tag":"anonymous"}"#;
+
     #[test]
     #[should_panic(
         expected = "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
@@ -464,25 +492,47 @@ mod tests {
     }
 
     #[test]
-    fn the_1_6_envelopes_are_unknown_versions() {
-        let json = br#"{"version":1,"principal":{"tag":"anonymous"},"state":{"value":42}}"#;
-        assert_eq!(
-            decode_snapshot(snapshot(json.to_vec(), "application/json")).unwrap_err(),
-            "JSON snapshot version must be 2"
-        );
-        let principal = br#"{"tag":"anonymous"}"#;
+    fn every_1_6_envelope_version_still_loads_and_drops_its_principal() {
+        let json = format!(r#"{{"version":1,"principal":{ANONYMOUS_1_6},"state":{{"value":42}}}}"#);
+        let SnapshotData::Json(state) =
+            decode_snapshot(snapshot(json.into_bytes(), "application/json")).unwrap()
+        else {
+            panic!("expected JSON");
+        };
+        assert_eq!(state, br#"{"value":42}"#);
+
         let mut binary_v2 = vec![2];
-        binary_v2.extend_from_slice(&(principal.len() as u32).to_be_bytes());
-        binary_v2.extend_from_slice(principal);
+        binary_v2.extend_from_slice(&(ANONYMOUS_1_6.len() as u32).to_be_bytes());
+        binary_v2.extend_from_slice(ANONYMOUS_1_6.as_bytes());
         binary_v2.extend_from_slice(b"state");
+        let SnapshotData::Bytes(state) =
+            decode_snapshot(snapshot(binary_v2, "application/octet-stream")).unwrap()
+        else {
+            panic!("expected bytes");
+        };
+        assert_eq!(state, b"state");
+
         let mut binary_v1 = vec![1];
         binary_v1.extend_from_slice(b"state");
-        for (payload, version) in [(binary_v2, 2), (binary_v1, 1)] {
-            assert_eq!(
-                decode_snapshot(snapshot(payload, "application/octet-stream")).unwrap_err(),
-                format!("Unsupported snapshot version: {version}")
-            );
-        }
+        let SnapshotData::Bytes(state) =
+            decode_snapshot(snapshot(binary_v1, "application/octet-stream")).unwrap()
+        else {
+            panic!("expected bytes");
+        };
+        assert_eq!(state, b"state");
+    }
+
+    #[test]
+    fn a_malformed_1_6_principal_still_fails_the_load() {
+        let json = br#"{"version":1,"principal":{"tag":"agent","val":{"componentId":"nope","agentId":"a"}},"state":null}"#;
+        assert!(decode_snapshot(snapshot(json.to_vec(), "application/json")).is_err());
+
+        let bad = br#"{"tag":"golem-user"}"#;
+        let mut binary_v2 = vec![2];
+        binary_v2.extend_from_slice(&(bad.len() as u32).to_be_bytes());
+        binary_v2.extend_from_slice(bad);
+        binary_v2.extend_from_slice(b"state");
+        assert!(decode_snapshot(snapshot(binary_v2, "application/octet-stream")).is_err());
     }
 
     #[test]
@@ -531,8 +581,10 @@ mod tests {
 
     #[test]
     fn json_snapshot_distinguishes_null_fields_and_requires_integer_version() {
-        for version in ["null", "2.0", "2e0", "-2", "\"2\"", "true", "1"] {
-            let payload = format!(r#"{{"version":{version},"state":null}}"#);
+        for version in ["null", "1.0", "1e0", "-1", "\"1\"", "true"] {
+            let payload = format!(
+                r#"{{"version":{version},"principal":{{"tag":"anonymous"}},"state":null}}"#
+            );
             let error = decode_snapshot(
                 load_snapshot::exports::golem::api::load_snapshot::Snapshot {
                     payload: payload.into_bytes(),
@@ -540,23 +592,39 @@ mod tests {
                 },
             )
             .unwrap_err();
-            assert_eq!(error, "JSON snapshot version must be 2");
+            assert_eq!(error, "JSON snapshot version must be 1 or 2");
         }
+        let error = decode_snapshot(
+            load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: br#"{"version":1,"principal":null,"state":null}"#.to_vec(),
+                mime_type: "application/json".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Failed to deserialize principal from JSON:"));
     }
 
     #[test]
     fn json_snapshot_requires_a_complete_envelope() {
         let cases = [
             (
-                serde_json::json!({ "state": {} }),
+                serde_json::json!({ "principal": { "tag": "anonymous" }, "state": {} }),
                 "JSON snapshot missing 'version' field",
             ),
             (
                 serde_json::json!({ "version": 3, "state": {} }),
-                "JSON snapshot version must be 2",
+                "JSON snapshot version must be 1 or 2",
             ),
             (
                 serde_json::json!({ "version": 2 }),
+                "JSON snapshot missing 'state' field",
+            ),
+            (
+                serde_json::json!({ "version": 1, "state": {} }),
+                "JSON snapshot missing 'principal' field",
+            ),
+            (
+                serde_json::json!({ "version": 1, "principal": { "tag": "anonymous" } }),
                 "JSON snapshot missing 'state' field",
             ),
         ];
@@ -575,7 +643,7 @@ mod tests {
 
     #[test]
     fn binary_snapshot_rejects_truncated_envelopes() {
-        for payload in [vec![], vec![2], vec![2, 0, 0, 0], vec![2, 0, 0, 0, 2, b'{']] {
+        for payload in [vec![2], vec![2, 0, 0, 0], vec![2, 0, 0, 0, 2, b'{']] {
             assert!(
                 decode_snapshot(
                     load_snapshot::exports::golem::api::load_snapshot::Snapshot {

@@ -41,6 +41,18 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
   return res.val;
 }
 
+/** What 2.0 saves after loading a 1.6 envelope: the same state with no principal. */
+const upgraded = ({
+  principal: _principal,
+  ...rest
+}: {
+  principal?: unknown;
+  version: number;
+}) => ({
+  ...rest,
+  version: 2,
+});
+
 const jsonOf = (data: Uint8Array) => JSON.parse(new TextDecoder().decode(data));
 const simpleSnapshot = (snapshot: SnapshotTransport) => {
   if (snapshot.kind === 'multipart') throw new Error('expected a simple snapshot');
@@ -632,7 +644,8 @@ describe('snapshot — multipart databases', () => {
         contentType: 'application/json',
         body: new TextEncoder().encode(
           JSON.stringify({
-            version: 2,
+            version: 1,
+            principal: { tag: 'anonymous' },
             state: { count: 17 },
             fileDatabases: {},
           }),
@@ -892,7 +905,9 @@ describe('snapshot — in-memory and file-backed databases', () => {
       {
         name: 'state',
         contentType: 'application/json',
-        body: new TextEncoder().encode(JSON.stringify({ version: 2, state: null })),
+        body: new TextEncoder().encode(
+          JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state: null }),
+        ),
       },
     ]);
     await env.isolatedGuest.loadSnapshot.load({
@@ -1011,7 +1026,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     expect(parts.map((part) => part.name)).toEqual(location === ':memory:' ? ['db:__proto__'] : []);
 
     const envelope = JSON.stringify({
-      version: 2,
+      version: 1,
+      principal: { tag: 'anonymous' },
       state: { count: 1 },
       fileDatabases: saved.fileDatabases,
     });
@@ -1044,7 +1060,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
               .body,
           )
         : new TextDecoder().decode(resaved.payload);
-    expect(resavedEnvelope).toBe(JSON.stringify(JSON.parse(envelope)));
+    expect(resavedEnvelope).toBe(JSON.stringify(upgraded(JSON.parse(envelope))));
   });
 
   it('fails the save of an in-memory database whose field name a part name cannot hold', async () => {
@@ -1171,7 +1187,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     env.select('ReopenFileDatabase');
 
     const envelope = {
-      version: 2,
+      version: 1,
+      principal: { tag: 'anonymous' },
       state: { count: 5 },
       fileDatabases: { fileDb: '/data/app.db' },
     };
@@ -1190,7 +1207,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
 
     const saved = await env.isolatedGuest.saveSnapshot.save();
     expect(saved.mimeType).toBe('application/json');
-    expect(jsonOf(saved.payload)).toEqual(envelope);
+    expect(jsonOf(saved.payload)).toEqual(upgraded(envelope));
   });
 
   it('fails the load when no file exists at a recorded location', async () => {
@@ -1215,7 +1232,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
       env.isolatedGuest.loadSnapshot.load({
         payload: new TextEncoder().encode(
           JSON.stringify({
-            version: 2,
+            version: 1,
+            principal: { tag: 'anonymous' },
             state: { count: 5 },
             fileDatabases: { fileDb: '/data/app.db' },
           }),
@@ -1245,7 +1263,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     env.select('MultipartDatabases');
 
     const envelope = {
-      version: 2,
+      version: 1,
+      principal: { tag: 'anonymous' },
       state: { count: 6 },
       fileDatabases: { fileDb: '/data/app.db' },
     };
@@ -1277,7 +1296,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const saved = await env.isolatedGuest.saveSnapshot.save();
     const parts = env.multipart.decodeMultipart(saved.payload, env.boundaryOf(saved.mimeType));
     expect(parts.map((part) => part.name)).toEqual(['state', 'db:memDb']);
-    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toEqual(envelope);
+    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toEqual(upgraded(envelope));
     expect(parts[1].body).toEqual(memoryBytes);
   });
 
@@ -1312,7 +1331,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
         JSON.stringify({
-          version: 2,
+          version: 1,
+          principal: { tag: 'anonymous' },
           state: { count: 7 },
           fileDatabases: { fileDb: '/data/app.db' },
         }),
@@ -1364,7 +1384,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
         env.isolatedGuest.loadSnapshot.load({
           payload: new TextEncoder().encode(
             JSON.stringify({
-              version: 2,
+              version: 1,
+              principal: { tag: 'anonymous' },
               state: { count: 9 },
               fileDatabases: { fileDb: '/data/app.db' },
             }),
@@ -1402,7 +1423,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
         JSON.stringify({
-          version: 2,
+          version: 1,
+          principal: { tag: 'anonymous' },
           state: { count: 8 },
           fileDatabases: {},
         }),
@@ -1438,7 +1460,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
         JSON.stringify({
-          version: 2,
+          version: 1,
+          principal: { tag: 'anonymous' },
           state: { count: 3 },
           fileDatabases: { fileDb: '/data/app.db' },
         }),
@@ -1479,7 +1502,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
         JSON.stringify({
-          version: 2,
+          version: 1,
+          principal: { tag: 'anonymous' },
           state: { count: 8 },
           fileDatabases: {},
         }),
@@ -1516,7 +1540,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
       env.isolatedGuest.loadSnapshot.load({
         payload: new TextEncoder().encode(
           JSON.stringify({
-            version: 2,
+            version: 1,
+            principal: { tag: 'anonymous' },
             state: { count: 8 },
             fileDatabases: {},
           }),
@@ -1550,7 +1575,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
         JSON.stringify({
-          version: 2,
+          version: 1,
+          principal: { tag: 'anonymous' },
           state: { count: 8 },
           fileDatabases: {},
         }),
@@ -1587,7 +1613,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
         JSON.stringify({
-          version: 2,
+          version: 1,
+          principal: { tag: 'anonymous' },
           state: { count: 8 },
           fileDatabases: {},
         }),

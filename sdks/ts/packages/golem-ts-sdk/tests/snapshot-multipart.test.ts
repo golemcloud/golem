@@ -7,6 +7,10 @@ import type { StandardSchemaV1 } from '../src/schema/standardSchema';
 
 const input = schemaValueToWit(v.record([]));
 const bytes: Uint8Array = new Uint8Array([0, 255, 13, 10]);
+const principal = {
+  tag: 'oidc',
+  val: { sub: 'Árvíz 🦀', issuer: 'issuer', claims: '{}' },
+} as const;
 
 const wireSnapshot = (
   state: unknown,
@@ -17,7 +21,7 @@ const wireSnapshot = (
     {
       name: 'state',
       contentType: 'application/json',
-      body: new TextEncoder().encode(JSON.stringify({ version: 2, state, ...metadata })),
+      body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state, ...metadata })),
     },
     ...extras,
   ]);
@@ -306,7 +310,7 @@ describe('explicit multipart snapshots', () => {
       `FailureParts(${JSON.stringify(input)})`;
     for (const snapshot of [
       {
-        payload: new TextEncoder().encode(JSON.stringify({ version: 2, state: null })),
+        payload: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state: null })),
         mimeType: 'application/json',
       },
       wireSnapshot(null, [{ name: 'db:main', contentType: 'application/x-sqlite3', body: bytes }]),
@@ -352,11 +356,11 @@ describe('explicit multipart snapshots', () => {
     (globalThis as { currentAgentId?: string }).currentAgentId =
       `MalformedParts(${JSON.stringify(input)})`;
     for (const body of [
-      new TextEncoder().encode('{"version":2,"version":2,"state":null}'),
-      new TextEncoder().encode('{"version":2.0,"state":null}'),
-      new TextEncoder().encode('{"version":2e0,"state":null}'),
-      // The 1.6 envelope is an unknown version.
-      new TextEncoder().encode('{"version":1,"principal":{"tag":"anonymous"},"state":null}'),
+      new TextEncoder().encode(
+        '{"version":1,"version":1,"principal":{"tag":"anonymous"},"state":null}',
+      ),
+      new TextEncoder().encode('{"version":1.0,"principal":{"tag":"anonymous"},"state":null}'),
+      new TextEncoder().encode('{"version":1e0,"principal":{"tag":"anonymous"},"state":null}'),
       new Uint8Array([255]),
     ]) {
       const { data, boundary } = encodeMultipart([
@@ -551,12 +555,12 @@ describe('explicit multipart snapshots', () => {
     }
   });
 
-  it('refuses a 1.6 multipart envelope before loading or installing state', async () => {
+  it('rejects malformed multipart principals before loading or installing state', async () => {
     const sdk = await import('../src');
     const load = vi.fn(() => ({}));
     sdk
       .defineAgent({
-        name: 'LegacyEnvelopeParts',
+        name: 'PrincipalParts',
         id: {},
         methods: {},
         snapshotting: { multipart: { state: z.null() } },
@@ -567,21 +571,45 @@ describe('explicit multipart snapshots', () => {
         snapshot: { save: () => ({ state: null, parts: new Map() }), load },
       });
     (globalThis as { currentAgentId?: string }).currentAgentId =
-      `LegacyEnvelopeParts(${JSON.stringify(input)})`;
-    const { data, boundary } = encodeMultipart([
-      {
-        name: 'state',
-        contentType: 'application/json',
-        body: new TextEncoder().encode(
-          JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state: null }),
-        ),
-      },
-    ]);
-    await expect(
-      sdk.loadSnapshot.load({ payload: data, mimeType: `multipart/mixed; boundary=${boundary}` }),
-    ).rejects.toBeDefined();
-    expect(load).not.toHaveBeenCalled();
-    await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
+      `PrincipalParts(${JSON.stringify(input)})`;
+    const invalid: unknown[] = [
+      null,
+      [],
+      { tag: 'oidc', val: null },
+      { tag: 'agent', val: { componentId: '00000000-0000-0000-0000-000000000001', agentId: 17 } },
+      { tag: 'golem-user', val: { accountId: 17 } },
+    ];
+    for (const field of [
+      'sub',
+      'issuer',
+      'claims',
+      'email',
+      'name',
+      'givenName',
+      'familyName',
+      'picture',
+      'preferredUsername',
+      'emailVerified',
+    ]) {
+      invalid.push({
+        tag: 'oidc',
+        val: { ...principal.val, [field]: field === 'emailVerified' ? 'false' : 17 },
+      });
+    }
+    for (const principal of invalid) {
+      const { data, boundary } = encodeMultipart([
+        {
+          name: 'state',
+          contentType: 'application/json',
+          body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state: null })),
+        },
+      ]);
+      await expect(
+        sdk.loadSnapshot.load({ payload: data, mimeType: `multipart/mixed; boundary=${boundary}` }),
+      ).rejects.toBeDefined();
+      expect(load).not.toHaveBeenCalled();
+      await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
+    }
   });
 
   it.each(['$db', 'db😀', 'cache db', 'db\\cache'])(

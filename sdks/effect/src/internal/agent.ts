@@ -1509,8 +1509,9 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     throw new Error(`load-snapshot: agent '${agentTypeName}' did not declare a snapshot definition`)
   }
 
-  // 2. Decode the envelope. It holds no caller: the caller of an invocation
-  //    comes from the host and never from saved state.
+  // 2. Decode the envelope. A snapshot written by 1.6 carries a principal;
+  //    the decoder checks it and drops it, because the caller of an
+  //    invocation comes from the host and never from saved state.
   const decoded = decodeEnvelope(snapshot)
 
   let saved: unknown

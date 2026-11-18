@@ -38,15 +38,34 @@ describe("snapshot-envelope JSON format", () => {
     expect(decodeEnvelope(env)).toEqual({ kind: "json", state: { count: 42 } })
   })
 
-  it("refuses a 1.6 envelope as an unknown version", () => {
-    for (const principal of [anonymous, oidcAlice]) {
+  it("reads a 1.6 envelope and drops its principal", () => {
+    const decoded = decodeEnvelope({
+      payload: text({ version: 1, principal: oidcAlice, state: "x" }),
+      mimeType: "application/json",
+    })
+    expect(decoded).toEqual({ kind: "json", state: "x" })
+  })
+
+  it("rejects a 1.6 envelope whose principal is malformed", () => {
+    for (const principal of [
+      { tag: "oidc", val: { sub: "alice" } },
+      { tag: "unknown" },
+      { tag: "agent", val: { componentId: "not-a-uuid", agentId: "a" } },
+      "anonymous",
+    ]) {
       expect(() =>
         decodeEnvelope({
-          payload: text({ version: 1, principal, state: "x" }),
+          payload: text({ version: 1, principal, state: 0 }),
           mimeType: "application/json",
         }),
       ).toThrow(SnapshotEnvelopeError)
     }
+  })
+
+  it("rejects a 1.6 envelope without a principal", () => {
+    expect(() =>
+      decodeEnvelope({ payload: text({ version: 1, state: 0 }), mimeType: "application/json" }),
+    ).toThrow(SnapshotEnvelopeError)
   })
 
   it("rejects malformed JSON payloads", () => {
@@ -62,7 +81,7 @@ describe("snapshot-envelope JSON format", () => {
     for (const version of [0, 3, 99]) {
       expect(() =>
         decodeEnvelope({
-          payload: text({ version, state: 0 }),
+          payload: text({ version, principal: anonymous, state: 0 }),
           mimeType: "application/json",
         }),
       ).toThrow(SnapshotEnvelopeError)
@@ -94,20 +113,25 @@ describe("snapshot-envelope binary format", () => {
     expect(decoded.userPayload.length).toBe(0)
   })
 
-  it("refuses a 1.6 binary v2 envelope as an unknown version", () => {
+  it("reads a 1.6 binary v2 envelope and drops its principal", () => {
     for (const principal of [anonymous, oidcAlice]) {
-      let refusal: unknown
-      try {
-        decodeEnvelope({
-          payload: legacyBinary(principal, new Uint8Array([7, 8, 9])),
-          mimeType: "application/octet-stream",
-        })
-      } catch (error) {
-        refusal = error
-      }
-      expect(refusal).toBeInstanceOf(SnapshotEnvelopeError)
-      expect((refusal as SnapshotEnvelopeError).reason).toContain("unsupported version byte 2")
+      const decoded = decodeEnvelope({
+        payload: legacyBinary(principal, new Uint8Array([7, 8, 9])),
+        mimeType: "application/octet-stream",
+      })
+      expect(decoded.kind).toBe("binary")
+      if (decoded.kind !== "binary") throw new Error()
+      expect(Array.from(decoded.userPayload)).toEqual([7, 8, 9])
     }
+  })
+
+  it("rejects a 1.6 binary v2 envelope whose principal is malformed", () => {
+    expect(() =>
+      decodeEnvelope({
+        payload: legacyBinary({ tag: "oidc", val: {} }, new Uint8Array([1])),
+        mimeType: "application/octet-stream",
+      }),
+    ).toThrow(SnapshotEnvelopeError)
   })
 
   it("rejects the removed v1 binary envelope", () => {
@@ -115,6 +139,22 @@ describe("snapshot-envelope binary format", () => {
     const payload = new Uint8Array(1 + userBytes.length)
     payload[0] = 1
     payload.set(userBytes, 1)
+    expect(() => decodeEnvelope({ payload, mimeType: "application/octet-stream" })).toThrow(
+      SnapshotEnvelopeError,
+    )
+  })
+
+  it("rejects truncated v2 headers", () => {
+    const payload = new Uint8Array([2, 0, 0]) // version=2 but truncated len
+    expect(() => decodeEnvelope({ payload, mimeType: "application/octet-stream" })).toThrow(
+      SnapshotEnvelopeError,
+    )
+  })
+
+  it("rejects v2 payloads where principalLen exceeds the buffer", () => {
+    const payload = new Uint8Array(5)
+    payload[0] = 2
+    new DataView(payload.buffer).setUint32(1, 0xffff_ffff, false)
     expect(() => decodeEnvelope({ payload, mimeType: "application/octet-stream" })).toThrow(
       SnapshotEnvelopeError,
     )

@@ -67,20 +67,27 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         val stateJson = """{"counter":42,"label":"hello"}"""
         assertTrue(decodeJson(s"""{"version":2,"state":$stateJson}""") == Right(printed(stateJson)))
       },
-      test("refuses a 1.6 envelope as an unknown version") {
-        val forms = List(legacyOidc, legacyAgent, legacyUser, legacyAnonymous)
+      test("reads a 1.6 envelope and drops its principal") {
+        val stateJson = """{"x":"y"}"""
+        val forms     = List(legacyOidc, legacyAgent, legacyUser, legacyAnonymous)
         assertTrue(forms.forall { principal =>
-          decodeJson(s"""{"version":1,"principal":$principal,"state":{"x":"y"}}""").left
-            .exists(_.contains("Unsupported JSON snapshot version: 1"))
+          decodeJson(s"""{"version":1,"principal":$principal,"state":$stateJson}""") == Right(printed(stateJson))
         })
       },
-      test("loader rejects missing version and state") {
-        val noVersion = decodeJson("""{"state":{}}""")
-        val noState   = decodeJson("""{"version":2}""")
-        assertTrue(noVersion.left.exists(_.contains("version")), noState.left.exists(_.contains("state")))
+      test("loader rejects missing version, principal and state") {
+        val noVersion   = decodeJson("""{"state":{}}""")
+        val noPrincipal = decodeJson("""{"version":1,"state":{}}""")
+        val noState     = decodeJson("""{"version":2}""")
+        assertTrue(
+          noVersion.left.exists(_.contains("version")),
+          noPrincipal.left.exists(_.contains("principal")),
+          noState.left.exists(_.contains("state"))
+        )
       },
-      test("loader rejects an unsupported version") {
-        assertTrue(decodeJson("""{"version":3,"state":{}}""").left.exists(_.contains("version")))
+      test("loader rejects a malformed 1.6 principal and an unsupported version") {
+        val invalidPrincipal = decodeJson("""{"version":1,"principal":{"tag":"unknown"},"state":{}}""")
+        val wrongVersion     = decodeJson("""{"version":3,"state":{}}""")
+        assertTrue(invalidPrincipal.isLeft, wrongVersion.left.exists(_.contains("version")))
       }
     ),
     suite("Binary envelope")(
@@ -90,17 +97,14 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
       test("reads an empty 2.0 state") {
         assertTrue(decodeBinary(Array[Byte](3)) == Right(Seq.empty[Byte]))
       },
-      test("refuses a 1.6 binary v2 envelope as an unknown version") {
+      test("reads a 1.6 binary v2 envelope and drops its principal") {
         val forms = List(legacyOidc, legacyAgent, legacyUser, legacyAnonymous)
         assertTrue(
-          forms.forall(principal =>
-            decodeBinary(legacyBinary(principal, Array[Byte](9, 8))).left
-              .exists(_.contains("Unsupported snapshot version: 2"))
-          )
+          forms.forall(principal => decodeBinary(legacyBinary(principal, Array[Byte](9, 8))) == Right(Seq[Byte](9, 8)))
         )
       },
-      test("refuses the 1.6 binary v1 envelope as an unknown version") {
-        assertTrue(decodeBinary(Array[Byte](1, 10, 20)).left.exists(_.contains("Unsupported snapshot version: 1")))
+      test("legacy v1 stays principal-less") {
+        assertTrue(decodeBinary(Array[Byte](1, 10, 20)) == Right(Seq[Byte](10, 20)))
       },
       test("rejects empty, truncated, oversized, invalid-principal, and unknown envelopes") {
         val empty            = Guest.decodeSnapshotPayload(Array.emptyByteArray, "application/octet-stream")

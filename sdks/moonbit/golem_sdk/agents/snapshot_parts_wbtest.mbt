@@ -19,7 +19,7 @@ fn snapshot_test_wire(
 
 ///|
 fn snapshot_test_envelope() -> Bytes {
-  b"{\"version\":2,\"state\":null}"
+  b"{\"version\":1,\"principal\":{\"tag\":\"anonymous\"},\"state\":null}"
 }
 
 ///|
@@ -122,10 +122,7 @@ test "multipart empty bundle stays multipart and boundary collisions regenerate"
 test "multipart rejects SDK metadata shape duplicates and lexical version errors" {
   for
     text in [
-      "[]", "{\"version\":2.0,\"state\":null}", "{\"version\":2e0,\"state\":null}",
-      "{\"version\":2,\"version\":2,\"state\":null}",
-      // The 1.6 envelope is an unknown version.
-      "{\"version\":1.0,\"principal\":{\"tag\":\"anonymous\"},\"state\":null}",
+      "[]", "{\"version\":1.0,\"principal\":{\"tag\":\"anonymous\"},\"state\":null}",
       "{\"version\":1e0,\"principal\":{\"tag\":\"anonymous\"},\"state\":null}", "{\"version\":1,\"version\":1,\"principal\":{\"tag\":\"anonymous\"},\"state\":null}",
       "{\"version\":1,\"principal\":[],\"state\":null}", "{\"version\":1,\"principal\":{\"tag\":\"anonymous\",\"t\\u0061g\":\"anonymous\"},\"state\":null}",
       "{\"version\":1,\"principal\":{\"tag\":\"oidc\",\"val\":[]},\"state\":null}",

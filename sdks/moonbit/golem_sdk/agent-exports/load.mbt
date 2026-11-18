@@ -103,8 +103,22 @@ fn parse_snapshot_envelope(
         }
       None => raise SnapshotLoadError("Missing 'version' in snapshot envelope")
     }
-    if version != 2.0 {
+    if version != 1.0 && version != 2.0 {
       raise SnapshotLoadError("Unsupported JSON snapshot version: \{version}")
+    }
+    // A 1.6 envelope (version 1) carries a principal: it is checked as before and dropped.
+    if version == 1.0 {
+      let principal_json = match obj.get("principal") {
+        Some(principal) => principal
+        None =>
+          raise SnapshotLoadError("Missing 'principal' in snapshot envelope")
+      }
+      @agents.validate_legacy_principal_json(principal_json) catch {
+        e =>
+          raise SnapshotLoadError(
+            "Failed to parse principal: \{@debug.to_string(e)}",
+          )
+      }
     }
     let state_json = match obj.get("state") {
       Some(s) => s
@@ -118,9 +132,54 @@ fn parse_snapshot_envelope(
       raise SnapshotLoadError("Empty binary snapshot")
     }
     let version = data[0].to_int()
-    if version != 3 {
-      raise SnapshotLoadError("Unsupported binary snapshot version: \{version}")
+    match version {
+      // Version 1 is the 1.6 form without a principal; version 3 is the 2.0 form.
+      1 | 3 => {
+        let state_bytes = slice_fixedarray_to_bytes(data, 1)
+        @agents.SnapshotData::Binary(state_bytes)
+      }
+      2 => {
+        if data.length() < 5 {
+          raise SnapshotLoadError(
+            "Binary snapshot too short for version 2 header",
+          )
+        }
+        if data[1].to_int() > 0x7F {
+          raise SnapshotLoadError(
+            "Binary snapshot principal data exceeds supported size",
+          )
+        }
+        let principal_len = (data[1].to_int() << 24) |
+          (data[2].to_int() << 16) |
+          (data[3].to_int() << 8) |
+          data[4].to_int()
+        if principal_len > data.length() - 5 {
+          raise SnapshotLoadError(
+            "Binary snapshot too short for principal data",
+          )
+        }
+        let principal_bytes = Bytes::from_fixedarray(data)[5:5 + principal_len]
+        let principal_str = @utf8.decode(principal_bytes) catch {
+          _ => raise SnapshotLoadError("Invalid principal JSON UTF-8")
+        }
+        let principal_json = @json.parse(principal_str) catch {
+          e =>
+            raise SnapshotLoadError(
+              "Failed to parse principal JSON from binary envelope: \{e}",
+            )
+        }
+        // A 1.6 envelope: its principal is checked as before and dropped.
+        @agents.validate_legacy_principal_json(principal_json) catch {
+          e =>
+            raise SnapshotLoadError(
+              "Failed to deserialize principal: \{@debug.to_string(e)}",
+            )
+        }
+        let state_bytes = slice_fixedarray_to_bytes(data, 5 + principal_len)
+        @agents.SnapshotData::Binary(state_bytes)
+      }
+      other =>
+        raise SnapshotLoadError("Unsupported binary snapshot version: \{other}")
     }
-    @agents.SnapshotData::Binary(slice_fixedarray_to_bytes(data, 1))
   }
 }

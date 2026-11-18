@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
+import * as CoreTypes from "golem:core/types@2.0.0"
 import type { SnapshotPart } from "../Snapshot.js"
 import {
   decodeMultipart,
@@ -31,7 +32,7 @@ const BINARY_MIME = "application/octet-stream"
 const MULTIPART_MIME_PREFIX = "multipart/mixed"
 const SQLITE_PART_MIME = "application/x-sqlite3"
 const STATE_PART_NAME = "state"
-/** The binary snapshot version. Any other version byte is refused. */
+/** The binary snapshot version that 2.0 writes. Version 2 is the 1.6 form. */
 const BINARY_VERSION = 3
 const DB_PART_PREFIX = "db:"
 const USER_PART_PREFIX = "part:"
@@ -56,21 +57,75 @@ export const normalizeSnapshotContentType = (contentType: string): string => {
 // ---------------------------------------------------------------------------
 
 /**
- * Schema for the full envelope, `{ version: 2, state }`. Any other version is refused. The
- * `state` slot is intentionally `Schema.Unknown`: the user's own Schema has already encoded it to
- * a JSON value at the moment we build the envelope, and re-validation happens against the user's
- * Schema after decode.
+ * Each OIDC string-typed sub-claim is encoded as `T | null` on the wire, and tolerated as missing
+ * on decode.
  */
-const Envelope = Schema.Struct({
-  version: Schema.Literal(2),
-  state: Schema.Unknown,
-  fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-})
+const NullishString = Schema.optional(Schema.NullOr(Schema.String))
+const NullishBoolean = Schema.optional(Schema.NullOr(Schema.Boolean))
+
+/**
+ * The 1.6 principal of a snapshot, in its JSON-safe shape (UUIDs as strings).
+ *
+ * A 2.0 agent still reads snapshots that 1.6 wrote. The principal in such a snapshot is checked
+ * against this schema, so a malformed one still fails the load as it did before, and is then
+ * dropped: the caller of an invocation comes from the host, never from saved state.
+ */
+const LegacySerializedPrincipal = Schema.Union([
+  Schema.Struct({ tag: Schema.Literal("anonymous") }),
+  Schema.Struct({
+    tag: Schema.Literal("agent"),
+    val: Schema.Struct({
+      componentId: Schema.String,
+      agentId: Schema.String,
+    }),
+  }),
+  Schema.Struct({
+    tag: Schema.Literal("golem-user"),
+    val: Schema.Struct({ accountId: Schema.String }),
+  }),
+  Schema.Struct({
+    tag: Schema.Literal("oidc"),
+    val: Schema.Struct({
+      sub: Schema.String,
+      issuer: Schema.String,
+      email: NullishString,
+      name: NullishString,
+      emailVerified: NullishBoolean,
+      givenName: NullishString,
+      familyName: NullishString,
+      picture: NullishString,
+      preferredUsername: NullishString,
+      claims: Schema.String,
+    }),
+  }),
+])
+
+/**
+ * Schema for the full envelope. The 2.0 form is `{ version: 2, state }`; the 1.6 form is
+ * `{ version: 1, principal, state }`. The `state` slot is intentionally `Schema.Unknown`: the
+ * user's own Schema has already encoded it to a JSON value at the moment we build the envelope,
+ * and re-validation happens against the user's Schema after decode.
+ */
+const Envelope = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(2),
+    state: Schema.Unknown,
+    fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    principal: LegacySerializedPrincipal,
+    state: Schema.Unknown,
+    fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  }),
+])
 
 const EnvelopeFromString = Schema.fromJsonString(Envelope)
+const PrincipalFromString = Schema.fromJsonString(LegacySerializedPrincipal)
 
 const encodeEnvelope = Schema.encodeUnknownSync(EnvelopeFromString)
 const decodeEnvelopeFromString = Schema.decodeUnknownSync(EnvelopeFromString)
+const decodePrincipalFromString = Schema.decodeUnknownSync(PrincipalFromString)
 
 const encoder = new TextEncoder()
 const strictDecoder = strictTextDecoder()
@@ -80,6 +135,25 @@ const decodeUtf8 = (bytes: Uint8Array, ctx: string): string => {
     return strictDecoder.decode(bytes)
   } catch (err) {
     throw new SnapshotEnvelopeError(`${ctx}: payload is not valid UTF-8: ${String(err)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The 1.6 principal: checked, then dropped
+// ---------------------------------------------------------------------------
+
+/** Check that the UUID strings of a 1.6 principal parse, as the 1.6 reader did. */
+const checkLegacyPrincipal = (principal: typeof LegacySerializedPrincipal.Type): void => {
+  switch (principal.tag) {
+    case "anonymous":
+    case "oidc":
+      return
+    case "agent":
+      CoreTypes.parseUuid(principal.val.componentId)
+      return
+    case "golem-user":
+      CoreTypes.parseUuid(principal.val.accountId)
+      return
   }
 }
 
@@ -201,8 +275,9 @@ export interface DecodedMultipartEnvelope {
 export type DecodedEnvelope = DecodedJsonEnvelope | DecodedBinaryEnvelope | DecodedMultipartEnvelope
 
 /**
- * Decode a {@link ApiHost.Snapshot}: JSON and multipart version 2, binary version 3. Any other
- * version is refused.
+ * Decode a {@link ApiHost.Snapshot}. The 2.0 forms and the 1.6 forms that this SDK's 1.6 reader
+ * accepted (JSON v1, multipart v1 and binary v2) are read; a 1.6 principal is checked and dropped.
+ * Binary v1 stays rejected.
  */
 export const decodeEnvelope = (snapshot: ApiHost.Snapshot): DecodedEnvelope => {
   const mime = snapshot.mimeType
@@ -239,13 +314,21 @@ const parseEnvelopeJson = (text: string, ctx: string, strict = false) => {
           const keys = objects[objects.length - 1]!
           if (keys.has(key)) throw new Error(`duplicate JSON key '${key}'`)
           keys.add(key)
-          if (objects.length === 1 && key === "version" && tokens[i + 2] !== "2") {
-            throw new Error("multipart envelope version must be integer 2")
+          if (
+            objects.length === 1 &&
+            key === "version" &&
+            tokens[i + 2] !== "1" &&
+            tokens[i + 2] !== "2"
+          ) {
+            throw new Error("multipart envelope version must be integer 1 or 2")
           }
         }
       }
     }
-    return decodeEnvelopeFromString(text)
+    const envelope = decodeEnvelopeFromString(text)
+    // A 1.6 envelope: its principal was validated by the schema; check its UUIDs and drop it.
+    if (envelope.version === 1) checkLegacyPrincipal(envelope.principal)
+    return envelope
   } catch (err) {
     throw new SnapshotEnvelopeError(`${ctx}: ${String((err as Error).message ?? err)}`)
   }
@@ -349,6 +432,29 @@ const decodeBinaryEnvelope = (payload: Uint8Array): DecodedBinaryEnvelope => {
   const version = payload[0]!
   if (version === BINARY_VERSION) {
     return { kind: "binary", userPayload: payload.slice(1) }
+  }
+  if (version === 2) {
+    // A 1.6 envelope: its principal is checked and dropped.
+    if (payload.length < 5) {
+      throw new SnapshotEnvelopeError(`binary envelope (v2): truncated header`)
+    }
+    const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
+    const principalLen = view.getUint32(1, false)
+    if (payload.length < 5 + principalLen) {
+      throw new SnapshotEnvelopeError(
+        `binary envelope (v2): declared principal length ${principalLen} exceeds payload size ${payload.length - 5}`,
+      )
+    }
+    const principalBytes = payload.slice(5, 5 + principalLen)
+    const principalText = decodeUtf8(principalBytes, "binary envelope (v2): principal segment")
+    try {
+      checkLegacyPrincipal(decodePrincipalFromString(principalText))
+    } catch (err) {
+      throw new SnapshotEnvelopeError(
+        `binary envelope (v2): principal segment is not a valid principal: ${String((err as Error).message ?? err)}`,
+      )
+    }
+    return { kind: "binary", userPayload: payload.slice(5 + principalLen) }
   }
   throw new SnapshotEnvelopeError(`binary envelope: unsupported version byte ${version}`)
 }
