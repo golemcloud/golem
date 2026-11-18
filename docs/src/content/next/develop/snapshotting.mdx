@@ -793,7 +793,7 @@ If loading fails, partial state is discarded:
 
 ## A restored agent must behave like the live agent
 
-After loading a snapshot, Golem replays the invocations recorded after it and compares every result with the oplog. A restored agent must therefore return exactly what the live agent returned, for every later method result and host call. It is not enough that the snapshot holds the data: `load` must rebuild every value that a later result depends on in the same way that the live code keeps it. When a replayed result differs, the replay diverges with `Unexpected oplog entry during replay: expected …, got …`. When the failing replay started from a snapshot, such as the snapshot of the last manual update, the error names the oplog index of that snapshot.
+After loading a snapshot, Golem replays the invocations recorded after it and compares every result with the oplog. A restored agent must therefore return exactly what the live agent returned, for every later method result and host call. It is not enough that the snapshot holds the data: `load` must rebuild every value that a later result depends on in the same way that the live code keeps it. When a replayed result differs, the replay diverges with `Unexpected oplog entry at <index>: expected …, got …`. When the failing replay started from a snapshot, such as the snapshot of the last manual update, the error names the oplog index of that snapshot. When the failing replay started without a snapshot because recovery rejected the automatic snapshots it could use, the error names the oplog indexes of the rejected snapshots.
 
 Common causes:
 

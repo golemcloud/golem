@@ -20,8 +20,8 @@ use crate::Tracing;
 use golem_common::model::agent::{AgentMetadataDto, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentId, AgentStatus};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentStatus, OwnedAgentId};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
@@ -56,7 +56,7 @@ async fn add(
 /// The latest snapshot, when it follows the last finished invocation.
 async fn snapshot_at_tail(
     executor: &TestWorkerExecutor,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
 ) -> anyhow::Result<Option<OplogIndex>> {
     for _ in 0..50 {
         let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
@@ -86,7 +86,7 @@ async fn add_until_snapshots(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     agent_id: &ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     mut len: usize,
     count: usize,
 ) -> anyhow::Result<usize> {
@@ -107,16 +107,17 @@ async fn add_until_snapshots(
 /// Runs the agent live from a snapshot whose load differs from the live state, then takes two
 /// newer snapshots and one more invocation, and restarts the executor. Recovery rejects both
 /// newer snapshots and replays from the authoritative baseline of the agent, which diverges at
-/// the first result that the live agent computed from the faulty load.
+/// the first result that the live agent computed from the faulty load. Gives the metadata of the
+/// failed agent, the oplog indexes of its snapshots and of its finished invocations.
 async fn fail_recovery_after_a_live_restore(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     executor: TestWorkerExecutor,
     component: &ComponentDto,
     agent_id: &ParsedAgentKey,
-    worker_id: &AgentId,
+    worker_id: &OwnedAgentId,
     len: usize,
-) -> anyhow::Result<AgentMetadataDto> {
+) -> anyhow::Result<(AgentMetadataDto, Vec<OplogIndex>, Vec<OplogIndex>)> {
     let len = add_until_snapshots(&executor, component, agent_id, worker_id, len, 1).await?;
     drop(executor);
 
@@ -136,13 +137,37 @@ async fn fail_recovery_after_a_live_restore(
     let metadata = executor.get_worker_metadata(worker_id).await?;
     assert_eq!(metadata.status, AgentStatus::Failed);
     assert_eq!(metadata.last_error_kind, Some(OplogErrorKind::Recovery));
-    Ok(metadata)
+    let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    let indexes_of = |is_kind: fn(&PublicOplogEntry) -> bool| {
+        oplog
+            .iter()
+            .filter(|entry| is_kind(&entry.entry))
+            .map(|entry| entry.oplog_index)
+            .collect()
+    };
+    let snapshots = indexes_of(|entry| matches!(entry, PublicOplogEntry::Snapshot(_)));
+    let finished =
+        indexes_of(|entry| matches!(entry, PublicOplogEntry::AgentInvocationFinished(_)));
+    Ok((metadata, snapshots, finished))
+}
+
+/// Splits the text of a replay divergence into the oplog index that it names and the text after
+/// the index.
+fn divergence_at(error: &str) -> (OplogIndex, &str) {
+    let (index, rest) = error
+        .strip_prefix("Unexpected oplog entry at ")
+        .and_then(|rest| rest.split_once(": "))
+        .unwrap_or_else(|| panic!("not a replay divergence: {error}"));
+    let index = index
+        .parse()
+        .unwrap_or_else(|_| panic!("no oplog index in the divergence: {error}"));
+    (OplogIndex::from_u64(index), rest)
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn ts_full_replay_divergence_keeps_its_text(
+async fn ts_full_replay_after_rejected_snapshots_names_them(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -154,22 +179,30 @@ async fn ts_full_replay_divergence_keeps_its_text(
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotMismatchAgent", "full-replay");
+    let agent_id = agent_key!("SnapshotMismatchAgent", "full-replay");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     // The first snapshot follows `add("x")`; its load sets approx to the length of `["x"]`, 5,
     // so the live agent then returns 5 + 2 = 7 for `add("xx")`, where a replay returns 1 + 2 = 3.
-    let metadata = fail_recovery_after_a_live_restore(
+    let (metadata, snapshots, finished) = fail_recovery_after_a_live_restore(
         deps, &context, executor, &component, &agent_id, &worker_id, 0,
     )
     .await?;
 
+    // Recovery rejects the two newest snapshots, the candidates of its start, and then replays
+    // without a snapshot.
+    let [.., older, newer] = snapshots[..] else {
+        panic!("the agent has at least two snapshots: {snapshots:?}");
+    };
+    let error = metadata.last_error.expect("a failed agent has an error");
+    let (index, rest) = divergence_at(&error);
+    assert!(finished.contains(&index), "{error}");
     assert_eq!(
-        metadata.last_error.as_deref(),
-        Some(
-            "Unexpected oplog entry during replay: expected add => AgentMethod { output: F64(7.0) }, got add => AgentMethod { output: F64(3.0) }"
+        rest,
+        format!(
+            "expected add => AgentMethod {{ output: F64(7.0) }}, got add => AgentMethod {{ output: F64(3.0) }}; replay started without a snapshot after the snapshots at oplog indexes {older}, {newer} were rejected; {SNAPSHOT_HINT}"
         )
     );
     Ok(())
@@ -190,7 +223,7 @@ async fn ts_divergence_after_a_snapshot_names_the_snapshot(
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapshotMismatchAgent", "update-baseline");
+    let agent_id = agent_key!("SnapshotMismatchAgent", "update-baseline");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -216,16 +249,15 @@ async fn ts_divergence_after_a_snapshot_names_the_snapshot(
         })
         .expect("the manual update has a pending-update entry");
 
-    let metadata = fail_recovery_after_a_live_restore(
+    let (metadata, _, finished) = fail_recovery_after_a_live_restore(
         deps, &context, executor, &updated, &agent_id, &worker_id, 1,
     )
     .await?;
 
     let error = metadata.last_error.expect("a failed agent has an error");
-    assert!(
-        error.starts_with("Unexpected oplog entry during replay: expected add => AgentMethod"),
-        "{error}"
-    );
+    let (index, rest) = divergence_at(&error);
+    assert!(finished.contains(&index), "{error}");
+    assert!(rest.starts_with("expected add => AgentMethod"), "{error}");
     assert!(
         error.ends_with(&format!(
             "; replay started from the snapshot at oplog index {baseline}; {SNAPSHOT_HINT}"
