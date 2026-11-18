@@ -38,7 +38,7 @@ use tracing::{
 pub(crate) use values::reject_quota_handles_in_oplog_entries;
 use values::{
     decode_untyped_schema_value, encode_public_typed_schema_value, encode_untyped_schema_value,
-    oplog_payload_from_wit, oplog_payload_to_wit,
+    oplog_payload_from_wit, oplog_payload_to_wit, requester_from_wit, requester_to_wit,
 };
 
 #[cfg(test)]

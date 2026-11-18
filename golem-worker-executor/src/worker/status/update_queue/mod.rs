@@ -199,6 +199,7 @@ impl UpdateQueue {
                 timestamp,
                 description,
                 update_attempt_index,
+                requester: _,
             } => self.after_pending_update(index, *timestamp, description, *update_attempt_index),
             OplogEntry::FailedUpdate {
                 target_revision,
@@ -330,7 +331,9 @@ pub(crate) fn manual_update_target_revision_of(
 ) -> Option<ComponentRevision> {
     fn target_revision(payload: &AgentInvocationPayload) -> Option<ComponentRevision> {
         match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => Some(*target_revision),
+            AgentInvocationPayload::ManualUpdate {
+                target_revision, ..
+            } => Some(*target_revision),
             _ => None,
         }
     }

@@ -179,6 +179,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         target_revision: target_revision.into(),
         description: description.into(),
         update_attempt_index: update_attempt_index.into(),
+        requester: public_caller_to_wit(requester),
     } }
     SuccessfulUpdate { record SuccessfulUpdateParams => SuccessfulUpdateParameters {
         timestamp: timestamp.into(),
@@ -565,11 +566,13 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                     caller: public_caller_to_wit(params.caller),
                 })
             }
-            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Self::ManualUpdate(oplog::ManualUpdateParameters {
-                    target_revision: target_revision.into(),
-                })
-            }
+            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+                target_revision,
+                requester,
+            }) => Self::ManualUpdate(oplog::ManualUpdateParameters {
+                target_revision: target_revision.into(),
+                requester: public_caller_to_wit(requester),
+            }),
         })
     }
 }

@@ -204,6 +204,7 @@ before (value) {}
         update_attempt_index: params
         .update_attempt_index
         .map(golem_common::model::oplog::OplogIndex::from_u64),
+        requester: Box::new(requester_from_wit(&params.requester)?),
     } }
     SuccessfulUpdate { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -673,6 +674,7 @@ before (value) {}
         timestamp: timestamp.into(),
         description: description.try_into()?,
         update_attempt_index: update_attempt_index.map(Into::into),
+        requester: requester_to_wit(&requester)?,
     } }
     SuccessfulUpdate { record (new_total_linear_memory_size) => RawSuccessfulUpdateParameters {
         timestamp: timestamp.into(),

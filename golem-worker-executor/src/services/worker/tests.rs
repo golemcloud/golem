@@ -330,6 +330,7 @@ fn invocation_pair(
             invocation_id: *key,
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
+                requester: golem_common::model::caller::Caller::anonymous(),
             })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),

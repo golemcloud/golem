@@ -1679,6 +1679,7 @@ mod tests {
                 target_revision: revision(target),
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -1699,6 +1700,7 @@ mod tests {
                 snapshot_bootstrap: None,
             },
             Some(index(admission)),
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -1711,6 +1713,7 @@ mod tests {
                 filesystem_snapshot: name,
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         )
     }
 
@@ -1721,6 +1724,7 @@ mod tests {
             invocation_id: InvocationId(Uuid::new_v4()),
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: revision(target),
+                requester: golem_common::model::caller::Caller::anonymous(),
             })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
@@ -1909,6 +1913,7 @@ mod tests {
                     filesystem_snapshot: None,
                 },
                 Some(index(4)),
+                Box::new(golem_common::model::caller::Caller::anonymous()),
             ),
             invocation,
             succeeded(3),
@@ -1967,6 +1972,7 @@ mod tests {
                 bytes: golem_common::serialization::serialize(
                     &AgentInvocationPayload::ManualUpdate {
                         target_revision: revision(4),
+                        requester: golem_common::model::caller::Caller::anonymous(),
                     },
                 )
                 .unwrap(),
@@ -2016,6 +2022,7 @@ mod tests {
                         filesystem_snapshot: None,
                     },
                     Some(index(2)),
+                    Box::new(golem_common::model::caller::Caller::anonymous()),
                 ),
             ],
             &[],

@@ -310,6 +310,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
+        // The caller of the request is the requester of the update: every `PendingUpdate` of the
+        // attempt records it.
+        let requester = caller.clone();
         let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
         let metadata = worker.get_latest_worker_metadata().await;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
@@ -398,7 +401,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ),
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
-                let update_attempt_index = worker.enqueue_automatic_update(target_revision).await?;
+                let update_attempt_index = worker
+                    .enqueue_automatic_update(target_revision, requester)
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -418,7 +423,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(update_attempt_index)
             }
             (UpdateMode::Manual, decision) => {
-                let update_attempt_index = worker.enqueue_manual_update(target_revision).await?;
+                let update_attempt_index = worker
+                    .enqueue_manual_update(target_revision, requester)
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -752,6 +759,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_automatic_update(
         &self,
         target_revision: ComponentRevision,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         // Admission identity and execution strategy are separate. The first PendingUpdate only
         // admits the request; the invocation loop durably selects full or snapshot-assisted replay
@@ -766,8 +774,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         self.bump_read_only_cache_epoch();
-        let entry =
-            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None);
+        let entry = OplogEntry::pending_update(
+            UpdateDescription::Automatic { target_revision },
+            None,
+            Box::new(requester),
+        );
         let oplog_index = self
             .add_and_commit_oplog_internal(
                 &instance_guard,
@@ -778,16 +789,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
         Ok(oplog_index)
     }
+    /// Writes the `PendingUpdate` of an update attempt that was admitted earlier. `requester` is
+    /// the requester of that attempt's admission.
     pub(in crate::worker) async fn enqueue_update_for_attempt(
         &self,
         update_description: UpdateDescription,
         update_attempt_index: Option<OplogIndex>,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         // Bump + commit under the same worker lifecycle lock.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
         self.bump_read_only_cache_epoch();
-        let entry = OplogEntry::pending_update(update_description.clone(), update_attempt_index);
+        let entry = OplogEntry::pending_update(
+            update_description.clone(),
+            update_attempt_index,
+            Box::new(requester),
+        );
         let oplog_index = self
             .add_and_commit_oplog_internal(
                 &instance_guard,
@@ -805,10 +823,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_manual_update(
         &self,
         target_revision: ComponentRevision,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         self.ensure_component_agent_ingress("manual update")?;
-        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
-            .await
+        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester,
+        })
+        .await
     }
     /// Reads the `PendingUpdate` oplog entry referenced by `pending` and reconstructs the full
     /// update description, including any snapshot payload reference. The status record only keeps
@@ -826,6 +848,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             other => Err(WorkerExecutorError::unknown(format!(
                 "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
                 pending.oplog_index
+            ))),
+        }
+    }
+    /// The requester of the automatic update admitted at `admission_index`: the `requester` of
+    /// the `PendingUpdate` there. The executor writes the strategy entry of that update with the
+    /// same requester.
+    pub(in crate::worker) async fn requester_of_admission(
+        &self,
+        admission_index: OplogIndex,
+    ) -> Result<Caller, WorkerExecutorError> {
+        match self.oplog.read(admission_index).await? {
+            OplogEntry::PendingUpdate { requester, .. } => Ok(*requester),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected the PendingUpdate that admitted an update at index {admission_index}, \
+                 but found {other:?}"
             ))),
         }
     }

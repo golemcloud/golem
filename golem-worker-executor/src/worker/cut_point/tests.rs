@@ -127,7 +127,14 @@ fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
 fn successful_snapshot_update_boundary_is_validated() {
     let update = snapshot_update(2);
     let entries = BTreeMap::from([
-        (idx(3), OplogEntry::pending_update(update.clone(), None)),
+        (
+            idx(3),
+            OplogEntry::pending_update(
+                update.clone(),
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
+        ),
         (
             idx(5),
             OplogEntry::successful_update(
@@ -169,7 +176,14 @@ fn successful_snapshot_update_boundary_is_validated() {
 fn failed_snapshot_update_boundary_is_rejected() {
     let update = snapshot_update(2);
     let entries = BTreeMap::from([
-        (idx(3), OplogEntry::pending_update(update.clone(), None)),
+        (
+            idx(3),
+            OplogEntry::pending_update(
+                update.clone(),
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
+        ),
         (
             idx(5),
             OplogEntry::failed_update(
@@ -213,7 +227,11 @@ fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
         let entries = BTreeMap::from([
             (
                 idx(3),
-                OplogEntry::pending_update(snapshot_assisted_update(2), None),
+                OplogEntry::pending_update(
+                    snapshot_assisted_update(2),
+                    None,
+                    Box::new(golem_common::model::caller::Caller::anonymous()),
+                ),
             ),
             (idx(5), outcome),
         ]);
@@ -227,7 +245,14 @@ fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
 #[test]
 fn unapplied_snapshot_update_can_be_fully_removed_or_retained() {
     let update = snapshot_update(2);
-    let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update, None))]);
+    let entries = BTreeMap::from([(
+        idx(3),
+        OplogEntry::pending_update(
+            update,
+            None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
+        ),
+    )]);
 
     assert_eq!(
         validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
@@ -246,7 +271,14 @@ fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
         target_revision: ComponentRevision::new(3).unwrap(),
     };
     let entries = BTreeMap::from([
-        (idx(2), OplogEntry::pending_update(snapshot.clone(), None)),
+        (
+            idx(2),
+            OplogEntry::pending_update(
+                snapshot.clone(),
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
+        ),
         (
             idx(3),
             OplogEntry::successful_update(
@@ -258,7 +290,14 @@ fn automatic_and_deleted_snapshot_updates_do_not_grant_an_exception() {
                 None,
             ),
         ),
-        (idx(5), OplogEntry::pending_update(automatic.clone(), None)),
+        (
+            idx(5),
+            OplogEntry::pending_update(
+                automatic.clone(),
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
+        ),
         (
             idx(6),
             OplogEntry::successful_update(
@@ -289,7 +328,10 @@ fn a_cut_between_a_manual_admission_and_its_failure_without_a_pending_update_is_
                 not_before: None,
                 invocation_id: InvocationId(Uuid::new_v4()),
                 payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
-                    golem_common::model::AgentInvocationPayload::ManualUpdate { target_revision },
+                    golem_common::model::AgentInvocationPayload::ManualUpdate {
+                        target_revision,
+                        requester: golem_common::model::caller::Caller::anonymous(),
+                    },
                 )),
                 trace_id: golem_common::model::invocation_context::TraceId::generate(),
                 trace_states: Vec::new(),
@@ -320,6 +362,7 @@ fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update(
         payload: OplogPayload::Inline(Box::new(
             golem_common::model::AgentInvocationPayload::ManualUpdate {
                 target_revision: *update.target_revision(),
+                requester: golem_common::model::caller::Caller::anonymous(),
             },
         )),
         trace_id: golem_common::model::invocation_context::TraceId::generate(),
@@ -329,7 +372,11 @@ fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update(
     let without = BTreeMap::from([
         (
             idx(3),
-            OplogEntry::pending_update(update.clone(), Some(idx(2))),
+            OplogEntry::pending_update(
+                update.clone(),
+                Some(idx(2)),
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
         ),
         (
             idx(5),
@@ -379,8 +426,22 @@ fn a_failure_whose_attempt_index_names_an_update_behind_the_head_ends_nothing() 
         )
     };
     let entries = BTreeMap::from([
-        (idx(2), OplogEntry::pending_update(automatic, None)),
-        (idx(3), OplogEntry::pending_update(manual, None)),
+        (
+            idx(2),
+            OplogEntry::pending_update(
+                automatic,
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
+        ),
+        (
+            idx(3),
+            OplogEntry::pending_update(
+                manual,
+                None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
+            ),
+        ),
         (idx(4), failure(3, 3)),
         (idx(5), failure(2, 2)),
     ]);
@@ -411,11 +472,19 @@ fn a_cut_that_retains_a_restore_point_retains_its_bootstrap_range() {
     {
         *snapshot_bootstrap = Some(range(2, 3));
     }
-    let strategy = OplogEntry::pending_update(description, None);
+    let strategy = OplogEntry::pending_update(
+        description,
+        None,
+        Box::new(golem_common::model::caller::Caller::anonymous()),
+    );
     assert_eq!(bootstrap_range_named_by(&successful), Some(&range(4, 6)));
     assert_eq!(bootstrap_range_named_by(&strategy), Some(&range(2, 3)));
     assert_eq!(
-        bootstrap_range_named_by(&OplogEntry::pending_update(snapshot_update(2), None)),
+        bootstrap_range_named_by(&OplogEntry::pending_update(
+            snapshot_update(2),
+            None,
+            Box::new(golem_common::model::caller::Caller::anonymous())
+        )),
         None
     );
 

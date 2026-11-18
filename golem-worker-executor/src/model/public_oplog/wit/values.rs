@@ -95,6 +95,23 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
     }
 }
 
+/// The requester of an update in the raw WIT form: its binary encoding in the oplog, as an
+/// `oplog-payload` holds the caller of an invocation.
+pub(super) fn requester_to_wit(
+    requester: &golem_common::model::caller::Caller,
+) -> Result<Vec<u8>, String> {
+    golem_common::serialization::serialize(requester)
+}
+
+/// Decodes the raw WIT form of an update's requester. Bytes that are not an encoded caller are
+/// refused, so a round trip through WIT never changes who requested the update.
+pub(super) fn requester_from_wit(
+    bytes: &[u8],
+) -> Result<golem_common::model::caller::Caller, String> {
+    golem_common::serialization::decode(bytes)
+        .map_err(|error| format!("requester does not decode: {error}"))
+}
+
 pub(super) fn oplog_payload_from_wit<
     T: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq,
 >(

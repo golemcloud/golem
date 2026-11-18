@@ -5400,6 +5400,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         timestamp: Timestamp::now_utc(),
         description: desc.clone(),
         update_attempt_index: None,
+        requester: Box::new(golem_common::model::caller::Caller::anonymous()),
     }
     .rounded();
     oplog.add(entry4.clone()).await.unwrap();
@@ -6048,6 +6049,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         timestamp: Timestamp::now_utc(),
         description: desc.clone(),
         update_attempt_index: None,
+        requester: Box::new(golem_common::model::caller::Caller::anonymous()),
     }
     .rounded();
     oplog.add(entry4.clone()).await.unwrap();
@@ -12270,6 +12272,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             timestamp: Timestamp::now_utc(),
             description: inline_description,
             update_attempt_index: None,
+            requester: Box::new(golem_common::model::caller::Caller::anonymous()),
         })
         .await
         .unwrap();
@@ -12278,6 +12281,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             timestamp: Timestamp::now_utc(),
             description: external_description,
             update_attempt_index: None,
+            requester: Box::new(golem_common::model::caller::Caller::anonymous()),
         })
         .await
         .unwrap();

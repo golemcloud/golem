@@ -432,6 +432,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         target_revision,
                         mode,
                         false,
+                        // The calling agent requests the update, in both roles, as for a fork.
+                        Caller::entry(self.self_principal()),
                         handle.agent_auth_ctx(),
                     )
                     .await;
