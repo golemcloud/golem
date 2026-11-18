@@ -26,6 +26,34 @@ use crate::model::oplog::{
 };
 
 #[cfg(test)]
+mod memory_reconciliation_tests {
+    use super::*;
+    use crate::model::Timestamp;
+    use crate::model::oplog::public_oplog_entry::MemorySizeReconciledParams;
+    use golem_api_grpc::proto::golem::worker::{
+        OplogEntry as ProtoPublicOplogEntry, RawOplogEntry,
+    };
+    use test_r::test;
+
+    #[test]
+    fn absolute_memory_reconciliation_roundtrips_in_raw_and_public_oplogs() {
+        for bytes in [0, 9_007_199_254_741_009, u64::MAX] {
+            let timestamp = Timestamp::now_utc().rounded();
+            let raw = OplogEntry::MemorySizeReconciled { timestamp, bytes };
+            assert!(raw.is_hint());
+            let proto: RawOplogEntry = raw.clone().try_into().unwrap();
+            assert_eq!(OplogEntry::try_from(proto).unwrap(), raw);
+            let public = PublicOplogEntry::MemorySizeReconciled(MemorySizeReconciledParams {
+                timestamp,
+                bytes,
+            });
+            let proto: ProtoPublicOplogEntry = public.clone().try_into().unwrap();
+            assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tool_attachment_control_tests {
     use test_r::test;
 

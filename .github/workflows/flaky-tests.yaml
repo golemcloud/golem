@@ -45,3 +45,20 @@ jobs:
           --summary "${GITHUB_STEP_SUMMARY}"
           --output flaky-tests.md
           --update-issue
+      - name: Save generated report
+        if: ${{ !cancelled() && hashFiles('flaky-tests.md') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-tests-report
+          path: flaky-tests.md
+      - name: Report collector failure
+        if: failure()
+        run: |
+          echo "::error::Flaky-test collection or publication failed. The issue report may be stale; check this run's logs."
+          {
+            echo '## Flaky-test report update failed'
+            echo
+            echo 'Collection or publication failed. The issue report may be stale. Do not interpret it as a current clean run.'
+            echo
+            echo "[Collector logs](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+          } >> "$GITHUB_STEP_SUMMARY"

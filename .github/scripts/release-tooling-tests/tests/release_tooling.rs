@@ -14,6 +14,285 @@ fn workspace_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
 }
 
+fn copy_makefiles(repo: &Path) {
+    for name in [
+        "Makefile.toml",
+        "Makefile.main-validation.toml",
+        "Makefile.sdk-validation.toml",
+    ] {
+        fs::copy(workspace_path().join(name), repo.join(name)).unwrap();
+    }
+}
+
+#[test]
+fn main_validation_dashboard_validates_and_persists_public_observations() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/main-validation/observer/dashboard/test_server.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_retains_logs_and_reports_actual_task_lifetimes() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_progress.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_freezes_executor_binaries_without_changing_the_selection() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_freeze.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_slack_preserves_delivery_receipts_with_formatted_alerts() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_slack.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_lists_all_commits_since_the_previous_selected_run() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_changes.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_reuses_component_wasms_by_source_across_languages() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_fixtures.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_keeps_failed_workload_results_separate_from_cache_delivery() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_cache_lifecycle.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn release_preparation_requires_exact_validation_and_release_prerequisites() {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(workspace_path().join(".github/workflows/prepare-golem-release.yaml"))
+            .unwrap(),
+    )
+    .unwrap();
+    let jobs = &workflow["jobs"];
+    assert!(jobs.get("preflight").is_none());
+    assert!(jobs["validate"].get("outputs").is_none());
+    assert!(jobs["release-prerequisites"].get("if").is_none());
+    assert_eq!(jobs["release-prerequisites"]["needs"], "validate");
+    assert_eq!(
+        jobs["publish-builtins"]["needs"],
+        serde_yaml::to_value(["validate", "release-prerequisites"]).unwrap()
+    );
+    let condition = jobs["publish-builtins"]["if"].as_str().unwrap();
+    let states = ["success", "failure", "cancelled", "skipped"];
+    let mut cases = Vec::new();
+    for validate in states {
+        for prerequisites in states {
+            for cancelled in [false, true] {
+                cases.push(json!({
+                    "needs": {
+                        "validate": {"result": validate},
+                        "release-prerequisites": {"result": prerequisites}
+                    },
+                    "cancelled": cancelled,
+                    "expected": !cancelled && validate == "success" && prerequisites == "success"
+                }));
+            }
+        }
+    }
+    let output = Command::new("node")
+        .args([
+            "--input-type=module",
+            "-e",
+            r#"
+import assert from 'node:assert/strict';
+const [condition, cases] = JSON.parse(process.argv[1]);
+for (const value of cases) {
+    const expression = condition.replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, '$1');
+    const code = expression.replace(/\.([A-Za-z_][A-Za-z0-9_-]*)/g, "['$1']");
+    const result = Boolean(Function('needs', 'cancelled', `return (${code});`)(value.needs, () => value.cancelled));
+    assert.equal(result, value.expected, JSON.stringify(value));
+}
+"#,
+            &serde_json::to_string(&(condition, cases)).unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn cutover_keeps_maintenance_ci_without_main_pr_tests() {
+    let load = |name: &str| -> serde_yaml::Value {
+        serde_yaml::from_str(
+            &fs::read_to_string(workspace_path().join(".github/workflows").join(name)).unwrap(),
+        )
+        .unwrap()
+    };
+    let ci = load("ci.yaml");
+    let bash = load("builtin-bash.yaml");
+    let steps = ci["jobs"]["unit-tests-and-checks"]["steps"]
+        .as_sequence()
+        .unwrap();
+    let python = steps
+        .iter()
+        .position(|step| step["uses"] == "actions/setup-python@v6")
+        .unwrap();
+    let release_tests = steps
+        .iter()
+        .position(|step| step["name"] == "Test release tooling")
+        .unwrap();
+    assert!(python < release_tests);
+    assert_eq!(steps[python]["with"]["python-version"], "3.14");
+    for workflow in [&ci, &bash] {
+        for event in ["push", "pull_request"] {
+            assert_eq!(
+                workflow["on"][event]["branches"],
+                serde_yaml::to_value(["[0-9]+.[0-9]+.x"]).unwrap()
+            );
+        }
+        assert!(workflow["on"].get("workflow_dispatch").is_some());
+    }
+    assert!(ci["on"].get("workflow_call").is_some());
+    for event in ["push", "pull_request"] {
+        assert_eq!(
+            ci["on"][event]["paths-ignore"],
+            serde_yaml::to_value([
+                "docs/**",
+                "golem-cloud-billing/**",
+                ".github/workflows/golem-cloud-billing.yaml"
+            ])
+            .unwrap()
+        );
+    }
+    assert!(
+        !workspace_path()
+            .join(".github/workflows/skill-harness-pr.yaml")
+            .exists()
+    );
+    assert!(ci["jobs"].get("skill-harness-unit-tests").is_some());
+    for name in ["builtin-bash-oracle-drift.yaml", "golem-cloud-billing.yaml"] {
+        let workflow = load(name);
+        assert_eq!(
+            workflow["on"]["pull_request"]["branches"],
+            serde_yaml::to_value(["[0-9]+.[0-9]+.x"]).unwrap()
+        );
+        assert!(
+            workflow["on"]["push"]["branches"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .any(|branch| branch == "main")
+        );
+    }
+}
+
+#[test]
+fn main_validation_cutover_executes_selection_and_exact_release_gate_shells() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_cutover.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn draft_notes_start_at_the_previous_stable_golem_release() {
     let fixture = TempDir::new().unwrap();
@@ -449,11 +728,7 @@ fn release_source_requires_the_exact_merged_pr_head() {
     let response = fixture.path().join("pulls.json");
     fs::create_dir(&repo).unwrap();
     fs::create_dir(&bin).unwrap();
-    fs::copy(
-        crate::workspace_path().join("Makefile.toml"),
-        repo.join("Makefile.toml"),
-    )
-    .unwrap();
+    copy_makefiles(&repo);
     fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
     git(&repo, &["init", "--initial-branch=main"]);
     git(&repo, &["config", "user.name", "release-test"]);
@@ -610,11 +885,7 @@ exit 1
 fn release_publication_requires_successful_preparation_of_the_exact_tag() {
     let fixture = TempDir::new().unwrap();
     let repo = fixture.path();
-    fs::copy(
-        crate::workspace_path().join("Makefile.toml"),
-        repo.join("Makefile.toml"),
-    )
-    .unwrap();
+    copy_makefiles(repo);
     fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
     git(repo, &["init"]);
     git(repo, &["config", "user.name", "release-test"]);
@@ -687,8 +958,8 @@ fn release_publication_requires_successful_preparation_of_the_exact_tag() {
 fn builtin_packaging_failure_precedes_every_publication() {
     let fixture = TempDir::new().unwrap();
     let repo = fixture.path();
-    let makefile = fs::read_to_string(crate::workspace_path().join("Makefile.toml")).unwrap();
-    fs::write(repo.join("Release.toml"), makefile).unwrap();
+    copy_makefiles(repo);
+    fs::rename(repo.join("Makefile.toml"), repo.join("Release.toml")).unwrap();
     // Replace source validation and expensive compilation, not packaging or publication.
     fs::write(repo.join("Makefile.toml"), "extend = 'Release.toml'\n[tasks.validate-builtin-release]\nclear = true\nscript_runner = '@duckscript'\nscript = 'echo validated'\n[tasks.ensure-builtin-artifacts]\nclear = true\nscript_runner = '@duckscript'\nscript = '''\nmkdir plugins\nmkdir builtin-tools\nwritefile plugins/otlp-exporter.wasm plugin\nwritefile builtin-tools/filesystem-tools.wasm tools\n'''\n").unwrap();
     fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();

@@ -26,7 +26,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder, StagePublication, decode_scan_cursor, downcast_oplog,
+    ReservedRawStartBuilder, ScanPage, StagePublication, decode_scan_cursor, downcast_oplog,
     first_scan_cursor,
 };
 use crate::storage::indexed::{IndexedStorageError, IndexedStorageMetaNamespace};

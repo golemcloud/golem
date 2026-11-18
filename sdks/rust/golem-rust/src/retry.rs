@@ -85,46 +85,38 @@ pub fn remove_retry_policy(name: &str) {
     retry_api::remove_retry_policy(name);
 }
 
-/// Guard that restores the previous state of a named retry policy on drop.
-/// If the policy existed before, it is restored; if it was newly added, it is removed.
+/// Guard of a retry policy scope. While the guard is alive, its named policy overrides the
+/// agent-wide policy with the same name for the host calls of the task that created it. That
+/// includes every future the task polls meanwhile, such as futures joined with the guarded block
+/// or spawned with `spawn_local`, and the subtasks the task creates. Dropping the guard ends the
+/// scope. The scope changes no agent-wide policy and records no oplog entry.
 pub struct RetryPolicyGuard {
-    previous: Option<NamedRetryPolicy>,
-    name: String,
+    _scope: crate::bindings::golem::api::retry_scope::RetryPolicyScope,
 }
 
-impl Drop for RetryPolicyGuard {
-    fn drop(&mut self) {
-        match self.previous.take() {
-            Some(original) => set_retry_policy(&original),
-            None => remove_retry_policy(&self.name),
-        }
+/// Opens a retry policy scope for `policy`. The policy applies until the returned guard is
+/// dropped.
+#[must_use]
+pub fn use_retry_policy(policy: NamedRetryPolicy) -> RetryPolicyGuard {
+    RetryPolicyGuard {
+        _scope: crate::bindings::golem::api::retry_scope::RetryPolicyScope::new(&policy),
     }
 }
 
-/// Temporarily sets a named retry policy. When the returned guard is dropped,
-/// the previous policy with the same name is restored (or removed if it didn't exist).
-#[must_use]
-pub fn use_retry_policy(policy: NamedRetryPolicy) -> RetryPolicyGuard {
-    let previous = get_retry_policy_by_name(&policy.name);
-    let name = policy.name.clone();
-    set_retry_policy(&policy);
-    RetryPolicyGuard { previous, name }
-}
-
-/// Temporarily sets a high-level named retry policy after validating and
-/// flattening it into the raw WIT representation.
+/// Opens a retry policy scope for a high-level named policy after validating and flattening it
+/// into the raw WIT representation.
 pub fn use_named_policy(policy: &NamedPolicy) -> Result<RetryPolicyGuard, RetryBuilderError> {
     let raw = policy.try_to_raw()?;
     Ok(use_retry_policy(raw))
 }
 
-/// Executes the given function with a named retry policy temporarily set.
+/// Executes the given function inside a retry policy scope for `policy`.
 pub fn with_retry_policy<R>(policy: NamedRetryPolicy, f: impl FnOnce() -> R) -> R {
     let _guard = use_retry_policy(policy);
     f()
 }
 
-/// Executes the given async function with a named retry policy temporarily set.
+/// Executes the given async function inside a retry policy scope for `policy`.
 pub async fn with_retry_policy_async<R, F: std::future::Future<Output = R>>(
     policy: NamedRetryPolicy,
     f: impl FnOnce() -> F,
@@ -133,7 +125,7 @@ pub async fn with_retry_policy_async<R, F: std::future::Future<Output = R>>(
     f().await
 }
 
-/// Executes the given function with a high-level named retry policy temporarily set.
+/// Executes the given function inside a retry policy scope for a high-level named policy.
 pub fn with_named_policy<R>(
     policy: &NamedPolicy,
     f: impl FnOnce() -> R,
@@ -142,11 +134,7 @@ pub fn with_named_policy<R>(
     Ok(f())
 }
 
-/// Executes the given async function with a high-level named retry policy temporarily set.
-///
-/// This mutates the agent's active named retry policies for the lifetime of the future.
-/// If the future yields, other interleaved work in the same agent may observe the
-/// temporary policy until the guard is dropped.
+/// Executes the given async function inside a retry policy scope for a high-level named policy.
 pub async fn with_named_policy_async<R, F: std::future::Future<Output = R>>(
     policy: &NamedPolicy,
     f: impl FnOnce() -> F,

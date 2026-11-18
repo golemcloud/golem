@@ -4,20 +4,18 @@ on:
   workflow_call:
   push:
     branches:
-      - main
       # Long-lived maintenance branches for shipped major.minor lines,
       # e.g. `1.5.x`. The wildcard means a new `1.6.x` branch starts running
       # CI on push automatically when it is created.
       - "[0-9]+.[0-9]+.x"
-    # Skip the heavy Rust/Docker/etc. CI when only docs/ or the cloud billing app changed. They
-    # have their own workflows: .github/workflows/docs.yaml and golem-cloud-billing.yaml. The
-    # required checks of main do not report for such a change, so its pull request is merged
-    # with the ruleset bypass.
+    # Docs and the cloud billing app have dedicated workflows.
     paths-ignore:
       - "docs/**"
       - "golem-cloud-billing/**"
       - ".github/workflows/golem-cloud-billing.yaml"
   pull_request:
+    branches:
+      - "[0-9]+.[0-9]+.x"
     paths-ignore:
       - "docs/**"
       - "golem-cloud-billing/**"
@@ -172,6 +170,9 @@ jobs:
           key: ${{ runner.os }}-bun-${{ hashFiles('docs/bun.lockb') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
       - name: Test release tooling
         run: |
           node --test .github/scripts/release-channel.test.mjs
@@ -1697,8 +1698,10 @@ jobs:
         run: ./scripts/regen-bindings.sh
         working-directory: sdks/moonbit/golem_sdk
 
+      # MoonBit fixtures embed and encode their components; the Rust gc-heap fixture parses and
+      # composes a WAT component.
       - name: Install wasm-tools
-        if: matrix.chunk.needs-moonbit
+        if: matrix.chunk.needs-moonbit || startsWith(matrix.chunk.name, 'rust-')
         run: cargo binstall --force --locked wasm-tools@1.248.0
 
       - name: Restore built TS SDK

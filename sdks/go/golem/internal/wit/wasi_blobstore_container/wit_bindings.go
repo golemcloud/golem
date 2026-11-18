@@ -187,7 +187,7 @@ func (self *Container) Info() witTypes.Result[wasi_blobstore_types.ContainerMeta
 	var result0 witTypes.Result[wasi_blobstore_types.ContainerMetadata, string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t1093(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t1097(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result0 = witTypes.Ok[wasi_blobstore_types.ContainerMetadata, string](result)
 	case 1:
@@ -392,7 +392,7 @@ func (self *Container) ObjectInfo(name string) witTypes.Result[wasi_blobstore_ty
 	var result0 witTypes.Result[wasi_blobstore_types.ObjectMetadata, string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t1094(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t1098(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result0 = witTypes.Ok[wasi_blobstore_types.ObjectMetadata, string](result)
 	case 1:
@@ -434,14 +434,14 @@ func (self *Container) Clear() witTypes.Result[witTypes.Unit, string] {
 }
 
 //go:noinline
-func wasm_lift_1_t1093(src unsafe.Pointer) wasi_blobstore_types.ContainerMetadata {
+func wasm_lift_1_t1097(src unsafe.Pointer) wasi_blobstore_types.ContainerMetadata {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return wasi_blobstore_types.ContainerMetadata{Name: value0, CreatedAt: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))}
 }
 
 //go:noinline
-func wasm_lift_1_t1094(src unsafe.Pointer) wasi_blobstore_types.ObjectMetadata {
+func wasm_lift_1_t1098(src unsafe.Pointer) wasi_blobstore_types.ObjectMetadata {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 

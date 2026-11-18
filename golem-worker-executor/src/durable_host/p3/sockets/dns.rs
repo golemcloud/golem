@@ -14,7 +14,9 @@
 
 use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::reserve_invocation_id_before_await;
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+use crate::durable_host::durability::{
+    ClassifiedHostError, GuestTaskContext, HostFailureKind,
+};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_deniable_access_classified, wasi_sockets_view,
 };
@@ -36,6 +38,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
+        let custom_invocation = store.guest_task_context::<GuestTaskContext>()?;
+        // The link waits for the guest to receive the result, as the rebuild after a snapshot
+        // reads it from the delivery marker: a result that the guest discards links nothing.
+        let (link, on_delivered) = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .shared_resolved_names()
+                .deferred_link()
+        });
         let targets = dns_target(&name)
             .map(|target| vec![target])
             .map_err(|error| error.to_string());
@@ -51,6 +61,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
             _,
             Ctx,
             P3SocketsIpNameLookupResolveAddresses,
+            _,
             _,
             _,
         >(
@@ -69,6 +80,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
                     })
             },
             RetryContext::dns(&name),
+            on_delivered,
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                 let result = <WasiSockets as ip_name_lookup::HostWithStore<U>>::resolve_addresses(
@@ -85,6 +97,20 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
             },
         )
         .await?;
+
+        // The host call has returned the result but the guest has not received it yet, so the
+        // link is set before the delivery observer can run its hook.
+        if let Ok(addresses) = &response.result
+            && store.with(|mut access| {
+                durable_worker_ctx::<Ctx, U>(access.data_mut())
+                    .lookup_links(custom_invocation.as_deref())
+            })?
+        {
+            link.set(
+                &name,
+                addresses.0.iter().cloned().map(std::net::IpAddr::from),
+            );
+        }
 
         Ok(response
             .result

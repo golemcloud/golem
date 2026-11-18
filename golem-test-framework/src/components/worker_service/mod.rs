@@ -115,9 +115,12 @@ async fn env_vars(
 
     let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
-        .with_str(
+        .with(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
-            "/tmp/ittest-local-object-store/golem",
+            std::env::temp_dir()
+                .join("ittest-local-object-store/golem")
+                .to_string_lossy()
+                .to_string(),
         )
         .with(
             "GOLEM__REGISTRY_SERVICE__HOST",

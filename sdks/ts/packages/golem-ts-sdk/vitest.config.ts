@@ -17,6 +17,10 @@ export default defineConfig({
         'types/golem_durability_1_6_0_durability.d.ts',
       ),
       'golem:api/retry@1.5.0': path.resolve(__dirname, 'types/golem_api_1_5_0_retry.d.ts'),
+      'golem:api/retry-scope@1.5.0': path.resolve(
+        __dirname,
+        'types/golem_api_1_5_0_retry_scope.d.ts',
+      ),
       'wasm-rquickjs:custom-invocation-context': path.resolve(
         __dirname,
         'types/wasm-rquickjs-custom-invocation-context.d.ts',

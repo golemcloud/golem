@@ -273,9 +273,12 @@ oplog_payload! {
         PermissionCardLiveness {
             card_id: Uuid,
         },
-        /// The ids of the cards behind the handles that a card operation decides on, in argument
-        /// order.
+        /// The invocation that a card operation decides for, and the ids of the cards behind the
+        /// handles that it decides on, in argument order. `invocation_id` is the ID of the agent
+        /// or entity invocation that the deciding host call is attributed to, or `None` for work
+        /// that no invocation is attributed to.
         PermissionCardDecision {
+            invocation_id: Option<InvocationId>,
             card_ids: Vec<Uuid>,
         },
         PermissionCardTransfer {
@@ -758,6 +761,9 @@ oplog_payload! {
             result: Result<Option<Vec<u8>>, String>,
             next_oplog_index: OplogIndex,
             current_component_revision: ComponentRevision,
+            /// The last entry that a guest search reads. The first page of the search fixes it
+            /// and replay restores it. `None` for a `get-oplog` read.
+            last_oplog_index: Option<OplogIndex>,
         },
         GolemApiOplogEntries {
             result: Result<Vec<u8>, String>
