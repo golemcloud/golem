@@ -1050,7 +1050,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
             _ => None,
         })
         .expect("the constructor reservation must be recorded");
-    assert_eq!(status.current_idempotency_key.as_ref(), Some(&init_key));
+    assert_eq!(status.current_idempotency_key(), Some(&init_key));
     let error_index = *status
         .invocation_results
         .get(&init_key)
@@ -1095,7 +1095,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         .await?;
     let status = worker.get_last_known_status().await;
     assert_eq!(status.status, AgentStatus::Interrupted);
-    assert_eq!(status.current_idempotency_key.as_ref(), Some(&init_key));
+    assert_eq!(status.current_idempotency_key(), Some(&init_key));
     assert_eq!(status.invocation_results.get(&init_key), Some(&error_index));
     let interrupted = executor.stored_oplog(&id).await;
     assert!(

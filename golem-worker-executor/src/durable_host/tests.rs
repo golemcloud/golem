@@ -2235,6 +2235,7 @@ fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: None,
         manual_update_target_revision: Some(ComponentRevision::INITIAL),
+        operation: None,
     });
 
     assert!(should_restart_after_shard_assignment_change(&status));
@@ -2271,7 +2272,16 @@ fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
 fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Interrupted,
-        current_idempotency_key: Some(Uuid::new_v4().into()),
+        running: Some(golem_common::model::RunningInvocation {
+            key: Uuid::new_v4().into(),
+            request: golem_common::model::InvocationRequestRef {
+                index: golem_common::model::OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: golem_common::model::OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     };
     assert!(!should_restart_after_shard_assignment_change(&status));
@@ -2282,6 +2292,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
         oplog_index: OplogIndex::INITIAL,
         idempotency_key: Some(Uuid::new_v4().into()),
         manual_update_target_revision: None,
+        operation: None,
     });
     status.pending_updates.push_back(PendingUpdateRef {
         timestamp: Timestamp::now_utc(),

@@ -369,6 +369,25 @@ fn result_at(terminal: u64) -> InvocationResultPosition {
     InvocationResultPosition {
         terminal: OplogIndex::from_u64(terminal),
         request: Some(OplogIndex::from_u64(terminal - 1)),
+        end: golem_common::model::InvocationEnd::Completed,
+        operation: None,
+        accepted_at: None,
+        changed_at: golem_common::model::Timestamp::from(0),
+    }
+}
+
+/// The lookup without the operation and timestamps, which `result_at` does not know.
+fn positions_only(lookup: InvocationResultIndexLookup) -> InvocationResultIndexLookup {
+    match lookup {
+        InvocationResultIndexLookup::Found(position) => {
+            InvocationResultIndexLookup::Found(InvocationResultPosition {
+                operation: None,
+                accepted_at: None,
+                changed_at: golem_common::model::Timestamp::from(0),
+                ..position
+            })
+        }
+        other => other,
     }
 }
 
@@ -1281,6 +1300,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
                 &first,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -1293,6 +1313,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
                 &second,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(5))
     );
@@ -1361,6 +1382,7 @@ async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
                 &first,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -1459,6 +1481,31 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
             .unwrap(),
         InvocationResultIndexLookup::DefinitiveMiss
     );
+
+    // The results that left the recent results are listed from the index, each with its request.
+    let mut listed: Vec<(InvocationId, InvocationResultPosition)> = service
+        .list_invocation_result_index(&owned_agent_id, invocation_index_fingerprint(), &current)
+        .await
+        .unwrap()
+        .expect("the index is complete")
+        .into_iter()
+        .map(
+            |(key, position)| match positions_only(InvocationResultIndexLookup::Found(position)) {
+                InvocationResultIndexLookup::Found(position) => (key, position),
+                _ => unreachable!(),
+            },
+        )
+        .collect();
+    listed.sort_by_key(|(_, position)| position.terminal);
+    assert_eq!(
+        listed,
+        vec![
+            (first, result_at(3)),
+            (second, result_at(5)),
+            (third, result_at(7)),
+            (fourth, result_at(9)),
+        ]
+    );
 }
 
 #[test]
@@ -1515,6 +1562,7 @@ async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result()
                 &repeated,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(5))
     );
@@ -1592,6 +1640,7 @@ async fn independent_catch_up_cannot_publish_over_newer_generation() {
                 &current,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(6))
     );
@@ -1711,6 +1760,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
                 &current,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -1796,6 +1846,7 @@ async fn concurrent_generation_catch_up_clears_reverted_results() {
                 &current,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(6))
     );
@@ -2097,6 +2148,7 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
         manual_update_target_revision: Some(
             golem_common::model::component::ComponentRevision::INITIAL,
         ),
+        operation: None,
     });
 
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(
@@ -3352,6 +3404,7 @@ async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its
                 &key,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -3398,6 +3451,7 @@ async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_m
             oplog_index: OplogIndex::from_u64(8),
             idempotency_key: Some(cancelled),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..AgentStatusRecord::default()
     };
@@ -3439,5 +3493,149 @@ async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_m
         lookup,
         InvocationResultIndexLookup::DefinitiveMiss,
         "the committed cancellation at 9 must not be reported as a definitive miss"
+    );
+}
+
+#[test]
+async fn evicting_the_cached_status_removes_the_result_index_and_catch_up_rebuilds_it() {
+    let first = idempotency_key("evicted-first");
+    let second = idempotency_key("evicted-second");
+    let (service, _oplog, owned_agent_id) =
+        index_test_service(invocation_entries(&[first, second]));
+    // Nothing is in the recent results, so only the persisted index can answer.
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+    let lookup = |key| {
+        let service = service.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        let status = status.clone();
+        async move {
+            service
+                .lookup_invocation_result_index(
+                    &owned_agent_id,
+                    invocation_index_fingerprint(),
+                    &status,
+                    &key,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    let before = lookup(second).await;
+    assert!(matches!(before, InvocationResultIndexLookup::Found(_)));
+
+    service
+        .remove_cached_status(&owned_agent_id, invocation_index_fingerprint())
+        .await
+        .unwrap();
+    // Missing metadata is never a definitive miss, so no key with a result reads as new.
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(lookup(second).await, before);
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+}
+
+#[test]
+async fn a_result_index_field_that_does_not_decode_resets_the_index() {
+    let first = idempotency_key("undecodable-first");
+    let second = idempotency_key("undecodable-second");
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let oplog = Arc::new(IndexTestOplogService::new(invocation_entries(&[
+        first, second,
+    ])));
+    let service = index_test_service_with(storage.clone(), oplog);
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "undecodable-index-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    // A field in a format that no longer decodes, such as one written before a format change.
+    let namespace = DefaultWorkerService::invocation_result_index_namespace(
+        &owned_agent_id.agent_id,
+        invocation_index_fingerprint(),
+    );
+    storage
+        .with_entity(
+            "test",
+            "corrupt_invocation_result_index",
+            "invocation_result",
+        )
+        .set_raw(
+            namespace,
+            &invocation_result_index_field(&first),
+            &[0xff, 0x00],
+        )
+        .await
+        .unwrap();
+
+    let lookup = |key| {
+        let service = service.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        let status = status.clone();
+        async move {
+            service
+                .lookup_invocation_result_index(
+                    &owned_agent_id,
+                    invocation_index_fingerprint(),
+                    &status,
+                    &key,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(lookup(first).await, InvocationResultIndexLookup::Incomplete);
+    // The whole index is suspect now, not only the field that failed.
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
     );
 }

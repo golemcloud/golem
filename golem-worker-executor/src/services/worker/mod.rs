@@ -39,11 +39,14 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
-use crate::worker::status::{InvocationRequests, fold_invocation_result_entries};
+use crate::worker::status::{
+    InvocationRequests, fold_invocation_result_entries, known_request_operations,
+};
 use async_trait::async_trait;
 use desert_rust::BinarySerializer;
 use futures::future::BoxFuture;
 use golem_common::base_model::durable_stream::StreamSessionKey;
+use golem_common::model::InvocationEnd;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::card::CardTransferIndex;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -82,6 +85,20 @@ fn rejections_to_store(
     (kept != current).then(|| kept.into_iter().collect())
 }
 
+/// Whether the index covered through `metadata` and the recent results of `status` hold every
+/// result of `status`: the index covers the whole oplog, or the recent results reach back to an
+/// entry that the index covers.
+fn invocation_result_index_is_complete(
+    metadata: &InvocationResultIndexMetadata,
+    status: &AgentStatusRecord,
+) -> bool {
+    metadata.covered_through >= status.oplog_idx
+        || status
+            .invocation_results
+            .oldest_retained_index()
+            .is_some_and(|oldest| oldest <= metadata.covered_through)
+}
+
 fn invocation_result_index_field(key: &InvocationId) -> String {
     format!("{INVOCATION_RESULT_INDEX_FIELD_PREFIX}{key}")
 }
@@ -102,7 +119,7 @@ struct PersistedInvocationResult {
     position: InvocationResultPosition,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvocationResultIndexLookup {
     Found(InvocationResultPosition),
     DefinitiveMiss,
@@ -359,6 +376,18 @@ pub trait WorkerService: Send + Sync {
         _idempotency_key: &InvocationId,
     ) -> Result<InvocationResultIndexLookup, String> {
         Ok(InvocationResultIndexLookup::Incomplete)
+    }
+
+    /// Every result in the persisted result index, or `None` when the index is not complete for
+    /// `status` under the same rule as [`WorkerService::lookup_invocation_result_index`]. The
+    /// recent results of `status` complete it.
+    async fn list_invocation_result_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _status: &AgentStatusRecord,
+    ) -> Result<Option<Vec<(InvocationId, InvocationResultPosition)>>, String> {
+        Ok(None)
     }
 
     /// Resolves the authoritative `Create` entry. The cached mode only selects which oplog
@@ -633,6 +662,43 @@ impl DefaultWorkerService {
 
     fn rejected_periodic_snapshots_field(fingerprint: AgentFingerprint) -> String {
         fingerprint.0.to_string()
+    }
+
+    /// Removes the persisted result index of the incarnation, under the lock that its catch-up
+    /// holds, so a catch-up in progress cannot publish over the removal.
+    async fn clear_invocation_result_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<(), WorkerExecutorError> {
+        let lock = self.invocation_result_index_lock(owned_agent_id);
+        let _guard = lock.inner.lock().await;
+        self.remove_all_fields(
+            owned_agent_id,
+            Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint),
+            "invocation-result index",
+        )
+        .await
+    }
+
+    async fn invalidate_invocation_result_index(
+        &self,
+        namespace: &KeyValueStorageNamespace,
+        expected_metadata: Option<&[u8]>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.key_value_storage
+            .with_entity("worker", "invalidate_invocation_result_index", "metadata")
+            .compare_and_mutate_many_raw(
+                namespace.clone(),
+                INVOCATION_RESULT_INDEX_METADATA_FIELD,
+                expected_metadata,
+                &[],
+                &[INVOCATION_RESULT_INDEX_METADATA_FIELD],
+                DERIVED_CACHE_EXPIRY,
+            )
+            .await
+            .map(|_| ())
+            .map_err(WorkerExecutorError::runtime)
     }
 
     async fn remove_all_fields(

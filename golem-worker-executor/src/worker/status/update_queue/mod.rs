@@ -24,7 +24,8 @@ use golem_common::base_model::OplogIndex;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
-    AgentInvocationPayload, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    AgentInvocationPayload, InvocationOperation, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::VecDeque;
@@ -56,6 +57,10 @@ pub(crate) struct UpdateQueue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateStep {
     Unchanged,
+    /// An invocation other than a manual update was accepted. It carries the operation, so a
+    /// later reader of the step need not decode the invocation again; `None` when the payload is
+    /// stored externally or its operation is too long to keep.
+    InvocationAdmitted(Option<InvocationOperation>),
     /// A manual update invocation added a manual admission for this target revision.
     ManualAdmitted(ComponentRevision),
     /// A `PendingUpdate` added a queue element. `consumed` is the manual admission that a
@@ -88,6 +93,7 @@ impl UpdateStep {
             | Self::ConsumedInDeletedRegion(index) => Some(*index),
             Self::FailedAdmission(admission) => Some(admission.index),
             Self::Unchanged
+            | Self::InvocationAdmitted(_)
             | Self::ManualAdmitted(_)
             | Self::Admitted { consumed: None }
             | Self::Selected
@@ -101,6 +107,7 @@ impl UpdateStep {
         match self {
             Self::ManualAdmitted(target_revision) => Some(*target_revision),
             Self::Unchanged
+            | Self::InvocationAdmitted(_)
             | Self::Admitted { .. }
             | Self::Selected
             | Self::Succeeded(_)
@@ -115,6 +122,7 @@ impl UpdateStep {
         match self {
             Self::Succeeded(Some(update)) | Self::FailedQueued(Some(update)) => Some(update),
             Self::Unchanged
+            | Self::InvocationAdmitted(_)
             | Self::ManualAdmitted(_)
             | Self::Admitted { .. }
             | Self::Selected
@@ -174,13 +182,17 @@ impl UpdateQueue {
         let step = match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp, payload, ..
-            } => match manual_update_target_revision_of(payload) {
-                Some(target_revision) => self.admit(ManualAdmission {
-                    timestamp: *timestamp,
-                    index,
-                    target_revision,
-                }),
-                None => UpdateStep::Unchanged,
+            } => match classify_invocation_payload(payload) {
+                InvocationPayloadClass::ManualUpdate(target_revision) => {
+                    self.admit(ManualAdmission {
+                        timestamp: *timestamp,
+                        index,
+                        target_revision,
+                    })
+                }
+                InvocationPayloadClass::Invocation(operation) => {
+                    UpdateStep::InvocationAdmitted(operation)
+                }
             },
             OplogEntry::PendingUpdate {
                 update_attempt_index: Some(attempt_index),
@@ -320,26 +332,39 @@ thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
-/// The target revision of a pending agent invocation payload when it is a manual update.
+/// What a pending agent invocation payload holds, for the folds that need no more of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum InvocationPayloadClass {
+    ManualUpdate(ComponentRevision),
+    /// Another invocation, with its operation when the payload is in the oplog, decodes, and
+    /// its operation is short enough to keep.
+    Invocation(Option<InvocationOperation>),
+}
+
+/// Decodes `payload` at most once to classify it.
 ///
 /// The producer of a manual update invocation keeps its payload in the oplog whatever the payload
 /// limit, so this never needs to download an external payload: an `External` payload is not a
 /// manual update.
-pub(crate) fn manual_update_target_revision_of(
+pub(crate) fn classify_invocation_payload(
     payload: &OplogPayload<AgentInvocationPayload>,
-) -> Option<ComponentRevision> {
-    fn target_revision(payload: &AgentInvocationPayload) -> Option<ComponentRevision> {
+) -> InvocationPayloadClass {
+    fn classify(payload: &AgentInvocationPayload) -> InvocationPayloadClass {
         match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => Some(*target_revision),
-            _ => None,
+            AgentInvocationPayload::ManualUpdate { target_revision } => {
+                InvocationPayloadClass::ManualUpdate(*target_revision)
+            }
+            other => InvocationPayloadClass::Invocation(
+                other.operation().and_then(InvocationOperation::kept),
+            ),
         }
     }
 
     match payload {
-        OplogPayload::Inline(p) => target_revision(p),
+        OplogPayload::Inline(p) => classify(p),
         OplogPayload::SerializedInline {
             cached: Some(v), ..
-        } => target_revision(v),
+        } => classify(v),
         OplogPayload::SerializedInline { bytes, .. } => {
             #[cfg(test)]
             INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
@@ -348,14 +373,39 @@ pub(crate) fn manual_update_target_revision_of(
                     tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
                     e
                 })
-                .ok()
-                .as_ref()
-                .and_then(target_revision)
+                .map_or(InvocationPayloadClass::Invocation(None), |payload| {
+                    classify(&payload)
+                })
         }
         OplogPayload::External {
             cached: Some(v), ..
-        } => target_revision(v),
-        OplogPayload::External { .. } => None,
+        } => classify(v),
+        OplogPayload::External { .. } => InvocationPayloadClass::Invocation(None),
+    }
+}
+
+/// The target revision of a pending agent invocation payload when it is a manual update.
+pub(crate) fn manual_update_target_revision_of(
+    payload: &OplogPayload<AgentInvocationPayload>,
+) -> Option<ComponentRevision> {
+    match classify_invocation_payload(payload) {
+        InvocationPayloadClass::ManualUpdate(target_revision) => Some(target_revision),
+        InvocationPayloadClass::Invocation(_) => None,
+    }
+}
+
+/// The operation of the request in a `PendingAgentInvocation` or `AgentInvocationStarted` entry,
+/// for a fold that has no update step of the entry.
+pub(crate) fn request_operation(entry: &OplogEntry) -> Option<InvocationOperation> {
+    match entry {
+        OplogEntry::PendingAgentInvocation { payload, .. }
+        | OplogEntry::AgentInvocationStarted { payload, .. } => {
+            match classify_invocation_payload(payload) {
+                InvocationPayloadClass::Invocation(operation) => operation,
+                InvocationPayloadClass::ManualUpdate(_) => None,
+            }
+        }
+        _ => None,
     }
 }
 

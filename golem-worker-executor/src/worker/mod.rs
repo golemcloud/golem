@@ -71,6 +71,7 @@ pub mod instance;
 mod interrupt;
 pub mod invocation;
 mod invocation_loop;
+pub mod invocations;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
@@ -166,7 +167,8 @@ use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, Start
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
     InvocationRequests, calculate_last_known_status_with_checkpoint,
-    fold_invocation_result_entries, revert_validation_regions, update_status_with_new_entries,
+    fold_invocation_result_entries, request_operation, revert_validation_regions,
+    update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -189,6 +191,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
+use golem_common::model::InvocationEnd;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{

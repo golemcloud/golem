@@ -14,7 +14,7 @@
 
 use desert_rust::BinaryCodec;
 
-use super::InvocationStatus;
+use super::{InvocationOperation, InvocationStatus};
 use crate::base_model::caller::Caller;
 use crate::model::account::AccountId;
 use crate::model::card::ScopeCard;
@@ -139,6 +139,29 @@ pub enum AgentInvocationPayload {
 }
 
 impl AgentInvocationPayload {
+    /// What this invocation runs. `None` for a manual update, which is not an invocation of the
+    /// agent.
+    pub fn operation(&self) -> Option<InvocationOperation> {
+        match self {
+            Self::ManualUpdate { .. } => None,
+            Self::AgentInitialization { .. } => Some(InvocationOperation::Constructor),
+            Self::AgentMethod { method_name, .. } => {
+                Some(InvocationOperation::Method(method_name.clone()))
+            }
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => Some(InvocationOperation::tool(
+                &tool_name.to_string(),
+                command_path,
+            )),
+            Self::LoadSnapshot { .. } | Self::SaveSnapshot | Self::ProcessOplogEntries { .. } => {
+                Some(InvocationOperation::Internal)
+            }
+        }
+    }
+
     /// Compares the caller's execution contract, not deployment-time tool resolution.
     /// Tracing and scheduling metadata are stored outside the payload.
     pub fn same_caller_request(&self, other: &Self) -> bool {
@@ -773,6 +796,9 @@ pub struct PendingInvocationRef {
     pub idempotency_key: Option<InvocationId>,
     /// Target revision of the manual update. `Some` only for manual update invocations.
     pub manual_update_target_revision: Option<ComponentRevision>,
+    /// What the invocation runs. `None` for a manual update, and when the fold did not decode
+    /// the payload: it is stored externally, or its operation is too long to keep.
+    pub operation: Option<InvocationOperation>,
 }
 
 impl PendingInvocationRef {

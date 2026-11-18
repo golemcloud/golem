@@ -15,10 +15,12 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, InvocationResultMembership, InvocationResultPosition,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationEnd, InvocationOperation,
+    InvocationRequestRef, InvocationResultMembership, InvocationResultPosition,
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
+    RetryConfig, RetryPolicyState, RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord,
+    Timestamp,
     UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
@@ -33,6 +35,7 @@ pub(crate) mod update_queue;
 pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
+pub(crate) use update_queue::request_operation;
 use update_queue::{UpdateStep, manual_update_target_revision_of};
 
 #[cfg(test)]
@@ -51,7 +54,9 @@ use fields::calculate_source_card_transfers;
 use fields::calculate_total_linear_memory_size;
 use fields::calculate_update_fields;
 use fields::collect_resources;
-pub(crate) use fields::{InvocationRequests, fold_invocation_result_entries};
+pub(crate) use fields::{
+    InvocationRequests, fold_invocation_result_entries, known_request_operations,
+};
 pub use reconstruction::calculate_last_known_status;
 pub use reconstruction::calculate_last_known_status_for_existing_worker;
 pub use reconstruction::calculate_last_known_status_with_checkpoint;
@@ -400,6 +405,7 @@ fn update_status_with_precomputed_regions(
         last_known.invocation_results,
         requests,
         deleted_regions,
+        steps,
         &new_entries,
     );
 
@@ -450,8 +456,7 @@ fn update_status_with_precomputed_regions(
         ephemeral_execution_begun,
         never_live,
         pending_durable_stream_cancellations,
-        current_idempotency_key: requests.current,
-        current_invocation_started_at: requests.current_started_at,
+        running: requests.current,
         withdrawn_again: requests.withdrawn_again,
         component_revision,
         component_size,

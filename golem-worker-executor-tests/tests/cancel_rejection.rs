@@ -22,12 +22,19 @@ use crate::Tracing;
 use chrono::Utc;
 use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind, OplogIndex};
-use golem_common::model::{AgentInvocation, InvocationId, OwnedAgentId};
+use golem_common::model::invocation_context::TraceId;
+use golem_common::model::oplog::{
+    AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+};
+use golem_common::model::{
+    AgentInvocation, AgentInvocationPayload, InvocationId, InvocationOperation, OwnedAgentId,
+    Timestamp,
+};
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::model::{LookupResult, TrapType};
+use golem_worker_executor::worker::invocations::InvocationState;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -204,4 +211,238 @@ async fn rejection_of_an_uncancelled_invocation_stays_its_result(
         false,
     )
     .await
+}
+
+/// The invocations of an agent are listed the same before and after its cached status is
+/// evicted, and after the executor restarts. With a one-entry recent index the older results
+/// come from the persisted index, which the eviction removes and catch-up rebuilds, and the
+/// payloads are external, so their operations are read from the request entries.
+#[test]
+#[timeout("4m")]
+async fn invocations_are_listed_the_same_after_eviction_and_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 1;
+            config.invocation_results.bloom_bits = 8;
+            config.invocation_results.physical_index_catch_up_chunk_size = 1;
+            config.oplog.max_payload_size = 1;
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_id!("ScheduledInvocationServer", "listed-after-eviction");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "listed-after-eviction-owner"),
+        )
+        .await?;
+    let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
+        idempotency_key: *key,
+        method_name: "inc_global_by".to_string(),
+        input: data_value!(1u64).into_parts().1,
+        invocation_context: InvocationContextStack::fresh(),
+        principal: Principal::Agent(AgentPrincipal {
+            agent_id: owner.clone(),
+        }),
+        scope_card: None,
+    };
+    executor
+        .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+        .await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let due = Utc::now() + chrono::Duration::hours(1);
+
+    let mut cancelled = Vec::new();
+    for _ in 0..3 {
+        let key = InvocationId(uuid::Uuid::new_v4());
+        let receipt = worker.schedule_invocation(invocation(&key), due).await?;
+        assert!(
+            worker
+                .cancel_scheduled_invocation(key, receipt, &owner)
+                .await?
+        );
+        cancelled.push(key);
+    }
+    let scheduled = InvocationId(uuid::Uuid::new_v4());
+    worker
+        .schedule_invocation(invocation(&scheduled), due)
+        .await?;
+
+    let before = worker.list_invocations().await?;
+    let state_of = |key: &InvocationId| {
+        before
+            .iter()
+            .find(|entry| entry.key == *key)
+            .map(|entry| (entry.state, entry.operation.clone()))
+    };
+    let inc = Some(InvocationOperation::Method("inc_global_by".to_string()));
+    for key in &cancelled {
+        assert_eq!(
+            state_of(key),
+            Some((InvocationState::Cancelled, inc.clone()))
+        );
+    }
+    assert_eq!(
+        state_of(&scheduled),
+        Some((InvocationState::Scheduled, inc.clone()))
+    );
+    assert!(
+        before
+            .iter()
+            .any(|entry| entry.state == InvocationState::Completed
+                && entry.operation
+                    == Some(InvocationOperation::Method("get_global_value".to_string())))
+    );
+    assert!(
+        before
+            .windows(2)
+            .all(|pair| pair[0].last_change > pair[1].last_change),
+        "newest change first: {before:?}"
+    );
+
+    executor.evict_cached_status(&target).await?;
+    assert_eq!(worker.list_invocations().await?, before, "after eviction");
+    drop(worker);
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    executor
+        .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+        .await?;
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let after: Vec<_> = worker
+        .list_invocations()
+        .await?
+        .into_iter()
+        .filter(|entry| before.iter().any(|known| known.key == entry.key))
+        .collect();
+    assert_eq!(after, before, "after a restart");
+    drop(worker);
+    Ok(())
+}
+
+/// The invocation loop withdraws a queued duplicate of a finished invocation. The withdrawal is
+/// not the result of the key, so once the finished result has left the recent results the list
+/// still shows that result.
+#[test]
+#[timeout("4m")]
+async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 1;
+            config.invocation_results.bloom_bits = 8;
+            config.invocation_results.physical_index_catch_up_chunk_size = 1;
+        })),
+        ..Default::default()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_id!("ScheduledInvocationServer", "listed-duplicate");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "listed-duplicate-owner"),
+        )
+        .await?;
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner.clone(),
+    });
+    let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
+        idempotency_key: *key,
+        method_name: "inc_global_by".to_string(),
+        input: data_value!(1u64).into_parts().1,
+        invocation_context: InvocationContextStack::fresh(),
+        principal: principal.clone(),
+        scope_card: None,
+    };
+    executor
+        .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+        .await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let due = Utc::now() + chrono::Duration::hours(1);
+
+    let finished = InvocationId(uuid::Uuid::new_v4());
+    worker
+        .clone()
+        .invoke_and_await(invocation(&finished))
+        .await?;
+    let state_of =
+        |listed: &[golem_worker_executor::worker::invocations::InvocationListEntry]| {
+            listed
+                .iter()
+                .find(|entry| entry.key == finished)
+                .map(|entry| entry.state)
+        };
+    assert_eq!(
+        state_of(&worker.list_invocations().await?),
+        Some(InvocationState::Completed)
+    );
+
+    // Later results evict the finished one from the one-entry recent results.
+    for _ in 0..3 {
+        let other = InvocationId(uuid::Uuid::new_v4());
+        let receipt = worker.schedule_invocation(invocation(&other), due).await?;
+        assert!(
+            worker
+                .cancel_scheduled_invocation(other, receipt, &owner)
+                .await?
+        );
+    }
+    assert_eq!(
+        state_of(&worker.list_invocations().await?),
+        Some(InvocationState::Completed),
+        "before the duplicate"
+    );
+
+    // A queued duplicate of the finished key, withdrawn as `discard_pending_duplicate` does.
+    worker
+        .add_to_oplog(OplogEntry::pending_agent_invocation(
+            Some(Timestamp::from(due.timestamp_millis() as u64)),
+            finished,
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "inc_global_by".to_string(),
+                input: data_value!(1u64).into_parts().1,
+                principal: principal.clone(),
+                scope_card: None,
+            })),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ))
+        .await?;
+    worker
+        .add_and_commit_oplog(OplogEntry::cancel_pending_invocation(finished))
+        .await?;
+
+    let listed = worker.list_invocations().await?;
+    let lookup = worker.lookup_invocation_result(&finished).await;
+    assert_eq!(
+        state_of(&listed),
+        Some(InvocationState::Completed),
+        "after the withdrawn duplicate (lookup of the key: {lookup:?}): {listed:?}"
+    );
+    drop(worker);
+    Ok(())
 }

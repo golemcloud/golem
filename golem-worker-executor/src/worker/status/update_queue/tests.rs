@@ -341,6 +341,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 oplog_index: idx(6),
                 idempotency_key: Some(InvocationId(Uuid::new_v4())),
                 manual_update_target_revision: None,
+                operation: None,
             },
             PendingInvocationRef {
                 timestamp: Timestamp::from(1_000),
@@ -348,6 +349,7 @@ fn of_seeds_the_queue_and_the_manual_admissions_from_a_checkpoint_status() {
                 oplog_index: idx(7),
                 idempotency_key: None,
                 manual_update_target_revision: Some(revision(4)),
+                operation: None,
             },
         ],
         ..AgentStatusRecord::default()

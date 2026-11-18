@@ -1713,7 +1713,16 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
 fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(*key),
+        running: Some(golem_common::model::RunningInvocation {
+            key: *key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: Timestamp::from(0),
+        }),
         ..AgentStatusRecord::default()
     }
 }
@@ -1879,6 +1888,7 @@ fn invocation_rejection_fails_only_the_rejected_pending_key() {
             oplog_index: OplogIndex::from_u64(2),
             idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
+            operation: None,
         }],
         ..AgentStatusRecord::default()
     };
@@ -2387,6 +2397,7 @@ fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocati
         oplog_index: OplogIndex::from_u64(2),
         idempotency_key: Some(*key),
         manual_update_target_revision: None,
+        operation: None,
     }
 }
 

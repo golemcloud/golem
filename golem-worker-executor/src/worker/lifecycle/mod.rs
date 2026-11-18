@@ -1123,7 +1123,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .any(|pending| pending.has_idempotency_key(&idempotency_key))
         {
             return Ok(
-                if status.current_idempotency_key.as_ref() == Some(&idempotency_key) {
+                if status.current_idempotency_key() == Some(&idempotency_key) {
                     CancelInvocationOutcome::Running
                 } else {
                     CancelInvocationOutcome::NotPending

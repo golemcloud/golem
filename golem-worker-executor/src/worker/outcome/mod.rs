@@ -222,12 +222,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     error,
                     ..
                 } if &invocation_id == key => {
-                    if status.current_idempotency_key.as_ref() == Some(key)
+                    if status.current_idempotency_key() == Some(key)
                         && status.status == AgentStatus::Interrupted
                     {
                         return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
                     }
-                    if status.current_idempotency_key.as_ref() == Some(key)
+                    if status.current_idempotency_key() == Some(key)
                         && (status.status != AgentStatus::Failed
                             || status.last_error_kind == Some(OplogErrorKind::Recovery))
                         && status.status != AgentStatus::Exited
@@ -260,7 +260,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )),
             };
         }
-        if status.current_idempotency_key.as_ref() == Some(key) {
+        if status.current_idempotency_key() == Some(key) {
             if status.status == AgentStatus::Interrupted {
                 return Err(InterruptKind::Interrupt(Timestamp::now_utc()).into());
             }
@@ -644,7 +644,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let position = if let Some(position) = status.invocation_results.position(key) {
-            Some(*position)
+            Some(position.clone())
         } else if status.invocation_results.might_contain(key) {
             self.resolve_old_invocation_result_index(&status, key)
                 .await?
@@ -653,10 +653,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let request = match position {
             Some(position) => position.request,
-            None if status.current_idempotency_key.as_ref() == Some(key) => {
-                status.current_invocation_started_at
-            }
-            None => return Ok(None),
+            None => match &status.running {
+                Some(running) if running.key == *key => Some(running.request.index),
+                _ => return Ok(None),
+            },
         };
         let request = request.ok_or_else(|| {
             WorkerExecutorError::runtime("accepted invocation has no indexed request entry")
@@ -776,7 +776,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .pending_invocations
                 .iter()
                 .any(|entry| entry.has_idempotency_key(key));
-            let is_current = status.current_idempotency_key.as_ref() == Some(key);
+            let is_current = status.current_idempotency_key() == Some(key);
             if is_pending || is_current {
                 LookupResult::Pending
             } else {
@@ -863,8 +863,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &mut requests,
                 &status.deleted_regions,
                 &entries,
-                |candidate, position, withdrawal| {
-                    if candidate == key && !(withdrawal && result.is_some()) {
+                // The lookup answers with the outcome only, so it decodes no request.
+                |_, _| None,
+                |candidate, position| {
+                    if candidate == key
+                        && !(position.end == InvocationEnd::Cancelled && result.is_some())
+                    {
                         result = Some(position);
                     }
                 },
@@ -972,7 +976,7 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
                     trap_type: TrapType::Error { .. },
                     ..
                 }),
-        } if status.current_idempotency_key.as_ref() == Some(key)
+        } if status.current_idempotency_key() == Some(key)
             && (status.status != AgentStatus::Failed
                 || status.last_error_kind == Some(OplogErrorKind::Recovery))
             && status.status != AgentStatus::Exited =>

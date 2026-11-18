@@ -1645,7 +1645,7 @@ fn can_append_invocation(
     status.invocation_results.change_generation() == expected_result_generation
         && status.invocation_results.revert_generation() == expected_revert_generation
         && !status.invocation_results.contains_key(idempotency_key)
-        && status.current_idempotency_key.as_ref() != Some(idempotency_key)
+        && status.current_idempotency_key() != Some(idempotency_key)
         && !status
             .pending_invocations
             .iter()
@@ -1866,6 +1866,7 @@ mod tests {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(key),
             manual_update_target_revision: None,
+            operation: None,
         }
     }
 
@@ -2162,6 +2163,10 @@ mod tests {
         golem_common::model::InvocationResultPosition {
             terminal,
             request: None,
+            end: golem_common::model::InvocationEnd::Completed,
+            operation: None,
+            accepted_at: None,
+            changed_at: golem_common::model::Timestamp::from(0),
         }
     }
 
@@ -2181,7 +2186,16 @@ mod tests {
         ));
 
         status.pending_invocations.clear();
-        status.current_idempotency_key = Some(key);
+        status.running = Some(golem_common::model::RunningInvocation {
+            key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        });
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2189,7 +2203,7 @@ mod tests {
             revert_generation
         ));
 
-        status.current_idempotency_key = None;
+        status.running = None;
         status
             .invocation_results
             .insert(InvocationId(Uuid::new_v4()), result_at(OplogIndex::INITIAL));
