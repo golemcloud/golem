@@ -1562,19 +1562,19 @@ async fn rest_manual_update_records_the_requester(
 ) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
+    // Revision 2 saves a snapshot and revision 3 loads it, so the manual update succeeds.
     let component = user
-        .component(&env.id, "golem_it_agent_sdk_rust_release")
-        .name("golem-it:agent-sdk-rust")
+        .component(&env.id, "it_agent_update_v2_release")
+        .name("it:agent-update")
         .unique()
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("InvocationContextProbe", "rest-manual-update-1");
+    let parsed_agent_id = agent_id!("UpdateTest");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
-    // The next revision is the same probe, so its load hook reads what the save hook wrote.
     let target = user
-        .update_component(&component.id, "golem_it_agent_sdk_rust_release")
+        .update_component(&component.id, "it_agent_update_v3_release")
         .await?;
 
     user.manual_update_worker(&agent_id, target.revision, false)
