@@ -1,0 +1,257 @@
+name: Main validation
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      acceptance:
+        description: 'Use the acceptance status, without consuming requests or changing release evidence'
+        type: boolean
+        default: true
+      source:
+        description: 'Acceptance only: exact commit SHA (defaults to this workflow commit)'
+        type: string
+      parallel:
+        description: 'Acceptance only: exercise the three overlapping subflows'
+        type: boolean
+        default: false
+
+# Only one cycle runs. Replaced pending wake-ups lose no exact-source requests:
+# those requests remain open issues until their cycle finishes.
+concurrency:
+  group: main-validation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    if: github.repository == 'golemcloud/golem' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && vars.MAIN_VALIDATION_ENABLED == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      statuses: write
+    outputs:
+      selected: ${{ steps.source.outputs.selected }}
+      source: ${{ steps.source.outputs.source }}
+      request: ${{ steps.source.outputs.request }}
+      context: ${{ steps.source.outputs.context }}
+    steps:
+      - name: Select an exact request or the latest main
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTANCE: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance }}
+          REQUESTED_SOURCE: ${{ inputs.source }}
+          ENABLED: ${{ vars.MAIN_VALIDATION_ENABLED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'selected=false' >> "$GITHUB_OUTPUT"
+          repository="repos/$GITHUB_REPOSITORY"
+          request=''
+          context='Main validation'
+          if [[ "$ACCEPTANCE" == true ]]; then
+            context='Main validation (acceptance)'
+            source=${REQUESTED_SOURCE:-$GITHUB_SHA}
+            [[ "$source" =~ ^[a-f0-9]{40}$ ]]
+            gh api "$repository/commits/$source" --silent
+          else
+            [[ "$ENABLED" == true && "$GITHUB_REF" == refs/heads/main && -z "$REQUESTED_SOURCE" ]]
+            main=$(gh api "$repository/git/ref/heads/main" --jq .object.sha)
+            gh api --paginate --slurp "$repository/issues?state=open&labels=main-validation-request&sort=created&direction=asc&per_page=100" > "$RUNNER_TEMP/requests.json"
+            while IFS= read -r issue; do
+              number=$(jq -r .number <<< "$issue")
+              body=$(jq -r '.body // ""' <<< "$issue")
+              source=$(jq -er '.source | strings' <<< "$body" 2>/dev/null) || source=''
+              tag=$(jq -er '.release_tag // "" | strings' <<< "$body" 2>/dev/null) || tag=invalid
+              valid=false
+              if [[ "$source" =~ ^[a-f0-9]{40}$ && -z "$tag" ]]; then
+                if comparison=$(gh api "$repository/compare/$source...$main"); then
+                  [[ $(jq -r .status <<< "$comparison") =~ ^(ahead|identical)$ ]] && valid=true
+                else
+                  # Missing commits are bad requests; authentication/server errors stop this run.
+                  jq -e '(.status | tostring) == "404"' <<< "$comparison" >/dev/null || exit 1
+                fi
+              elif [[ "$source" =~ ^[a-f0-9]{40}$ && "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[-+a-zA-Z0-9.]*$ ]]; then
+                object=$(gh api "$repository/git/matching-refs/tags/$tag" --jq ".[] | select(.ref == \"refs/tags/$tag\") | .object")
+                for depth in {1..10}; do
+                  [[ $(jq -r '.type // ""' <<< "${object:-null}") == tag ]] || break
+                  sha=$(jq -r .sha <<< "$object")
+                  object=$(gh api "$repository/git/tags/$sha" --jq .object)
+                done
+                if [[ -n "$object" ]] && jq -e --arg sha "$source" '.type == "commit" and .sha == $sha' <<< "$object" >/dev/null; then
+                  valid=true
+                fi
+              fi
+              if [[ "$valid" == true ]]; then
+                request=$number
+                break
+              fi
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" --reason 'not planned' \
+                --comment 'Invalid validation request. Supply JSON with a full source SHA in main history, or that SHA and a release_tag which resolves to it. This request does not block main sampling.'
+            done < <(jq -c '.[][] | select(.pull_request == null)' "$RUNNER_TEMP/requests.json")
+            if [[ -z "$request" ]]; then
+              source=$main
+              status=$(gh api --paginate --slurp "$repository/commits/$source/statuses?per_page=100" | \
+                jq -r '[.[][] | select(.context == "Main validation" and .creator.login == "github-actions[bot]")][0].state // ""')
+              if [[ "$status" =~ ^(success|failure|error)$ ]]; then
+                echo "Latest main $source already has a completed result."
+                exit 0
+              fi
+            fi
+          fi
+          gh api --method POST "$repository/statuses/$source" -f state=pending -f context="$context" \
+            -f description='Validation is running' -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --silent
+          printf 'source=%s\nrequest=%s\ncontext=%s\nselected=true\n' "$source" "$request" "$context" >> "$GITHUB_OUTPUT"
+          printf 'Source: `%s`\n\nStatus: %s\n' "$source" "$context" >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    needs: select
+    if: needs.select.outputs.selected == 'true'
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    # Cold serial baseline is about 4.5 hours; leave an hour for setup and evidence.
+    timeout-minutes: 330
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: 20
+      WASI_SDK_PATH: /opt/wasi-sdk
+      MAIN_VALIDATION_PARALLEL: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance && inputs.parallel }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.select.outputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          path: .validation-control
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Mount compiler caches
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: main-validation-linux-target
+          path: target
+          commit: 'true'
+      - name: Mount dependency caches
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: main-validation-linux-dependencies
+          path: .validation-cache
+          commit: 'true'
+      - name: Configure dependency caches
+        shell: bash
+        run: |
+          mkdir -p "$PWD/.validation-cache/cargo"
+          echo "MAIN_VALIDATION_REPORT_DIR=$RUNNER_TEMP/main-validation-reports" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$PWD/.validation-cache/cargo" >> "$GITHUB_ENV"
+          echo "$PWD/.validation-cache/cargo/bin" >> "$GITHUB_PATH"
+          echo "NPM_CONFIG_CACHE=$PWD/.validation-cache/npm" >> "$GITHUB_ENV"
+          echo "GOCACHE=$PWD/.validation-cache/go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=$PWD/.validation-cache/go-mod" >> "$GITHUB_ENV"
+          echo "SBT_OPTS=-Dsbt.ivy.home=$PWD/.validation-cache/ivy -Dsbt.global.base=$PWD/.validation-cache/sbt-global -Dsbt.boot.directory=$PWD/.validation-cache/sbt-boot" >> "$GITHUB_ENV"
+      - uses: ./.validation-control/.github/actions/setup-main-validation
+      - name: Validate the selected source
+        timeout-minutes: 300
+        run: cargo make --profile ci main-validation
+      - name: Retain Linux reports even after failure
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: main-validation-linux-${{ github.run_id }}
+          path: ${{ env.MAIN_VALIDATION_REPORT_DIR }}
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  apfs:
+    needs: select
+    if: needs.select.outputs.selected == 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.select.outputs.source }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-shared-key: main-validation-apfs
+      - name: Execute same-source native APFS coverage
+        env:
+          MAIN_VALIDATION_REPORT_DIR: ${{ runner.temp }}/main-validation-apfs
+        run: cargo make --profile ci main-validation-apfs
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: main-validation-apfs-${{ github.run_id }}
+          path: ${{ runner.temp }}/main-validation-apfs
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
+
+  result:
+    needs: [select, linux, apfs]
+    if: always() && needs.select.outputs.selected == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: write
+      issues: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v6
+        id: linux-reports
+        continue-on-error: true
+        with:
+          name: main-validation-linux-${{ github.run_id }}
+          path: evidence/linux
+      - uses: actions/download-artifact@v6
+        id: apfs-reports
+        continue-on-error: true
+        with:
+          name: main-validation-apfs-${{ github.run_id }}
+          path: evidence/apfs
+      - name: Publish original test results and recovered failures
+        id: report
+        continue-on-error: true
+        uses: ./.github/actions/publish-test-report
+        with:
+          artifact-name: main-validation-test-report
+          github-token: ${{ github.token }}
+          report-path: evidence/linux/ctrf-*.json
+      - name: Publish the exact-source result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.select.outputs.source }}
+          REQUEST: ${{ needs.select.outputs.request }}
+          CONTEXT: ${{ needs.select.outputs.context }}
+          PASSED: ${{ needs.linux.result == 'success' && needs.apfs.result == 'success' && steps.linux-reports.outcome == 'success' && steps.apfs-reports.outcome == 'success' && steps.report.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=failure
+          [[ "$PASSED" == true ]] && state=success
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$SOURCE" -f state="$state" -f context="$CONTEXT" \
+            -f description="Linux and APFS validation: $state" -f target_url="$url" --silent
+          if [[ -n "$REQUEST" ]]; then
+            gh issue close "$REQUEST" --repo "$GITHUB_REPOSITORY" --comment "Validation of $SOURCE finished: $state. $url"
+          fi
+          echo "Validation of $SOURCE: $state. $url" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$state" == success ]]

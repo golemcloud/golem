@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation};
+use golem_rust::{agent_definition, agent_implementation, read_only};
 use wasi::sockets::instance_network::instance_network;
 use wasi::sockets::ip_name_lookup::resolve_addresses;
 
@@ -231,6 +231,184 @@ fn tcp_file_blocking_splice(port: u16) -> Result<(u32, (u64, Vec<u8>)), String> 
     })
 }
 
+fn p2_address(address: std::net::SocketAddr) -> wasi::sockets::network::IpSocketAddress {
+    use wasi::sockets::network::{IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress};
+
+    match address {
+        std::net::SocketAddr::V4(address) => {
+            let [a, b, c, d] = address.ip().octets();
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (a, b, c, d),
+                port: address.port(),
+            })
+        }
+        std::net::SocketAddr::V6(address) => {
+            let [a, b, c, d, e, f, g, h] = address.ip().segments();
+            IpSocketAddress::Ipv6(Ipv6SocketAddress {
+                address: (a, b, c, d, e, f, g, h),
+                port: address.port(),
+                flow_info: 0,
+                scope_id: 0,
+            })
+        }
+    }
+}
+
+fn p3_address(
+    address: std::net::SocketAddr,
+) -> golem_rust::wasip3::sockets::types::IpSocketAddress {
+    use golem_rust::wasip3::sockets::types::{
+        IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress,
+    };
+
+    match address {
+        std::net::SocketAddr::V4(address) => {
+            let [a, b, c, d] = address.ip().octets();
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (a, b, c, d),
+                port: address.port(),
+            })
+        }
+        std::net::SocketAddr::V6(address) => {
+            let [a, b, c, d, e, f, g, h] = address.ip().segments();
+            IpSocketAddress::Ipv6(Ipv6SocketAddress {
+                address: (a, b, c, d, e, f, g, h),
+                port: address.port(),
+                flow_info: 0,
+                scope_id: 0,
+            })
+        }
+    }
+}
+
+/// Runs one socket operation of the P2 API on `address`: `tcp-connect`, `udp-send`, `tcp-bind`,
+/// `udp-bind` or `tcp-listen` (which first binds to `address`).
+fn socket_policy_p2(operation: &str, address: &str) -> Result<String, String> {
+    use wasi::sockets::network::IpAddressFamily;
+    use wasi::sockets::udp::OutgoingDatagram;
+
+    let address: std::net::SocketAddr = address.parse().map_err(|error| format!("{error}"))?;
+    let family = if address.is_ipv4() {
+        IpAddressFamily::Ipv4
+    } else {
+        IpAddressFamily::Ipv6
+    };
+    let unspecified = if address.is_ipv4() {
+        "0.0.0.0:0"
+    } else {
+        "[::]:0"
+    };
+    let unspecified = p2_address(unspecified.parse().unwrap());
+    let remote = p2_address(address);
+    let network = instance_network();
+    let error = |error| format!("{error:?}");
+    match operation {
+        "tcp-connect" => {
+            let socket =
+                wasi::sockets::tcp_create_socket::create_tcp_socket(family).map_err(error)?;
+            socket.start_connect(&network, remote).map_err(error)?;
+            socket.subscribe().block();
+            socket.finish_connect().map_err(error)?;
+            Ok("connected".to_string())
+        }
+        "udp-send" => {
+            let socket =
+                wasi::sockets::udp_create_socket::create_udp_socket(family).map_err(error)?;
+            socket.start_bind(&network, unspecified).map_err(error)?;
+            socket.subscribe().block();
+            socket.finish_bind().map_err(error)?;
+            let (_, outgoing) = socket.stream(None).map_err(error)?;
+            outgoing.check_send().map_err(error)?;
+            outgoing
+                .send(&[OutgoingDatagram {
+                    data: b"policy".to_vec(),
+                    remote_address: Some(remote),
+                }])
+                .map(|sent| sent.to_string())
+                .map_err(error)
+        }
+        "tcp-bind" | "tcp-listen" => {
+            let socket =
+                wasi::sockets::tcp_create_socket::create_tcp_socket(family).map_err(error)?;
+            socket.start_bind(&network, remote).map_err(error)?;
+            socket.subscribe().block();
+            socket.finish_bind().map_err(error)?;
+            if operation == "tcp-bind" {
+                return Ok("bound".to_string());
+            }
+            socket.start_listen().map_err(error)?;
+            socket.subscribe().block();
+            socket.finish_listen().map_err(error)?;
+            Ok("listening".to_string())
+        }
+        "udp-bind" => {
+            let socket =
+                wasi::sockets::udp_create_socket::create_udp_socket(family).map_err(error)?;
+            socket.start_bind(&network, remote).map_err(error)?;
+            socket.subscribe().block();
+            socket.finish_bind().map_err(error)?;
+            Ok("bound".to_string())
+        }
+        _ => Err(format!("unknown P2 socket operation: {operation}")),
+    }
+}
+
+/// [`socket_policy_p2`] on the P3 API; `tcp-listen` also listens on a socket that was never
+/// bound.
+async fn socket_policy_p3(operation: &str, address: &str) -> Result<String, String> {
+    use golem_rust::wasip3::sockets::types::{IpAddressFamily, TcpSocket, UdpSocket};
+
+    let address: std::net::SocketAddr = address.parse().map_err(|error| format!("{error}"))?;
+    let family = if address.is_ipv4() {
+        IpAddressFamily::Ipv4
+    } else {
+        IpAddressFamily::Ipv6
+    };
+    let remote = p3_address(address);
+    let error = |error| format!("{error:?}");
+    match operation {
+        "tcp-connect" => {
+            let socket = TcpSocket::create(family).map_err(error)?;
+            socket.connect(remote).await.map_err(error)?;
+            Ok("connected".to_string())
+        }
+        "udp-send" => {
+            let socket = UdpSocket::create(family).map_err(error)?;
+            socket
+                .send(b"policy".to_vec(), Some(remote))
+                .await
+                .map_err(error)?;
+            Ok("sent".to_string())
+        }
+        "tcp-bind" => {
+            let socket = TcpSocket::create(family).map_err(error)?;
+            socket.bind(remote).map_err(error)?;
+            Ok("bound".to_string())
+        }
+        "udp-bind" => {
+            let socket = UdpSocket::create(family).map_err(error)?;
+            socket.bind(remote).map_err(error)?;
+            Ok("bound".to_string())
+        }
+        "tcp-listen" => {
+            let socket = TcpSocket::create(family).map_err(error)?;
+            socket.bind(remote).map_err(error)?;
+            socket
+                .listen()
+                .map(|_| "listening".to_string())
+                .map_err(error)
+        }
+        "tcp-listen-unbound" => {
+            let socket = TcpSocket::create(family).map_err(error)?;
+            socket
+                .listen()
+                .map(|_| "listening".to_string())
+                .map_err(error)
+        }
+        _ => Err(format!("unknown P3 socket operation: {operation}")),
+    }
+}
+
 async fn udp_receive(port: u16, ready_port: u16) -> Result<Vec<u8>, String> {
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
@@ -385,6 +563,10 @@ pub trait Networking {
     -> Result<(), String>;
     async fn udp_send_p3(&self, port: u16, data: Vec<u8>) -> Result<(), String>;
     async fn udp_receive_p3(&self, port: u16, ready_port: u16) -> Result<String, String>;
+    fn socket_policy_p2(&self, operation: String, address: String) -> Result<String, String>;
+    async fn socket_policy_p3(&self, operation: String, address: String) -> Result<String, String>;
+    #[read_only]
+    async fn read_only_tcp_connect_p3(&self, address: String) -> Result<String, String>;
 }
 
 pub struct NetworkingImpl {
@@ -634,5 +816,17 @@ impl Networking for NetworkingImpl {
             .await
             .map_err(|error| format!("{error:?}"))?;
         Ok(String::from_utf8_lossy(&data).to_string())
+    }
+
+    fn socket_policy_p2(&self, operation: String, address: String) -> Result<String, String> {
+        socket_policy_p2(&operation, &address)
+    }
+
+    async fn socket_policy_p3(&self, operation: String, address: String) -> Result<String, String> {
+        socket_policy_p3(&operation, &address).await
+    }
+
+    async fn read_only_tcp_connect_p3(&self, address: String) -> Result<String, String> {
+        socket_policy_p3("tcp-connect", &address).await
     }
 }

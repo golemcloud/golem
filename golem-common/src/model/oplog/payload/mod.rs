@@ -762,6 +762,9 @@ oplog_payload! {
             result: Result<Option<Vec<u8>>, String>,
             next_oplog_index: OplogIndex,
             current_component_revision: ComponentRevision,
+            /// The last entry that a guest search reads. The first page of the search fixes it
+            /// and replay restores it. `None` for a `get-oplog` read.
+            last_oplog_index: Option<OplogIndex>,
         },
         GolemApiOplogEntries {
             result: Result<Vec<u8>, String>
