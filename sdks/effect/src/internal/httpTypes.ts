@@ -14,8 +14,9 @@
  *
  * @since 1.5.0
  */
-import type { Schema } from "effect"
-import type { EndpointDef, EndpointKind, MountDef } from "../Http.js"
+import type { Schema, SchemaAST } from "effect"
+import type { WitSchemaKind } from "../WitTypes.js"
+import type { MountDef } from "../Http.js"
 // Multimodal / ElementSpec are matched by brand below
 // (the discriminating `_effectGolem` literal-string field) so we no
 // longer need the nominal types — keeping the comments / JSDoc links
@@ -347,7 +348,75 @@ type IsBindable<V> =
         ? false
         : true
 
-type IsPrimitiveValue<V> = [V] extends [string | number | bigint | boolean] ? true : false
+type IsQuerySchema<S, Collections extends boolean = true, Maps extends boolean = true> =
+  IsAny<S> extends true
+    ? true
+    : Schema.Top extends S
+      ? true
+      : S extends WitSchemaKind<infer Kind>
+        ? Kind extends "map"
+          ? S extends Schema.$ReadonlyMap<infer K, infer V>
+            ? Collections extends true
+              ? Maps extends true
+                ? IsQuerySchema<K, false> extends true
+                  ? IsQuerySchema<V, false>
+                  : false
+                : false
+              : false
+            : false
+          : Kind extends "list"
+            ? Collections
+            : false
+        : S extends Schema.decodeTo<any, infer From, any, any>
+          ? IsQuerySchema<From, Collections, Maps>
+          : S extends Schema.NonEmptyArray<any>
+            ? false
+            : S extends Schema.$Array<infer E>
+              ? Collections extends true
+                ? IsQuerySchema<E, false>
+                : false
+              : S extends Schema.Option<infer I>
+                ? Collections extends true
+                  ? IsQuerySchema<I, Collections, Maps>
+                  : false
+                : S extends Schema.Union<infer Members>
+                  ? Members extends readonly [infer I, Schema.Null | Schema.Undefined | Schema.Void]
+                    ? Collections extends true
+                      ? IsQuerySchema<I, Collections, Maps>
+                      : false
+                    : Members extends readonly [
+                          Schema.Null | Schema.Undefined | Schema.Void,
+                          infer I,
+                        ]
+                      ? Collections extends true
+                        ? IsQuerySchema<I, Collections, Maps>
+                        : false
+                      : Members extends readonly Schema.Literal<string>[]
+                        ? true
+                        : false
+                  : S extends { readonly ast: infer Ast extends SchemaAST.AST }
+                    ? SchemaAST.AST extends Ast
+                      ? true
+                      : Ast["_tag"] extends
+                            | "String"
+                            | "Number"
+                            | "BigInt"
+                            | "Boolean"
+                            | "Enum"
+                            | "TemplateLiteral"
+                        ? true
+                        : S extends Schema.Literal<infer L>
+                          ? L extends string | number | boolean | bigint
+                            ? true
+                            : false
+                          : S extends Schema.Literals<infer L>
+                            ? L extends ReadonlyArray<string>
+                              ? true
+                              : false
+                            : Ast["_tag"] extends "Suspend"
+                              ? true
+                              : false
+                    : false
 
 type IsPathBindable<V> =
   IsAny<V> extends true
@@ -358,16 +427,17 @@ type IsPathBindable<V> =
         : true
       : false
 
-type IsQueryOrHeaderBindable<V> =
-  IsAny<V> extends true
-    ? true
-    : IsBindable<V> extends true
-      ? V extends Schema.NonEmptyArray<any>
-        ? false
-        : V extends Schema.$Array<infer Element>
-          ? IsPrimitiveValue<Element["Type"]>
-          : true
-      : false
+type IsQueryOrHeaderBindable<V> = IsQuerySchema<V, true, false>
+
+/** Schema-based keys eligible for scalar, list, map or outer-option query binding. @since 1.6.0 @category models */
+export type QueryBindableKeys<C> = {
+  [K in keyof C & string]: IsQuerySchema<C[K]> extends true ? K : never
+}[keyof C & string]
+
+/** Top-level stream input slots whose HTTP resource binding belongs to the host. @since 1.6.0 @category models */
+export type StreamResourceKeys<C> = {
+  [K in keyof C & string]: C[K] extends WitSchemaKind<"stream"> ? K : never
+}[keyof C & string]
 
 /**
  * Subset of `keyof C & string` whose value is statically eligible
@@ -400,7 +470,7 @@ export type PathBindableKeys<C> = {
 /**
  * Subset of parameter keys statically eligible for query/header
  * binding. In addition to scalar schemas, this admits
- * `Schema.Array` when its decoded element type is primitive. Nested
+ * `Schema.Array` when its element schema has a scalar wire shape. Nested
  * arrays, record elements, and non-empty arrays are excluded because
  * the host collection contract is a plain `list<primitive>`.
  *
@@ -713,112 +783,3 @@ export type HeaderKeysTuple<H> = [H[keyof H]] extends [never]
     : [keyof H & string] extends [never]
       ? readonly []
       : UnionToTuple<keyof H & string>
-
-// ---------------------------------------------------------------------------
-// Bodyless verbs (GET / HEAD) cannot have unbound method parameters
-// ---------------------------------------------------------------------------
-//
-// `EndpointVars` (the first phantom on `EndpointDef`) is the union of
-// every name bound by the endpoint — path, query, AND header. So
-// `Exclude<keyof Params & string, EndpointVars> extends never`
-// expresses "every method parameter is bound somewhere on this
-// endpoint". When the endpoint's `Kind` is narrowed to `"bodyless"`
-// (only the `Http.get` / `Http.head` shorthands do this), an unbound
-// param is a hard error: there is no request body in which the host
-// could deliver its value.
-//
-// `Http.endpoint("GET", ...)` and `Http.custom(verb, ...)` are
-// deliberately tagged `"bodyful"` regardless of the verb string —
-// they do NOT participate in this check, matching the runtime
-// `isBodylessVerb` convention which only treats the literal `"GET"`
-// / `"HEAD"` shorthands as bodyless.
-//
-// Mirrors (defence-in-depth) the runtime "GET/HEAD endpoints may not
-// have unbound parameters" loop in `validateEndpoint` (Http.ts
-// L1136-1146). The runtime check stays the canonical error source —
-// the type-level pre-filter only refuses to compile call sites whose
-// missing bindings are statically visible.
-
-// "bodyless" is currently the only bodyless tag; a `K extends
-// "bodyless"` distribution preserves the message wording for any
-// future tag without enumerating cases here.
-type BodylessLabel<K extends string> = K extends "bodyless" ? "GET/HEAD" : K
-
-/**
- * Per-element validator for the `http` array of a `MethodSpec`.
- *
- * Maps each endpoint positionally — endpoints with different `Kind`
- * values and different bound-var sets in the same array are validated
- * independently. Endpoints whose `Kind` extends `"bodyless"` AND
- * whose bound-var union does NOT cover every key of `Params` are
- * replaced with an {@link Invalid} carrier whose message names the
- * missing parameter(s); every other endpoint passes through
- * unchanged. Bodyful endpoints are always passed through (their
- * unbound params map to JSON body fields keyed by name).
- *
- * Used in `src/internal/method.ts` as the constraint on the
- * `method({ ..., http })` factory's `http` field: the array literal
- * is intersected with this mapped tuple, surfacing a compile error
- * at the offending endpoint position with the missing parameter
- * baked into the error message.
- *
- * @since 1.5.0
- * @category models
- */
-export type ValidateBodylessEndpoints<
-  Endpoints extends ReadonlyArray<EndpointDef<string, EndpointKind, EndpointBound, unknown>>,
-  Params,
-> = {
-  readonly [I in keyof Endpoints]: Endpoints[I] extends EndpointDef<
-    infer Bound,
-    infer Kind,
-    EndpointBound,
-    unknown
-  >
-    ? Kind extends "bodyless"
-      ? [Exclude<keyof Params & string, Bound>] extends [never]
-        ? Endpoints[I]
-        : Invalid<`${BodylessLabel<Kind>} endpoint cannot have unbound param '${Exclude<
-            keyof Params & string,
-            Bound
-          > &
-            string}' (only path / query / header bindings are allowed because there is no request body)`>
-      : Endpoints[I]
-    : Endpoints[I]
-}
-
-/**
- * Spec-side intersection variant of {@link ValidateBodylessEndpoints}
- * for use in curried combinators (e.g. `withHttp`) where the endpoints
- * are received first and the spec — carrying `params` — arrives in a
- * later call. Folds the per-element results into a single union of
- * intersection partners: every valid endpoint contributes `unknown`
- * (a no-op intersection), every bodyless-but-uncovered endpoint
- * contributes an {@link Invalid} carrier. Intersecting the spec arg
- * with the result forces tsc to surface the failure at the spec
- * call-site rather than at the (already-passed) endpoints arg.
- *
- * @since 1.5.0
- * @category models
- */
-export type RequireValidBodylessEndpoints<
-  Endpoints extends ReadonlyArray<EndpointDef<string, EndpointKind, EndpointBound, unknown>>,
-  Params,
-> = {
-  readonly [I in keyof Endpoints]: Endpoints[I] extends EndpointDef<
-    infer Bound,
-    infer Kind,
-    EndpointBound,
-    unknown
-  >
-    ? Kind extends "bodyless"
-      ? [Exclude<keyof Params & string, Bound>] extends [never]
-        ? unknown
-        : Invalid<`${BodylessLabel<Kind>} endpoint cannot have unbound param '${Exclude<
-            keyof Params & string,
-            Bound
-          > &
-            string}' (only path / query / header bindings are allowed because there is no request body)`>
-      : unknown
-    : unknown
-}[number]
