@@ -1,12 +1,68 @@
 """Publish an observation and its analysis, or a heartbeat, without running workload code."""
 
+import datetime
+import http.client
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+
+def changes_since_previous_run(run):
+    """Enumerate Git's complete source range, independently of failure suspects."""
+    result = {"available": False, "baseline": "", "commits": [], "note": ""}
+    source = run.get("source", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", source) or not run.get("context"):
+        result["note"] = "The tested source and context are not yet verified."
+        return result
+    state = Path(os.environ.get("OBSERVER_STATE_DIR", ".local/ci-observer"))
+    previous = []
+    try:
+        created = datetime.datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+        for path in (state / "seen").glob("*.json"):
+            record = json.loads(path.read_text())
+            if (record.get("run_id") == run["run_id"] or record.get("selected") is not True
+                    or record.get("context") != run["context"]
+                    or record.get("classification") in ("incomplete", "no-selection")
+                    or record.get("conclusion") == "cancelled"
+                    or not re.fullmatch(r"[0-9a-f]{40}", record.get("source", ""))):
+                continue
+            timestamp = datetime.datetime.fromisoformat(record["created_at"].replace("Z", "+00:00"))
+            if timestamp < created:
+                previous.append((timestamp, record["run_id"], record.get("attempt", 1), record["source"]))
+        if not previous:
+            result["note"] = "No previous comparable selected run with a verified source is available."
+            return result
+        baseline = max(previous)[3]
+        result["baseline"] = baseline
+
+        def git(*arguments):
+            return subprocess.run(["git", *arguments], capture_output=True, text=True, timeout=30, check=True).stdout
+
+        if git("rev-parse", "--is-shallow-repository").strip() != "false":
+            result["note"] = "Full Git history is unavailable in the observer checkout."
+            return result
+        history = git("log", "--reverse", "--format=%H%x00%s", f"{baseline}..{source}", "--")
+        for line in history.rstrip("\n").split("\n") if history else []:
+            sha, subject = line.split("\x00", 1)
+            result["commits"].append({"sha": sha, "subject": subject})
+        ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", baseline, source],
+                                  capture_output=True, timeout=30)
+        if ancestor.returncode not in (0, 1):
+            raise ValueError("cannot establish source ancestry")
+        result["available"] = True
+        result["note"] = ("Oldest first. Commits reachable from this source but not the previous source."
+                          if ancestor.returncode == 0 else
+                          "The histories diverge. Listed commits are reachable from this source but not the previous source.")
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        result.update(available=False, commits=[], note="The complete source range is unavailable; the observer must fetch and verify its history.")
+    return result
+
 
 url = os.environ.get("CI_DASHBOARD_URL", "").rstrip("/")
 token = os.environ.get("CI_DASHBOARD_TOKEN", "")
@@ -23,6 +79,21 @@ elif len(sys.argv) == 3:
     report = json.loads(Path(sys.argv[2]).read_text())
     payload["classification"] = report["classification"]
     payload["analysis"] = report["analysis"]
+    if payload.get("status") == "in_progress" and (not payload.get("source") or not payload.get("context")):
+        try:
+            with urllib.request.urlopen(url + "/data.json", timeout=30) as response:
+                live = json.load(response)
+            for run in live.get("runs", []):
+                if ((run.get("run_id"), run.get("attempt")) == (payload["run_id"], payload["attempt"])
+                        and run.get("progress") and re.fullmatch(r"[0-9a-f]{40}", run.get("source", ""))
+                        and all(not payload.get(field) or payload[field] == run.get(field) for field in ("source", "context"))
+                        and run.get("context") in ("Main validation", "Main validation (acceptance)")):
+                    for field in ("source", "context"):
+                        if not payload.get(field):
+                            payload[field] = run[field]
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+            print("Runner source unavailable; publishing without a verified source range", file=sys.stderr)
+    payload["changes"] = changes_since_previous_run(payload)
     endpoint = "/api/run"
     link = f'{url}/#run-{payload["run_id"]}-a{payload["attempt"]}'
 else:

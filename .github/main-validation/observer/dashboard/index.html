@@ -23,6 +23,7 @@
     .empty{padding:32px 24px;text-align:center;color:var(--muted)}.empty strong{display:block;color:var(--ink);font-size:16px;font-weight:600;margin-bottom:7px}.detail{min-width:0}.detail-card{background:var(--white);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}.detail-heading{padding:24px;border-bottom:1px solid var(--line)}.detail-top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.detail-title{margin-top:9px;overflow-wrap:anywhere}.detail-links{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:12px}.metadata{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:22px 0 0}.metadata dt{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}.metadata dd{margin:0;font-size:12px;overflow-wrap:anywhere}.section{padding:24px;border-bottom:1px solid var(--line)}.section:last-child{border-bottom:0}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}.section-head .eyebrow{font-size:9px}
     .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.metric{padding:14px;background:var(--card);border:1px solid var(--line);border-radius:8px}.metric-value{font-size:27px;font-weight:600;letter-spacing:-1px;line-height:1.25;font-variant-numeric:tabular-nums}.metric-label{font-size:11px;color:var(--muted);margin-top:5px}.metric.failed .metric-value{color:var(--red)}.metric.recovered .metric-value{color:var(--teal)}.test-note{font-size:12px;color:var(--muted);margin-top:12px}.job{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.job:first-child{padding-top:0}.job:last-child{border-bottom:0;padding-bottom:0}.job-name{font-size:13px;font-weight:600;overflow-wrap:anywhere}.steps{font-size:12px;color:var(--red);margin:6px 0 0;padding-left:18px}
     .analysis{background:linear-gradient(135deg,rgba(245,176,62,.045),transparent 70%),var(--white)}.analysis-summary{font-size:15px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}.analysis-label{display:inline-flex;border:1px solid var(--accent-border);color:var(--accent);background:var(--accent-bg);border-radius:4px;font-family:var(--font-mono);font-size:9px;padding:3px 6px;letter-spacing:.08em;white-space:nowrap}.baseline{padding:12px 14px;border-left:2px solid var(--accent);background:var(--accent-bg);margin:16px 0;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}.suspect{padding:14px 0;border-top:1px solid var(--line)}.suspect-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.confidence{font-family:var(--font-mono);font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}.suspect p{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.limits{margin-top:16px;font-size:12px;color:var(--muted)}.limits ul{padding-left:18px;margin:7px 0 0}.limits li{white-space:pre-wrap;overflow-wrap:anywhere}
+    .commit-list{padding:0;margin:16px 0 0;list-style:none}.commit-list li{padding:12px 0;border-top:1px solid var(--line)}.commit-list a{font-size:13px;font-weight:600;overflow-wrap:anywhere}.commit-list .mono{display:block;color:var(--muted);margin-top:5px;font-size:11px}.commit-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
     .test-details{border:1px solid var(--line);border-radius:8px;margin-top:10px;overflow:hidden}.test-details summary{cursor:pointer;padding:14px;position:relative;overflow-wrap:anywhere;font-size:13px;font-weight:600}.test-details summary:hover{background:var(--hover)}.test-suite{display:block;margin:4px 0 0 17px;font-size:11px;font-weight:400;color:var(--muted)}.test-body{padding:0 14px 14px}.test-message{font:11px/1.7 var(--font-mono);background:#0d0d12;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:16px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:8px 0}.attempts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:10px 0;font-size:11px}.report-name{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.recovered-group{margin-top:24px}.footer{display:flex;justify-content:space-between;gap:14px;border-top:1px solid var(--line);margin-top:32px;padding-top:20px;color:var(--muted);font-size:11px}.loading{padding:70px 24px;text-align:center}.loading .eyebrow{margin-bottom:10px}.loading h2{margin-bottom:10px}.selection-note{margin-top:12px;font-size:12px;color:var(--muted)}
     .task-status{display:inline-flex;align-items:center;gap:6px;font-size:11px;white-space:nowrap;color:var(--muted)}.task-status svg{width:15px;height:15px;flex-shrink:0}.task-status.passed{color:var(--teal)}.task-status.running{color:var(--blue)}.task-status.failed{color:var(--red)}.task-status.blocked,.task-status.interrupted{color:var(--amber)}
     .completion{padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:8px;margin:16px 0}.progress-counts{display:flex;gap:10px 18px;flex-wrap:wrap;align-items:center}.progress-counts strong{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}.completion-count{margin-left:auto;color:var(--muted);font-size:11px}.completion-track{display:flex;gap:min(2px,.25%);height:8px;margin:12px 0 8px}.completion-track span{flex:1;min-width:0;background:var(--border-strong);border-radius:1px}.completion-track .passed{background:var(--teal)}.completion-track .running{background:var(--blue)}.completion-track .failed{background:var(--red)}.completion-track .blocked,.completion-track .interrupted{background:var(--amber)}
@@ -363,6 +364,27 @@
       body.append(el('pre','test-message',test.message || 'No failure message was included in the report.'));
       details.append(summary,body); return details;
     }
+    function renderChanges(run, card) {
+      const changes = run.changes || {}, commits = list(changes.commits);
+      const box = section('Changes since previous run','changes');
+      if (!changes.available) {
+        box.append(el('p','small subtle',changes.note || 'The observer has not yet verified the source comparison.'));
+      } else {
+        box.firstChild.append(el('span','small subtle',`${commits.length} ${commits.length === 1 ? 'commit' : 'commits'}`));
+        const range = el('div','commit-range small');
+        range.append(el('span','subtle','Previous source'),githubLink(str(changes.baseline).slice(0,12),`https://github.com/golemcloud/golem/commit/${changes.baseline}`),el('span','subtle','→'),githubLink(str(run.source).slice(0,12),`https://github.com/golemcloud/golem/commit/${run.source}`));
+        box.append(range,el('p','small subtle',changes.note || 'Oldest first.'));
+        if (!commits.length) box.append(el('p','small','No new commits since the previous selected run.'));
+        const rows = el('ol','commit-list');
+        for (const commit of commits) {
+          const row = el('li');
+          row.append(githubLink(commit.subject || 'Commit subject unavailable',`https://github.com/golemcloud/golem/commit/${commit.sha}`),el('span','mono',str(commit.sha).slice(0,12)));
+          rows.append(row);
+        }
+        box.append(rows);
+      }
+      card.append(box);
+    }
     function renderAnalysis(run, card) {
       const analysis = run.analysis || {}, box = section('Failure analysis','analysis');
       box.firstChild.append(el('span','analysis-label','LLM · REVIEW REQUIRED'));
@@ -409,7 +431,7 @@
         if (list(job.failed_steps).length) { const steps = el('ul','steps'); job.failed_steps.forEach(step=>steps.append(el('li','',step))); info.append(steps); }
         row.append(info,badge(job.conclusion || 'running',job.conclusion || (job.completed_at ? 'Unknown' : job.started_at ? 'In progress' : 'Pending'))); jobs.append(row);
       }
-      renderProgress(run,card); card.append(jobs); renderTests(run,card); renderAnalysis(run,card); root.replaceChildren(card);
+      renderProgress(run,card); card.append(jobs); renderTests(run,card); renderChanges(run,card); renderAnalysis(run,card); root.replaceChildren(card);
       let testIndex = 0;
       for (const details of root.querySelectorAll('details')) {
         details.dataset.testKey ||= `${key(run)}:test:${testIndex++}`;

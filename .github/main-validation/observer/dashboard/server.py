@@ -114,6 +114,13 @@ def public_run(value):
         raise ValueError("unknown validation context")
     tests = value.get("tests") or {}
     analysis = value.get("analysis") or {}
+    changes = value.get("changes") or {}
+    baseline = changes.get("baseline") or ""
+    commits = changes.get("commits") or []
+    if (baseline and not re.fullmatch(r"[0-9a-f]{40}", baseline)) or any(
+        not re.fullmatch(r"[0-9a-f]{40}", commit.get("sha", "")) for commit in commits
+    ):
+        raise ValueError("commit history requires exact commit SHAs")
     totals = tests.get("totals") or {}
     if any(type(n) is not int or n < 0 for n in totals.values()):
         raise ValueError("test totals must be nonnegative integers")
@@ -125,6 +132,10 @@ def public_run(value):
         **{key: text(value.get(key), 200) for key in
            ("workflow_sha", "branch", "event", "status", "conclusion", "classification")},
         "selected": value.get("selected") if type(value.get("selected")) is bool else None,
+        "changes": {"available": changes.get("available") is True, "baseline": baseline,
+                    "note": text(changes.get("note")),
+                    "commits": [{"sha": commit["sha"], "subject": text(commit.get("subject"), 500)}
+                                for commit in commits]},
         "jobs": [{"name": text(job.get("name")), "conclusion": text(job.get("conclusion")),
                   "started_at": job.get("started_at"), "completed_at": job.get("completed_at"),
                   "failed_steps": [text(step) for step in job.get("failed_steps", [])]}
@@ -211,7 +222,8 @@ class Store:
                                     raise ValueError("task log name changed")
                                 if task["started_at"] and (new["started_at"] != task["started_at"] or new["status"] == "pending"):
                                     raise ValueError("task interval changed")
-                        run = dict(existing)
+                        run = {**existing, **{field: existing.get(field) or run[field]
+                                             for field in ("source", "workflow_sha", "branch", "event", "context")}}
                     else:
                         run = {**public_run({**run, "updated_at": run["created_at"],
                                              "status": "in_progress", "selected": True}), "_progress_only": True}
@@ -223,6 +235,9 @@ class Store:
                         raise ValueError("refusing an older observation of this attempt")
                     if "progress" in existing:
                         run["progress"] = existing["progress"]
+                        for field in ("source", "context"):
+                            if not run.get(field):
+                                run[field] = existing.get(field, "")
                 runs = [old for old in runs if (old["run_id"], old["attempt"]) != key] + [run]
             runs.sort(key=lambda item: (item["run_id"], item["attempt"]), reverse=True)
             data = {"updated_at": self.data["updated_at"] if progress else timestamp(), "runs": runs[:200]}

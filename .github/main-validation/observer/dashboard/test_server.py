@@ -33,6 +33,9 @@ class DashboardTest(unittest.TestCase):
                     "updated_at": "2026-11-17T09:00:00Z", "source": "a" * 40,
                     "context": "Main validation", "status": "completed", "conclusion": "failure",
                     "selected": True, "classification": "failure",
+                    "changes": {"available": True, "baseline": "c" * 40, "note": "Oldest first.",
+                                "commits": [{"sha": "b" * 40, "subject": "First <change>"},
+                                            {"sha": "a" * 40, "subject": "Second change"}]},
                     "jobs": [{"name": "linux", "conclusion": "failure", "failed_steps": ["Validate"]}],
                     "tests": {"reports": [{"file": "unit.json"}],
                               "totals": {"tests": 17, "passed": 15, "failed": 2},
@@ -112,6 +115,19 @@ class DashboardTest(unittest.TestCase):
         self.assertNotIn("raw_logs", run)
         self.assertNotIn("_progress_only", run)
         self.assertEqual(json.loads(Store(self.directory.name).snapshot())["runs"][0], run)
+
+    def test_runner_identity_fills_unknown_source_and_survives_observer_refresh(self):
+        self.run.update(status="in_progress", conclusion="", source="", context="")
+        self.assertEqual(self.publish(self.run)[0], 200)
+        analysis = self.record()["analysis"]
+        progress = self.progress()
+        self.assertEqual(self.publish_progress(progress)[0], 200)
+        self.assertEqual(self.record()["source"], progress["source"])
+        self.assertEqual(self.record()["context"], progress["context"])
+        self.assertEqual(self.publish(self.run)[0], 200)
+        self.assertEqual(self.record()["source"], progress["source"])
+        self.assertEqual(self.record()["context"], progress["context"])
+        self.assertEqual(self.record()["analysis"], analysis)
 
     def test_observer_and_progress_merge_with_independent_clocks_in_both_orders(self):
         value = self.progress()
@@ -282,6 +298,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(record["tests"]["totals"]["passed"], 15)
         self.assertEqual(record["analysis"]["suspects"][0]["sha"], "b" * 40)
         self.assertEqual(record["analysis"]["suspects"][0]["subject"], "Fix worker <replay> & delivery")
+        self.assertEqual(record["changes"], self.run["changes"])
 
     def test_reruns_have_distinct_records_and_old_activity_cannot_replace_completion(self):
         self.assertEqual(self.publish(self.run)[0], 200)
