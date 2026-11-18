@@ -2960,6 +2960,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             },
             "needle",
             ScanBudget::default(),
+            ClaimVisibility::Hidden,
         )
     };
     let first = page(OplogIndex::INITIAL).await.unwrap();
@@ -2990,6 +2991,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             2,
             "needle",
             ScanBudget::default(),
+            ClaimVisibility::Hidden,
         )
     };
     let first = guest(OplogIndex::INITIAL).await.unwrap();

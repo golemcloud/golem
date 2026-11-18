@@ -1136,6 +1136,7 @@ impl AgentCommandHandler {
                     &agent_id.0,
                     entry,
                     omit_payloads,
+                    show_claims,
                 )
                 .await?,
             );
