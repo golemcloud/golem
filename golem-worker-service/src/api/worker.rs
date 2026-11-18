@@ -34,7 +34,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, PromiseId, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
 use golem_service_base::api_tags::ApiTags;
@@ -626,6 +626,10 @@ impl WorkerApi {
     }
 
     /// Get the oplog of a worker
+    ///
+    /// Each recorded invocation shows its caller: the principal that started the chain, the
+    /// principal that made the call, and the tokens presented at the entry point. With
+    /// `include=claims`, the users among the callers also show their verified claims.
     #[oai(
         path = "/:component_id/workers/:agent_name/oplog",
         method = "get",
@@ -639,6 +643,7 @@ impl WorkerApi {
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
+        include: Query<Option<OplogInclude>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -650,7 +655,15 @@ impl WorkerApi {
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
         let response = self
-            .get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, auth)
+            .get_oplog_internal(
+                agent_id,
+                from.0,
+                count.0,
+                cursor.0,
+                query.0,
+                include_claims(include.0),
+                auth,
+            )
             .instrument(record.span.clone())
             .await;
 
@@ -664,6 +677,7 @@ impl WorkerApi {
         count: u64,
         cursor: Option<OplogCursor>,
         query: Option<String>,
+        include_claims: bool,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
         let mut response = match (from, query) {
@@ -677,17 +691,31 @@ impl WorkerApi {
             }
             (Some(from), None) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
+                    .get_oplog(
+                        &agent_id,
+                        OplogIndex::from_u64(from),
+                        cursor,
+                        count,
+                        include_claims,
+                        auth,
+                    )
                     .await?
             }
             (None, Some(query)) => {
                 self.worker_service
-                    .search_oplog(&agent_id, cursor, count, query, auth)
+                    .search_oplog(&agent_id, cursor, count, query, include_claims, auth)
                     .await?
             }
             (None, None) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
+                    .get_oplog(
+                        &agent_id,
+                        OplogIndex::INITIAL,
+                        cursor,
+                        count,
+                        include_claims,
+                        auth,
+                    )
                     .await?
             }
         };
@@ -706,7 +734,8 @@ impl WorkerApi {
     /// Oplog pages omit entries whose encoded form is larger than a server limit, and describe
     /// them by their type, timestamp, size and component revision. This endpoint returns such an
     /// entry in full. Pass the component revision of the description to save the server from
-    /// scanning the oplog for it.
+    /// scanning the oplog for it. With `include=claims`, the users among the callers also show
+    /// their verified claims.
     #[oai(
         path = "/:component_id/workers/:agent_name/oplog/:oplog_index",
         method = "get",
@@ -718,6 +747,7 @@ impl WorkerApi {
         agent_name: Path<String>,
         oplog_index: Path<u64>,
         component_revision: Query<Option<ComponentRevision>>,
+        include: Query<Option<OplogInclude>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<PublicOplogEntryWithIndex>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -737,6 +767,7 @@ impl WorkerApi {
                 agent_id,
                 OplogIndex::from_u64(oplog_index.0),
                 component_revision.0,
+                include_claims(include.0),
                 auth,
             )
             .instrument(record.span.clone())
@@ -750,11 +781,18 @@ impl WorkerApi {
         agent_id: AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
+        include_claims: bool,
         auth: AuthCtx,
     ) -> Result<Json<PublicOplogEntryWithIndex>> {
         let mut entry = self
             .worker_service
-            .get_oplog_entry(&agent_id, oplog_index, component_revision, auth)
+            .get_oplog_entry(
+                &agent_id,
+                oplog_index,
+                component_revision,
+                include_claims,
+                auth,
+            )
             .await?;
         entry.entry.redact_host_managed_values_for_external();
         Ok(Json(entry))
@@ -1238,6 +1276,12 @@ impl WorkerApi {
             )
         })
     }
+}
+
+/// Whether an oplog read asks for the users' verified claims. The worker service passes the
+/// request on only after its oplog read check.
+fn include_claims(include: Option<OplogInclude>) -> bool {
+    matches!(include, Some(OplogInclude::Claims))
 }
 
 fn redact_worker_metadata_for_external(workers: &mut [AgentMetadataDto]) {

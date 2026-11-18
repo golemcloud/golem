@@ -530,6 +530,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: Option<OplogCursor>,
         _: u64,
+        _: bool,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
@@ -542,6 +543,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: Option<OplogCursor>,
         _: u64,
         _: String,
+        _: bool,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
@@ -553,6 +555,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: OplogIndex,
         _: Option<golem_common::model::component::ComponentRevision>,
+        _: bool,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<

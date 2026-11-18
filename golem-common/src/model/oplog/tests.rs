@@ -3931,3 +3931,17 @@ fn oplog_search_matches_the_caller_pair_but_never_claims() {
         }
     }
 }
+
+#[test]
+fn oplog_include_claims_reads_and_writes_as_claims() {
+    use crate::model::oplog::OplogInclude;
+    assert_eq!(OplogInclude::Claims.to_string(), "claims");
+    assert_eq!(
+        serde_json::to_string(&OplogInclude::Claims).unwrap(),
+        "\"claims\""
+    );
+    assert_eq!(
+        serde_json::from_str::<OplogInclude>("\"claims\"").unwrap(),
+        OplogInclude::Claims
+    );
+}

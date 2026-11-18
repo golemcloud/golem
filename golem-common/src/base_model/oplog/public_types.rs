@@ -824,10 +824,11 @@ pub struct ExternalToolInvocationParameters {
 }
 
 /// What a reader of an oplog asks to include beyond the default public form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, derive_more::Display)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[display(rename_all = "camelCase")]
 pub enum OplogInclude {
     /// The verified claims of the users among the callers. Only a reader that may read the oplog
     /// gets them.
