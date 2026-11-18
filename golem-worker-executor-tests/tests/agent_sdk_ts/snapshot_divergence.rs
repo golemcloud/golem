@@ -107,7 +107,8 @@ async fn add_until_snapshots(
 /// Runs the agent live from a snapshot whose load differs from the live state, then takes two
 /// newer snapshots and one more invocation, and restarts the executor. Recovery rejects both
 /// newer snapshots and replays from the authoritative baseline of the agent, which diverges at
-/// the first result that the live agent computed from the faulty load.
+/// the first result that the live agent computed from the faulty load. Gives the metadata of the
+/// failed agent and the oplog indexes of its snapshots.
 async fn fail_recovery_after_a_live_restore(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -116,7 +117,7 @@ async fn fail_recovery_after_a_live_restore(
     agent_id: &ParsedAgentId,
     worker_id: &AgentId,
     len: usize,
-) -> anyhow::Result<AgentMetadataDto> {
+) -> anyhow::Result<(AgentMetadataDto, Vec<OplogIndex>)> {
     let len = add_until_snapshots(&executor, component, agent_id, worker_id, len, 1).await?;
     drop(executor);
 
@@ -136,13 +137,20 @@ async fn fail_recovery_after_a_live_restore(
     let metadata = executor.get_worker_metadata(worker_id).await?;
     assert_eq!(metadata.status, AgentStatus::Failed);
     assert_eq!(metadata.last_error_kind, Some(OplogErrorKind::Recovery));
-    Ok(metadata)
+    let snapshots = executor
+        .get_oplog(worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .map(|entry| entry.oplog_index)
+        .collect();
+    Ok((metadata, snapshots))
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn ts_full_replay_divergence_keeps_its_text(
+async fn ts_full_replay_after_rejected_snapshots_names_them(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -161,16 +169,21 @@ async fn ts_full_replay_divergence_keeps_its_text(
 
     // The first snapshot follows `add("x")`; its load sets approx to the length of `["x"]`, 5,
     // so the live agent then returns 5 + 2 = 7 for `add("xx")`, where a replay returns 1 + 2 = 3.
-    let metadata = fail_recovery_after_a_live_restore(
+    let (metadata, snapshots) = fail_recovery_after_a_live_restore(
         deps, &context, executor, &component, &agent_id, &worker_id, 0,
     )
     .await?;
 
+    // Recovery rejects the two newest snapshots, the candidates of its start, and then replays
+    // without a snapshot.
+    let [.., older, newer] = snapshots[..] else {
+        panic!("the agent has at least two snapshots: {snapshots:?}");
+    };
     assert_eq!(
-        metadata.last_error.as_deref(),
-        Some(
-            "Unexpected oplog entry during replay: expected add => AgentMethod { output: F64(7.0) }, got add => AgentMethod { output: F64(3.0) }"
-        )
+        metadata.last_error,
+        Some(format!(
+            "Unexpected oplog entry during replay: expected add => AgentMethod {{ output: F64(7.0) }}, got add => AgentMethod {{ output: F64(3.0) }}; replay started without a snapshot after the snapshots at oplog indexes {older}, {newer} were rejected; {SNAPSHOT_HINT}"
+        ))
     );
     Ok(())
 }
@@ -216,7 +229,7 @@ async fn ts_divergence_after_a_snapshot_names_the_snapshot(
         })
         .expect("the manual update has a pending-update entry");
 
-    let metadata = fail_recovery_after_a_live_restore(
+    let (metadata, _) = fail_recovery_after_a_live_restore(
         deps, &context, executor, &updated, &agent_id, &worker_id, 1,
     )
     .await?;

@@ -502,22 +502,50 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Adds the oplog index of the loaded snapshot to a divergence of a replay that started from
     /// it, with the hint that a restored state that differs from the live one is a common cause.
-    /// A divergence of a replay without a snapshot keeps its text.
+    /// A divergence of a replay without a snapshot gets the same hint with the oplog indexes of
+    /// the automatic snapshots that the starts of this incarnation rejected, and keeps its text
+    /// when they rejected none.
     fn with_replay_snapshot_hint(
         store: &Store<Ctx>,
         error: WorkerExecutorError,
     ) -> WorkerExecutorError {
-        match (error, store.data().durable_ctx().state.last_snapshot_index) {
-            (WorkerExecutorError::UnexpectedOplogEntry { expected, got }, Some(snapshot_index)) => {
-                WorkerExecutorError::UnexpectedOplogEntry {
-                    expected,
-                    got: format!(
-                        "{got}; replay started from the snapshot at oplog index {snapshot_index}; a snapshot load that differs from the live state is a common cause"
+        const HINT: &str = "a snapshot load that differs from the live state is a common cause";
+        let WorkerExecutorError::UnexpectedOplogEntry { expected, got } = error else {
+            return error;
+        };
+        let got = match store.data().durable_ctx().state.last_snapshot_index {
+            Some(snapshot_index) => format!(
+                "{got}; replay started from the snapshot at oplog index {snapshot_index}; {HINT}"
+            ),
+            None => {
+                let mut rejected: Vec<OplogIndex> = store
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .read_exclusions(
+                        crate::worker::snapshot_selection::SnapshotExclusions::persisted_rejections,
+                    )
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                rejected.sort();
+                match rejected.as_slice() {
+                    [] => got,
+                    [index] => format!(
+                        "{got}; replay started without a snapshot after the snapshot at oplog index {index} was rejected; {HINT}"
+                    ),
+                    indexes => format!(
+                        "{got}; replay started without a snapshot after the snapshots at oplog indexes {} were rejected; {HINT}",
+                        indexes
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
                 }
             }
-            (error, _) => error,
-        }
+        };
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got }
     }
 }
 
