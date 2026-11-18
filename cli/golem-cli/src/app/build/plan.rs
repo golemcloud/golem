@@ -350,27 +350,12 @@ impl BuildPlan {
             golem_common::model::agent::extraction::ExtractedComponentMetadata,
         >,
     ) -> BTreeSet<ComponentName> {
-        let mut selected = self.selected.clone();
-        loop {
-            let previous = selected.len();
-            for rule in &self.selection_rules {
-                if selected.contains(&rule.owner)
-                    && (!rule.after_metadata || metadata.contains_key(&rule.owner))
-                    && rule
-                        .subject
-                        .as_ref()
-                        .is_none_or(|subject| metadata_contains(metadata, subject))
-                {
-                    selected.extend(rule.components.iter().cloned());
-                }
-            }
-            for name in selected.clone() {
-                selected.extend(self.stages[&name].dependencies.iter().cloned());
-            }
-            if selected.len() == previous {
-                return selected;
-            }
-        }
+        selected_components(
+            &self.selected,
+            &self.selection_rules,
+            self.stages(),
+            metadata,
+        )
     }
 
     pub fn stages(&self) -> impl Iterator<Item = &BuildStage> {
@@ -511,6 +496,41 @@ impl BuildPlan {
             );
         }
         Ok(())
+    }
+}
+
+pub(super) fn selected_components<'a>(
+    selected: &BTreeSet<ComponentName>,
+    rules: &[BuildSelectionRule],
+    stages: impl Iterator<Item = &'a BuildStage>,
+    metadata: &BTreeMap<
+        ComponentName,
+        golem_common::model::agent::extraction::ExtractedComponentMetadata,
+    >,
+) -> BTreeSet<ComponentName> {
+    let stages = stages
+        .map(|stage| (&stage.component, stage))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected = selected.clone();
+    loop {
+        let previous = selected.len();
+        for rule in rules {
+            if selected.contains(&rule.owner)
+                && (!rule.after_metadata || metadata.contains_key(&rule.owner))
+                && rule
+                    .subject
+                    .as_ref()
+                    .is_none_or(|subject| metadata_contains(metadata, subject))
+            {
+                selected.extend(rule.components.iter().cloned());
+            }
+        }
+        for name in selected.clone() {
+            selected.extend(stages[&name].dependencies.iter().cloned());
+        }
+        if selected.len() == previous {
+            return selected;
+        }
     }
 }
 

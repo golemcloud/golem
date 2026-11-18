@@ -44,8 +44,16 @@ bridge with a middleware chain waits for every required middleware input.
 
 A missing program or unclassifiable command fails requirement inspection before
 project repair or recipe execution. A bridge-only build checks its supplied
-artifact without requiring an unused compiler pipeline. Managed Go inspection
-requires an installed toolchain and does not bootstrap one during check.
+artifact without requiring an unused compiler pipeline. Conditional middleware
+candidates reserve requirements without requiring unrelated artifacts. When a
+metadata result activates a candidate, execution checks its artifact before the
+next stage.
+
+Managed Go inspection accepts either the installed toolchain or the pinned
+download on a supported platform. Check does not download or install it. A cold
+offline build refuses before project writes; an online build retains on-demand
+installation, and a warm offline build can use that installation. An explicit
+`GOLEM_GO_TOOLCHAIN` override must name an existing toolchain.
 
 `middleware-bootstrap/` supplies a small real Rust component for cold CLI tests.
 Its variants export tools, middleware names and aliases. The tests start without

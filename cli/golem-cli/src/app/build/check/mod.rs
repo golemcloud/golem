@@ -29,11 +29,12 @@ use crate::app::build::check::requirements::{
     ToolRequirement, ToolRequirementCheck, ToolRequirementSeverity, VersionRange,
     tool_requirements_for_language,
 };
-use crate::app::build::go_toolchain::{GoToolchain, installed_go_toolchain};
+use crate::app::build::go_toolchain::{GoToolchain, inspect_go_toolchain};
 use crate::app::context::{BuildContext, validated_to_anyhow};
 use crate::app::edit::golem_yaml;
 use crate::fs;
 use crate::log::LogColorize;
+use crate::model::app::ApplicationConfig;
 use crate::model::language::GuestLanguage;
 use crate::process::which;
 use crate::sdk_overrides::sdk_overrides;
@@ -139,7 +140,7 @@ pub async fn check_build_tool_requirements<'a>(
     let mut validation = ValidationBuilder::new();
 
     for requirement in requirements.into_values() {
-        let result = check_tool_requirement(app_root_dir, requirement);
+        let result = check_tool_requirement(app_root_dir, requirement, ctx.application_config());
         validation.with_context(vec![("tool", requirement.name.to_string())], |validation| {
             if let Err(error) = result {
                 match requirement.severity {
@@ -251,7 +252,11 @@ fn selected_component_languages(ctx: &BuildContext<'_>) -> BTreeSet<GuestLanguag
         .collect()
 }
 
-fn check_tool_requirement(project_dir: &Path, requirement: ToolRequirement) -> anyhow::Result<()> {
+fn check_tool_requirement(
+    project_dir: &Path,
+    requirement: ToolRequirement,
+    config: &ApplicationConfig,
+) -> anyhow::Result<()> {
     match requirement.check {
         ToolRequirementCheck::CommandVersion { command, args } => {
             check_command_version(project_dir, requirement, command, args)
@@ -260,7 +265,7 @@ fn check_tool_requirement(project_dir: &Path, requirement: ToolRequirement) -> a
             check_rust_target(project_dir, requirement, target)
         }
         ToolRequirementCheck::GolemGoToolchain => {
-            let toolchain = installed_go_toolchain().map_err(|err| {
+            let toolchain = inspect_go_toolchain(config).map_err(|err| {
                 anyhow!(
                     "{} is not available: {}\nHint: {}",
                     requirement.name.log_color_error_highlight(),
@@ -268,7 +273,7 @@ fn check_tool_requirement(project_dir: &Path, requirement: ToolRequirement) -> a
                     requirement.install_hint
                 )
             })?;
-            check_go_toolchain_version(project_dir, requirement, &toolchain)
+            check_go_toolchain_version(project_dir, requirement, toolchain.as_ref())
         }
     }
 }
@@ -276,27 +281,33 @@ fn check_tool_requirement(project_dir: &Path, requirement: ToolRequirement) -> a
 fn check_go_toolchain_version(
     project_dir: &Path,
     requirement: ToolRequirement,
-    toolchain: &GoToolchain,
+    toolchain: Option<&GoToolchain>,
 ) -> anyhow::Result<()> {
-    let output = Command::new(&toolchain.go)
-        .current_dir(project_dir)
-        .args(["version"])
-        .output()
-        .map_err(|err| {
-            anyhow!(
-                "{} failed to run ({}): {}\nHint: {}",
-                requirement.name.log_color_error_highlight(),
-                toolchain.go.display(),
-                err,
-                requirement.install_hint
-            )
-        })?;
+    let output_text = match toolchain {
+        Some(toolchain) => {
+            let output = Command::new(&toolchain.go)
+                .current_dir(project_dir)
+                .args(["version"])
+                .output()
+                .map_err(|err| {
+                    anyhow!(
+                        "{} failed to run ({}): {}\nHint: {}",
+                        requirement.name.log_color_error_highlight(),
+                        toolchain.go.display(),
+                        err,
+                        requirement.install_hint
+                    )
+                })?;
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+        // Inspection validated that the pinned archive can be installed at execution.
+        None => crate::versions::go_toolchain::TAG.to_string(),
+    };
 
     let Some(range) = requirement.version_range else {
         return Ok(());
     };
 
-    let output_text = String::from_utf8_lossy(&output.stdout).to_string();
     let version = extract_version_or_quoted_major(output_text.as_str()).ok_or_else(|| {
         anyhow!(
             "{} version could not be detected from output\nHint: {}",

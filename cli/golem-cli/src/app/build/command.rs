@@ -428,9 +428,12 @@ async fn execute_external_command(
                         anyhow::ensure!(checked.contains(&preparation),
                             "Build command requires unchecked dependency preparation {preparation:?}");
                     }
-                    super::inspect::check_requirement(&super::plan::BuildRequirement::Preparation {
-                        preparation: preparation.clone(),
-                    })?;
+                    super::inspect::check_requirement(
+                        &super::plan::BuildRequirement::Preparation {
+                            preparation: preparation.clone(),
+                        },
+                        ctx.application_config(),
+                    )?;
                     ensure_common_dependencies(ctx, &preparation).await?;
                 }
 

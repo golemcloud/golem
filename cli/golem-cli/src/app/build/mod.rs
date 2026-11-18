@@ -68,16 +68,20 @@ pub struct BuildExecution {
 /// Inspect admission requirements before authorizing project preparation. This
 /// does not construct an executable plan from unpersisted loading changes.
 pub async fn inspect_build_requirements(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-    let stages = inspect::inspect_preparation_stages(
+    let (stages, selected) = inspect::inspect_preparation_stages(
         ctx,
         ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
     )?;
-    for requirement in stages
-        .iter()
-        .flat_map(|stage| &stage.actions)
-        .flat_map(|action| &action.requirements)
-    {
-        inspect::check_requirement(requirement)?;
+    // Conditional candidates reserve their programs now, but their artifacts are
+    // required only when metadata activates the corresponding selection rule.
+    for stage in &stages {
+        for requirement in stage.actions.iter().flat_map(|action| &action.requirements) {
+            if selected.contains(&stage.component)
+                || !matches!(requirement, plan::BuildRequirement::ExistingFile { .. })
+            {
+                inspect::check_requirement(requirement, ctx.application_config())?;
+            }
+        }
     }
     if ctx.should_run_step(AppBuildStep::Check) {
         check_build_tool_requirements(
@@ -102,7 +106,7 @@ pub async fn preflight_build(ctx: &BuildContext<'_>) -> anyhow::Result<plan::Bui
         ctx,
         ctx.should_run_step(AppBuildStep::GenBridge) || ctx.should_run_step(AppBuildStep::Check),
     )?;
-    inspect::check_host_requirements(&plan)?;
+    inspect::check_host_requirements(&plan, ctx.application_config())?;
     if ctx.should_run_step(AppBuildStep::Check) {
         check_build_tool_requirements(
             ctx,
@@ -294,7 +298,14 @@ async fn execute_component_stages(
 
     while !pending_components.is_empty() {
         for name in pending_components.iter() {
-            checked_plan.stage(name)?;
+            for requirement in checked_plan
+                .stage(name)?
+                .actions
+                .iter()
+                .flat_map(|action| &action.requirements)
+            {
+                inspect::check_requirement(requirement, ctx.application_config())?;
+            }
         }
         if has_dependency_guest_request && !ctx.should_run_step(AppBuildStep::Build) {
             for component_name in pending_components

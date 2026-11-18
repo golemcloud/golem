@@ -17,6 +17,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use test_r::test;
 
+fn cli_command() -> Command {
+    Command::new(crate::app::test_binary_path(
+        &crate::app::test_binary_profile(),
+        "golem",
+    ))
+}
+
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     if !root.exists() {
@@ -41,6 +48,110 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cold_go_toolchain_check_is_read_only_and_build_prepares_it() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("golem.yaml"),
+        "manifestVersion: 2.0.0\napp: cold-go\ncomponentTemplates:\n  local-go:\n    guestLanguage: go\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    templates: local-go\n    componentWasm: component.wasm\n    build:\n      - command: go version\n      - command: node build.cjs\n").unwrap();
+    std::fs::write(
+        project.path().join("build.cjs"),
+        "require('node:fs').copyFileSync('seed.wasm', 'component.wasm');",
+    )
+    .unwrap();
+    let seed = wat::parse_str(include_str!(
+        "../../../test-components/size-analysis/retention.wat"
+    ))
+    .unwrap();
+    std::fs::write(project.path().join("seed.wasm"), &seed).unwrap();
+    let command = || {
+        let mut command = cli_command();
+        command
+            .current_dir(project.path())
+            .env_remove("GOLEM_GO_TOOLCHAIN")
+            .env("XDG_CACHE_HOME", cache.path())
+            .env("GOLEM_WASM_RPC_OFFLINE", "false")
+            .arg("--config-dir")
+            .arg(config.path());
+        command
+    };
+    let before = snapshot(project.path());
+    for yes in [false, true] {
+        for offline in [false, true] {
+            for _ in 0..2 {
+                let mut command = command();
+                if yes {
+                    command.arg("--yes");
+                }
+                command.args(["build", "--step", "check"]);
+                if offline {
+                    command.env("GOLEM_WASM_RPC_OFFLINE", "true");
+                }
+                let output = command.output().unwrap();
+                let text = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(output.status.success(), !offline, "{text}");
+                if offline {
+                    assert!(text.contains("offline mode is enabled"), "{text}");
+                }
+                assert_eq!(snapshot(project.path()), before, "{text}");
+                assert_eq!(
+                    snapshot(cache.path()),
+                    BTreeMap::from([(PathBuf::new(), Vec::new())]),
+                    "check must not install a toolchain: {text}"
+                );
+            }
+        }
+    }
+    let refused = command()
+        .env("GOLEM_WASM_RPC_OFFLINE", "true")
+        .args(["--yes", "build", "--step", "build"])
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!refused.status.success(), "{text}");
+    assert!(text.contains("offline mode is enabled"), "{text}");
+    assert_eq!(snapshot(project.path()), before, "{text}");
+    assert_eq!(
+        snapshot(cache.path()),
+        BTreeMap::from([(PathBuf::new(), Vec::new())])
+    );
+
+    for offline in [false, true] {
+        let mut command = command();
+        command.args(["--yes", "build", "--step", "build"]);
+        if offline {
+            command.env("GOLEM_WASM_RPC_OFFLINE", "true");
+        }
+        let output = command.output().unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        let release = golem_cli::versions::go_toolchain::TAG
+            .split('-')
+            .next()
+            .unwrap();
+        assert!(text.contains(&format!("go version {release}")), "{text}");
+        assert_eq!(
+            std::fs::read(project.path().join("component.wasm")).unwrap(),
+            seed
+        );
+        assert_eq!(text.contains("Installing"), !offline, "{text}");
+    }
+}
+
 #[test]
 fn build_check_does_not_upgrade_manifests_even_with_yes() {
     for yes in [false, true] {
@@ -55,7 +166,7 @@ fn build_check_does_not_upgrade_manifests_even_with_yes() {
         .unwrap();
         std::fs::write(project.path().join("component.wasm"), b"unchanged artifact").unwrap();
         let before = snapshot(project.path());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_golem-cli"));
+        let mut command = cli_command();
         command
             .current_dir(project.path())
             .arg("--config-dir")
@@ -87,7 +198,7 @@ fn build_check_does_not_upgrade_manifests_even_with_yes() {
         );
         assert!(!text.contains("checked host build stages"), "{text}");
 
-        let build = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+        let build = cli_command()
             .current_dir(project.path())
             .arg("--config-dir")
             .arg(config.path())
@@ -128,7 +239,7 @@ throw new Error('expected failure after preparation');
 "#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+    let output = cli_command()
         .current_dir(project.path())
         .arg("--config-dir")
         .arg(config.path())
@@ -214,7 +325,7 @@ fn stale_common_markers_survive_checks_and_requirement_refusals() {
             std::fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
             let before = snapshot(project.path());
             for attempt in 0..2 {
-                let mut command = Command::new(env!("CARGO_BIN_EXE_golem-cli"));
+                let mut command = cli_command();
                 command
                     .current_dir(project.path())
                     .arg("--config-dir")
@@ -268,7 +379,7 @@ fn missing_or_unclassifiable_programs_fail_before_any_project_write() {
                     "manifestVersion: {version}\napp: preflight\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    componentWasm: component.wasm\n{old_output}    build:\n      - command: node -e 'throw new Error(\"must not execute\")'\n        mkdirs: [must-not-exist]\n      - command: '{command}'\n"
                 )).unwrap();
                 let before = snapshot(project.path());
-                let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+                let output = cli_command()
                     .current_dir(project.path())
                     .arg("--config-dir")
                     .arg(config.path())
@@ -307,7 +418,7 @@ fn current_manifest_checks_show_repairs_without_writing_or_creating_symlinks() {
     std::fs::write(project.path().join("component.wasm"), b"prebuilt artifact").unwrap();
     let before = snapshot(project.path());
     for yes in [false, true] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_golem-cli"));
+        let mut command = cli_command();
         command
             .current_dir(project.path())
             .arg("--config-dir")
@@ -337,7 +448,7 @@ fn template_requirements_fail_without_generating_common_files() {
     std::fs::write(project.path().join("golem.yaml"),
         "manifestVersion: 2.0.0\napp: template-preflight\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    templates: rust\n    presets:\n      debug:\n        build:\n          - command: gc03-program-that-does-not-exist\n").unwrap();
     let before = snapshot(project.path());
-    let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+    let output = cli_command()
         .current_dir(project.path())
         .arg("--config-dir")
         .arg(config.path())
@@ -369,7 +480,7 @@ fn template_checks_inspect_repairs_without_creating_generated_manifests() {
     )
     .unwrap();
     let before = snapshot(project.path());
-    let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+    let output = cli_command()
         .current_dir(project.path())
         .arg("--config-dir")
         .arg(config.path())
@@ -402,7 +513,7 @@ fn bridge_only_build_without_requests_ignores_unused_programs_and_artifacts() {
             std::fs::remove_file(project.path().join("component.wasm")).unwrap();
         }
         let before = snapshot(project.path());
-        let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+        let output = cli_command()
             .current_dir(project.path())
             .arg("--config-dir")
             .arg(config.path())
@@ -438,7 +549,7 @@ async fn host_build_preserves_component_exports_and_start_result() {
     .unwrap();
     std::fs::write(project.path().join("seed.wasm"), &seed).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+    let output = cli_command()
         .current_dir(project.path())
         .arg("--config-dir")
         .arg(config.path())
@@ -524,7 +635,7 @@ if (step === 'second') fs.copyFileSync('seed.wasm', `${name}/component.wasm`);
             std::fs::write(project.path().join("fail"), "").unwrap();
         }
         let before = snapshot(project.path());
-        let check = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+        let check = cli_command()
             .current_dir(project.path())
             .arg("--config-dir")
             .arg(config.path())
@@ -537,7 +648,7 @@ if (step === 'second') fs.copyFileSync('seed.wasm', `${name}/component.wasm`);
             String::from_utf8_lossy(&check.stderr)
         );
         assert_eq!(snapshot(project.path()), before);
-        let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+        let output = cli_command()
             .current_dir(project.path())
             .arg("--config-dir")
             .arg(config.path())
@@ -751,7 +862,7 @@ fs.copyFileSync(`../inputs/${name}.wasm`, 'component.wasm');
                 .join("golem-temp/extracted-component-metadata")
                 .exists()
         );
-        let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+        let output = cli_command()
             .current_dir(project.path())
             .arg("--config-dir")
             .arg(config.path())

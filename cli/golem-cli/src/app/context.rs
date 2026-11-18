@@ -488,7 +488,13 @@ impl ApplicationContext {
         } else {
             source_mode
         };
-        match preload_app(source_mode, calling_working_dir, dev_mode, defer_writes, load_plan) {
+        match preload_app(
+            source_mode,
+            calling_working_dir,
+            dev_mode,
+            defer_writes,
+            load_plan,
+        ) {
             Some(environments) => validated_to_anyhow(
                 "Failed to load application manifest environments, see problems above",
                 environments,

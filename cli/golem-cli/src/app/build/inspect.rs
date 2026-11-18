@@ -19,7 +19,7 @@ use super::plan::{
 };
 use crate::app::context::BuildContext;
 use crate::log::{log_action, logln};
-use crate::model::app::AppBuildStep;
+use crate::model::app::{AppBuildStep, ApplicationConfig};
 use anyhow::{Context, ensure};
 use golem_common::model::component::ComponentName;
 use std::collections::{BTreeMap, BTreeSet};
@@ -95,9 +95,16 @@ fn inspect_selection(
 pub(super) fn inspect_preparation_stages(
     ctx: &BuildContext<'_>,
     with_dependencies: bool,
-) -> anyhow::Result<Vec<BuildStage>> {
-    let (components, _) = inspect_selection(ctx, with_dependencies)?;
-    inspect_stages(ctx, components.iter(), with_dependencies)
+) -> anyhow::Result<(Vec<BuildStage>, BTreeSet<ComponentName>)> {
+    let (components, rules) = inspect_selection(ctx, with_dependencies)?;
+    let stages = inspect_stages(ctx, components.iter(), with_dependencies)?;
+    let selected = super::plan::selected_components(
+        ctx.application_context().selected_component_names(),
+        &rules,
+        stages.iter(),
+        &BTreeMap::new(),
+    );
+    Ok((stages, selected))
 }
 
 pub(super) fn inspect_build(
@@ -340,14 +347,27 @@ fn inspect_stage(
 
 /// Host resolution stays at the Standalone boundary. Tool execution must use
 /// the shared program resolver, not reinterpret these host observations.
-pub(super) fn check_host_requirements(plan: &BuildPlan) -> anyhow::Result<()> {
-    for requirement in plan.requirements() {
-        check_requirement(requirement)?;
+pub(super) fn check_host_requirements(
+    plan: &BuildPlan,
+    config: &ApplicationConfig,
+) -> anyhow::Result<()> {
+    let selected = plan.selected_components(&BTreeMap::new());
+    for stage in plan.stages() {
+        for requirement in stage.actions.iter().flat_map(|action| &action.requirements) {
+            if selected.contains(&stage.component)
+                || !matches!(requirement, BuildRequirement::ExistingFile { .. })
+            {
+                check_requirement(requirement, config)?;
+            }
+        }
     }
     Ok(())
 }
 
-pub(super) fn check_requirement(requirement: &BuildRequirement) -> anyhow::Result<()> {
+pub(super) fn check_requirement(
+    requirement: &BuildRequirement,
+    config: &ApplicationConfig,
+) -> anyhow::Result<()> {
     if let BuildRequirement::Preparation { preparation } = requirement {
         if !preparation.manifest().exists() {
             return Ok(());
@@ -363,7 +383,7 @@ pub(super) fn check_requirement(requirement: &BuildRequirement) -> anyhow::Resul
             },
             CommonDependencies::Go(_) => BuildRequirement::ManagedGoToolchain,
         };
-        return check_requirement(&requirement);
+        return check_requirement(&requirement, config);
     }
     if let BuildRequirement::ExistingFile { path } = requirement {
         ensure!(
@@ -373,7 +393,7 @@ pub(super) fn check_requirement(requirement: &BuildRequirement) -> anyhow::Resul
         );
     }
     if matches!(requirement, BuildRequirement::ManagedGoToolchain) {
-        super::go_toolchain::installed_go_toolchain()?;
+        super::go_toolchain::inspect_go_toolchain(config)?;
     }
     if let BuildRequirement::HostProgram { program, directory } = requirement {
         let resolved = crate::process::resolve_command_for_execution(program, Some(directory))

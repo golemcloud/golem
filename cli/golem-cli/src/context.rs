@@ -525,6 +525,7 @@ impl Context {
             file_download_client: self.file_download_client.clone(),
             golem_clients: tokio::sync::OnceCell::new(),
             selected_context_logging: std::sync::OnceLock::new(),
+            application_load_plan: tokio::sync::Mutex::new(None),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 self.yes,
                 self.should_colorize,
@@ -567,6 +568,7 @@ impl Context {
                 config.disable_app_manifest_discovery,
                 config.app_manifest_path.as_deref(),
             ),
+            state.some_or_err()?.application().app_root_dir(),
             config.dev_mode,
             false,
         )?;

@@ -60,17 +60,17 @@ impl GoToolchain {
     }
 }
 
-/// Locates an installed toolchain without downloading or writing files.
-pub fn installed_go_toolchain() -> anyhow::Result<GoToolchain> {
+/// Inspects the installed toolchain or validates its planned download without writes.
+pub fn inspect_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<Option<GoToolchain>> {
     if let Some(root) = go_toolchain_override(std::env::var_os(GO_TOOLCHAIN_ENV_VAR))? {
-        return Ok(GoToolchain::at(root));
+        return Ok(Some(GoToolchain::at(root)));
     }
     let toolchain = GoToolchain::at(install_dir()?);
-    anyhow::ensure!(
-        is_installed(&toolchain),
-        "The Golem Go toolchain is not installed; set {GO_TOOLCHAIN_ENV_VAR} to an installed toolchain before building"
-    );
-    Ok(toolchain)
+    if is_installed(&toolchain) {
+        return Ok(Some(toolchain));
+    }
+    check_installation(config)?;
+    Ok(None)
 }
 
 /// Makes the pinned Go toolchain available, downloading it if needed, and
@@ -85,33 +85,7 @@ pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<G
         return Ok(toolchain);
     }
 
-    let Some(expected_sha256) = archive_sha256() else {
-        bail!(
-            "The Golem Go toolchain ({tag}) has no build for {os}/{arch}; it is published for {supported}.\n\
-             Set {env} to a toolchain built from https://github.com/{repo} for this platform.",
-            tag = crate::versions::go_toolchain::TAG,
-            os = go_os(),
-            arch = go_arch(),
-            supported = crate::versions::go_toolchain::ARCHIVES
-                .iter()
-                .map(|(os, arch, _)| format!("{os}/{arch}"))
-                .collect::<Vec<_>>()
-                .join(", "),
-            env = GO_TOOLCHAIN_ENV_VAR,
-            repo = crate::versions::go_toolchain::REPO,
-        );
-    };
-
-    if config.offline {
-        bail!(
-            "The Golem Go toolchain ({tag}) is not installed, and offline mode is enabled.\n\
-             Install it by building without --offline, or set {env} to a Go toolchain \
-             that has it: {url}",
-            tag = crate::versions::go_toolchain::TAG,
-            env = GO_TOOLCHAIN_ENV_VAR,
-            url = download_url(),
-        );
-    }
+    let expected_sha256 = check_installation(config)?;
 
     // componentize-go guards the same directory with this lock while it
     // downloads its own toolchain, so taking it keeps a concurrent build (or a
@@ -144,6 +118,36 @@ pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<G
     drop(lock);
 
     Ok(toolchain)
+}
+
+fn check_installation(config: &ApplicationConfig) -> anyhow::Result<&'static str> {
+    let Some(expected_sha256) = archive_sha256() else {
+        bail!(
+            "The Golem Go toolchain ({tag}) has no build for {os}/{arch}; it is published for {supported}.\n\
+             Set {env} to a toolchain built from https://github.com/{repo} for this platform.",
+            tag = crate::versions::go_toolchain::TAG,
+            os = go_os(),
+            arch = go_arch(),
+            supported = crate::versions::go_toolchain::ARCHIVES
+                .iter()
+                .map(|(os, arch, _)| format!("{os}/{arch}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            env = GO_TOOLCHAIN_ENV_VAR,
+            repo = crate::versions::go_toolchain::REPO,
+        );
+    };
+    if config.offline {
+        bail!(
+            "The Golem Go toolchain ({tag}) is not installed, and offline mode is enabled.\n\
+             Install it by building without --offline, or set {env} to a Go toolchain \
+             that has it: {url}",
+            tag = crate::versions::go_toolchain::TAG,
+            env = GO_TOOLCHAIN_ENV_VAR,
+            url = download_url(),
+        );
+    }
+    Ok(expected_sha256)
 }
 
 fn is_installed(toolchain: &GoToolchain) -> bool {

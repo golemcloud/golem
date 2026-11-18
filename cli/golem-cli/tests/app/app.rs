@@ -2112,9 +2112,8 @@ async fn explicit_guest_component_matcher_with_missing_wasm_is_not_silently_skip
 
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains(
-        "The following agent matchers were not found during Rust guest bridge SDK generation: app:missing"
-    ));
+    assert!(outputs.stdout_contains("Build requires existing file"));
+    assert!(outputs.stdout_contains("missing-final.wasm"));
     assert!(
         !ctx.cwd_path_join("bridge/rust-guest/bar-agent-guest-client/Cargo.toml")
             .exists()
@@ -2153,9 +2152,9 @@ async fn explicit_guest_wildcard_matcher_with_missing_wasm_is_not_silently_skipp
 
     let outputs = ctx.cli([cmd::BUILD, flag::STEP, "gen-bridge"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains(
-        "The following selected components could not be inspected during Rust guest bridge SDK generation: app:missing"
-    ));
+    assert!(outputs.stdout_contains("Build requires existing file"));
+    assert!(outputs.stdout_contains("missing-final.wasm"));
+    assert!(!ctx.cwd_path_join("bridge").exists());
 }
 
 #[test]
