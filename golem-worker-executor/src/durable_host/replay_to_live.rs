@@ -172,6 +172,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 && self.runtime != OwnerRuntime::Agent)
     }
 
+    pub(crate) fn parks_incomplete_tool_guest_replay(&self) -> bool {
+        self.tool_frontends.is_some()
+            && matches!(
+                self.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            )
+            && self.entity_invocation_scope().map(|scope| scope.mode())
+                == Some(InvocationExecutionMode::ReplayingCompleted)
+    }
+
     pub(crate) fn prepare_live_continuation_at_replay_tail(
         &self,
         replay_ended: bool,
@@ -428,7 +438,9 @@ pub(crate) fn is_tool_attachment_live_admission_rejection(error: &WorkerExecutor
 }
 
 pub(crate) fn tool_attachment_live_admission_cancelled_error() -> WorkerExecutorError {
-    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED)
+    WorkerExecutorError::Interrupted {
+        kind: InterruptKind::EntityCancellation,
+    }
 }
 
 async fn activate_incomplete_entity_linear_memory<Ctx: WorkerCtx>(
