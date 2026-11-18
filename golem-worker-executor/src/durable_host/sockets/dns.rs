@@ -19,7 +19,7 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::authorization::targets::dns_target;
-use crate::durable_host::concurrent::reserve_invocation_id_before_await;
+use crate::durable_host::concurrent::{OnDelivered, reserve_invocation_id_before_await};
 use crate::durable_host::durability::{ClassifiedHostError, GuestTaskContext, HostFailureKind};
 use crate::durable_host::p3::{durable_worker_ctx, run_deniable_access_classified};
 use crate::preview2::golem::network::dns::{
@@ -71,74 +71,72 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
         // The A and AAAA records link when the guest receives the answer, where the rebuild after
         // a snapshot reads them from the delivery marker: an answer that the guest discards links
         // nothing.
-        let (link, on_delivered) = store.with(|mut access| {
-            durable_worker_ctx::<Ctx, U>(access.data_mut())
-                .shared_resolved_names()
-                .deferred_link()
-        });
+        let links = store.with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            ctx.lookup_links(custom_invocation.as_deref())
+                .map(|links| links.then(|| ctx.shared_resolved_names()))
+        })?;
         let record_type = SerializableDnsRecordType::from(record_type);
         let targets = dns_target(&name)
             .map(|target| vec![target])
             .map_err(|error| error.to_string());
 
-        let response =
-            run_deniable_access_classified::<_, _, Ctx, GolemNetworkDnsResolve, _, _, _>(
-                store,
-                HostRequestNetworkDnsResolve {
-                    name: name.clone(),
-                    record_type,
-                },
-                DurableFunctionType::ReadRemote,
-                targets,
-                |response| {
-                    response
-                        .result
-                        .as_ref()
-                        .err()
-                        .map(|error| ClassifiedHostError {
-                            kind: classify_dns_error(error),
-                            message: format!(
-                                "DNS {record_type:?} lookup of '{name}' failed: {error:?}"
-                            ),
-                        })
-                },
-                RetryContext::dns(&name),
-                on_delivered,
-                || async {
-                    let resolver = store.with(|mut access| {
-                        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                        if !ctx.state.config.agent_sockets.enabled {
-                            return Ok(None);
-                        }
-                        if ctx.state.dns_resolver.is_none() {
-                            ctx.state.dns_resolver =
-                                Some(build_resolver(&ctx.state.config.agent_sockets)?);
-                        }
-                        Ok::<_, NetError>(ctx.state.dns_resolver.clone())
-                    });
-                    let result = match resolver {
-                        Ok(Some(resolver)) => lookup(&resolver, &name, record_type).await,
-                        Ok(None) => Err(SerializableDnsError::PermanentResolverFailure),
-                        Err(error) => {
-                            tracing::warn!(error = %error, "Failed to build the DNS resolver");
-                            Err(SerializableDnsError::PermanentResolverFailure)
-                        }
-                    };
-                    Ok(HostResponseNetworkDnsResolve { result })
-                },
-            )
-            .await?;
-
-        // The host call has returned the answer but the guest has not received it yet, so the
-        // link is set before the delivery observer can run its hook.
-        if let Ok(records) = &response.result
-            && store.with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut())
-                    .lookup_links(custom_invocation.as_deref())
-            })?
-        {
-            link.set(&name, linked_addresses(records));
-        }
+        let response = run_deniable_access_classified::<_, _, Ctx, GolemNetworkDnsResolve, _, _>(
+            store,
+            HostRequestNetworkDnsResolve {
+                name: name.clone(),
+                record_type,
+            },
+            DurableFunctionType::ReadRemote,
+            targets,
+            |response| {
+                response
+                    .result
+                    .as_ref()
+                    .err()
+                    .map(|error| ClassifiedHostError {
+                        kind: classify_dns_error(error),
+                        message: format!(
+                            "DNS {record_type:?} lookup of '{name}' failed: {error:?}"
+                        ),
+                    })
+            },
+            RetryContext::dns(&name),
+            |response| -> OnDelivered {
+                match (&links, &response.result) {
+                    (Some(names), Ok(records)) => {
+                        let names = names.clone();
+                        let name = name.clone();
+                        let addresses: Vec<IpAddr> = linked_addresses(records).collect();
+                        Box::new(move || names.with(|names| names.insert(&name, addresses)))
+                    }
+                    _ => Box::new(|| {}),
+                }
+            },
+            || async {
+                let resolver = store.with(|mut access| {
+                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                    if !ctx.state.config.agent_sockets.enabled {
+                        return Ok(None);
+                    }
+                    if ctx.state.dns_resolver.is_none() {
+                        ctx.state.dns_resolver =
+                            Some(build_resolver(&ctx.state.config.agent_sockets)?);
+                    }
+                    Ok::<_, NetError>(ctx.state.dns_resolver.clone())
+                });
+                let result = match resolver {
+                    Ok(Some(resolver)) => lookup(&resolver, &name, record_type).await,
+                    Ok(None) => Err(SerializableDnsError::PermanentResolverFailure),
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Failed to build the DNS resolver");
+                        Err(SerializableDnsError::PermanentResolverFailure)
+                    }
+                };
+                Ok(HostResponseNetworkDnsResolve { result })
+            },
+        )
+        .await?;
 
         Ok(response
             .result

@@ -3446,8 +3446,8 @@ classification as an address lookup: only `temporary-resolver-failure` retries; 
 and has no cache, so every live guest query is one upstream query. With agent sockets disabled a
 lookup fails with `permanent-resolver-failure`. The A and AAAA records of an answer link to the
 queried name in `ResolvedNames` as a P3 address lookup does: when the answer reaches the guest. Live
-and on replay the lookup sets a deferred link that the delivery observer adds only as `Delivered`,
-and `rebuild_resolved_names` links them at the call's `CompletionDelivered` marker, and a discarded or
+and on replay the lookup builds a hook from the answer that the delivery observer runs only as
+`Delivered`, and `rebuild_resolved_names` links the records at the call's `CompletionDelivered` marker, and a discarded or
 undelivered answer links nothing. Tests: `tests/scope_cards/dns_records.rs`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
