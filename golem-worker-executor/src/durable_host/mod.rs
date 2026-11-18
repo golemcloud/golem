@@ -247,7 +247,6 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
 use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
-use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
