@@ -516,7 +516,25 @@ returns `Admitted` or `ResourceExhausted`, before `ReplayToLiveRole::NonPrimary`
 Store's `local_live_tail`; completed replays reuse historical memory charges and bypass current
 pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
-(`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
+(`tool/attachment/`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
+
+`tool/attachment/state.rs` separates terminal selection from publication. `Open` has no selection;
+`OwnerReserved` holds the owner's selected terminal before acceptance; `Appending` holds an accepted
+terminal awaiting its append and publication. `RecordedPending` restores an exact terminal and
+`End` index while publication is pending. `Available` carries either `Local` (no recorded `End`) or
+`Recorded(index)` provenance; availability alone does not prove an oplog commit. Owner acceptance
+can promote a reservation or local terminal to `Appending` without replacing its cause or resetting
+`failure_item_delivered`. Restore derives that bit from the matching observed terminal index and
+rejects conflicting recorded selections. A late publication capability uses the current selection
+after restore and preserves its delivery bit, rather than reviving its old cause or delivering the
+failure item twice.
+
+Visibility, fencing and memory remain independent. `AttachmentMode` exposes chunks in `Live` or
+`CompletionPublished`, and terminals in those modes or `TerminalOnly`; readers also require an
+`Available` terminal and respect unpublished queued chunks. `owner_fenced` blocks further acceptance
+and publication; fencing preserves an available terminal, otherwise supplies a local cancelled
+terminal, not a new durable effect. Terminal availability alone does not release byte charges.
+Queue drainage, in-flight transfer and existing discard/teardown paths own that release.
 
 An admission refusal records its exact demand in `SerializableToolOperationTerminal`, independently
 of the returned tool error. The demand is a typed Start claim, a validated recorded-entry index,
@@ -653,7 +671,8 @@ causal invocation boundaries" while filesystem-incapable invocations get an imme
 permit. A synchronous call from a body back into its blocked owner must pass
 `OwnerLane::ensure_synchronous_owner_call` and is otherwise rejected with `WouldDeadlock` instead
 of hanging; asynchronous owner calls are allowed. `permanent_tool_guest_trap` in
-`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist. Typed quotas,
+`worker/invocation.rs` isolates only its fixed Wasm instruction-trap allowlist and uncaught Wasm
+exceptions. Typed quotas,
 policy exhaustion, `WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner
 recovery even when the retry decision is exhausted. Supervisors independent of the caller Store
 cancel a failed parent's descendants, preserving selected outcomes and unrelated siblings.

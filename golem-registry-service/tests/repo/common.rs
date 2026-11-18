@@ -19,10 +19,9 @@ use async_trait::async_trait;
 use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
-use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{
-    AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, Snapshotting,
+    AgentMode, AgentTypeName, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails,
+    PathSegment, Snapshotting,
 };
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
@@ -69,7 +68,7 @@ use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
     ToolReleaseId,
 };
-use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
+use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
 use golem_common::schema::tool::{
     CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
@@ -172,6 +171,8 @@ use golem_registry_service::services::{
     plan::PlanService,
     tool_release::{ToolReleaseError, ToolReleaseService},
 };
+use golem_schema::Empty;
+use golem_schema::http::{CustomHttpMethod, FileMapping, LiteralSegment};
 use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
@@ -500,7 +501,7 @@ fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
             component_id: ComponentId::new(),
             agent_id: "runtime-card-source".to_string(),
         },
-        invocation_key: IdempotencyKey::new("runtime-card-invocation".to_string()),
+        invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(42),
     }
 }
@@ -3424,6 +3425,22 @@ pub async fn test_component_stage(deps: &Deps) {
     assert!(components.len() == 1);
     assert!(components[0].revision == other_component_revision_0);
 
+    for revision_id in [1, 2] {
+        let exact = deps
+            .component_repo
+            .get_by_id_and_revision(component_id, revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.record.component.revision.revision_id, revision_id);
+        assert_eq!(
+            exact.record.component.revision.audit.deleted,
+            revision_id == 2
+        );
+        assert!(exact.component_deleted_at.is_some());
+        assert_eq!(exact.latest_deletion_revision, Some(2));
+    }
+
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
         ..revision_0.clone()
@@ -3447,6 +3464,38 @@ pub async fn test_component_stage(deps: &Deps) {
     .unwrap();
     let_assert!(created_after_delete = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
+
+    let services = environment_service_deps(deps);
+    for (revision_id, deleted) in [(0, false), (1, false), (2, true), (3, false)] {
+        let exact = deps
+            .component_repo
+            .get_by_id_and_revision(component_id, revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.record.component.revision.revision_id, revision_id);
+        assert_eq!(exact.record.component.revision.audit.deleted, deleted);
+        assert!(exact.component_deleted_at.is_none());
+        assert_eq!(exact.latest_deletion_revision, Some(2));
+
+        let public = services
+            .component_service
+            .get_component_revision(
+                ComponentId(component_id),
+                revision_id.try_into().unwrap(),
+                &AuthCtx::System,
+            )
+            .await;
+        if deleted {
+            assert!(matches!(
+                public,
+                Err(golem_registry_service::services::component::ComponentError::ComponentNotFound(id))
+                    if id == ComponentId(component_id)
+            ));
+        } else {
+            assert_eq!(i64::from(public.unwrap().revision), revision_id);
+        }
+    }
 }
 
 pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {
@@ -9766,9 +9815,11 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         FileMapping::compile_list(pairs.iter().copied()).expect("valid persistence mappings")
     };
     let mount = |static_bindings, filesystem_bindings, openapi_provider_method| HttpMountDetails {
-        path_prefix: vec![PathSegment::Literal(LiteralSegment {
-            value: "assets".to_string(),
-        })],
+        path_prefix: vec![PathSegment::Segment(
+            golem_schema::http::PathSegment::Literal(LiteralSegment {
+                value: "assets".to_string(),
+            }),
+        )],
         auth_details: None,
         phantom_agent: false,
         phantom_id_binding: None,
@@ -9847,9 +9898,11 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         prompt_hint: None,
         input_schema: InputSchema::parameters([]),
         output_schema: OutputSchema::Unit,
-        http_endpoint: vec![endpoint(HttpMethod::Custom(CustomHttpMethod {
-            value: "ANY".to_string(),
-        }))],
+        http_endpoint: vec![endpoint(HttpMethod::Method(
+            golem_schema::http::HttpMethod::Custom(CustomHttpMethod {
+                value: "ANY".to_string(),
+            }),
+        ))],
         read_only: None,
     });
     regular.http_mount = Some(mount(
@@ -14794,8 +14847,8 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     use golem_registry_service::services::deployment::DeployedRoutesService;
     use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
     use golem_service_base::custom_api::{
-        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RouteBehaviour,
-        RouteMatch, RouteSecurity,
+        CompiledInputSchema, CorsOptions, MountAgent, MountBehaviour, MountFileSource, PathSegment,
+        RouteBehaviour, RouteMatch, RouteSecurity,
     };
     use golem_service_base::repo::Blob;
     use std::sync::Arc;
@@ -14845,35 +14898,39 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                 } else {
                     vec![]
                 },
-                behaviour: RouteBehaviour::HttpRouter(HttpRouterBehaviour {
-                    component_id: ComponentId(new_repo_uuid()),
-                    component_revision: ComponentRevision::INITIAL,
-                    agent_type: AgentTypeName(format!("router{id}")),
-                    constructor_input: CompiledInputSchema {
-                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                        input_schema: InputSchema::Parameters(vec![]),
-                    },
+                behaviour: RouteBehaviour::Mount(MountBehaviour {
                     handler: None,
-                    openapi_provider_method: None,
-                    static_bindings: if protected {
-                        vec![]
-                    } else {
-                        golem_common::base_model::agent::FileMapping::compile_list([(
-                            "/assets/*",
-                            "/public/$1",
-                        )])
-                        .unwrap()
+                    openapi_provider: None,
+                    files: MountFileSource::Router {
+                        agent: MountAgent {
+                            component_id: ComponentId(new_repo_uuid()),
+                            component_revision: ComponentRevision::INITIAL,
+                            agent_type: AgentTypeName(format!("router{id}")),
+                            constructor_input: CompiledInputSchema {
+                                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                                input_schema: InputSchema::Parameters(vec![]),
+                            },
+                            constructor_parameters: vec![],
+                        },
+                        file_index: if protected {
+                            vec![]
+                        } else {
+                            vec![RouterFileIndexEntry {
+                                path: "/public/index.html".into(),
+                                blob_key: AgentFileContentHash(
+                                    golem_common::model::diff::Hash::from(blake3::hash(
+                                        b"gol556-router-blob",
+                                    )),
+                                ),
+                                size: 556,
+                            }]
+                        },
                     },
-                    file_index: if protected {
+                    file_bindings: if protected {
                         vec![]
                     } else {
-                        vec![RouterFileIndexEntry {
-                            path: "/public/index.html".into(),
-                            blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
-                                blake3::hash(b"gol556-router-blob"),
-                            )),
-                            size: 556,
-                        }]
+                        golem_schema::http::FileMapping::compile_list([("/assets/*", "/public/$1")])
+                            .unwrap()
                     },
                     file_response_headers: vec![],
                 }),
@@ -14967,46 +15024,52 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
         .unwrap();
     assert_eq!(routes.routes.len(), 2);
     assert!(matches!(routes.routes[0].security, RouteSecurity::None));
-    let RouteBehaviour::HttpRouter(router) = &routes.routes[0].behavior else {
+    let RouteBehaviour::Mount(router) = &routes.routes[0].behavior else {
         panic!("expected router")
     };
     assert_eq!(
-        router.static_bindings,
+        router.file_bindings,
         vec![FileMapping::Subtree(
-            golem_common::model::agent::SubtreeFileMapping {
+            golem_schema::http::SubtreeFileMapping {
                 public_prefix: vec!["assets".into()],
                 filesystem_root: "/public".into()
             }
         )]
     );
-    assert_eq!(router.file_index.len(), 1);
-    assert_eq!(router.file_index[0].path, "/public/index.html");
-    assert_eq!(router.file_index[0].size, 556);
+    let MountFileSource::Router { file_index, .. } = &router.files else {
+        panic!("expected router files")
+    };
+    assert_eq!(file_index.len(), 1);
+    assert_eq!(file_index[0].path, "/public/index.html");
+    assert_eq!(file_index[0].size, 556);
     assert_eq!(
-        router.file_index[0].blob_key,
+        file_index[0].blob_key,
         AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
             b"gol556-router-blob"
         )))
     );
     let grpc: golem_api_grpc::proto::golem::customapi::CompiledRoutes = routes.into();
     let grpc_roundtrip: golem_service_base::custom_api::CompiledRoutes = grpc.try_into().unwrap();
-    let RouteBehaviour::HttpRouter(router) = &grpc_roundtrip.routes[0].behavior else {
+    let RouteBehaviour::Mount(router) = &grpc_roundtrip.routes[0].behavior else {
         panic!("expected gRPC router")
     };
     assert_eq!(
-        router.static_bindings,
+        router.file_bindings,
         vec![FileMapping::Subtree(
-            golem_common::model::agent::SubtreeFileMapping {
+            golem_schema::http::SubtreeFileMapping {
                 public_prefix: vec!["assets".into()],
                 filesystem_root: "/public".into()
             }
         )]
     );
-    assert_eq!(router.file_index.len(), 1);
-    assert_eq!(router.file_index[0].path, "/public/index.html");
-    assert_eq!(router.file_index[0].size, 556);
+    let MountFileSource::Router { file_index, .. } = &router.files else {
+        panic!("expected router files")
+    };
+    assert_eq!(file_index.len(), 1);
+    assert_eq!(file_index[0].path, "/public/index.html");
+    assert_eq!(file_index[0].size, 556);
     assert_eq!(
-        router.file_index[0].blob_key,
+        file_index[0].blob_key,
         AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
             b"gol556-router-blob"
         )))
@@ -15024,13 +15087,13 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
         let id = SecuritySchemeId::new();
         let mut revision = SecuritySchemeRevisionRecord::creation(
             id,
-            Provider::Google(golem_common::base_model::Empty {}),
+            Provider::Google(golem_schema::Empty {}),
             "test".into(),
             "test".into(),
             &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
             &[],
             &golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
-                golem_common::model::Empty {},
+                golem_schema::Empty {},
             ),
             golem_common::model::account::AccountId(owner.revision.account_id),
         );
@@ -15101,7 +15164,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
 }
 
 pub async fn test_security_scheme_login_persistence(deps: &Deps) {
-    use golem_common::base_model::Empty;
     use golem_common::model::security_scheme::{
         AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
     };
@@ -15109,6 +15171,7 @@ pub async fn test_security_scheme_login_persistence(deps: &Deps) {
     use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
     use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
     use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use golem_schema::Empty;
     use openidconnect::{RedirectUrl, Scope};
 
     let repo: Box<dyn SecuritySchemeRepo> = match &deps.test_db {
@@ -15167,11 +15230,11 @@ pub async fn test_security_scheme_login_persistence(deps: &Deps) {
 }
 
 pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(deps: &Deps) {
-    use golem_common::base_model::Empty;
     use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeLogin};
     use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
     use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
     use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_schema::Empty;
     use openidconnect::RedirectUrl;
 
     let (deployment_a, security_a): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =

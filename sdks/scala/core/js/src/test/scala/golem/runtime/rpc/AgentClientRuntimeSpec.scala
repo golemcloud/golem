@@ -53,6 +53,38 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         )
       }
     },
+    test("ResolvedAgent metadata calls surface a rejected call's error and expose its metadata as absent") {
+      val agentType = rpcAgentType
+      val invoker   = new RecordingRpcInvoker
+      val resolved  = resolvedAgent(invoker, agentType)
+      val method    = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
+      val started   = InvocationMetadata(
+        "RpcParityAgent(\"t\")",
+        golem.InvocationId("RpcParityAgent(\"t\")", java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+      )
+
+      invoker.enqueueInvokeResult(Left("denied: missing permission"))
+      invoker.enqueueInvokeResult(Left("denied: missing permission"))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
+      invoker.enqueueInvokeResult(Right(encodeResult(SampleOutput("ok"))))
+
+      ZIO.fromFuture { _ =>
+        for {
+          awaited    <- errorOf(resolved.awaitWithMetadata(method, SampleInput("a", 1)))
+          cancelable <- resolved.cancelableAwaitWithMetadata(method, SampleInput("b", 2))
+          rejection  <- errorOf(cancelable.result)
+          unstarted  <- errorOf(resolved.awaitWithMetadata(method, SampleInput("d", 4)))
+          _           = invoker.asyncMetadata = Some(started)
+          accepted   <- resolved.awaitWithMetadata(method, SampleInput("c", 3))
+        } yield assertTrue(
+          awaited == "denied: missing permission",
+          cancelable.metadata.isEmpty,
+          rejection == "denied: missing permission",
+          unstarted == "protocol-error: completed invocation has no metadata",
+          accepted == InvocationResult(started, SampleOutput("ok"))
+        )
+      }
+    },
     test("ResolvedAgent routes fire-and-forget calls through trigger and schedule") {
       val agentType = rpcAgentType
       val invoker   = new RecordingRpcInvoker
@@ -71,7 +103,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     },
     test("awaited calls carry the default scope card, a per-call card overrides it, and the card stays usable") {
       val invoker   = new RecordingRpcInvoker
-      val wire      = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire      = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
       val method    = wire.methodByName[SampleInput, SampleOutput]("rpcCall")
       val default   = scopeCard("default")
       val perCall   = scopeCard("per-call")
@@ -100,7 +132,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     },
     test("fire-and-forget and scheduled calls never carry the default scope card") {
       val invoker = new RecordingRpcInvoker
-      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
         .withScopeCard(scopeCard("d"))
       val method = wire.methodByName[String, Unit]("fireAndForget")
       ZIO.fromFuture { implicit ec =>
@@ -132,7 +164,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     test("a scope card moved before the call fails it without consuming an argument card") {
       val invoker = new RecordingRpcInvoker
       val scope   = scopeCard("moved-before")
-      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
         .withScopeCard(scope)
       val method   = wire.methodByName[PermissionCard, Boolean]("sendCard")
       val argument = permissionCard("argument")
@@ -148,7 +180,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     test("a scope card moved while the input is lowered gives the argument card back") {
       val invoker = new RecordingRpcInvoker
       val scope   = scopeCard("moved-during")
-      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", null, invoker))
+      val wire    = WireResolvedAgent(rpcWireType, RemoteAgentClient("ScopeWireAgent", "agent-1", invoker))
         .withScopeCard(scope)
       val method   = wire.methodByName[PermissionCard, Boolean]("sendCard")
       val raw      = scala.scalajs.js.Dynamic.literal(name = "argument")
@@ -267,6 +299,9 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
   private def permissionCard(name: String): PermissionCard =
     PermissionCard.fromRaw(scala.scalajs.js.Dynamic.literal(name = name).asInstanceOf[JsPermissionCardResource])
 
+  private def errorOf(future: Future[_]): Future[String] =
+    future.transform(result => scala.util.Success(result.failed.map(_.getMessage).getOrElse("<succeeded>")))
+
   private def rpcAgentType: AgentType[RpcParityAgent, Any] =
     AgentClient.agentType[RpcParityAgent].asInstanceOf[AgentType[RpcParityAgent, Any]]
 
@@ -283,8 +318,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     agentType: AgentType[RpcParityAgent, Any],
     invoker: RpcInvoker
   ): RemoteAgentClient =
-    // The `metadata` field is not read on the awaitable / fire-and-forget path.
-    RemoteAgentClient(agentType.typeName, "agent-1", null, invoker)
+    RemoteAgentClient(agentType.typeName, "agent-1", invoker)
 
   /** Encode a single-output method result as the host `some(tree)`. */
   private def encodeResult[A](value: A)(implicit into: IntoSchema[A]): Option[JsSchemaValueTree] =
@@ -306,6 +340,8 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
     val scheduleCalls  = mutable.ListBuffer.empty[(golem.Datetime, String, JsSchemaValueTree)]
 
     private val invokeResults = mutable.Queue.empty[Either[String, Option[JsSchemaValueTree]]]
+
+    var asyncMetadata: Option[InvocationMetadata] = None
 
     def enqueueInvokeResult(result: Either[String, Option[JsSchemaValueTree]]): Unit =
       invokeResults.enqueue(result)
@@ -335,6 +371,19 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         }
       } else Future.successful(None)
     }
+
+    override def asyncInvokeAndAwaitWithMetadata(
+      functionName: String,
+      input: JsSchemaValueTree,
+      scopeCard: Option[ScopeCard]
+    ): Either[String, AsyncInvocation[Option[JsSchemaValueTree]]] =
+      Right(
+        AsyncInvocation(
+          asyncMetadata,
+          asyncInvokeAndAwait(functionName, input, scopeCard),
+          CancellationToken.fromFunction(() => ())
+        )
+      )
 
     override def cancelableAsyncInvokeAndAwait(
       functionName: String,

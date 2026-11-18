@@ -16,7 +16,7 @@ use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
 use futures::{StreamExt, stream};
-use golem_common::model::{IdempotencyKey, LogLevel};
+use golem_common::model::{InvocationId, LogLevel};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
@@ -43,14 +43,9 @@ pub trait WorkerEventService: Send + Sync {
     /// structured log entries are also included. The stream is guaranteed to contain information only emitted during the _last_ invocation.
     fn get_last_invocation_errors(&self) -> String;
 
-    fn emit_invocation_start(
-        &self,
-        function: &str,
-        idempotency_key: &IdempotencyKey,
-        is_live: bool,
-    ) {
+    fn emit_invocation_start(&self, function: &str, idempotency_key: &InvocationId, is_live: bool) {
         self.emit_event(
-            InternalWorkerEvent::invocation_start(function, idempotency_key),
+            InternalWorkerEvent::invocation_start(function, *idempotency_key),
             is_live,
         )
     }
@@ -58,11 +53,11 @@ pub trait WorkerEventService: Send + Sync {
     fn emit_invocation_finished(
         &self,
         function: &str,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &InvocationId,
         is_live: bool,
     ) {
         self.emit_event(
-            InternalWorkerEvent::invocation_finished(function, idempotency_key),
+            InternalWorkerEvent::invocation_finished(function, *idempotency_key),
             is_live,
         )
     }
@@ -173,17 +168,17 @@ impl WorkerEventService for WorkerEventServiceDefault {
                 // We need to keep going back till the beginning of the invocation, including possible retries (which won't be live)
                 InternalWorkerEvent::InvocationStart {
                     function,
-                    idempotency_key,
+                    invocation_id,
                     ..
                 } => {
                     match &first_seen_invocation {
                         None => {
-                            first_seen_invocation = Some((function, idempotency_key));
+                            first_seen_invocation = Some((function, invocation_id));
                             stderr_chunks.extend(std::mem::take(&mut current_stderr_chunks_batch));
                         }
-                        Some((expected_function, expected_idempotency_key))
+                        Some((expected_function, expected_invocation_id))
                             if function == *expected_function
-                                && idempotency_key == *expected_idempotency_key =>
+                                && invocation_id == *expected_invocation_id =>
                         {
                             // The previous function we saw was a retry of this one. Keep collection logs.
                             // Note that deduplication of logs will ensure that there is only one live entry for all log messages between all retries of the invocation.
@@ -258,7 +253,7 @@ mod tests {
         gate1_rx.await.unwrap();
 
         for b in 1..=4u8 {
-            svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
+            svc.emit_event(InternalWorkerEvent::stdout(vec![b], None), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
@@ -291,7 +286,7 @@ mod tests {
         gate2_rx.await.unwrap();
 
         for b in 5..=8u8 {
-            svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
+            svc.emit_event(InternalWorkerEvent::stdout(vec![b], None), true);
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
 

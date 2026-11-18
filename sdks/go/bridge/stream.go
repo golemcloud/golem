@@ -39,8 +39,8 @@ import (
 // afterwards, or handing it on twice, fails with ErrStreamConsumed.
 //
 // A stream returned by a method ends with nil at clean completion, with a
-// *StreamError when the producer failed, or with a *StreamCancelled when either
-// side cancelled it. Close a returned stream you stop reading early: the agent
+// *StreamError when the producer failed, or with a *StreamCancelled when the
+// consumer cancelled it. Close a returned stream you stop reading early: the agent
 // learns that nobody is listening, and the session can finish.
 
 // ErrStreamConsumed reports a stream read or passed on after it was already
@@ -51,22 +51,40 @@ var ErrStreamConsumed = errors.New("golem: the stream was already consumed")
 var ErrStreamClosed = errors.New("golem: the stream's reader closed it")
 
 // StreamError is the failure that ended a stream returned by a method.
+// Graph and Value carry the full typed payload when Kind is StreamErrorFailed.
 type StreamError struct {
-	Code    string
+	Kind    StreamErrorKind
 	Message string
+	Graph   schema.SchemaGraph
+	Value   schema.SchemaValue
 }
 
+// StreamErrorKind identifies the closed set of producer failures.
+type StreamErrorKind string
+
+const (
+	StreamErrorFailed            StreamErrorKind = "failed"
+	StreamErrorTrapped           StreamErrorKind = "trapped"
+	StreamErrorCancelled         StreamErrorKind = "cancelled"
+	StreamErrorAbandoned         StreamErrorKind = "abandoned"
+	StreamErrorInterrupted       StreamErrorKind = "interrupted"
+	StreamErrorResourceExhausted StreamErrorKind = "resource-exhausted"
+)
+
 func (e *StreamError) Error() string {
-	return fmt.Sprintf("golem: stream failed (%s): %s", e.Code, e.Message)
+	return fmt.Sprintf("golem: stream failed (%s): %s", e.Kind, e.Message)
 }
 
 // StreamCancelled reports a stream that was cancelled before it completed.
 type StreamCancelled struct {
-	Reason string
+	Details *string
 }
 
 func (e *StreamCancelled) Error() string {
-	return fmt.Sprintf("golem: stream cancelled (%s)", e.Reason)
+	if e.Details == nil {
+		return "golem: stream consumer cancelled"
+	}
+	return fmt.Sprintf("golem: stream consumer cancelled (%s)", *e.Details)
 }
 
 // AgentStream is a sequence of values streamed to or from an agent method.

@@ -8,7 +8,7 @@ use super::{
     ClassPermissionTarget, NetworkResourcePattern, NetworkVerb, PermissionTarget, PortPattern,
     ResourcePattern,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -35,6 +35,34 @@ pub fn network_target(
                 .unwrap_or_else(PortPattern::any),
         ),
     }))
+}
+
+/// The permission target of a raw socket connect or outgoing datagram to `address`;
+/// `this_host` tells whether the address is an address of the executor host, and `hostnames` are
+/// the hostnames that the agent's recorded lookups linked to the address.
+pub fn socket_target(
+    address: SocketAddr,
+    this_host: bool,
+    hostnames: Vec<String>,
+) -> PermissionTarget {
+    PermissionTarget::Network(ClassPermissionTarget {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        resource: NetworkResourcePattern::socket_address(
+            address.ip(),
+            address.port(),
+            this_host,
+            hostnames,
+        ),
+    })
+}
+
+/// The hostname that an address lookup of `name` links its addresses to: the name as a grant
+/// names it. An IP literal or an invalid name links nothing.
+pub fn link_hostname(name: &str) -> Option<String> {
+    normalize_host(name)
+        .ok()
+        .filter(|host| host.parse::<IpAddr>().is_err())
 }
 
 fn normalize_host(host: &str) -> Result<String, NetworkTargetError> {
@@ -146,6 +174,13 @@ mod tests {
     #[test]
     fn malformed_network_and_urls_fail_closed() {
         assert!(network_target("::1", Some(80)).is_err());
+        for host in ["[fd00:ec2::254]", "[::ffff:169.254.169.254]", "[::1]:9000"] {
+            assert!(http_target(&format!("http://{host}/")).is_err(), "{host}");
+            assert!(
+                websocket_target(&format!("ws://{host}/")).is_err(),
+                "{host}"
+            );
+        }
         assert!(network_target("*.example.com", None).is_err());
         assert!(http_target("ftp://example.com/a").is_err());
         assert!(http_target("https://u:p@example.com").is_err());

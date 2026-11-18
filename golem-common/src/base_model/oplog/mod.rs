@@ -21,12 +21,11 @@ use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
-    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
-    StreamSessionRecord,
+    StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentId, IdempotencyKey, OplogIndex, Timestamp, TransactionId};
+use crate::base_model::{AgentId, InvocationId, OplogIndex, Timestamp, TransactionId};
 use crate::model::account::AccountId;
 #[cfg(feature = "full")]
 use crate::model::card::{CardHolder, InvocationWalletPin, StoredCard};
@@ -191,7 +190,7 @@ oplog_entry! {
         wit_raw_type: "raw-agent-invocation-started-parameters"
         wit_public_type: "agent-invocation-started-parameters"
         raw {
-            idempotency_key: IdempotencyKey,
+            invocation_id: InvocationId,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
@@ -209,16 +208,35 @@ oplog_entry! {
         wit_raw_type: "raw-agent-invocation-finished-parameters"
         wit_public_type: "agent-invocation-finished-parameters"
         raw {
+            invocation_id: InvocationId,
             result: payload::OplogPayload<AgentInvocationResult>,
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
         }
         public {
+            invocation_id: InvocationId,
             result: PublicAgentInvocationResult,
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
+        }
+    },
+    /// A method returned an error, completing only this invocation.
+    AgentInvocationFailed {
+        hint: false
+        wit_raw_type: "raw-agent-invocation-failed-parameters"
+        wit_public_type: "agent-invocation-failed-parameters"
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            invocation_id: InvocationId,
+            error: AgentError,
+            start_index: OplogIndex,
+        }
+        public {
+            invocation_id: InvocationId,
+            error: String,
+            start_index: OplogIndex,
         }
     },
     /// Worker suspended
@@ -237,6 +255,8 @@ oplog_entry! {
         raw {
             entity_parent_start_index: Option<OplogIndex>,
             kind: OplogErrorKind,
+            /// The invocation whose work failed; `None` for a `Recovery` error, and for an `Invocation` error recorded while no invocation runs.
+            invocation_id: Option<InvocationId>,
             error: AgentError,
             /// Points to the oplog index where the retry should start from.
             /// When counting the number of retries for a specific error, the error entries are grouped by this index.
@@ -247,6 +267,7 @@ oplog_entry! {
         }
         public {
             kind: OplogErrorKind,
+            invocation_id: Option<InvocationId>,
             error: String,
             retry_from: OplogIndex,
             retry_policy_state: Option<PublicRetryPolicyState>,
@@ -300,7 +321,7 @@ oplog_entry! {
         wit_public_type: "pending-agent-invocation-parameters"
         raw {
             not_before: Option<Timestamp>,
-            idempotency_key: IdempotencyKey,
+            invocation_id: InvocationId,
             payload: payload::OplogPayload<AgentInvocationPayload>,
             trace_id: TraceId,
             trace_states: Vec<String>,
@@ -340,12 +361,17 @@ oplog_entry! {
             new_total_linear_memory_size: Option<u64>,
             new_active_plugins: HashSet<EnvironmentPluginGrantId>,
             snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+            /// The bootstrap range of the target revision: the entries of the durable calls that
+            /// its core initializer claimed while the update instantiated it, its own block for a
+            /// snapshot-based update and the selected record's block for a snapshot-assisted one.
+            bootstrap: Option<OplogRegion>,
         }
         public {
             target_revision: ComponentRevision,
             new_component_size: u64,
             new_active_plugins: BTreeSet<PluginInstallationDescription>,
             snapshot_assisted_details: Option<PublicSnapshotAssistedUpdateDetails>,
+            bootstrap: Option<OplogRegion>,
         }
     },
     /// An update failed to be applied
@@ -367,7 +393,7 @@ oplog_entry! {
             update_attempt_index: Option<OplogIndex>,
         }
     },
-    /// Increased total linear memory size
+    /// Increased allocated linear memory and GC heap capacity
     GrowMemory {
         hint: true
         wit_raw_type: "grow-memory-parameters"
@@ -377,6 +403,18 @@ oplog_entry! {
         }
         public {
             delta: u64
+        }
+    },
+    /// Replaced the reload requirement with the allocation reconstructed by the primary Store
+    MemorySizeReconciled {
+        hint: true
+        wit_raw_type: "memory-size-reconciled-parameters"
+        wit_public_type: "memory-size-reconciled-parameters"
+        raw {
+            bytes: u64
+        }
+        public {
+            bytes: u64
         }
     },
     /// Created a resource instance
@@ -488,10 +526,10 @@ oplog_entry! {
         wit_raw_type: "cancel-pending-invocation-parameters"
         wit_public_type: "cancel-pending-invocation-parameters"
         raw {
-            idempotency_key: IdempotencyKey,
+            invocation_id: InvocationId,
         }
         public {
-            idempotency_key: IdempotencyKey,
+            invocation_id: InvocationId,
         }
     },
     /// Marks the beginning of a remote transaction
@@ -572,10 +610,15 @@ oplog_entry! {
             /// filesystem snapshot is usable only after a `SnapshotConfirmed` entry with the
             /// same name.
             filesystem_snapshot: Option<FilesystemSnapshotName>,
+            /// The bootstrap range of the generation that took the snapshot: the entries of the
+            /// durable calls that the core initializer of the running revision made, live or in
+            /// replay. `None` when the initializer made no durable call.
+            bootstrap: Option<OplogRegion>,
         }
         public {
             data: PublicSnapshotData,
             filesystem_snapshot: Option<String>,
+            bootstrap: Option<OplogRegion>,
         }
     },
     /// Checkpoint for oplog processor plugin delivery tracking
@@ -585,13 +628,16 @@ oplog_entry! {
         wit_public_type: "oplog-processor-checkpoint-parameters"
         raw {
             plugin_grant_id: EnvironmentPluginGrantId,
+            source_component_revision: ComponentRevision,
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
             last_batch_start: OplogIndex,
+            delivery: Option<Vec<u8>>,
         }
         public {
             plugin: PluginInstallationDescription,
+            source_component_revision: ComponentRevision,
             target_agent_id: AgentId,
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
@@ -916,28 +962,14 @@ oplog_entry! {
             record: TypedSchemaValue,
         }
     },
-    /// Records a stream's unique successful or error-context terminal.
-    StreamEnd {
+    /// Records a stream's unique terminal.
+    StreamTerminal {
         hint: true
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
             entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamEndRecord>,
-            summary: Option<DurableStreamEventSummary>,
-        }
-        public {
-            record: TypedSchemaValue,
-        }
-    },
-    /// Records a stream's unique role-aware cancellation terminal.
-    StreamCancel {
-        hint: true
-        wit_raw_type: "raw-durable-stream-record-parameters"
-        wit_public_type: "durable-stream-record-parameters"
-        raw {
-            entity_parent_start_index: Option<OplogIndex>,
-            record: payload::OplogPayload<StreamCancelRecord>,
+            record: payload::OplogPayload<StreamTerminalRecord>,
             summary: Option<DurableStreamEventSummary>,
         }
         public {

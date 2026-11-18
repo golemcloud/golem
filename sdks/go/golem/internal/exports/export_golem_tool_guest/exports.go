@@ -23,7 +23,6 @@
 package export_golem_tool_guest
 
 import (
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
@@ -46,7 +45,7 @@ type Stderr = witTypes.Option[*streams.ToolOutputWriter]
 var Exports struct {
 	DiscoverTools func() witTypes.Result[[]toolCommon.Tool, types.ToolError]
 	GetTool       func(name string) witTypes.Result[toolCommon.Tool, types.ToolError]
-	Invoke        func(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, stderr Stderr, principal common.Principal) witTypes.Result[toolCommon.InvocationResult, types.ToolError]
+	Invoke        func(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, stderr Stderr) witTypes.Result[toolCommon.InvocationResult, types.ToolError]
 }
 
 func mustBeSet(name string, set bool) {
@@ -65,7 +64,7 @@ func GetTool(name string) witTypes.Result[toolCommon.Tool, types.ToolError] {
 	return Exports.GetTool(name)
 }
 
-func Invoke(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, stderr Stderr, principal common.Principal) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+func Invoke(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, stderr Stderr) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	mustBeSet("invoke", Exports.Invoke != nil)
-	return Exports.Invoke(toolName, commandPath, input, stdin, stdout, stderr, principal)
+	return Exports.Invoke(toolName, commandPath, input, stdin, stdout, stderr)
 }

@@ -1,9 +1,12 @@
 name: 'Check Published SDKs'
 description: 'Build, deploy, and invoke the six streaming templates with pinned registry SDKs'
 inputs:
+  prepare-binaries:
+    description: 'Build local release prerequisites instead of consuming restored CI binaries'
+    default: 'false'
   wasm-rquickjs-version:
     description: 'wasm-rquickjs version used to build JavaScript components'
-    default: '0.5.0'
+    default: '0.5.2'
   moonbit-version:
     description: 'MoonBit compiler and core version'
     default: '0.10.18+6c83a7f62'
@@ -28,6 +31,7 @@ runs:
         cargo binstall --force --locked wit-bindgen-cli@0.40.0
     - uses: ./.github/actions/setup-js-wasm-tools
       with:
+        node-version: '24'
         wasm-rquickjs-version: ${{ inputs.wasm-rquickjs-version }}
     - uses: actions/setup-java@v5
       with:
@@ -42,6 +46,10 @@ runs:
       with:
         go-version-file: sdks/go/golem/go.mod
         cache: 'false'
+    - name: Prepare local release prerequisites
+      if: inputs.prepare-binaries == 'true'
+      shell: bash
+      run: cargo make --disable-check-for-updates --profile ci prepare-release-prerequisites
     - name: Check published SDK streaming templates
       shell: bash
       env:

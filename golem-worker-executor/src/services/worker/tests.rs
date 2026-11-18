@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::InvocationId;
+
 use super::*;
 use crate::model::ExecutionStatus;
+use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::Oplog;
+use crate::services::oplog::ScanPage;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::shard::ShardServiceDefault;
 use crate::storage::keyvalue::KeyValueStorageError;
@@ -228,7 +232,7 @@ impl OplogService for IndexTestOplogService {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 
@@ -317,13 +321,13 @@ impl ComponentService for IndexTestComponentService {
 fn invocation_pair(
     entries: &mut BTreeMap<OplogIndex, OplogEntry>,
     started_at: u64,
-    key: &IdempotencyKey,
+    key: &InvocationId,
 ) {
     entries.insert(
         OplogIndex::from_u64(started_at),
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
-            idempotency_key: key.clone(),
+            invocation_id: *key,
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
             })),
@@ -344,6 +348,7 @@ fn invocation_pair(
         OplogIndex::from_u64(started_at + 1),
         OplogEntry::AgentInvocationFinished {
             timestamp: Timestamp::now_utc(),
+            invocation_id: *key,
             result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentInitialization)),
             method_name: None,
             consumed_fuel: 0,
@@ -352,7 +357,7 @@ fn invocation_pair(
     );
 }
 
-fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntry> {
+fn invocation_entries(keys: &[InvocationId]) -> BTreeMap<OplogIndex, OplogEntry> {
     let mut entries = BTreeMap::from([(OplogIndex::INITIAL, OplogEntry::recovery_succeeded())]);
     for (offset, key) in keys.iter().enumerate() {
         invocation_pair(&mut entries, 2 + offset as u64 * 2, key);
@@ -360,16 +365,23 @@ fn invocation_entries(keys: &[IdempotencyKey]) -> BTreeMap<OplogIndex, OplogEntr
     entries
 }
 
+fn result_at(terminal: u64) -> InvocationResultPosition {
+    InvocationResultPosition {
+        terminal: OplogIndex::from_u64(terminal),
+        request: Some(OplogIndex::from_u64(terminal - 1)),
+    }
+}
+
 fn invocation_status(
     oplog_idx: u64,
     capacity: usize,
-    results: &[(&IdempotencyKey, u64)],
+    results: &[(&InvocationId, u64)],
     revert_generation: u64,
     deleted_regions: DeletedRegions,
 ) -> AgentStatusRecord {
     let mut invocation_results = InvocationResultMembership::new(capacity, 128, 3);
     for (key, index) in results {
-        invocation_results.insert((*key).clone(), OplogIndex::from_u64(*index));
+        invocation_results.insert(*(*key), result_at(*index));
     }
     invocation_results.set_revert_generation(revert_generation);
     AgentStatusRecord {
@@ -445,7 +457,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
     let agent_id = AgentId {
         component_id,
         agent_id: golem_common::model::agent::OwnerKind::external_tool_instance_name(
-            &IdempotencyKey::new("external-tool-storage-recovery".to_string()),
+            &golem_common::model::IdempotencyKey::new("external-tool-storage-recovery".to_string()),
         ),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
@@ -505,12 +517,14 @@ fn with_candidates(last: u64, previous: Option<u64>) -> AgentStatusRecord {
             timestamp: Timestamp::from(1_000),
             component_revision: ComponentRevision::INITIAL,
             files: golem_common::model::SnapshotFiles::Unnamed,
+            bootstrap: None,
         }),
         previous_usable_automatic_snapshot: previous.map(|previous| {
             golem_common::model::UsableAutomaticSnapshot {
                 index: OplogIndex::from_u64(previous),
                 component_revision: ComponentRevision::INITIAL,
                 filesystem_snapshot: None,
+                bootstrap: None,
             }
         }),
         ..AgentStatusRecord::default()
@@ -835,8 +849,8 @@ async fn invocation_index_metadata(
     value.unwrap().unwrap()
 }
 
-fn idempotency_key(value: &str) -> IdempotencyKey {
-    IdempotencyKey::new(value.to_string())
+fn idempotency_key(value: &str) -> InvocationId {
+    test_invocation_id(value.to_string())
 }
 
 fn invocation_index_fingerprint() -> AgentFingerprint {
@@ -890,10 +904,10 @@ fn sample_status() -> AgentStatusRecord {
     };
     status
         .invocation_results
-        .insert(idempotency_key("k1"), OplogIndex::from_u64(10));
+        .insert(idempotency_key("k1"), result_at(10));
     status
         .invocation_results
-        .insert(idempotency_key("k2"), OplogIndex::from_u64(20));
+        .insert(idempotency_key("k2"), result_at(20));
     status.received_card_transfers.insert(
         transfer_id(1),
         ReceivedCardTransferState::Received {
@@ -953,6 +967,7 @@ fn sample_status() -> AgentStatusRecord {
                         index: OplogIndex::from_u64(7),
                         component_revision: ComponentRevision::new(3).unwrap(),
                         filesystem_snapshot: Some(assisted_name.clone()),
+                        bootstrap: None,
                     },
                 },
             )),
@@ -962,6 +977,7 @@ fn sample_status() -> AgentStatusRecord {
         kind: golem_common::model::AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
             filesystem_snapshot: Some(assisted_name),
         },
+        bootstrap: None,
     });
     status
 }
@@ -1060,7 +1076,7 @@ fn hot_delta_only_writes_changed_fields() {
     let mut new = previous.clone();
     new.oplog_idx = OplogIndex::from_u64(50);
     new.invocation_results
-        .insert(idempotency_key("k3"), OplogIndex::from_u64(48));
+        .insert(idempotency_key("k3"), result_at(48));
 
     let mut core = new.clone();
     let parts = split_status(&mut core);
@@ -1187,8 +1203,7 @@ fn cold_reconcile_deletes_stale_transfer_fields() {
 async fn invocation_result_index_resumes_across_calls_and_chunks() {
     let first = idempotency_key("first");
     let second = idempotency_key("second");
-    let (service, oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+    let (service, oplog, owned_agent_id) = index_test_service(invocation_entries(&[first, second]));
     let partial = invocation_status(2, 2, &[], 0, DeletedRegions::new());
     let complete = invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
 
@@ -1229,7 +1244,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        InvocationResultIndexLookup::Found(result_at(3))
     );
     assert_eq!(
         service
@@ -1241,7 +1256,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
+        InvocationResultIndexLookup::Found(result_at(5))
     );
 }
 
@@ -1249,8 +1264,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
 async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
     let first = idempotency_key("first");
     let second = idempotency_key("second");
-    let (service, oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[first.clone(), second.clone()]));
+    let (service, oplog, owned_agent_id) = index_test_service(invocation_entries(&[first, second]));
     let partial = invocation_status(3, 2, &[(&first, 3)], 0, DeletedRegions::new());
     let complete = invocation_status(5, 2, &[(&first, 3), (&second, 5)], 0, DeletedRegions::new());
 
@@ -1310,7 +1324,7 @@ async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        InvocationResultIndexLookup::Found(result_at(3))
     );
 }
 
@@ -1359,13 +1373,8 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
     let fourth = idempotency_key("fourth");
     let fifth = idempotency_key("fifth");
     let missing = idempotency_key("missing");
-    let (service, _oplog, owned_agent_id) = index_test_service(invocation_entries(&[
-        first.clone(),
-        second.clone(),
-        third.clone(),
-        fourth.clone(),
-        fifth.clone(),
-    ]));
+    let (service, _oplog, owned_agent_id) =
+        index_test_service(invocation_entries(&[first, second, third, fourth, fifth]));
     let indexed = invocation_status(
         9,
         2,
@@ -1418,7 +1427,7 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
 async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result() {
     let repeated = idempotency_key("repeated");
     let (service, _oplog, owned_agent_id) =
-        index_test_service(invocation_entries(&[repeated.clone(), repeated.clone()]));
+        index_test_service(invocation_entries(&[repeated, repeated]));
     let partial = invocation_status(3, 0, &[(&repeated, 3)], 0, DeletedRegions::new());
     service
         .catch_up_invocation_result_index(
@@ -1469,7 +1478,7 @@ async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result()
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(5))
+        InvocationResultIndexLookup::Found(result_at(5))
     );
 }
 
@@ -1546,7 +1555,7 @@ async fn independent_catch_up_cannot_publish_over_newer_generation() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(6))
+        InvocationResultIndexLookup::Found(result_at(6))
     );
     assert_eq!(
         new_service
@@ -1587,8 +1596,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
     let mut malformed_metadata = serialize(&InvocationResultIndexMetadata {
         covered_through: OplogIndex::from_u64(2),
         revert_generation: 0,
-        current_idempotency_key: None,
-        cancelled_idempotency_key: None,
+        requests: InvocationRequests::default(),
     })
     .unwrap();
     malformed_metadata.pop();
@@ -1666,7 +1674,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(3))
+        InvocationResultIndexLookup::Found(result_at(3))
     );
 }
 
@@ -1751,7 +1759,7 @@ async fn concurrent_generation_catch_up_clears_reverted_results() {
             )
             .await
             .unwrap(),
-        InvocationResultIndexLookup::Found(OplogIndex::from_u64(6))
+        InvocationResultIndexLookup::Found(result_at(6))
     );
     let fields = service
         .key_value_storage
@@ -1899,6 +1907,18 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             )
             .await
             .unwrap();
+        storage
+            .with_entity("test", "seed_promise", "entry")
+            .set_raw(
+                crate::services::promise::promise_namespace_of(
+                    &owned_agent_id.agent_id,
+                    fingerprint,
+                ),
+                "promise",
+                b"value",
+            )
+            .await
+            .unwrap();
     }
     service
         .write_cached_agent_mode(
@@ -1965,6 +1985,22 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             .unwrap()
             .is_none()
     );
+    for (fingerprint, expected) in [
+        (first, Vec::<String>::new()),
+        (second, vec!["promise".into()]),
+    ] {
+        assert_eq!(
+            storage
+                .with("test", "read_promises")
+                .keys(crate::services::promise::promise_namespace_of(
+                    &owned_agent_id.agent_id,
+                    fingerprint,
+                ))
+                .await
+                .unwrap(),
+            expected
+        );
+    }
     assert_eq!(
         service
             .get_rejected_periodic_snapshots(&owned_agent_id, first)
@@ -2063,33 +2099,38 @@ fn tracks_workers_with_pending_updates_for_assignment_recovery() {
 #[test]
 fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
     use golem_common::model::durable_stream::{
-        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
-        StreamInvocationId, StreamRecordReference,
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamInvocationId,
+        StreamRecordReference, StreamTerminal, StreamTerminalAuthor,
     };
 
     let mut status = AgentStatusRecord::default();
+    let intent = StreamConsumerCancelIntentRecord {
+        format_version: 1,
+        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
+            StreamInvocationId {
+                callee_environment_id: EnvironmentId::new(),
+                callee: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "remote".into(),
+                },
+                callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+                idempotency_key: test_invocation_id("caller-side".into()),
+            },
+        ),
+        consumer_invocation: test_invocation_id("consumer".into()),
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
+        epoch: 1,
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
+    };
     status
         .pending_durable_stream_cancellations
-        .insert(StreamConsumerCancelIntentRecord {
-            format_version: 1,
-            session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
-                StreamInvocationId {
-                    callee_environment_id: EnvironmentId::new(),
-                    callee: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "remote".into(),
-                    },
-                    callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::new("caller-side".into()),
-                },
-            ),
-            consumer_invocation: IdempotencyKey::new("consumer".into()),
-            source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
-            epoch: 1,
-            role: StreamCancelRole::OutputConsumer,
-            reason: StreamCancelReason::Cancelled,
-            details: None,
-        });
+        .insert((intent.source.clone(), intent.epoch), vec![intent]);
 
     assert!(status.durable_stream_sessions.iter().next().is_none());
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(
@@ -2126,6 +2167,10 @@ struct FakeOplogService {
     fail_delete_once: AtomicBool,
     hide_identity_after_delete_attempt: bool,
     delete_attempts: AtomicUsize,
+    /// The storage batches that `scan_for_component` answers with, in order.
+    scan_batches: std::sync::Mutex<VecDeque<ScanPage>>,
+    /// The key counts that `scan_for_component` was asked for, in order.
+    scan_requests: std::sync::Mutex<Vec<u64>>,
 }
 
 #[async_trait]
@@ -2289,9 +2334,15 @@ impl OplogService for FakeOplogService {
         _component_id: &ComponentId,
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
-        _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        unreachable!()
+        count: u64,
+    ) -> Result<ScanPage, WorkerExecutorError> {
+        self.scan_requests.lock().unwrap().push(count);
+        Ok(self
+            .scan_batches
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("the scan asked for more batches than the storage has"))
     }
 
     async fn upload_raw_payload(
@@ -2930,10 +2981,22 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         hide_identity_after_delete_attempt: true,
         ..FakeOplogService::default()
     });
-    let service = test_worker_service(
-        Arc::new(InMemoryKeyValueStorage::new()),
-        oplog_service.clone(),
-    );
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let service = test_worker_service(storage.clone(), oplog_service.clone());
+    let promises =
+        crate::services::promise::promise_namespace_of(&owned_agent_id.agent_id, fingerprint);
+    storage
+        .with_entity("test", "seed_promise", "entry")
+        .set_raw(promises.clone(), "promise", b"value")
+        .await
+        .unwrap();
+    let promise_keys = || async {
+        storage
+            .with("test", "read_promises")
+            .keys(promises.clone())
+            .await
+            .unwrap()
+    };
     let lifecycle_locks = crate::services::oplog::OpenOplogs::new("delete-test");
     let mut lifecycle = lifecycle_locks
         .lock_lifecycle(&owned_agent_id.agent_id)
@@ -2951,6 +3014,8 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         .await
         .unwrap_err();
     assert!(error.to_string().contains("injected oplog delete failure"));
+    // The agent keeps its oplog, so it keeps its promises too: nothing could rebuild them.
+    assert_eq!(promise_keys().await, vec!["promise".to_string()]);
 
     service
         .remove(
@@ -2964,6 +3029,7 @@ async fn oplog_delete_failure_is_returned_and_explicit_remove_retry_completes() 
         .await
         .unwrap();
     assert_eq!(oplog_service.delete_attempts.load(Ordering::Relaxed), 2);
+    assert!(promise_keys().await.is_empty());
 }
 
 #[test]
@@ -2981,4 +3047,123 @@ async fn recovery_scan_reports_an_unreadable_index() {
         result.is_err(),
         "expected the index read failure to surface"
     );
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+/// Lists the agents of a component over scripted storage batches with `budget` and an agent scan
+/// batch size of `batch_size`. Returns the cursor of the listing and the key counts it asked the
+/// storage for.
+async fn list_agents_over_batches(
+    budget: ScanBudget,
+    batch_size: u64,
+    batches: Vec<ScanPage>,
+) -> (Option<ScanCursor>, Vec<u64>) {
+    use crate::services::worker_enumeration::{
+        DefaultWorkerEnumerationService, WorkerEnumerationService,
+    };
+
+    let oplog_service = Arc::new(FakeOplogService {
+        scan_batches: std::sync::Mutex::new(batches.into()),
+        ..Default::default()
+    });
+    let mut config = GolemConfig::default();
+    config.limits.scan_budget = budget;
+    config.limits.agent_scan_batch_size = std::num::NonZeroU64::new(batch_size).unwrap();
+    let enumeration = DefaultWorkerEnumerationService::new(
+        Arc::new(test_worker_service(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            oplog_service.clone(),
+        )),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(config),
+    );
+    let (cursor, agents) = enumeration
+        .get(
+            &EnvironmentId::new(),
+            &ComponentId(Uuid::new_v4()),
+            None,
+            ScanCursor::default(),
+            i64::MAX as u64,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(agents.is_empty());
+    let requests = oplog_service.scan_requests.lock().unwrap().clone();
+    (cursor, requests)
+}
+
+/// The batches list no agent: the multi-layer oplog service drops the keys of agents that a lower
+/// layer also has, as it does for an archived agent with a primary tail, and still counts them as
+/// examined. The listing charges the examined keys, not the listed agents.
+#[test]
+async fn agent_listing_charges_examined_keys_and_stops_after_the_batch_that_spends_the_budget() {
+    let budget = keys_budget(3, std::time::Duration::from_secs(600));
+
+    // Two examined keys leave one key of the budget, so the listing asks for one more key and
+    // stops after it. A listing that charged the listed agents would ask for three keys again.
+    let (cursor, requests) = list_agents_over_batches(
+        budget,
+        100,
+        vec![batch("1", 2), batch("2", 1), batch("3", 1)],
+    )
+    .await;
+    assert_eq!(requests, vec![3, 1]);
+    assert_eq!(cursor, Some(ScanCursor::new("2".to_string())));
+
+    // The storage answers the request for three keys with five, as Redis `SCAN COUNT` can. The
+    // listing keeps the whole batch and stops after it, and leaves the next batch to the next call.
+    let (cursor, requests) =
+        list_agents_over_batches(budget, 100, vec![batch("1", 5), batch("2", 1)]).await;
+    assert_eq!(requests, vec![3]);
+    assert_eq!(cursor, Some(ScanCursor::new("1".to_string())));
+}
+
+/// A listing asks the storage for at most the configured agent scan batch size at a time, and for
+/// the rest of the key budget once less than that remains. It also stops after the first batch when
+/// its time budget is spent, although its key budget is not.
+#[test]
+async fn agent_listing_asks_for_batches_of_at_most_the_batch_size_and_stops_at_its_time_budget() {
+    let (cursor, requests) = list_agents_over_batches(
+        keys_budget(100, std::time::Duration::from_secs(600)),
+        40,
+        vec![
+            batch("1", 40),
+            batch("2", 40),
+            batch("3", 20),
+            batch("4", 1),
+        ],
+    )
+    .await;
+    assert_eq!(requests, vec![40, 40, 20]);
+    assert_eq!(cursor, Some(ScanCursor::new("3".to_string())));
+
+    let (cursor, requests) = list_agents_over_batches(
+        keys_budget(250, std::time::Duration::ZERO),
+        40,
+        vec![batch("1", 1), batch("2", 1), batch("3", 1)],
+    )
+    .await;
+    assert_eq!(requests, vec![40]);
+    assert_eq!(cursor, Some(ScanCursor::new("1".to_string())));
+}
+
+fn keys_budget(entries: u64, time: std::time::Duration) -> ScanBudget {
+    ScanBudget {
+        entries: std::num::NonZeroU64::new(entries).unwrap(),
+        time,
+    }
+}
+
+/// A storage batch that lists no agent, examined `examined_keys` keys and ends at `cursor`.
+fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
+    ScanPage {
+        cursor: ScanCursor::new(cursor.to_string()),
+        agent_ids: vec![],
+        examined_keys,
+    }
 }

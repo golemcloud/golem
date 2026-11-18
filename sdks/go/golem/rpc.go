@@ -130,32 +130,32 @@ func (m MethodDef[Id, In, Out]) MustCall(c Client[Id], in In) Out {
 }
 
 // Trigger invokes the method without waiting for a result, returning the
-// invocation's identity. A failure to start the invocation is returned as a
+// invocation's metadata. A failure to start the invocation is returned as a
 // [RemoteCallError]; failures after the invocation is accepted are not
 // reported here.
-func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationID, error) {
+func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationMetadata, error) {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	m.refuseStreams("Trigger")
 	tree, err := m.encodeInput(c.agentID, in)
 	if err != nil {
-		return InvocationID{}, err
+		return InvocationMetadata{}, err
 	}
 	res := c.rpc.Invoke(m.name, tree, noScopeCard())
 	if res.IsErr() {
-		return InvocationID{}, rpcErrorToGo(c.agentID, m.name, res.Err())
+		return InvocationMetadata{}, rpcErrorToGo(c.agentID, m.name, res.Err())
 	}
-	return invocationIDFrom(res.Ok()), nil
+	return invocationMetadataFrom(res.Ok()), nil
 }
 
 // MustTrigger is [MethodDef.Trigger] that panics on a remote failure.
-func (m MethodDef[Id, In, Out]) MustTrigger(c Client[Id], in In) InvocationID {
-	id, err := m.Trigger(c, in)
+func (m MethodDef[Id, In, Out]) MustTrigger(c Client[Id], in In) InvocationMetadata {
+	metadata, err := m.Trigger(c, in)
 	if err != nil {
 		panic(err)
 	}
-	return id
+	return metadata
 }
 
 // Schedule arranges for the method to be invoked at the given time and returns a
@@ -176,8 +176,8 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*Sc
 	}
 	receipt := res.Ok()
 	return &ScheduledInvocation{
-		ID:    invocationIDFrom(receipt.Metadata),
-		token: receipt.CancellationToken,
+		Metadata: invocationMetadataFrom(receipt.Metadata),
+		token:    receipt.CancellationToken,
 	}, nil
 }
 
@@ -219,10 +219,10 @@ func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) 
 	}
 	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
 	return &Future[Out]{
-		ID:     invocationIDFrom(inv.Metadata),
-		fut:    inv.Future,
-		method: m.name,
-		target: c.agentID,
+		Metadata: asyncInvocationMetadata(inv.Metadata),
+		fut:      inv.Future,
+		method:   m.name,
+		target:   c.agentID,
 	}
 }
 
@@ -299,20 +299,73 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 // invocation identity and scheduling
 // ---------------------------------------------------------------------------
 
-// InvocationID identifies one remote invocation.
+// InvocationID identifies one invocation: the agent that runs it, in the text
+// form of an agent ID, and a UUID. Its text form, from String, is
+// <agent-id>.<uuid>.
 type InvocationID struct {
-	AgentID        string
-	IdempotencyKey string
+	AgentID string
+	UUID    UUID
 }
 
-func invocationIDFrom(m host.InvocationMetadata) InvocationID {
-	return InvocationID{AgentID: m.AgentId, IdempotencyKey: m.IdempotencyKey}
+// String returns the text form <agent-id>.<uuid>.
+func (id InvocationID) String() string { return id.AgentID + "." + id.UUID.String() }
+
+// invocationIDSuffixLen is the length of the "." and the hyphenated UUID at the
+// end of an invocation ID's text form.
+const invocationIDSuffixLen = 1 + 36
+
+// ParseInvocationID reads the text form of an [InvocationID]. The UUID is the
+// last 36 characters, after a ".", so an agent ID that contains "." is read
+// back unchanged. It is an error when the "." is missing, the UUID is not
+// valid, or the agent ID is empty.
+func ParseInvocationID(s string) (InvocationID, error) {
+	invalid := func(reason string) (InvocationID, error) {
+		return InvocationID{}, fmt.Errorf("golem: invalid invocation id %q: %s", s, reason)
+	}
+	if len(s) < invocationIDSuffixLen || s[len(s)-invocationIDSuffixLen] != '.' {
+		return invalid("expected <agent-id>.<uuid>")
+	}
+	agentID := s[:len(s)-invocationIDSuffixLen]
+	if agentID == "" {
+		return invalid("the agent id is empty")
+	}
+	uuid, err := ParseUUID(s[len(s)-invocationIDSuffixLen+1:])
+	if err != nil {
+		return invalid(err.Error())
+	}
+	return InvocationID{AgentID: agentID, UUID: uuid}, nil
+}
+
+// InvocationMetadata is the identity the host allocated for one remote
+// invocation. For an ephemeral target, AgentID is the generated one-shot
+// phantom ID.
+type InvocationMetadata struct {
+	AgentID      string
+	InvocationID InvocationID
+}
+
+func invocationMetadataFrom(m host.InvocationMetadata) InvocationMetadata {
+	return InvocationMetadata{
+		AgentID:      m.AgentId,
+		InvocationID: InvocationID{AgentID: m.AgentId, UUID: uuidFromWit(m.InvocationId.Id)},
+	}
+}
+
+// asyncInvocationMetadata is the identity of an asynchronous invocation, or nil
+// when the host rejected the call before it started. The future of a rejected
+// call reports the rejection.
+func asyncInvocationMetadata(m witTypes.Option[host.InvocationMetadata]) *InvocationMetadata {
+	if m.IsNone() {
+		return nil
+	}
+	metadata := invocationMetadataFrom(m.Some())
+	return &metadata
 }
 
 // ScheduledInvocation is a future invocation that has not run yet.
 type ScheduledInvocation struct {
-	ID    InvocationID
-	token *host.CancellationToken
+	Metadata InvocationMetadata
+	token    *host.CancellationToken
 }
 
 // Cancel prevents the invocation, if it has not already started.

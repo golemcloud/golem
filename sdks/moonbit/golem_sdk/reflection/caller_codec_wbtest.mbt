@@ -101,7 +101,10 @@ test "reflected output rejection releases stale and unexpected streams" {
     {
       metadata: {
         agent_id: { value: "agent", },
-        idempotency_key: "invocation",
+        invocation_id: @rpc.InvocationId::new(
+          "agent",
+          @schema.Uuid::from_bits(0, 1),
+        ),
       },
       value: Some(
         @model.SchemaValue::Stream(

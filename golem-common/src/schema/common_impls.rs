@@ -78,6 +78,11 @@ impl_schema_for_uuid_newtype!(
     "agent-fingerprint"
 );
 impl_schema_for_uuid_newtype!(
+    crate::base_model::InvocationId,
+    "golem_common.base_model.InvocationId",
+    "invocation-id"
+);
+impl_schema_for_uuid_newtype!(
     crate::base_model::component::ComponentId,
     "golem_common.base_model.component.ComponentId",
     "component-id"
@@ -138,5 +143,49 @@ impl FromSchema for crate::base_model::component::ComponentRevision {
                 "ComponentRevision",
             )),
         }
+    }
+}
+
+/// The schema of `golem:core/types@2.0.0::promise-id`. Its `fingerprint` is a plain `uuid`,
+/// while an `AgentFingerprint` on its own has the `agent-fingerprint` record schema.
+#[derive(golem_schema_derive::IntoSchema, golem_schema_derive::FromSchema)]
+#[schema(named = "golem_common.base_model.PromiseId")]
+struct PromiseIdSchema {
+    agent_id: crate::base_model::AgentId,
+    fingerprint: uuid::Uuid,
+    oplog_idx: crate::base_model::OplogIndex,
+}
+
+impl IntoSchema for crate::base_model::PromiseId {
+    fn type_id() -> TypeId {
+        <PromiseIdSchema as IntoSchema>::type_id()
+    }
+
+    fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
+        <PromiseIdSchema as IntoSchema>::register_in(builder)
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        PromiseIdSchema {
+            agent_id: self.agent_id.clone(),
+            fingerprint: self.fingerprint.0,
+            oplog_idx: self.oplog_idx,
+        }
+        .to_value()
+    }
+}
+
+impl FromSchema for crate::base_model::PromiseId {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        let PromiseIdSchema {
+            agent_id,
+            fingerprint,
+            oplog_idx,
+        } = PromiseIdSchema::from_value(v)?;
+        Ok(Self {
+            agent_id,
+            fingerprint: crate::base_model::AgentFingerprint(fingerprint),
+            oplog_idx,
+        })
     }
 }

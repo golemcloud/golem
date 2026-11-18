@@ -49,13 +49,13 @@ lazy_static! {
     .unwrap();
     static ref ALLOCATED_MEMORY_BYTES: Histogram = register_histogram!(
         "allocated_memory_bytes",
-        "Worker's total linear memory size after a memory.grow, sampled at each grow",
+        "Store's accounted total of linear-memory bytes and GC heap capacity, sampled after each positive memory-growth notification.",
         crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
     )
     .unwrap();
     static ref WORKER_ALLOCATED_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
         "worker_allocated_linear_memory_bytes",
-        "Per-worker allocated linear-memory total sampled after instance reconciliation. This is the sum of current data_size values for unique linear-memory backings, not measured resident memory.",
+        "Per-Store allocated linear-memory bytes plus GC heap capacity, sampled after instance reconciliation. Linear memories contribute current data_size values for unique backings; this is not measured resident memory.",
         crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
     )
     .unwrap();

@@ -28,8 +28,8 @@
  * // Imperative, persisted to oplog:
  * yield* Retry.setPolicy(policy)
  *
- * // Scoped: only active for the wrapped Effect's lifetime,
- * // then the previous policy (or absence thereof) is restored:
+ * // Scoped: only active for the wrapped Effect's lifetime; the
+ * // agent-wide policies are never changed:
  * yield* Retry.withPolicy(policy, doWork)
  * ```
  *
@@ -908,9 +908,15 @@ export const removePolicy = (name: string): Effect.Effect<void, RetryHostError, 
 // ---------------------------------------------------------------------------
 
 /**
- * Set a named retry policy and arrange for the previous policy to be
- * restored when the surrounding {@link Scope} closes. If no policy with
- * the same name existed, the policy is removed on close.
+ * Open a retry policy scope for a named retry policy and close it when the
+ * surrounding {@link Scope} closes. While the scope is open, the policy
+ * overrides the agent-wide policy with the same name for the host calls of
+ * the current task. The scope changes no agent-wide policy and records no
+ * oplog entry.
+ *
+ * JavaScript code of one agent runs on one component-model task, so other
+ * fibers of the same invocation that run while the scope is open also see
+ * the policy.
  *
  * Use directly with `Effect.scoped`, or via {@link withPolicy} for the
  * common "run this Effect with a temporary policy" shape.
@@ -924,28 +930,19 @@ export const useScoped = (
   Effect.gen(function* () {
     const client = yield* RetryClient
     const raw = yield* toRawNamedPolicy(policy)
-    const previous = yield* Effect.try({
-      try: () => client.getRetryPolicyByName(raw.name),
-      catch: (e) => new RetryHostError(e),
-    })
     yield* Effect.acquireRelease(
-      Effect.try({ try: () => client.setRetryPolicy(raw), catch: (e) => new RetryHostError(e) }),
-      () =>
-        Effect.try({
-          try: () =>
-            previous !== undefined
-              ? client.setRetryPolicy(previous)
-              : client.removeRetryPolicy(raw.name),
-          catch: () => undefined,
-        }).pipe(Effect.ignore),
+      Effect.try({
+        try: () => client.openRetryPolicyScope(raw),
+        catch: (e) => new RetryHostError(e),
+      }),
+      (close) => Effect.try({ try: close, catch: () => undefined }).pipe(Effect.ignore),
     )
   })
 
 /**
- * Run `effect` with `policy` temporarily installed. Equivalent to
+ * Run `effect` inside a retry policy scope for `policy`. Equivalent to
  * `Effect.scoped(useScoped(policy).pipe(Effect.zipRight(effect)))`. The
- * previous policy (or absence thereof) is restored on success, error,
- * and interruption alike.
+ * scope closes on success, error, and interruption alike.
  *
  * @since 1.5.0
  * @category combinators

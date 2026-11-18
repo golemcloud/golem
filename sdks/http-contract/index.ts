@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-import type { FileMapping, HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@2.0.0';
+import type { HttpEndpointDetails, HttpMountDetails } from 'golem:agent/common@2.0.0';
+import type { FileMapping } from 'golem:core/http@2.0.0';
 
 /** A canonical field occurrence. Values are bytes, not UTF-8 text. */
 export interface HttpHeader {
@@ -118,7 +119,10 @@ export function compileFileMappings(mappings: readonly FileExposure[]): FileMapp
     )
       fail('target-path');
     const mapping: FileMapping = subtree
-      ? { tag: 'subtree', val: { publicPrefix: segments, filesystemRoot: target } }
+      ? {
+          tag: 'subtree',
+          val: { publicPrefix: segments, filesystemRoot: target },
+        }
       : { tag: 'exact', val: { publicPath: segments, filePath: target } };
     const key = JSON.stringify(mapping);
     if (seen.has(key)) fail('duplicate-mapping');
@@ -150,7 +154,10 @@ export function compileRouterMount(options: RouterMountOptions): {
     (handlerMethod !== undefined && handlerMethod === openapiProviderMethod)
   )
     fail('router-methods');
-  const pathPrefix = publicSegments(options.mount).map((val) => ({ tag: 'literal' as const, val }));
+  const pathPrefix = publicSegments(options.mount).map((val) => ({
+    tag: 'segment' as const,
+    val: { tag: 'literal' as const, val },
+  }));
   return {
     mount: {
       pathPrefix,

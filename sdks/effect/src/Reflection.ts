@@ -15,6 +15,7 @@ import {
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
+import type { InvocationMetadata } from "./Client.js"
 import type { InvokeOptions } from "./DynamicClient.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
@@ -70,7 +71,7 @@ export class ReflectionSchemaError {
 
 /** Result and host invocation metadata returned by reflected calls. @since 1.6.0 @category models */
 export interface ReflectedInvocation<T> {
-  readonly metadata: AgentHost.InvocationMetadata
+  readonly metadata: InvocationMetadata
   readonly value?: T
 }
 
@@ -85,12 +86,10 @@ export interface ReflectedMethod {
     input: CoreTypes.SchemaValueTree,
     options?: InvokeOptions,
   ) => Effect.Effect<ReflectedInvocation<CoreTypes.SchemaValueTree>, ReflectionError>
-  readonly trigger: (
-    input: JsonValue,
-  ) => Effect.Effect<AgentHost.InvocationMetadata, ReflectionError>
+  readonly trigger: (input: JsonValue) => Effect.Effect<InvocationMetadata, ReflectionError>
   readonly triggerValue: (
     input: CoreTypes.SchemaValueTree,
-  ) => Effect.Effect<AgentHost.InvocationMetadata, ReflectionError>
+  ) => Effect.Effect<InvocationMetadata, ReflectionError>
   readonly schedule: (
     at: AgentHost.Datetime,
     input: JsonValue,
@@ -103,7 +102,7 @@ export interface ReflectedMethod {
 
 /** A cancelable reflected scheduled invocation. @since 1.6.0 @category models */
 export interface ReflectedScheduledInvocation {
-  readonly metadata: AgentHost.InvocationMetadata
+  readonly metadata: InvocationMetadata
   readonly cancel: Effect.Effect<void>
 }
 

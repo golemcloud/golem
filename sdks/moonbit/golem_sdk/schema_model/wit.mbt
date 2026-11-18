@@ -728,8 +728,8 @@ fn ValueEncoder::emit_node(
     Stream(handle) =>
       match handle.take() {
         Some(Wrapped(raw)) => @types.StreamValue(raw)
-        Some(Native(reader)) => {
-          handle.cell = Some(Native(reader))
+        Some(Native(reader, outcome)) => {
+          handle.cell = Some(Native(reader, outcome))
           raise EncodeError(
             "native schema value stream was not prepared for transfer",
           )
@@ -778,7 +778,7 @@ pub fn schema_value_to_wit(
 fn reject_native_streams(value : SchemaValue) -> Unit raise SchemaModelError {
   match value {
     Stream(handle) =>
-      if handle.cell is Some(Native(_)) {
+      if handle.cell is Some(Native(_, _)) {
         raise EncodeError(
           "native schema value stream was not prepared for transfer",
         )

@@ -150,7 +150,7 @@ pub(super) async fn decide_install<Ctx: WorkerCtx>(
     if let Err(error) = ctx
         .with_agent_authority_at_boundary(|ctx| {
             ensure_install_permission_in_surface(
-                &ctx.state.agent_effective_surface,
+                ctx.state.authority().effective_surface(),
                 &ctx.state.created_by_email,
                 source_card.card_id(),
                 &target_recipient,

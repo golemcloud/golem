@@ -28,19 +28,33 @@ private[runtime] object StreamSessionState {
       if (highWater == first) this
       else trimFn.map(_(highWater)).getOrElse(throw BridgeException("input high-water split an atomic item"))
   }
-  final case class PendingTerminal(first: BigInt, sendFn: Long => Future[Unit]) extends PendingInput {
-    val count = BigInt(0); val bytes = 0; val terminal = true
+  final case class PendingTerminal(first: BigInt, bytes: Int, sendFn: Long => Future[Unit]) extends PendingInput {
+    val count = BigInt(0); val terminal = true
     def send(channel: Long): Future[Unit] = sendFn(channel)
     def after(highWater: BigInt): PendingInput = this
   }
 
-  /** Durable client-side input state. Exactly one pending range is retained until its cumulative ACK. */
+  /** One pending range and its deferred failure share the replay budget until their cumulative ACKs. */
   final class InputState(totalReplayBytes: AtomicLong = new AtomicLong(0L)) {
     private var channel = 0L
     private var next = BigInt(0)
     private var ended = false
     private var cancelled = false
     private var pending: Option[PendingInput] = None
+    private var deferredFailure: Option[golem.bridge.runtime.json.Json] = None
+    private var deferredBytes = 0
+    def failureOutcome: Option[golem.bridge.runtime.json.Json] = synchronized(deferredFailure)
+    def retainFailure(outcome: golem.bridge.runtime.json.Json): Boolean = synchronized {
+      if (ended) false
+      else if (deferredFailure.nonEmpty) true
+      else {
+        val bytes = outcome.render.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+        chargeBytes(bytes, pending.fold(0)(_.bytes))
+        deferredFailure = Some(outcome)
+        deferredBytes = bytes
+        true
+      }
+    }
     def detach(): Unit = synchronized { channel = 0L }
     def remap(newChannel: Long, highWater: BigInt, terminal: Boolean): Option[(PendingInput, Long)] = synchronized {
       if (newChannel <= 0) throw BridgeException("invalid input channel")
@@ -68,7 +82,11 @@ private[runtime] object StreamSessionState {
     def reserve(data: PendingInput): (PendingInput, Long) = synchronized {
       if (ended || pending.nonEmpty || data.first != next || data.count < 0)
         throw BridgeException("conflicting input stream state")
-      charge(data)
+      if (data.terminal && deferredFailure.nonEmpty) {
+        if (data.bytes != deferredBytes) throw BridgeException("conflicting deferred input terminal")
+        deferredFailure = None
+        deferredBytes = 0
+      } else charge(data)
       pending = Some(data)
       next += data.count
       if (data.terminal) ended = true
@@ -95,11 +113,21 @@ private[runtime] object StreamSessionState {
       }
       accepted
     }
-    def cancel(): Unit = synchronized { pending.foreach(release); pending = None; ended = true }
+    def cancel(): Unit = synchronized {
+      pending.foreach(release)
+      pending = None
+      totalReplayBytes.addAndGet(-deferredBytes)
+      deferredBytes = 0
+      deferredFailure = None
+      ended = true
+    }
     def cancelLocal(): Unit = synchronized { cancel(); cancelled = true }
-    private def charge(data: PendingInput): Unit = {
-      if (data.bytes > StreamSessionProtocol.MaxReplayBytes || totalReplayBytes.addAndGet(data.bytes) > StreamSessionProtocol.MaxSessionQueuedBytes) {
-        totalReplayBytes.addAndGet(-data.bytes)
+    private def charge(data: PendingInput): Unit = chargeBytes(data.bytes, deferredBytes)
+    private def chargeBytes(bytes: Int, retained: Int): Unit = {
+      if (bytes < 0 || bytes.toLong + retained > StreamSessionProtocol.MaxReplayBytes)
+        throw BridgeException("unacknowledged input exceeds the protocol limit")
+      if (totalReplayBytes.addAndGet(bytes) > StreamSessionProtocol.MaxSessionQueuedBytes) {
+        totalReplayBytes.addAndGet(-bytes)
         throw BridgeException("unacknowledged input exceeds the protocol limit")
       }
     }

@@ -24,9 +24,7 @@ use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{
-    LogColorize, end_for_closed_output, eprint_line, is_closed_pipe, log_action, print_text,
-};
+use crate::log::{LogColorize, end_for_closed_output, eprint_line, is_closed_pipe, log_action};
 use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
@@ -35,7 +33,7 @@ use crate::model::environment::{
 };
 use crate::model::format::Format;
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
-use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeView};
+use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeHelpView, ToolInvokeView};
 use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
 use anyhow::{anyhow, bail};
@@ -46,7 +44,7 @@ use golem_client::api::{
 };
 use golem_client::invocation_session::{
     InvocationSession, InvocationSessionStateSnapshot, ReconnectPolicy,
-    drive_native_tool_session_until,
+    drive_native_tool_session_with_stop,
 };
 use golem_client::model::{
     NativeToolDefinition, NativeToolDescribeRequest, NativeToolInvocationMode,
@@ -361,9 +359,26 @@ impl ToolCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-        let owner = if let Some(raw) = args.agent {
+        let owner = if args.lookup
+            && let Some(agent) = args.agent.as_ref()
+            && agent.0.parse::<AgentId>().is_ok()
+        {
+            let agent_id = final_tool_lookup_owner(agent)?;
+            ToolOwner {
+                application_name: environment.application_name.clone(),
+                environment_name: environment.environment_name.clone(),
+                agent_id: Some(agent_id),
+                component_id: None,
+                environment,
+            }
+        } else if let Some(raw) = args.agent {
             self.resolve_tool_owner(raw).await?
         } else if let Some(name) = args.component {
+            if args.lookup {
+                bail!(
+                    "--lookup requires --agent <component-id>:<agent-id> from the invocation receipt"
+                );
+            }
             let component = self
                 .ctx
                 .component_handler()
@@ -390,8 +405,10 @@ impl ToolCommandHandler {
                 .map_err(anyhow::Error::msg)?
             {
                 arguments::ParsedToolArguments::Help(help) => {
-                    print_text(help);
-                    return Ok(());
+                    return self
+                        .ctx
+                        .log_handler()
+                        .log_output(ToolInvokeHelpView { help });
                 }
                 arguments::ParsedToolArguments::Invoke {
                     command_path,
@@ -417,6 +434,7 @@ impl ToolCommandHandler {
             let initial = InvocationSessionStateSnapshot {
                 delivered_output_cursors: Default::default(),
                 stable_stream_bindings: Default::default(),
+                accepted_invocation: None,
                 pending_operation: Some(PublicClientMessage::ToolStart {
                     attempt_id: uuid::Uuid::new_v4(),
                     application: owner.application_name.to_string(),
@@ -434,7 +452,7 @@ impl ToolCommandHandler {
                 session_token: None,
             };
             let mut reader = match args.stdin {
-                Some(path) if path == Path::new("-") => Some(process_stdin_reader()),
+                Some(path) if path == Path::new("-") => Some(process_stdin_reader()?),
                 Some(path) => Some(Box::pin(tokio::fs::File::open(&path).await.map_err(
                     |error| anyhow!("Failed to open tool stdin '{}': {error}", path.display()),
                 )?) as Pin<Box<dyn AsyncRead + Send>>),
@@ -472,12 +490,15 @@ impl ToolCommandHandler {
             let cancelled = async {
                 let _ = tokio::signal::ctrl_c().await;
             };
-            let result = drive_native_tool_session_until(
+            let bindings = session.delivery_tracker();
+            let result = drive_native_tool_session_with_stop(
                 session,
                 reader.take(),
                 &mut writer,
                 &mut stderr_writer,
                 cancelled,
+                std::future::pending::<()>(),
+                |_| {},
             )
             .await
             .map_err(|error| match &error {
@@ -488,9 +509,16 @@ impl ToolCommandHandler {
                 }
                 _ => anyhow!(error),
             })?;
+            let accepted = bindings
+                .snapshot()
+                .accepted_invocation
+                .ok_or_else(|| anyhow!("the tool session ended without an acceptance"))?;
             let view = ToolInvocationSessionView {
-                target: public_target,
-                idempotency_key: key,
+                target: PublicNativeToolTarget::Agent {
+                    component_id: accepted.agent_id().component_id.0,
+                    agent_id: accepted.agent_id().agent_id.clone(),
+                },
+                idempotency_key: accepted.id(),
                 result,
             };
             let failed = public_tool_failed(&view.result);
@@ -892,6 +920,14 @@ fn tool_input_or_empty(
         })
 }
 
+fn final_tool_lookup_owner(raw: &RawAgentId) -> anyhow::Result<AgentId> {
+    let owner: AgentId = raw.0.parse().map_err(anyhow::Error::msg)?;
+    if owner.agent_id.is_empty() {
+        bail!("the invocation receipt owner must have a nonempty agent id");
+    }
+    Ok(owner)
+}
+
 /// The owner as a live session names the target of a tool call.
 pub(crate) fn public_target(owner: &ToolOwner) -> PublicNativeToolTarget {
     match (&owner.agent_id, owner.component_id) {
@@ -927,10 +963,11 @@ pub(crate) fn public_typed_value(
     })
 }
 
-fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
+fn process_stdin_reader() -> anyhow::Result<Pin<Box<dyn AsyncRead + Send>>> {
+    let stdin = crate::command_handler::interactive::stdin("the tool's stdin")?;
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     std::thread::spawn(move || {
-        let mut stdin = std::io::stdin().lock();
+        let mut stdin = stdin.lock();
         let mut buffer = [0; 64 * 1024];
         loop {
             let item = match stdin.read(&mut buffer) {
@@ -945,9 +982,9 @@ fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
             }
         }
     });
-    Box::pin(tokio_util::io::StreamReader::new(
+    Ok(Box::pin(tokio_util::io::StreamReader::new(
         tokio_stream::wrappers::ReceiverStream::new(receiver),
-    ))
+    )))
 }
 
 /// A standard stream of the process that ends the process when the reader has gone.
@@ -1025,14 +1062,15 @@ fn finish_tool_report(failed: bool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LiveReportDestination, finish_tool_report, live_report_destination,
-        native_tool_result_failed, public_tool_failed, public_typed_value,
+        LiveReportDestination, final_tool_lookup_owner, finish_tool_report,
+        live_report_destination, native_tool_result_failed, public_tool_failed, public_typed_value,
     };
     use crate::error::PipedExitCode;
     use crate::log::{
         Output, RawOutputReservation, TracingSuppression, TracingWriter, reservation_aware_output,
         tracing_writer,
     };
+    use crate::model::agent::RawAgentId;
     use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
     use golem_common::model::invocation_session_public::PublicInvocationResult;
     use golem_common::model::tool::SerializableToolRpcError;
@@ -1040,6 +1078,17 @@ mod tests {
         NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
     use test_r::test;
+
+    #[test]
+    fn final_tool_lookup_owner_preserves_reserved_owner_without_type_resolution() {
+        let component = uuid::Uuid::new_v4();
+        let name = "__external_tool:non-constructor-owner";
+        let owner = final_tool_lookup_owner(&RawAgentId(format!("{component}:{name}"))).unwrap();
+        assert_eq!(owner.component_id.0, component);
+        assert_eq!(owner.agent_id, name);
+        assert!(final_tool_lookup_owner(&RawAgentId(format!("{component}:"))).is_err());
+        assert!(final_tool_lookup_owner(&RawAgentId("BashOwner(\"acceptance\")".into())).is_err());
+    }
 
     #[test]
     fn native_session_input_uses_public_schema_json_not_internal_value_encoding() {

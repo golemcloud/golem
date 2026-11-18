@@ -125,6 +125,7 @@ const PromiseIdSchema = z.object({
     }),
     agentId: z.string(),
   }),
+  fingerprint: s.uuid(),
   oplogIdx: s.u64(),
 });
 
@@ -248,6 +249,7 @@ export const SharedConfigAgentImpl = SharedConfigAgent.implement({
             uuid: Uuid.from(promiseId.agentId.componentId.uuid),
           },
         },
+        fingerprint: Uuid.from(promiseId.fingerprint),
       };
     },
     async revealSecretThenAwaitReplayGate({ promiseId }) {

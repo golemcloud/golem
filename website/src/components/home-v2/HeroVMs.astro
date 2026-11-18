@@ -1,0 +1,125 @@
+<figure
+  class="hero-vms"
+  role="img"
+  aria-label="A cloud of lightweight Golem VMs, each enclosing code within its own durable, permission-enforced boundary."
+>
+  <svg viewBox="0 0 560 500" fill="none" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient
+        id="hero-vm-surface"
+        x1="20"
+        y1="0"
+        x2="240"
+        y2="240"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stop-color="#354b3d"></stop>
+        <stop offset="1" stop-color="#1b2b22"></stop>
+      </linearGradient>
+      <linearGradient
+        id="hero-vm-edge"
+        x1="0"
+        y1="0"
+        x2="240"
+        y2="240"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stop-color="#a6c2a7"></stop>
+        <stop offset="1" stop-color="#4b6a54"></stop>
+      </linearGradient>
+    </defs>
+    {
+      [
+        { transform: "translate(365 28) scale(.45)", opacity: ".28" },
+        { transform: "translate(263 99) scale(.7)", opacity: ".57" },
+        { transform: "translate(88 209) rotate(-7 124 120)", opacity: "1" },
+      ].map((vm, i) => (
+        <g transform={vm.transform} opacity={vm.opacity}>
+          {i === 2 && (
+            <rect
+              class="vm-depth"
+              x="0"
+              y="8"
+              width="246"
+              height="245"
+              rx="22"
+              fill="#101c16"
+              stroke="#3e5946"
+            />
+          )}
+          <rect
+            class="vm-surface"
+            x="8"
+            width="232"
+            height="240"
+            rx="18"
+            fill="url(#hero-vm-surface)"
+            stroke="url(#hero-vm-edge)"
+            stroke-width="1.5"
+          />
+          <rect
+            class="vm-boundary"
+            x="20"
+            y="12"
+            width="208"
+            height="216"
+            rx="10"
+            stroke="#7b9b7f"
+            stroke-opacity=".3"
+          />
+          <path
+            class="vm-code"
+            d="M91 85L65 111L91 137M157 85L183 111L157 137M139 72L109 150"
+            stroke="#a8d4b5"
+            stroke-width="3"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          {i === 2 && (
+            <text
+              x="37"
+              y="202"
+              fill="#b8cdbb"
+              font-family="ui-monospace, monospace"
+              font-size="18"
+              letter-spacing="2"
+            >
+              VM
+            </text>
+          )}
+        </g>
+      ))
+    }
+  </svg>
+</figure>
+
+<style>
+  .hero-vms {
+    width: 100%;
+    margin: 0;
+    align-self: center;
+  }
+  .hero-vms svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  @media (forced-colors: active) {
+    .hero-vms svg {
+      forced-color-adjust: none;
+    }
+    .hero-vms :is(.vm-surface, .vm-depth) {
+      fill: Canvas;
+      stroke: CanvasText;
+    }
+    .hero-vms :is(.vm-code, .vm-boundary) {
+      stroke: CanvasText;
+    }
+    .hero-vms text {
+      fill: CanvasText;
+    }
+    .hero-vms g[opacity] {
+      opacity: 1;
+    }
+  }
+</style>

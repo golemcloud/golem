@@ -17,7 +17,7 @@
 //! ledger's accumulating state confirms the calls reached a real target.
 
 use crate::Tracing;
-use golem_common::model::{AgentStatus, OplogIndex, PromiseId};
+use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -190,10 +190,9 @@ async fn rpc_caller_resumes_after_suspending_mid_call(
 
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: target.clone(),
-                oplog_idx: OplogIndex::from_u64(oplog_idx as u64),
-            },
+            &executor
+                .promise_id(&target, OplogIndex::from_u64(oplog_idx as u64))
+                .await?,
             b"\"approved\"".to_vec(),
         )
         .await?;

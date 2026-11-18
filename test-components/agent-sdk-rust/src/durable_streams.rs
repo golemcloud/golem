@@ -38,6 +38,9 @@ pub trait DurableStreamAgent {
     #[endpoint(put = "/bytes/{count}?delay_ms={delay_ms}")]
     fn bytes(&self, count: u32, delay_ms: u64) -> AgentStream<u8>;
 
+    #[endpoint(put = "/trapped-output")]
+    fn trapped_output(&self, input: AgentStream<String>) -> AgentStream<String>;
+
     #[endpoint(put = "/delayed-output/{handle_delay_ms}?delay_ms={delay_ms}")]
     async fn delayed_output(&self, handle_delay_ms: u64, delay_ms: u64) -> AgentStream<String>;
 
@@ -145,6 +148,16 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
         stream_with_delay((0..count).map(|i| (i % 251) as u8), delay_ms)
     }
 
+    fn trapped_output(&self, mut input: AgentStream<String>) -> AgentStream<String> {
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one("before-trap".to_string()).await.unwrap();
+            assert_eq!(input.next().await, Some(Ok("trap".to_string())));
+            panic!("durable stream producer trap");
+        });
+        stream
+    }
+
     async fn delayed_output(&self, handle_delay_ms: u64, delay_ms: u64) -> AgentStream<String> {
         golem_rust::wasip3::clocks::monotonic_clock::wait_for(
             handle_delay_ms.saturating_mul(1_000_000),
@@ -160,6 +173,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
                 remaining -= step;
             }
             let _ = writer.write_one("delayed-value".to_string()).await;
+            let _ = writer.close().await;
         });
         stream
     }
@@ -169,7 +183,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
         spawn_local(async move {
             loop {
                 match input.next().await {
-                    Ok(Some(value)) => {
+                    Some(Ok(value)) => {
                         INPUT_ITEMS.fetch_add(1, Ordering::Relaxed);
                         if writer.write_one(value).await.is_err() {
                             OUTPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
@@ -177,13 +191,14 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
                         }
                         OUTPUT_WRITES.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(None) => {
+                    None => {
                         INPUT_EOF.fetch_add(1, Ordering::Relaxed);
+                        let _ = writer.close().await;
                         break;
                     }
-                    Err(_) => {
+                    Some(Err(error)) => {
                         INPUT_ERRORS.fetch_add(1, Ordering::Relaxed);
-                        break;
+                        panic!("input stream failed: {error}");
                     }
                 }
             }
@@ -194,8 +209,8 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
 
     async fn sink(&self, mut input: AgentStream<String>) -> String {
         let mut values = Vec::new();
-        while let Some(value) = input.next().await.expect("sink input failed") {
-            values.push(value);
+        while let Some(value) = input.next().await {
+            values.push(value.expect("sink input failed"));
         }
         values.join("|")
     }
@@ -236,6 +251,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
                 }
                 OUTPUT_WRITES.fetch_add(1, Ordering::Relaxed);
             }
+            let _ = writer.close().await;
             CONTINUATIONS.fetch_add(1, Ordering::Relaxed);
         });
         output
@@ -307,6 +323,7 @@ fn stream_with_delay<T: IntoWire + FromWire + 'static>(
                 break;
             }
         }
+        let _ = writer.close().await;
     });
     stream
 }
@@ -321,11 +338,16 @@ where
 {
     let (mut writer, output) = AgentStream::new();
     spawn_local(async move {
-        while let Ok(Some(value)) = input.next().await {
+        while let Some(value) = input.next().await {
+            let value = match value {
+                Ok(value) => value,
+                Err(error) => panic!("input stream failed: {error}"),
+            };
             if writer.write_one(map(value)).await.is_err() {
-                break;
+                return;
             }
         }
+        let _ = writer.close().await;
     });
     output
 }

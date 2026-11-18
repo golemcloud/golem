@@ -443,7 +443,7 @@ mod tests {
             std::io::empty(),
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             None,
-            true,
+            None,
         )
         .unwrap();
         let (a, mut send_a) = tokio::io::duplex(8);
@@ -571,7 +571,7 @@ mod tests {
             std::io::empty(),
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             Some(max),
-            false,
+            None,
         )
         .unwrap();
         let timer = table.push(Pending).unwrap();

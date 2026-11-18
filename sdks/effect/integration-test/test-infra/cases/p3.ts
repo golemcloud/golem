@@ -33,8 +33,8 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   )
   yield* expectMatch(
     ephemeral.stdout,
-    /idempotencyKeysPresent[^a-z]+true/i,
-    "ephemeral metadata returns idempotency keys",
+    /invocationIdsMatchAgents[^a-z]+true/i,
+    "ephemeral metadata returns invocation IDs of the target agents",
   )
   yield* expectMatch(
     ephemeral.stdout,

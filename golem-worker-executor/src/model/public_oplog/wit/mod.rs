@@ -54,26 +54,27 @@ use golem_common::model::card::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams, CardInstalledParams,
-    CardRevokedParams, CommittedRemoteTransactionParams, CompletionDeliveredParams,
-    CompletionDiscardedParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams,
-    HostStreamFrameParams, InterruptedParams, JumpParams, LogParams, ManualUpdateParameters,
-    OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PluginInstallationDescription, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult,
-    PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind, PublicSpanOutcome,
-    PublicSpanStarted, RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams,
-    ResumedParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams,
-    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
-    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, ToolAttachmentControlParams,
-    ToolAttachmentReadParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
+    CardInstalledParams, CardRevokedParams, CommittedRemoteTransactionParams,
+    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
+    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
+    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
+    LogParams, ManualUpdateParameters, MemorySizeReconciledParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicExternalToolResult, PublicSpanAttributes, PublicSpanData, PublicSpanFinished,
+    PublicSpanKind, PublicSpanOutcome, PublicSpanStarted, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, SpanClosedParams, StartParams, StreamItemsParams, StreamRegisteredParams,
+    StreamSessionParams, StreamTerminalParams, StringAttributeValue, SuccessfulUpdateParams,
+    SuspendParams, ToolAttachmentControlParams, ToolAttachmentReadParams,
 };
 
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
@@ -82,10 +83,10 @@ use golem_common::model::oplog::{
     SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
 };
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{Empty, Timestamp};
 use golem_common::schema::{
     SchemaValue, TypedSchemaValue, redact_host_managed_typed_value, redact_host_managed_value,
 };
+use golem_schema::Empty;
 use golem_schema::schema::wit::{
     PermissionCardHandleDropper, QuotaTokenHandleDropper, SecretHandleDropper, decode_value,
     encode_typed, encode_value, reject_quota_handles_in_value_tree, wire,
@@ -109,6 +110,20 @@ fn durable_invocation_id_from_wit(
     )
 }
 
+fn oplog_region_to_wit(region: golem_common::model::regions::OplogRegion) -> oplog::OplogRegion {
+    oplog::OplogRegion {
+        start: region.start.into(),
+        end: region.end.into(),
+    }
+}
+
+fn oplog_region_from_wit(region: oplog::OplogRegion) -> golem_common::model::regions::OplogRegion {
+    golem_common::model::regions::OplogRegion {
+        start: golem_common::model::OplogIndex::from_u64(region.start),
+        end: golem_common::model::OplogIndex::from_u64(region.end),
+    }
+}
+
 fn durable_stream_summary_to_wit(
     value: golem_common::model::oplog::DurableStreamEventSummary,
 ) -> oplog::DurableStreamEventSummary {
@@ -124,8 +139,24 @@ fn durable_stream_summary_to_wit(
     match value {
         S::Registered => oplog::DurableStreamEventSummary::Registered,
         S::Items { item_count } => oplog::DurableStreamEventSummary::Items(item_count),
-        S::End { outcome: value } => oplog::DurableStreamEventSummary::End(outcome(value)),
-        S::Cancelled => oplog::DurableStreamEventSummary::Cancelled,
+        S::Terminal {
+            outcome: value,
+            origin,
+        } => {
+            use golem_common::model::durable_stream::StreamTerminalOrigin as O;
+            use golem_common::model::oplog::DurableStreamTerminalOutcome as T;
+            oplog::DurableStreamEventSummary::Terminal(oplog::DurableStreamTerminalSummary {
+                origin: match origin {
+                    O::Source => oplog::StreamTerminalOrigin::Source,
+                    O::Control => oplog::StreamTerminalOrigin::Control,
+                },
+                outcome: match value {
+                    T::Finished => oplog::DurableStreamTerminalOutcome::Finished,
+                    T::Failed => oplog::DurableStreamTerminalOutcome::Failed,
+                    T::ConsumerCancelled => oplog::DurableStreamTerminalOutcome::ConsumerCancelled,
+                },
+            })
+        }
         S::SessionResult => oplog::DurableStreamEventSummary::SessionResult,
         S::SessionFinished { outcome: value } => {
             oplog::DurableStreamEventSummary::SessionFinished(outcome(value))
@@ -146,10 +177,21 @@ fn durable_stream_summary_from_wit(
     match value {
         oplog::DurableStreamEventSummary::Registered => S::Registered,
         oplog::DurableStreamEventSummary::Items(count) => S::Items { item_count: count },
-        oplog::DurableStreamEventSummary::End(value) => S::End {
-            outcome: outcome(value),
-        },
-        oplog::DurableStreamEventSummary::Cancelled => S::Cancelled,
+        oplog::DurableStreamEventSummary::Terminal(value) => {
+            use golem_common::model::durable_stream::StreamTerminalOrigin as O;
+            use golem_common::model::oplog::DurableStreamTerminalOutcome as T;
+            S::Terminal {
+                origin: match value.origin {
+                    oplog::StreamTerminalOrigin::Source => O::Source,
+                    oplog::StreamTerminalOrigin::Control => O::Control,
+                },
+                outcome: match value.outcome {
+                    oplog::DurableStreamTerminalOutcome::Finished => T::Finished,
+                    oplog::DurableStreamTerminalOutcome::Failed => T::Failed,
+                    oplog::DurableStreamTerminalOutcome::ConsumerCancelled => T::ConsumerCancelled,
+                },
+            }
+        }
         oplog::DurableStreamEventSummary::SessionResult => S::SessionResult,
         oplog::DurableStreamEventSummary::SessionFinished(value) => S::SessionFinished {
             outcome: outcome(value),

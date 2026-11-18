@@ -4,6 +4,58 @@ use golem_schema::proto::golem::schema::{
 };
 use test_r::test;
 
+#[test]
+#[test_r::timeout("10s")]
+async fn rejected_invocation_identity_conflict_returns_422_before_response_headers() {
+    use crate::api::common::ApiEndpointError;
+    use crate::custom_api::http_session::tests::{accepted, harness};
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRejected, InvocationRejectionReason, InvocationResponse, invocation_response,
+    };
+    use poem::IntoResponse;
+
+    let h = harness(1);
+    let Some(invocation_response::Response::Accepted(identity)) = accepted(1, None).response else {
+        unreachable!()
+    };
+    h.response_txs[0]
+        .send(Ok(InvocationResponse {
+            response: Some(invocation_response::Response::Rejected(
+                InvocationRejected {
+                    reason: InvocationRejectionReason::IdempotencyConflict as i32,
+                    error: "invocation has a different attached card".into(),
+                    idempotency_key: identity.idempotency_key,
+                    agent_id: identity.agent_id,
+                    ..Default::default()
+                },
+            )),
+        }))
+        .await
+        .unwrap();
+    let mut session = h.start_session();
+    let error = receive_response_head(
+        &mut session,
+        poem::Body::empty(),
+        &mut None,
+        Arc::new(AtomicBool::new(false)),
+        HttpSessionLimits::default().request_body_idle_timeout,
+        false,
+        HttpVersion::Http1,
+    )
+    .await
+    .unwrap_err();
+    let response = ApiEndpointError::from(error).into_response();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+    assert_eq!(body["code"], "IDEMPOTENCY_CONFLICT");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("different attached card")
+    );
+}
+
 fn value(value: schema_value::Value) -> ProtoValue {
     ProtoValue { value: Some(value) }
 }
@@ -39,6 +91,9 @@ async fn opening_size_error_returns_413_with_the_original_message() {
             poem::Body::empty(),
             &mut None,
             Arc::new(AtomicBool::new(false)),
+            HttpSessionLimits::default().request_body_idle_timeout,
+            false,
+            HttpVersion::Http1,
         )
         .await
         .unwrap_err();
@@ -67,9 +122,17 @@ async fn late_upload_overflow_cancels_the_session_without_buffering_the_body() {
     let done = Arc::new(AtomicBool::new(false));
     h.response_txs[0].send(Ok(accepted(1, None))).await.unwrap();
     h.response_txs[0].send(Ok(stream_result())).await.unwrap();
-    let _head = receive_response_head(&mut session, request.take_body(), &mut upload, done.clone())
-        .await
-        .unwrap();
+    let _head = receive_response_head(
+        &mut session,
+        request.take_body(),
+        &mut upload,
+        done.clone(),
+        HttpSessionLimits::default().request_body_idle_timeout,
+        true,
+        HttpVersion::Http1,
+    )
+    .await
+    .unwrap();
     // Response headers are available while the request body has not supplied a single chunk.
     assert!(limit.rejection().is_none());
     let response_head = process_response_head("POST", 200, &vec![]).unwrap();

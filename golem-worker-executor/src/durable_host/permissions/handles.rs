@@ -16,12 +16,11 @@ use super::{
     Accessor, CallReplayOutcome, CardId, CardState, DateTime, DurabilityHost, DurableCallSession,
     DurableFunctionType, DurableWorkerCtx, GolemPermissionsCardLiveness, HostFailureKind,
     HostPermissionCard, HostPermissionCardWithStore, HostRequestPermissionCardLiveness,
-    HostResponsePermissionCardLiveness, IdempotencyKey, InternalRetryResult, NotCancellable,
-    PermissionCardEntry, PermissionCardHandleRep, PermissionCardResolver,
-    PermissionCardValuePayload, ResolvedPermissionCard, Resource, ScopeCard,
-    SerializablePermissionCardLiveness, StoredCard, Utc, Uuid, WorkerCtx, WorkerExecutorError,
-    anyhow, deserialize, permission_error_to_anyhow, permissions_types, serialize,
-    worker_error_to_permission_error,
+    HostResponsePermissionCardLiveness, InternalRetryResult, NotCancellable, PermissionCardEntry,
+    PermissionCardHandleRep, PermissionCardResolver, PermissionCardValuePayload,
+    ResolvedPermissionCard, Resource, ScopeCard, SerializablePermissionCardLiveness, StoredCard,
+    Utc, Uuid, WorkerCtx, WorkerExecutorError, anyhow, deserialize, permission_error_to_anyhow,
+    permissions_types, serialize, worker_error_to_permission_error,
 };
 
 impl PermissionCardEntry {
@@ -39,7 +38,10 @@ impl PermissionCardEntry {
         }
     }
 
-    pub(super) fn from_scope(card: ScopeCard, invocation_key: IdempotencyKey) -> Self {
+    pub(super) fn from_scope(
+        card: ScopeCard,
+        invocation_key: golem_common::model::InvocationId,
+    ) -> Self {
         Self::Scope {
             card,
             invocation_key: Some(invocation_key),
@@ -67,7 +69,9 @@ impl PermissionCardEntry {
         }
     }
 
-    pub(super) fn scope_card(&self) -> Option<(&ScopeCard, Option<&IdempotencyKey>)> {
+    pub(super) fn scope_card(
+        &self,
+    ) -> Option<(&ScopeCard, Option<&golem_common::model::InvocationId>)> {
         match self {
             Self::Persistent { .. } => None,
             Self::Scope {
@@ -226,7 +230,7 @@ pub(super) fn permission_card_cached_card<Ctx: WorkerCtx>(
 pub(super) fn permission_card_scope_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: &Resource<PermissionCardHandleRep>,
-) -> Result<Option<(ScopeCard, Option<IdempotencyKey>)>, WorkerExecutorError> {
+) -> Result<Option<(ScopeCard, Option<golem_common::model::InvocationId>)>, WorkerExecutorError> {
     let rep = ctx.table().get(handle).map_err(invalid_handle_error)?;
     Ok(rep
         .downcast_ref::<PermissionCardEntry>()
@@ -248,8 +252,8 @@ pub(crate) fn resolve_invocation_scope_card<Ctx: WorkerCtx>(
 }
 
 pub(super) fn resolve_owned_scope_card(
-    scope_card: Option<(ScopeCard, Option<IdempotencyKey>)>,
-    invocation_key: &IdempotencyKey,
+    scope_card: Option<(ScopeCard, Option<golem_common::model::InvocationId>)>,
+    invocation_key: &golem_common::model::InvocationId,
 ) -> Result<ScopeCard, String> {
     let Some((card, owner_invocation_key)) = scope_card else {
         return Err("the scope-card argument must be a scope card".to_string());
@@ -520,7 +524,7 @@ impl<T: Send + 'static, Ctx: WorkerCtx> HostPermissionCardWithStore<T>
         accessor.with(|mut access| {
             let ctx = access.get();
             DurabilityHost::observe_function_call(ctx, "golem::core::permission-card", "drop");
-            ctx.state.invocation_scope_handles.remove(&rep.rep());
+            ctx.state.authority_mut().forget_scope_handle(rep.rep());
             ctx.table().delete(rep)?;
             Ok(())
         })
@@ -534,7 +538,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
         &mut self,
         handle: Resource<PermissionCardHandleRep>,
     ) -> Result<PermissionCardValuePayload, Self::Error> {
-        self.state.invocation_scope_handles.remove(&handle.rep());
+        self.state.authority_mut().forget_scope_handle(handle.rep());
         let rep = self.table().delete(handle).map_err(invalid_handle_error)?;
         match rep.into_payload::<PermissionCardEntry>() {
             Ok(entry) => entry.into_snapshot(),
@@ -578,7 +582,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
     }
 
     fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
-        self.state.invocation_scope_handles.remove(&handle.rep());
+        self.state.authority_mut().forget_scope_handle(handle.rep());
         let _ = self.table().delete(handle);
     }
 }

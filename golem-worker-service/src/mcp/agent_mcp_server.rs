@@ -315,7 +315,6 @@ impl ServerHandler for GolemAgentMcpServer {
 #[cfg(test)]
 mod tests {
     use crate::mcp::deployment::agent_capabilities_from_deployment;
-    use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
         AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
@@ -329,6 +328,7 @@ mod tests {
         AgentConstructorSchema, AgentMethodSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
         OutputSchema, RegisteredAgentTypeSchema, SchemaGraph,
     };
+    use golem_schema::Empty;
     use golem_service_base::mcp::CompiledMcp;
     use test_r::test;
 

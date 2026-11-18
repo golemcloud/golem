@@ -17,7 +17,7 @@ import golem.Datetime
 
 import java.util.UUID
 import scala.concurrent.Future
-import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import golem.concurrent.Implicits.global
 import scala.annotation.targetName
 import scala.util.control.NonFatal
 

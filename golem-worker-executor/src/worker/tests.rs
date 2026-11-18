@@ -12,11 +12,403 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use golem_common::model::oplog::AgentError;
-use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
+use golem_common::model::{AssistedSelection, IdempotencyKey, UsableAutomaticSnapshot};
 use golem_common::schema::SchemaValue;
 use test_r::test;
+
+fn accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
+    let tracker = instantiating_accounting_tracker(saved, current);
+    tracker.reconcile(current, Instant::now());
+    tracker
+}
+
+fn instantiating_accounting_tracker(saved: u64, current: u64) -> LinearMemoryTracker {
+    let tracker = LinearMemoryTracker::new(
+        saved,
+        saved,
+        AgentMode::Durable,
+        true,
+        false,
+        Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
+            0, 200, 0, 0, 0,
+        )),
+        Arc::new(StdMutex::new(MemoryGrant::inert(saved))),
+        Instant::now(),
+    );
+    tracker
+        .prepare_unshared_growth(0, current as usize)
+        .unwrap();
+    tracker.grow(current, Instant::now());
+    tracker
+}
+
+#[test]
+async fn accounting_finalization_joins_baseline_and_survives_cancellation() {
+    use tokio::sync::oneshot;
+
+    for saved in [40, 80] {
+        for later in [0, 20] {
+            let accounting = residency::MemoryAccounting::default();
+            let tracker = instantiating_accounting_tracker(saved, 40);
+            let entries = StdMutex::new(Vec::new());
+            let (baseline_done, baseline_receipt) = oneshot::channel();
+            let mut baseline = Box::pin(accounting.reconcile(&tracker, false, |bytes| {
+                entries.lock().unwrap().push((true, bytes));
+                baseline_receipt
+            }));
+            assert_eq!(futures::poll!(&mut baseline).is_pending(), saved != 40);
+            drop(baseline);
+            tracker.grow_and_record(later, Instant::now(), |_| panic!("initializer hint"));
+            let (final_done, final_receipt) = oneshot::channel();
+            let mut finalize =
+                Box::pin(
+                    accounting.finalize_instantiation(&tracker, 40 + later, |delta| {
+                        entries.lock().unwrap().push((false, delta));
+                        final_receipt
+                    }),
+                );
+            if saved != 40 {
+                assert!(futures::poll!(&mut finalize).is_pending());
+                assert_eq!(*entries.lock().unwrap(), vec![(true, 40)]);
+                baseline_done.send(Ok(())).unwrap();
+            }
+            assert_eq!(futures::poll!(&mut finalize).is_pending(), later > 0);
+            drop(finalize);
+            let expected = if later == 0 {
+                vec![]
+            } else {
+                vec![(false, later)]
+            };
+            assert_eq!(
+                entries
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .copied()
+                    .filter(|(absolute, _)| !absolute)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let mut retry = Box::pin(accounting.finalize_instantiation(
+                &tracker,
+                40 + later,
+                |_| panic!("initializer delta recorded twice"),
+            ));
+            if later > 0 {
+                assert!(futures::poll!(&mut retry).is_pending());
+                drop(retry);
+                let mut reset = Box::pin(accounting.reconcile(&tracker, true, |bytes| {
+                    assert_eq!(bytes, 40 + later);
+                    entries.lock().unwrap().push((true, bytes));
+                    let (done, receipt) = oneshot::channel();
+                    done.send(Ok(())).unwrap();
+                    receipt
+                }));
+                assert!(futures::poll!(&mut reset).is_pending());
+                final_done.send(Ok(())).unwrap();
+                reset.await.unwrap();
+                accounting
+                    .finalize_instantiation(&tracker, 40 + later, |_| {
+                        panic!("reset repeated initializer delta")
+                    })
+                    .await
+                    .unwrap();
+            } else {
+                retry.await.unwrap();
+            }
+            tracker.switch_to_live();
+            tracker.grow_and_record(7, Instant::now(), |delta| {
+                entries.lock().unwrap().push((false, delta));
+            });
+            let persisted =
+                entries
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .fold(
+                        saved,
+                        |total, &(absolute, bytes)| {
+                            if absolute { bytes } else { total + bytes }
+                        },
+                    );
+            assert_eq!(persisted, 47 + later);
+            assert_eq!(tracker.current_bytes(), persisted);
+        }
+    }
+}
+
+#[test]
+async fn accounting_finalization_failure_remains_authoritative() {
+    use tokio::sync::oneshot;
+
+    for fail_baseline in [false, true] {
+        for dropped in [false, true] {
+            let accounting = residency::MemoryAccounting::default();
+            let tracker = instantiating_accounting_tracker(80, 40);
+            let (done, receipt) = oneshot::channel();
+            if fail_baseline {
+                let mut baseline = Box::pin(accounting.reconcile(&tracker, false, |_| receipt));
+                assert!(futures::poll!(&mut baseline).is_pending());
+                drop(baseline);
+            } else {
+                accounting
+                    .reconcile(&tracker, false, |_| {
+                        let (done, receipt) = oneshot::channel();
+                        done.send(Ok(())).unwrap();
+                        receipt
+                    })
+                    .await
+                    .unwrap();
+                let mut finalize =
+                    Box::pin(accounting.finalize_instantiation(&tracker, 60, |_| receipt));
+                assert!(futures::poll!(&mut finalize).is_pending());
+                drop(finalize);
+            }
+            if dropped {
+                drop(done);
+            } else {
+                done.send(Err(WorkerExecutorError::runtime(
+                    "refused accounting commit",
+                )))
+                .unwrap();
+            }
+            let error = accounting
+                .finalize_instantiation(&tracker, 60, |_| panic!("lost failed receipt"))
+                .await
+                .unwrap_err();
+            for reset in [false, true] {
+                assert_eq!(
+                    accounting
+                        .reconcile(&tracker, reset, |_| panic!("lost failed receipt"))
+                        .await
+                        .unwrap_err()
+                        .to_string(),
+                    error.to_string()
+                );
+            }
+            let replacement = instantiating_accounting_tracker(80, 30);
+            accounting
+                .finalize_instantiation(&replacement, 30, |_| panic!("pure replay delta"))
+                .await
+                .unwrap();
+            assert_eq!(replacement.current_bytes(), 30);
+        }
+    }
+}
+
+#[test]
+async fn accounting_initializer_baseline_survives_cancellation_and_reset() {
+    use tokio::sync::oneshot;
+
+    for reset in [false, true] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = instantiating_accounting_tracker(20, 40);
+        let entries = Arc::new(StdMutex::new(Vec::new()));
+        let (sender, receipt) = oneshot::channel();
+        let captured = entries.clone();
+        let mut first = Box::pin(accounting.reconcile(&tracker, false, |bytes| {
+            captured.lock().unwrap().push(bytes);
+            receipt
+        }));
+        assert!(futures::poll!(&mut first).is_pending());
+        drop(first);
+        tracker.grow_and_record(7, Instant::now(), |_| panic!("premature growth hint"));
+        let mut retry = Box::pin(accounting.reconcile(&tracker, reset, |bytes| {
+            assert!(reset, "retry must join the original baseline");
+            entries.lock().unwrap().push(bytes);
+            let (sender, receipt) = oneshot::channel();
+            sender.send(Ok(())).unwrap();
+            receipt
+        }));
+        assert!(futures::poll!(&mut retry).is_pending());
+        assert_eq!(*entries.lock().unwrap(), vec![40]);
+        sender.send(Ok(())).unwrap();
+        retry.await.unwrap();
+        tracker.switch_to_live();
+        tracker.grow_and_record(11, Instant::now(), |_| panic!("premature growth hint"));
+        let delta = tracker.reconcile(58, Instant::now());
+        assert_eq!(delta, if reset { 11 } else { 18 });
+        assert_eq!(entries.lock().unwrap().last().unwrap() + delta, 58);
+    }
+    for dropped in [false, true] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = instantiating_accounting_tracker(20, 40);
+        let (sender, receipt) = oneshot::channel();
+        let mut first = Box::pin(accounting.reconcile(&tracker, false, |_| receipt));
+        assert!(futures::poll!(&mut first).is_pending());
+        drop(first);
+        tracker.grow_and_record(7, Instant::now(), |_| panic!("premature growth hint"));
+        if dropped {
+            drop(sender);
+        } else {
+            sender
+                .send(Err(WorkerExecutorError::runtime(
+                    "refused initializer baseline",
+                )))
+                .unwrap();
+        }
+        for reset in [false, true] {
+            assert!(
+                accounting
+                    .reconcile(&tracker, reset, |_| panic!("failed receipt was lost"))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+async fn accounting_cutover_captures_growth_and_survives_publisher_cancellation() {
+    use tokio::sync::oneshot;
+
+    for saved in [40, 80] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = accounting_tracker(saved, 40);
+        let entries = Arc::new(StdMutex::new(Vec::new()));
+        let (release, gate) = oneshot::channel();
+        let baseline_entries = entries.clone();
+        let mut publication = Box::pin(accounting.reconcile(&tracker, false, move |bytes| {
+            baseline_entries.lock().unwrap().push((true, bytes));
+            gate
+        }));
+        assert_eq!(futures::poll!(&mut publication).is_pending(), saved != 40);
+        tracker.grow_and_record(20, Instant::now(), |delta| {
+            entries.lock().unwrap().push((false, delta));
+        });
+        drop(publication);
+        let tracker_clone = tracker.clone();
+        let mut retry = Box::pin(accounting.reconcile(&tracker_clone, false, |_| {
+            panic!("a second publisher must join the existing cutover")
+        }));
+        if saved != 40 {
+            assert!(futures::poll!(&mut retry).is_pending());
+            release.send(Ok(())).unwrap();
+        }
+        retry.await.unwrap();
+        tracker.switch_to_live();
+        tracker.grow_and_record(7, Instant::now(), |delta| {
+            entries.lock().unwrap().push((false, delta));
+        });
+        let entries = entries.lock().unwrap();
+        let mut persisted = saved;
+        for &(absolute, bytes) in entries.iter() {
+            if absolute {
+                persisted = bytes;
+            } else {
+                persisted += bytes;
+            }
+        }
+        assert_eq!(persisted, 67);
+        assert_eq!(tracker.current_bytes(), 67);
+        assert_eq!(
+            entries.iter().filter(|(absolute, _)| *absolute).count(),
+            usize::from(saved != 40)
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|(absolute, _)| !*absolute)
+                .map(|(_, bytes)| *bytes)
+                .collect::<Vec<_>>(),
+            vec![20, 7]
+        );
+    }
+}
+
+#[test]
+async fn accounting_commit_failure_remains_a_publication_barrier() {
+    use tokio::sync::oneshot;
+
+    for dropped_receipt in [false, true] {
+        let accounting = residency::MemoryAccounting::default();
+        let tracker = accounting_tracker(80, 40);
+        let (sender, receipt) = oneshot::channel();
+        if dropped_receipt {
+            drop(sender);
+        } else {
+            sender
+                .send(Err(WorkerExecutorError::runtime("refused commit")))
+                .unwrap();
+        }
+        let failure = accounting
+            .reconcile(&tracker, false, |_| receipt)
+            .await
+            .unwrap_err();
+        for reset in [false, true] {
+            let repeated = accounting
+                .reconcile(&tracker, reset, |_| {
+                    panic!("a refused commit must remain authoritative")
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(failure.to_string(), repeated.to_string());
+        }
+        // A replacement Store must neither inherit the failure nor erase the old Store's receipt.
+        let replacement = accounting_tracker(80, 32);
+        accounting
+            .reconcile(&replacement, false, |bytes| {
+                assert_eq!(bytes, 32);
+                let (sender, receipt) = oneshot::channel();
+                sender.send(Ok(())).unwrap();
+                receipt
+            })
+            .await
+            .unwrap();
+        assert!(
+            accounting
+                .reconcile(&tracker, false, |_| panic!("old failure was lost"))
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[test]
+async fn accounting_reset_joins_prior_commit_without_blocking_a_new_store() {
+    use tokio::sync::oneshot;
+
+    let accounting = residency::MemoryAccounting::default();
+    let tracker = accounting_tracker(80, 40);
+    let (sender, receipt) = oneshot::channel();
+    let mut first = Box::pin(accounting.reconcile(&tracker, false, |_| receipt));
+    assert!(futures::poll!(&mut first).is_pending());
+    drop(first);
+    let replacement = accounting_tracker(80, 32);
+    let mut replacement_publish = Box::pin(accounting.reconcile(&replacement, false, |_| {
+        let (sender, receipt) = oneshot::channel();
+        sender.send(Ok(())).unwrap();
+        receipt
+    }));
+    assert!(matches!(
+        futures::poll!(&mut replacement_publish),
+        std::task::Poll::Ready(Ok(()))
+    ));
+    let resets = std::sync::atomic::AtomicUsize::new(0);
+    let (reset_sender, reset_receipt) = oneshot::channel();
+    tracker.grow(3, Instant::now());
+    let mut reset = Box::pin(accounting.reconcile(&tracker, true, |bytes| {
+        assert_eq!(bytes, 43);
+        resets.fetch_add(1, Ordering::SeqCst);
+        reset_receipt
+    }));
+    assert!(futures::poll!(&mut reset).is_pending());
+    assert_eq!(resets.load(Ordering::SeqCst), 0);
+    sender.send(Ok(())).unwrap();
+    assert!(futures::poll!(&mut reset).is_pending());
+    assert_eq!(resets.load(Ordering::SeqCst), 1);
+    drop(reset);
+    let mut join = Box::pin(accounting.reconcile(&tracker, false, |_| panic!("reset was lost")));
+    assert!(futures::poll!(&mut join).is_pending());
+    reset_sender.send(Ok(())).unwrap();
+    join.await.unwrap();
+}
 
 /// A terminal entry of an interrupt that an archive layer did not store fails the waiters
 /// with the cause. Only a fence is a lost shard, whose waiters are sent to the new owner.
@@ -114,6 +506,7 @@ fn assisted_pending(
                 index: OplogIndex::from_u64(7),
                 component_revision: source_revision,
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     }
@@ -500,7 +893,7 @@ fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
         into_pending_invocation_parts(AgentInvocation::ManualUpdate { target_revision });
 
     assert!(semantic_key.is_none());
-    assert!(!storage_key.value.is_empty());
+    assert!(!storage_key.0.is_nil());
     assert!(matches!(
         payload,
         AgentInvocationPayload::ManualUpdate {
@@ -522,6 +915,7 @@ fn rejected_automatic_snapshot_uses_manual_replay_revision() {
             timestamp: Timestamp::from(1_000),
             component_revision: active_revision,
             files: golem_common::model::SnapshotFiles::Unnamed,
+            bootstrap: None,
         }),
         ..Default::default()
     };
@@ -914,9 +1308,35 @@ fn allocated_memory_sums_unique_untouched_backings() -> anyhow::Result<()> {
     let mut store = Store::new(&engine, ());
     wasmtime::Instance::new(&mut store, &module, &[])?;
 
+    assert_eq!(instance::allocated_memory_bytes(&store), Ok(6 * 65_536));
+    Ok(())
+}
+
+#[test]
+fn allocated_memory_includes_the_gc_heap_allocated_during_instantiation() -> anyhow::Result<()> {
+    let engine = wasmtime::Engine::new(
+        &golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache(),
+    )?;
+    let module = wasmtime::Module::new(
+        &engine,
+        r#"(module
+                (type $arr (array (mut i32)))
+                (global $keep (mut (ref null $arr)) (ref.null $arr))
+                (memory 1)
+                (func $init (global.set $keep (array.new_default $arr (i32.const 1024))))
+                (start $init)
+            )"#,
+    )?;
+    let mut store = Store::new(&engine, ());
+    store.set_fuel(u64::MAX)?;
+    store.set_epoch_deadline(u64::MAX);
+    wasmtime::Instance::new(&mut store, &module, &[])?;
+
+    let gc_heap = store.gc_heap_capacity() as u64;
+    assert!(gc_heap > 0, "the start function must allocate a GC heap");
     assert_eq!(
-        instance::allocated_linear_memory_bytes(&store),
-        Ok(6 * 65_536)
+        instance::allocated_memory_bytes(&store),
+        Ok(65_536 + gc_heap)
     );
     Ok(())
 }
@@ -1037,8 +1457,8 @@ fn post_join_runtime_retains_cleanup_health_before_stopping_completion() {
 
 #[test]
 fn ephemeral_agent_accepts_only_one_invocation_identity() {
-    let first = IdempotencyKey::fresh();
-    let second = IdempotencyKey::fresh();
+    let first = InvocationId(Uuid::new_v4());
+    let second = InvocationId(Uuid::new_v4());
     let mut state = EphemeralInvocationState::Available;
 
     assert!(state.accept(&first).is_ok());
@@ -1051,11 +1471,11 @@ fn ephemeral_agent_accepts_only_one_invocation_identity() {
 
 #[test]
 fn hydrated_invocation_result_cache_is_bounded() {
-    let first = IdempotencyKey::new("first".to_string());
-    let second = IdempotencyKey::new("second".to_string());
+    let first = InvocationId(Uuid::from_u128(1));
+    let second = InvocationId(Uuid::from_u128(2));
     let mut cache = HydratedInvocationResultCache::new(1);
     cache.insert(
-        first.clone(),
+        first,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(2),
         },
@@ -1064,7 +1484,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
     );
 
     cache.insert(
-        second.clone(),
+        second,
         InvocationResult::Lazy {
             oplog_idx: OplogIndex::from_u64(4),
         },
@@ -1078,7 +1498,7 @@ fn hydrated_invocation_result_cache_is_bounded() {
 
 #[test]
 fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
-    let key = IdempotencyKey::new("shared-result".to_string());
+    let key = InvocationId(Uuid::from_u128(3));
     let index = OplogIndex::from_u64(4);
     let status = AgentStatusRecord::default();
     let generation = status.invocation_results.revert_generation();
@@ -1095,24 +1515,24 @@ fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
             invocation_status: None,
             component_revision: Some(ComponentRevision::INITIAL),
             agent_id: None,
-            idempotency_key: Some(key.clone()),
+            idempotency_key: Some(key),
             oplog_index: Some(index),
             agent_fingerprint: None,
         }),
     });
     let mut cache = HydratedInvocationResultCache::new(1);
-    cache.insert(key.clone(), result.clone(), generation, index);
+    cache.insert(key, result.clone(), generation, index);
     let (first, found_index) = cache.get_valid(&key, &status).unwrap();
     assert_eq!(found_index, index);
     assert!(Arc::ptr_eq(first, &result));
     let follower = first.clone();
-    cache.insert(key.clone(), follower.clone(), generation, index);
+    cache.insert(key, follower.clone(), generation, index);
     assert!(Arc::ptr_eq(
         cache.get_valid(&key, &status).unwrap().0,
         &follower
     ));
 
-    cache.insert(key.clone(), result.clone(), generation + 1, index);
+    cache.insert(key, result.clone(), generation + 1, index);
     assert!(cache.get_valid(&key, &status).is_none());
     cache.remove(&key);
     assert!(cache.get_valid(&key, &status).is_none());
@@ -1138,7 +1558,7 @@ fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
     let result = validate_resolved_invocation_identity(
         AgentMode::Ephemeral,
         None,
-        &IdempotencyKey::fresh(),
+        &IdempotencyKey::new("raw-ephemeral-owner-key".to_string()),
         InvocationFreshnessDisposition::MayExist,
     );
 
@@ -1151,7 +1571,7 @@ fn ephemeral_invocation_requires_a_final_phantom_id_even_when_it_may_exist() {
 
 #[test]
 fn known_fresh_ephemeral_invocation_requires_key_derived_phantom_id() {
-    let idempotency_key = IdempotencyKey::fresh();
+    let idempotency_key = IdempotencyKey::new("raw-ephemeral-owner-key".to_string());
     let expected_phantom_id = ephemeral_invocation_phantom_id(&idempotency_key);
 
     assert!(
@@ -1180,7 +1600,7 @@ fn durable_may_exist_invocation_identity_is_unchanged() {
         validate_resolved_invocation_identity(
             AgentMode::Durable,
             None,
-            &IdempotencyKey::fresh(),
+            &IdempotencyKey::new("raw-durable-owner-key".to_string()),
             InvocationFreshnessDisposition::MayExist,
         )
         .is_ok()
@@ -1201,7 +1621,7 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
         callee_environment_id: environment_id,
         callee: agent_id.clone(),
         callee_fingerprint: fingerprint,
-        idempotency_key: IdempotencyKey::new("invocation".to_string()),
+        idempotency_key: InvocationId(Uuid::from_u128(4)),
     };
     let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
@@ -1289,22 +1709,22 @@ fn start_attempt_exact_duplicate_matches_and_mismatch_does_not() {
     assert!(stream_slot_session_matches(&persisted, &reissued));
 }
 
-fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
+fn status_with_current_key(status: AgentStatus, key: &InvocationId) -> AgentStatusRecord {
     AgentStatusRecord {
         status,
-        current_idempotency_key: Some(key.clone()),
+        current_idempotency_key: Some(*key),
         ..AgentStatusRecord::default()
     }
 }
 
 #[test]
 fn lookup_keeps_retrying_error_pending() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let lookup = lookup_result_from_cached_result(
         &status_with_current_key(AgentStatus::Retrying, &key),
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::TransientError("in-function retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1319,13 +1739,45 @@ fn lookup_keeps_retrying_error_pending() {
 }
 
 #[test]
+fn lookup_reports_method_failure_even_before_status_projection() {
+    let key = InvocationId(Uuid::new_v4());
+    let error = AgentError::InternalError("method gave up".into());
+    for status in [
+        AgentStatus::Running,
+        AgentStatus::Idle,
+        AgentStatus::Retrying,
+    ] {
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(status, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult::Method {
+                    error: error.clone(),
+                    stderr: "method stderr".into(),
+                }),
+            },
+        );
+        match lookup {
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                error: actual,
+                stderr,
+            })) => {
+                assert_eq!(actual, error);
+                assert_eq!(stderr, "method stderr");
+            }
+            other => panic!("expected method failure, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn lookup_reports_terminal_error_as_failure() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let lookup = lookup_result_from_cached_result(
         &status_with_current_key(AgentStatus::Failed, &key),
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::TransientError("in-function retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1350,14 +1802,14 @@ fn lookup_reports_terminal_error_as_failure() {
 
 #[test]
 fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let mut status = status_with_current_key(AgentStatus::Failed, &key);
     status.last_error_kind = Some(OplogErrorKind::Recovery);
     let lookup = lookup_result_from_cached_result(
         &status,
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::TransientError("prior retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1373,12 +1825,12 @@ fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
 
 #[test]
 fn reconstructed_permission_denial_keeps_its_executor_error_type() {
-    let key = IdempotencyKey::fresh();
+    let key = InvocationId(Uuid::new_v4());
     let lookup = lookup_result_from_cached_result(
         &AgentStatusRecord::default(),
         &key,
         InvocationResult::Cached {
-            result: Err(FailedInvocationResult {
+            result: Err(FailedInvocationResult::Trap {
                 trap_type: TrapType::Error {
                     error: AgentError::PermissionDenied("permission denied".to_string()),
                     retry_from: OplogIndex::from_u64(17),
@@ -1398,14 +1850,14 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
 
 #[test]
 fn invocation_rejection_fails_only_the_rejected_pending_key() {
-    let rejected = IdempotencyKey::fresh();
-    let still_pending = IdempotencyKey::fresh();
+    let rejected = InvocationId(Uuid::new_v4());
+    let still_pending = InvocationId(Uuid::new_v4());
     let status = AgentStatusRecord {
         pending_invocations: vec![PendingInvocationRef {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             oplog_index: OplogIndex::from_u64(2),
-            idempotency_key: Some(still_pending.clone()),
+            idempotency_key: Some(still_pending),
             manual_update_target_revision: None,
         }],
         ..AgentStatusRecord::default()
@@ -1686,6 +2138,135 @@ fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
 }
 
 #[test]
+fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
+    use super::acquisition::{CreateDecision, CreateIdentity, decide_create};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::GolemUserPrincipal;
+
+    let request = CreateRequest::new(
+        CreateRequestKind::Exclusive,
+        Some(IdempotencyKey::new("create-1".into())),
+        Principal::anonymous(),
+        &InvocationContextStack::fresh(),
+    );
+    let env = vec![("A".into(), "one".into()), ("B".into(), "two".into())];
+    let config = vec![
+        AgentConfigEntryDto {
+            path: vec!["left".into()],
+            value: serde_json::json!({"count": 3, "name": "first"}).into(),
+        },
+        AgentConfigEntryDto {
+            path: vec!["right".into()],
+            value: serde_json::json!(7).into(),
+        },
+    ];
+    let decide = |incoming_request: &CreateRequest,
+                  key: Option<&str>,
+                  incoming_env: &[(String, String)],
+                  incoming_config: &[AgentConfigEntryDto],
+                  exclusive| {
+        decide_create(
+            Some(CreateIdentity {
+                request: &request,
+                canonical_key: Some("Counter(17)"),
+                env: &env,
+                config: &config,
+            }),
+            CreateIdentity {
+                request: incoming_request,
+                canonical_key: key,
+                env: incoming_env,
+                config: incoming_config,
+            },
+            exclusive,
+        )
+    };
+    assert_eq!(
+        decide_create(
+            None,
+            CreateIdentity {
+                request: &request,
+                canonical_key: Some("Counter(17)"),
+                env: &env,
+                config: &config,
+            },
+            true,
+        ),
+        CreateDecision::Created
+    );
+    let mut retry = CreateRequest::new(
+        request.kind,
+        request.idempotency_key.clone(),
+        request.principal.clone(),
+        &InvocationContextStack::fresh(),
+    );
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::IdempotentRetry
+    );
+    let reversed_env: Vec<_> = env.iter().cloned().rev().collect();
+    let reversed_config: Vec<_> = config.iter().cloned().rev().collect();
+    assert_eq!(
+        decide(
+            &retry,
+            Some("Counter(17)"),
+            &reversed_env,
+            &reversed_config,
+            true
+        ),
+        CreateDecision::IdempotentRetry
+    );
+    let mut changed_env = env.clone();
+    changed_env[1].1 = "changed".into();
+    let mut changed_config = config.clone();
+    changed_config[1].value = serde_json::json!(8).into();
+    for decision in [
+        decide(&retry, Some("Counter(18)"), &env, &config, true),
+        decide(&retry, None, &env, &config, true),
+        decide(&retry, Some("Counter(17)"), &changed_env, &config, true),
+        decide(&retry, Some("Counter(17)"), &env, &changed_config, true),
+        decide(&retry, Some("Counter(17)"), &env[..1], &config, true),
+        decide(&retry, Some("Counter(17)"), &env, &config[..1], true),
+    ] {
+        assert_eq!(decision, CreateDecision::IdempotencyKeyConflict);
+    }
+    retry.kind = CreateRequestKind::GetOrCreate;
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::IdempotencyKeyConflict
+    );
+    retry.kind = request.kind;
+    retry.principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: AccountId::new(),
+    });
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::IdempotencyKeyConflict
+    );
+    retry.idempotency_key = None;
+    retry.principal = request.principal.clone();
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::AlreadyExists
+    );
+    retry.idempotency_key = Some(IdempotencyKey::new("create-2".into()));
+    assert_eq!(
+        decide(&retry, Some("Counter(17)"), &env, &config, true),
+        CreateDecision::AlreadyExists
+    );
+    assert_eq!(
+        decide(
+            &retry,
+            Some("Counter(17)"),
+            &changed_env,
+            &changed_config,
+            false
+        ),
+        CreateDecision::Joined
+    );
+}
+
+#[test]
 fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() {
     let key = IdempotencyKey::new("create-key".to_string());
     let principal = Principal::anonymous();
@@ -1740,12 +2321,12 @@ fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() 
     );
 }
 
-fn pending(key: &IdempotencyKey, not_before: Option<Timestamp>) -> PendingInvocationRef {
+fn pending(key: &InvocationId, not_before: Option<Timestamp>) -> PendingInvocationRef {
     PendingInvocationRef {
         timestamp: Timestamp::from(1_000),
         not_before,
         oplog_index: OplogIndex::from_u64(2),
-        idempotency_key: Some(key.clone()),
+        idempotency_key: Some(*key),
         manual_update_target_revision: None,
     }
 }
@@ -1762,9 +2343,9 @@ fn pending_status(begun: bool, entries: Vec<PendingInvocationRef>) -> AgentStatu
 fn ephemeral_start_waits_for_scheduled_work_and_ignores_the_constructor_reservation() {
     use invocation_loop::{EphemeralStart, ephemeral_start_decision};
 
-    let init = IdempotencyKey::new("init-agent".to_string());
-    let method = IdempotencyKey::fresh();
-    let immediate = IdempotencyKey::fresh();
+    let init = InvocationId(Uuid::from_u128(5));
+    let method = InvocationId(Uuid::new_v4());
+    let immediate = InvocationId(Uuid::new_v4());
     let now = Timestamp::from(10_000);
     let later = Some(Timestamp::from(20_000));
     let earlier = Some(Timestamp::from(5_000));
@@ -1821,9 +2402,9 @@ fn ephemeral_start_waits_for_scheduled_work_and_ignores_the_constructor_reservat
 fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold() {
     use acquisition::never_started_ephemeral_admission;
 
-    let init = IdempotencyKey::new("init-agent".to_string());
-    let method = IdempotencyKey::fresh();
-    let other = IdempotencyKey::fresh();
+    let init = InvocationId(Uuid::from_u128(5));
+    let method = InvocationId(Uuid::new_v4());
+    let other = InvocationId(Uuid::new_v4());
     let later = Some(Timestamp::from(20_000));
     let admit = |status: AgentStatusRecord| never_started_ephemeral_admission(&status, Some(&init));
 
@@ -1832,7 +2413,7 @@ fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold
             false,
             vec![pending(&init, None), pending(&method, later)]
         )),
-        Some(Some(method.clone()))
+        Some(Some(method))
     );
     assert_eq!(
         admit(pending_status(false, vec![pending(&init, None)])),
@@ -1887,7 +2468,7 @@ fn only_a_never_started_ephemeral_agent_with_scheduled_or_no_work_may_start_cold
             &pending_status(false, vec![pending(&method, later)]),
             None
         ),
-        Some(Some(method.clone()))
+        Some(Some(method))
     );
     assert_eq!(
         admit(pending_status(

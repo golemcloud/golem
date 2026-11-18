@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::reject_empty_string;
-use crate::golem_agentic::golem::agent::common::QueryVariable;
+use golem_schema::http::wit::wire::QueryVariable;
 
 pub fn parse_query(query: &str) -> Result<Vec<QueryVariable>, String> {
     if query.is_empty() {

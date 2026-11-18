@@ -85,18 +85,21 @@ export type {
 export type PathSegment = WitPathSegment;
 
 /** Build a literal path segment, e.g. `http.literal('counters')`. */
-export const literal = (value: string): PathSegment => ({ tag: 'literal', val: value });
+export const literal = (value: string): PathSegment => ({
+  tag: 'segment',
+  val: { tag: 'literal', val: value },
+});
 
 /** Build a path-variable segment, e.g. `http.pathVar('name')` → `{name}`. */
 export const pathVar = (variableName: string): PathSegment => ({
-  tag: 'path-variable',
-  val: { variableName },
+  tag: 'segment',
+  val: { tag: 'path-variable', val: { variableName } },
 });
 
 /** Build a catch-all (remaining-path) variable segment; only valid last. */
 export const restVar = (variableName: string): PathSegment => ({
-  tag: 'remaining-path-variable',
-  val: { variableName },
+  tag: 'segment',
+  val: { tag: 'remaining-path-variable', val: { variableName } },
 });
 
 /** `{agent-type}` — runtime-injected by the host. */
@@ -182,8 +185,8 @@ export type HttpVerb =
   | { readonly custom: string };
 
 function verbToWit(v: HttpVerb): HttpMethod {
-  if (typeof v !== 'string') return { tag: 'custom', val: v.custom };
-  return { tag: v };
+  if (typeof v !== 'string') return { tag: 'method', val: { tag: 'custom', val: v.custom } };
+  return { tag: 'method', val: { tag: v } };
 }
 
 // ---------------------------------------------------------------------------
@@ -653,8 +656,11 @@ function compileDurableStreamRouteOptions(
 export function pathVariableNames(segments: readonly PathSegment[]): Set<string> {
   const names = new Set<string>();
   for (const s of segments) {
-    if (s.tag === 'path-variable' || s.tag === 'remaining-path-variable') {
-      names.add(s.val.variableName);
+    if (
+      s.tag === 'segment' &&
+      (s.val.tag === 'path-variable' || s.val.tag === 'remaining-path-variable')
+    ) {
+      names.add(s.val.val.variableName);
     }
   }
   return names;

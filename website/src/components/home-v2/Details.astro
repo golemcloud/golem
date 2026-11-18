@@ -1,0 +1,34 @@
+---
+import { details } from "../../data/home-preview/golem-2";
+import Inline from "./Inline.astro";
+interface Props {
+  section: number;
+  keys?: string[];
+  id?: string;
+}
+const { section, keys, id } = Astro.props;
+const entries = Object.entries(details[section - 1]).filter(([key]) => !keys || keys.includes(key));
+---
+
+<div class="g2-details" id={id}>
+  {
+    entries.map(([key, body]) => (
+      <details>
+        <summary>
+          {key}
+          <span aria-hidden="true">+</span>
+        </summary>
+        <div class="detail-body">
+          {body
+            .replace(/^\*|\*$/g, "")
+            .split(/\n\n+/)
+            .map((p) => (
+              <p>
+                <Inline value={p} />
+              </p>
+            ))}
+        </div>
+      </details>
+    ))
+  }
+</div>

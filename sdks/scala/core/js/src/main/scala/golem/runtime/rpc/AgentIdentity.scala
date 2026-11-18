@@ -28,6 +28,17 @@ private[golem] object AgentIdentity {
   def parse(agentId: String): Either[String, AgentHostApi.AgentIdParts] =
     AgentHostApi.parseAgentId(agentId)
 
+  def bindSelf(expectedTypeName: String): Either[String, RemoteAgentClient] =
+    WasmRpcApi.bindSelf().left.map(_.toString).flatMap { case (id, rpc) =>
+      val result = parse(id).flatMap { parts =>
+        if (parts.agentTypeName != expectedTypeName)
+          Left(s"invalid-type: self binding expects $expectedTypeName, identity is ${parts.agentTypeName}")
+        else Right(RemoteAgentClient(parts.agentTypeName, id, new RemoteAgentClient.WasmRpcInvoker(rpc)))
+      }
+      if (result.isLeft) rpc.drop()
+      result
+    }
+
   def createConnection(
     agentTypeName: String,
     constructorPayload: JsSchemaValueTree,
@@ -60,7 +71,7 @@ private[golem] object AgentIdentity {
             if (configOverrides.isEmpty) js.Array[JsTypedAgentConfigValue]()
             else ConfigOverrideEncoder.encode(configOverrides)
           val rpcClient = WasmRpcApi.newClient(displayTypeName, constructorPayload, phantomArg, jsConfig)
-          RemoteAgentClient(displayTypeName, id, agentType, new RemoteAgentClient.WasmRpcInvoker(rpcClient))
+          RemoteAgentClient(displayTypeName, id, new RemoteAgentClient.WasmRpcInvoker(rpcClient))
         }
       }
 }

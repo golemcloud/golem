@@ -18,7 +18,6 @@ pub(all) struct Handlers {
     @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?,
     @streams.ToolOutputWriter?,
     @streams.ToolOutputWriter?,
-    @common0.Principal,
     @underlying.UnderlyingTool,
     @async-core.TaskGroup[Unit],
   ) -> Result[@common.InvocationResult, @types.ToolError]
@@ -61,7 +60,6 @@ pub async fn invoke_tool_middleware(
   ]?,
   stdout : @streams.ToolOutputWriter?,
   stderr : @streams.ToolOutputWriter?,
-  principal : @common0.Principal,
   wrapped : @underlying.UnderlyingTool,
   background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
@@ -69,7 +67,7 @@ pub async fn invoke_tool_middleware(
     Some(h) =>
       (h.invoke_tool_middleware)(
         middleware_name, tool_name, tool_metadata, parameters, command_path, input,
-        stdin, stdout, stderr, principal, wrapped, background_group,
+        stdin, stdout, stderr, wrapped, background_group,
       )
     None => {
       @model.drop_wit_capabilities(parameters.value)

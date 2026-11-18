@@ -359,7 +359,7 @@ impl<T> ExternalDurableStream<T> {
 #[cfg(feature = "export_golem_agentic")]
 impl<T: crate::IntoSchema + crate::FromSchema + Send + 'static> ExternalDurableStream<T> {
     /// Preserve ordinary native stream schemas, including nested values and RPC inputs.
-    /// Local native reads return String errors; a forwarded producer failure traps, never EOF.
+    /// Native readers receive a catchable terminal error after the accepted items.
     pub fn into_agent_stream(self) -> crate::agentic::AgentStream<T> {
         crate::agentic::AgentStream::from_schema_stream(
             crate::schema::SchemaValueStream::from_source(self),
@@ -377,7 +377,10 @@ impl<T: crate::IntoSchema + Send + 'static> crate::schema::stream::SchemaValueSt
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<Option<crate::schema::wit::wire::SchemaValueTree>, String>,
+                    Output = Result<
+                        Option<crate::schema::wit::wire::SchemaValueTree>,
+                        crate::schema::StreamError,
+                    >,
                 > + Send
                 + '_,
         >,
@@ -390,7 +393,7 @@ impl<T: crate::IntoSchema + Send + 'static> crate::schema::stream::SchemaValueSt
                 Some(value) => crate::schema::wit::encode_value_async(&value.to_value())
                     .await
                     .map(Some)
-                    .map_err(|e| e.to_string()),
+                    .map_err(|e| crate::schema::StreamError::from(e.to_string())),
                 None => Ok(None),
             }
         })

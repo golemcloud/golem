@@ -124,12 +124,12 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             match &params.invocation {
                 PublicAgentInvocation::AgentInitialization(inner) => {
                     let _ = writeln!(result, "{pad}type:              initialization");
-                    let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key,);
+                    let _ = writeln!(result, "{pad}invocation id:     {}", inner.invocation_id,);
                 }
                 PublicAgentInvocation::AgentMethodInvocation(inner) => {
                     let _ = writeln!(result, "{pad}type:              method invocation");
                     let _ = writeln!(result, "{pad}method:            {}", inner.method_name);
-                    let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key,);
+                    let _ = writeln!(result, "{pad}invocation id:     {}", inner.invocation_id,);
                 }
                 PublicAgentInvocation::ExternalTool(inner) => {
                     let _ = writeln!(result, "{pad}type:              external tool");
@@ -139,7 +139,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                         "{pad}path:              {}",
                         inner.command_path.join("/")
                     );
-                    let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key);
+                    let _ = writeln!(result, "{pad}invocation id:     {}", inner.invocation_id);
                 }
                 PublicAgentInvocation::SaveSnapshot(_) => {
                     let _ = writeln!(result, "{pad}type:              save snapshot");
@@ -175,8 +175,16 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::AgentInvocationFinished(params) => {
             let _ = writeln!(result, "AGENT INVOCATION FINISHED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
             let _ = writeln!(result, "{pad}consumed fuel:     {}", params.consumed_fuel,);
             let _ = writeln!(result, "{pad}result:            {:?}", params.result);
+        }
+        PublicOplogEntry::AgentInvocationFailed(params) => {
+            let _ = writeln!(result, "AGENT INVOCATION FAILED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id);
+            let _ = writeln!(result, "{pad}start index:       {}", params.start_index);
+            let _ = writeln!(result, "{pad}error:             {}", params.error);
         }
         PublicOplogEntry::Suspend(params) => {
             let _ = writeln!(result, "SUSPEND");
@@ -186,6 +194,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "ERROR");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}kind:              {:?}", params.kind);
+            if let Some(invocation_id) = &params.invocation_id {
+                let _ = writeln!(result, "{pad}invocation id:     {invocation_id}");
+            }
             let _ = writeln!(result, "{pad}error:             {}", params.error);
             let _ = writeln!(result, "{pad}retry from:        {}", params.retry_from);
         }
@@ -213,8 +224,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
                 let _ = writeln!(
                     result,
-                    "{pad}idempotency key:   {}",
-                    inner_params.idempotency_key,
+                    "{pad}invocation id:     {}",
+                    inner_params.invocation_id,
                 );
             }
             PublicAgentInvocation::AgentMethodInvocation(inner_params) => {
@@ -222,8 +233,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
                 let _ = writeln!(
                     result,
-                    "{pad}idempotency key:   {}",
-                    inner_params.idempotency_key,
+                    "{pad}invocation id:     {}",
+                    inner_params.invocation_id,
                 );
             }
             PublicAgentInvocation::ExternalTool(inner_params) => {
@@ -236,8 +247,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 );
                 let _ = writeln!(
                     result,
-                    "{pad}idempotency key:   {}",
-                    inner_params.idempotency_key
+                    "{pad}invocation id:     {}",
+                    inner_params.invocation_id
                 );
             }
             PublicAgentInvocation::SaveSnapshot(_) => {
@@ -312,6 +323,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}increase:          {}", params.delta,);
         }
+        PublicOplogEntry::MemorySizeReconciled(params) => {
+            let _ = writeln!(result, "MEMORY SIZE RECONCILED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}allocated bytes:   {}", params.bytes);
+        }
         PublicOplogEntry::CreateResource(params) => {
             let _ = writeln!(result, "CREATE RESOURCE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -368,7 +384,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::CancelPendingInvocation(params) => {
             let _ = writeln!(result, "CANCEL INVOCATION");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}idempotency key:   {}", params.idempotency_key,);
+            let _ = writeln!(result, "{pad}invocation id:     {}", params.invocation_id,);
         }
         PublicOplogEntry::BeginRemoteTransaction(params) => {
             let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
@@ -652,17 +668,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 typed_schema_value_to_string(&params.record)
             );
         }
-        PublicOplogEntry::StreamEnd(params) => {
-            let _ = writeln!(result, "STREAM END");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}record:            {}",
-                typed_schema_value_to_string(&params.record)
-            );
-        }
-        PublicOplogEntry::StreamCancel(params) => {
-            let _ = writeln!(result, "STREAM CANCEL");
+        PublicOplogEntry::StreamTerminal(params) => {
+            let _ = writeln!(result, "STREAM TERMINAL");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(
                 result,
