@@ -2,7 +2,8 @@ import { test, expect } from 'bun:test'
 import { createHmac } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { completion, receiver } from './index'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import load, { completion, receiver } from './index'
 
 const secret = 'fixture-key-only-not-a-deployment-credential'
 const run = { id: 44267744093, run_attempt: 1, path: '.github/workflows/main-validation.yaml',
@@ -36,6 +37,28 @@ async function fixture(check: (f: any) => Promise<void>) {
 	f.handle = receiver(config, f.api)
 	try { await check(f) } finally { await rm(stateDir, { recursive: true }) }
 }
+
+test('loading from plugin cwd reads and updates the workspace-root private configuration', async () => fixture(async f => {
+	const root = f.config.stateDir
+	await mkdir(join(root, '.local'))
+	const pluginDirectory = join(root, '.amp/plugins/main-validation-observer')
+	await mkdir(pluginDirectory, { recursive: true })
+	const configPath = join(root, '.local/main-validation-webhook.json')
+	const config = { ...f.config, ownerThread: 'T-01234567-89ab-cdef-0123-456789abcdef' }
+	await writeFile(configPath, JSON.stringify(config), { mode: 0o600 })
+	let registrations = 0
+	const cwd = process.cwd()
+	try {
+		process.chdir(pluginDirectory)
+		await load({ system: { workspaceRoot: pathToFileURL(root).href },
+			helpers: { filePathFromURI: fileURLToPath }, createWebhook: async () => {
+				registrations++; return { url: 'https://fixture.invalid/not-a-real-webhook' }
+			} } as any)
+	} finally { process.chdir(cwd) }
+	expect(registrations).toBe(1)
+	expect(JSON.parse(await readFile(configPath, 'utf8'))).toEqual({
+		...config, url: 'https://fixture.invalid/not-a-real-webhook' })
+}))
 
 test('only authenticated completed Main validation identities pass; payload text cannot become instructions', () => {
 	expect(completion(delivery(), secret)).toEqual({ run: run.id, attempt: 1 })

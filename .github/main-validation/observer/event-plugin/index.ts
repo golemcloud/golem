@@ -109,7 +109,9 @@ export function receiver(config: Config, api: (path: string, signal: AbortSignal
 }
 
 export default async function (amp: PluginAPI) {
-	const configPath = join(process.cwd(), '.local/main-validation-webhook.json')
+	if (!amp.system.workspaceRoot) throw new Error('Observer webhook requires a Golem workspace')
+	const root = amp.helpers.filePathFromURI(amp.system.workspaceRoot)
+	const configPath = join(root, '.local/main-validation-webhook.json')
 	const config = await readJSON(configPath)
 	if (!config) return
 	if (!isAbsolute(config.stateDir) || !/^T-[0-9a-f-]+$/.test(config.ownerThread)
