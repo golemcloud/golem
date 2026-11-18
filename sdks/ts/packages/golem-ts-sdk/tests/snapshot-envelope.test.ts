@@ -90,41 +90,24 @@ describe('the 2.0 snapshot envelope', () => {
   });
 });
 
-describe('each 1.6 envelope version still loads and drops its principal', () => {
+describe('the 1.6 envelopes', () => {
   beforeEach(() => vi.resetModules());
 
-  it('reads binary v1 (no principal) and binary v2 (principal JSON)', async () => {
+  it('refuses binary v1 and binary v2 as unknown versions', async () => {
     const { sdk, loaded } = await setup();
     const state = new TextEncoder().encode('{"count":1}');
-    await sdk.loadSnapshot.load({
-      payload: new Uint8Array([1, ...state]),
-      mimeType: 'application/octet-stream',
-    });
-    expect(new TextDecoder().decode(loaded[0])).toBe('{"count":1}');
-
-    const { sdk: second, loaded: secondLoaded } = await setup();
     const principalJson = new TextEncoder().encode(JSON.stringify(anonymous));
     const header = new Uint8Array(5);
     header[0] = 2;
     new DataView(header.buffer).setUint32(1, principalJson.length, false);
-    await second.loadSnapshot.load({
-      payload: new Uint8Array([...header, ...principalJson, ...state]),
-      mimeType: 'application/octet-stream',
-    });
-    expect(new TextDecoder().decode(secondLoaded[0])).toBe('{"count":1}');
-  });
-
-  it('refuses a malformed 1.6 principal', async () => {
-    const { sdk } = await setup();
-    const bad = new TextEncoder().encode(JSON.stringify({ tag: 'agent', val: { componentId: 1 } }));
-    const header = new Uint8Array(5);
-    header[0] = 2;
-    new DataView(header.buffer).setUint32(1, bad.length, false);
-    await expect(
-      sdk.loadSnapshot.load({
-        payload: new Uint8Array([...header, ...bad, 1]),
-        mimeType: 'application/octet-stream',
-      }),
-    ).rejects.toBeDefined();
+    for (const payload of [
+      new Uint8Array([1, ...state]),
+      new Uint8Array([...header, ...principalJson, ...state]),
+    ]) {
+      await expect(
+        sdk.loadSnapshot.load({ payload, mimeType: 'application/octet-stream' }),
+      ).rejects.toContain(`Unsupported snapshot version ${payload[0]}`);
+    }
+    expect(loaded).toEqual([]);
   });
 });
