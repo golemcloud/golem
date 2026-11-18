@@ -64,6 +64,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-custom-snapshot-ts` | Enabling snapshotting and custom snapshot save/load functions |
 | `golem-retry-policies-ts` | Configuring semantic retry policies |
 | `golem-quota-ts` | Adding resource quotas (rate limiting, capacity, concurrency) |
+| `golem-permission-card-ts` | Managing permission cards: wallet, derive, inspect, revoke, install, and scope cards on RPC calls |
 | `golem-add-postgres-ts` | Connecting to PostgreSQL with `golem:rdbms/postgres` |
 | `golem-add-mysql-ts` | Connecting to MySQL with `golem:rdbms/mysql` |
 | `golem-add-ignite-ts` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` |
@@ -118,7 +119,7 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. A method's thrown error or rejected promise fails only that invocation, without automatic retry or rollback. Earlier mutations remain, and a durable agent can run its next invocation. Constructor errors and actual Wasm traps remain agent-fatal. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -293,9 +294,17 @@ Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{
 
 Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
-- `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
+- `durable(spec, request, body)` — run a synchronous non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy. `durableAsync(spec, request, body)` does the same for a body that awaits.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.
+
+**Custom durable operations.** A `durable` body is synchronous; a body that returns a promise
+throws a `TypeError`. `durableAsync` runs its body in its own scope: host calls after an `await`,
+and in timers and callbacks that the body registers, belong to the operation, and concurrent
+operations (for example in `Promise.all`) stay apart. An operation finishes only after the
+operations that started inside it have settled. Await or join the work that the body starts:
+detached work that runs after the operation finished belongs to the enclosing operation or to the
+invocation, not to the finished operation.
 
 ## Available Libraries
 

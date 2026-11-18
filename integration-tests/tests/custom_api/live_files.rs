@@ -27,6 +27,60 @@ fn large_file_contents() -> Vec<u8> {
 }
 
 #[test]
+#[timeout("120s")]
+async fn authenticated_live_files_preserve_no_store(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    use super::http_test_context::make_test_context;
+    use golem_common::model::http_api_deployment::{
+        HttpApiDeploymentAgentSecurity, TestSessionHeaderAgentSecurity,
+    };
+
+    let context = make_test_context(
+        deps,
+        vec![(
+            AgentTypeName("AuthenticatedLiveFiles".into()),
+            HttpApiDeploymentAgentOptions {
+                security: Some(HttpApiDeploymentAgentSecurity::TestSessionHeader(
+                    TestSessionHeaderAgentSecurity {
+                        header_name: "x-session".into(),
+                    },
+                )),
+            },
+        )],
+        "it_initial_file_system_release",
+        "golem-it:initial-file-system",
+    )
+    .await?;
+    context
+        .user
+        .start_agent(
+            &context.component_id,
+            agent_id!("AuthenticatedLiveFiles", "cache-user"),
+        )
+        .await?;
+    for (path, status, body) in [
+        ("created.txt", StatusCode::OK, "cache-user"),
+        ("missing.txt", StatusCode::NOT_FOUND, ""),
+    ] {
+        let response = context
+            .client
+            .get(
+                context
+                    .base_url
+                    .join(&format!("/private-files/cache-user/{path}"))?,
+            )
+            .header("x-session", "{}")
+            .send()
+            .await?;
+        assert_eq!(response.status(), status);
+        assert_eq!(response.headers()["cache-control"], "private, no-store");
+        assert_eq!(response.text().await?, body);
+    }
+    Ok(())
+}
+
+#[test]
 fn large_file_exceeds_compressed_grpc_window() {
     use flate2::{Compression, write::GzEncoder};
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -229,6 +283,13 @@ async fn mounted_live_files_initialize_once_and_serve_current_files(
         let response = request.send().await?;
         assert_eq!(response.status().as_u16(), status, "{suffix}");
         assert_eq!(response.headers()["cache-control"], "no-store");
+        let vary = response.headers()["vary"].to_str()?;
+        for name in ["Authorization", "Cookie", "Golem-Token"] {
+            assert!(
+                vary.split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case(name))
+            );
+        }
         assert_eq!(
             response.headers()["access-control-allow-origin"],
             "https://allowed.test"

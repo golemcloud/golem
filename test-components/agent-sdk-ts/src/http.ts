@@ -386,6 +386,18 @@ export const PrincipalAgent = defineAgent({
       returns: z.object({ value: s.principal() }),
       http: http.get("/authed-principal", { auth: true }),
     }),
+    authedReadonly: method({
+      input: {},
+      returns: z.string(),
+      readOnly: true,
+      http: http.get("/authed-readonly", { auth: true }),
+    }),
+    authedReadonlyPrincipal: method({
+      input: { caller: s.principal() },
+      returns: z.object({ value: s.principal() }),
+      readOnly: true,
+      http: http.get("/authed-readonly-principal", { auth: true }),
+    }),
   },
 });
 
@@ -402,6 +414,12 @@ export const PrincipalAgentImpl = PrincipalAgent.implement({
       return { value: caller, foo, bar };
     },
     authedPrincipal({ caller }) {
+      return { value: caller };
+    },
+    authedReadonly() {
+      return this.agentName;
+    },
+    authedReadonlyPrincipal({ caller }) {
       return { value: caller };
     },
   },

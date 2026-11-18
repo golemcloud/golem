@@ -156,7 +156,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &InvocationId,
     ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
-        let status = self.state_actor.status().await;
+        // Session expiry and stream-slot requests can reach a generation whose state actor a
+        // deletion stopped without holding a task-scope bind.
+        let status = self.try_get_last_known_status().await?;
         self.worker_service()
             .lookup_durable_stream_session(
                 &self.owned_agent_id,

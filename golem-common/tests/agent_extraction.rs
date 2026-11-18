@@ -59,7 +59,14 @@ async fn can_extract_agent_type_schemas_from_component_with_dynamic_rpc() -> any
         .map(|agent| agent.type_name.0.as_str())
         .collect();
     router_names.sort_unstable();
-    assert!(router_names == vec!["RawHttpRouter", "StaticHttpRouter"]);
+    assert!(
+        router_names
+            == vec![
+                "AuthenticatedHttpRouter",
+                "RawHttpRouter",
+                "StaticHttpRouter"
+            ]
+    );
     for router in &routers {
         router.validate().unwrap();
     }
