@@ -303,3 +303,38 @@ func TestAResultHoldsAStreamOnlyWithAStreamNode(t *testing.T) {
 		t.Error("a tree with a stream node does not hold a stream")
 	}
 }
+
+func TestOrdinarySerializationRefusesLiveValues(t *testing.T) {
+	c := callerFromWit(common.Caller{
+		Original:  witUser("bob", `{"role":"reader"}`),
+		Immediate: witAgent(),
+		Tokens:    []common.TokenProvenance{{}},
+	})
+	live := []any{
+		c, &c, c.Original, c.Immediate, c.Tokens[0], &c.Tokens[0],
+		AccountPrincipal{}, ToolPrincipal{}, AnonymousPrincipal{},
+		map[string]any{"nested": []any{c}},
+	}
+	for _, v := range live {
+		out, err := json.Marshal(v)
+		if err == nil {
+			t.Errorf("json.Marshal(%T) = %s, want a refusal", v, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "live value") || !strings.Contains(err.Error(), "ctx.Caller().Original.Ref()") {
+			t.Errorf("json.Marshal(%T) error = %v", v, err)
+		}
+	}
+}
+
+func TestAPrincipalRefStillSerializes(t *testing.T) {
+	ref := PrincipalRef{Issuer: "https://login.example", Subject: "bob"}
+	out, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatalf("json.Marshal(PrincipalRef) failed: %v", err)
+	}
+	var back PrincipalRef
+	if err := json.Unmarshal(out, &back); err != nil || back != ref {
+		t.Errorf("round trip of %s gave %+v, %v", out, back, err)
+	}
+}
