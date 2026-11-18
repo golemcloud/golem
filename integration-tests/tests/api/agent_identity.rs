@@ -41,7 +41,7 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use integration_tests::agents::{agent_type_id, key_target, keyed_agent_id};
+use integration_tests::agents::{agent_type_id, id_target, keyed_agent_id, proto_agent_key};
 use pretty_assertions::assert_eq;
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
@@ -462,15 +462,16 @@ async fn the_idempotency_key_is_read_only_from_the_header(
     Ok(())
 }
 
-/// The gateway and other `System` callers have no caller scope, so their idempotency key never
-/// joins two requests; a user's key does.
+/// Internal ephemeral calls use the IDs allocated by their caller. REST allocates the
+/// instance and reuses it when an authenticated caller repeats its idempotency key.
 #[test]
 #[timeout("4m")]
-async fn a_caller_without_a_scope_gets_two_agents_for_one_idempotency_key(
+async fn ephemeral_grpc_invocations_preserve_explicit_ids_and_rest_retries_reuse_the_id(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let (user, component) = counters(deps).await?;
     let key = agent_key!("EphemeralCounter", "unscoped");
+    let type_id = type_id(&deps.admin().await, &component, "EphemeralCounter").await?;
     let idempotency_key = Uuid::new_v4().to_string();
 
     let worker_service = deps.worker_service();
@@ -487,9 +488,11 @@ async fn a_caller_without_a_scope_gets_two_agents_for_one_idempotency_key(
         .map_err(|error| anyhow!("{error:?}"))?;
     let mut unscoped = Vec::new();
     for _ in 0..2 {
+        let expected_agent_id = AgentId::random(type_id);
         let response = grpc
             .invoke_agent(InvokeAgentRequest {
-                target: Some(key_target(&key)?),
+                target: Some(id_target(expected_agent_id)),
+                constructor: Some(proto_agent_key(&key)?),
                 method_name: Some("get_id".into()),
                 method_parameters: Some(method_parameters.clone()),
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
@@ -508,7 +511,9 @@ async fn a_caller_without_a_scope_gets_two_agents_for_one_idempotency_key(
         let agent_id = success
             .agent_id
             .ok_or_else(|| anyhow!("the invocation reported no agent ID"))?;
-        unscoped.push(AgentId::try_from(agent_id).map_err(|error| anyhow!("{error:?}"))?);
+        let agent_id = AgentId::try_from(agent_id).map_err(|error| anyhow!("{error:?}"))?;
+        assert_eq!(agent_id, expected_agent_id);
+        unscoped.push(agent_id);
     }
     assert_ne!(unscoped[0], unscoped[1]);
 
@@ -1038,7 +1043,7 @@ async fn management_statuses(
             "cancel_invocation",
             status(
                 &client
-                    .cancel_invocation(&environment, &agent, "missing-invocation", None)
+                    .cancel_invocation(&environment, &agent, &Uuid::new_v4().to_string(), None)
                     .await,
             ),
         ),

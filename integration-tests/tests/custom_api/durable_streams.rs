@@ -2198,7 +2198,8 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     let session = Uuid::new_v4().to_string();
     let input_reference = Uuid::new_v4();
     let mut socket =
-        connect_public_invocation_socket(&agent.user.deps, Some(&agent.user.token)).await?;
+        connect_public_invocation_socket(&agent.user.deps, agent.env_id, Some(&agent.user.token))
+            .await?;
     send_public_request(
         &mut socket,
         &PublicClientMessage::InvocationStart {

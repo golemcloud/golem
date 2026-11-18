@@ -18,7 +18,7 @@
 
 use anyhow::anyhow;
 use futures_concurrency::future::Join;
-use golem_client::api::{AgentClient, AgentError};
+use golem_client::api::{AgentClient, AgentError, RegistryServiceClient};
 use golem_client::model::{
     AgentConfigEntryDto, AgentInvocationMode, AgentInvocationRequest, AgentKeyRequest,
     CreateAgentRequest,
@@ -30,7 +30,7 @@ use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::{ExternalSchemaValue, TypedSchemaValue};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::config::dsl_impl::TestUserContext;
-use golem_test_framework::dsl::{AgentResult, TestDsl};
+use golem_test_framework::dsl::{AgentResult, TestDsl, TestDslExtended};
 use std::collections::HashMap;
 
 fn external_parameters(key: &ParsedAgentKey) -> anyhow::Result<ExternalSchemaValue> {
@@ -218,29 +218,29 @@ async fn invoke_agent_by_id_impl<Deps: TestDependencies>(
 }
 
 /// The registry-assigned type ID of `agent_type` in the component's environment. The registry
-/// assigns it when a deployment registers the agent type, so this reads the latest revision of
-/// the component, which must already be deployed.
+/// assigns it when a deployment registers the agent type, so this reads the environment's
+/// deployed agent types rather than the component metadata.
 pub async fn agent_type_id<Deps: TestDependencies>(
     user: &TestUserContext<Deps>,
     component: &ComponentDto,
     agent_type: &AgentTypeName,
 ) -> anyhow::Result<TypeId> {
-    let component = user.get_latest_component_revision(&component.id).await?;
-    component_agent_type_id(&component, agent_type)
-}
-
-/// The type ID of `agent_type` as the component metadata records it.
-pub fn component_agent_type_id(
-    component: &ComponentDto,
-    agent_type: &AgentTypeName,
-) -> anyhow::Result<TypeId> {
-    component
-        .metadata
-        .agent_types
-        .iter()
-        .find(|candidate| &candidate.declaration.type_name == agent_type)
-        .ok_or_else(|| anyhow!("Component {} does not implement {agent_type}", component.id))?
-        .type_id
+    let client = user.registry_service_client().await;
+    let deployment = client
+        .get_environment(&component.environment_id.0)
+        .await?
+        .current_deployment
+        .ok_or_else(|| anyhow!("Environment {} has no deployment", component.environment_id))?;
+    client
+        .list_deployment_agent_types(
+            &component.environment_id.0,
+            deployment.deployment_revision.into(),
+        )
+        .await?
+        .values
+        .into_iter()
+        .find(|candidate| &candidate.agent_type.type_name == agent_type)
+        .map(|candidate| candidate.type_id)
         .ok_or_else(|| anyhow!("Agent type {agent_type} has no registry-assigned type ID"))
 }
 
@@ -291,14 +291,13 @@ pub fn id_target(agent_id: AgentId) -> golem_api_grpc::proto::golem::worker::Age
 }
 
 /// The ID that the keyed agent of `key` has in the environment of the component, whether or
-/// not the agent exists. It reads the type ID from the latest, deployed, revision of the
-/// component.
+/// not the agent exists. It reads the type ID from the environment's deployed agent types.
 pub async fn derive_keyed_agent_id<Deps: TestDependencies>(
     user: &TestUserContext<Deps>,
     component_id: &ComponentId,
     key: &ParsedAgentKey,
 ) -> anyhow::Result<OwnedAgentId> {
     let component = user.get_latest_component_revision(component_id).await?;
-    let type_id = component_agent_type_id(&component, &key.agent_type)?;
+    let type_id = agent_type_id(user, &component, &key.agent_type).await?;
     keyed_agent_id(&component, type_id, key)
 }

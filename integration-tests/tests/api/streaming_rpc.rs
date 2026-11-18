@@ -63,10 +63,12 @@ pub(crate) type PublicInvocationSocket = WebSocketStream<MaybeTlsStream<tokio::n
 
 pub(crate) async fn connect_public_invocation_socket(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: Option<&TokenSecret>,
 ) -> Result<PublicInvocationSocket, WebSocketError> {
     connect_public_invocation_socket_with_subprotocol(
         deps,
+        environment_id,
         token,
         Some(INVOCATION_SESSION_SUBPROTOCOL),
     )
@@ -75,12 +77,13 @@ pub(crate) async fn connect_public_invocation_socket(
 
 async fn connect_public_invocation_socket_with_subprotocol(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: Option<&TokenSecret>,
     subprotocol: Option<&str>,
 ) -> Result<PublicInvocationSocket, WebSocketError> {
     let worker_service = deps.worker_service();
     let url = format!(
-        "ws://{}:{}/v1/agents/invoke-agent-session",
+        "ws://{}:{}/v1/runtime/envs/{environment_id}/invoke-agent-session",
         worker_service.http_host(),
         worker_service.http_port()
     );
@@ -181,10 +184,11 @@ fn native_stream(reference: serde_json::Value) -> serde_json::Value {
 
 async fn run_public_session(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: &TokenSecret,
     start: PublicClientMessage,
 ) -> anyhow::Result<Vec<PublicServerMessage>> {
-    let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
+    let mut socket = connect_public_invocation_socket(deps, environment_id, Some(token)).await?;
     send_public_request(&mut socket, &start).await?;
 
     let mut responses = Vec::new();
@@ -209,6 +213,7 @@ async fn run_public_session(
 
 async fn resume_public_input_with_end(
     deps: &EnvBasedTestDependencies,
+    environment_id: EnvironmentId,
     token: &TokenSecret,
     session_token: String,
     input_channel: u32,
@@ -220,7 +225,7 @@ async fn resume_public_input_with_end(
         session_token,
         version: INVOCATION_SESSION_VERSION,
     };
-    let mut socket = connect_public_invocation_socket(deps, Some(token)).await?;
+    let mut socket = connect_public_invocation_socket(deps, environment_id, Some(token)).await?;
     send_public_request(&mut socket, &resume).await?;
     let resumed = receive_public_response(&mut socket).await?;
     let resumed_channel = match resumed {
@@ -1099,10 +1104,10 @@ async fn grpc_invocation_session_routes_resume_and_takeover(
         };
         assert_eq!(
             rejected.reason,
-            InvocationRejectionReason::Internal as i32,
+            InvocationRejectionReason::NotFound as i32,
             "resume endpoint returned an unexpected rejection: {rejected:?}"
         );
-        assert_eq!(rejected.error, "Component not found");
+        assert_eq!(rejected.error, format!("Worker not found: {agent_id}"));
         assert!(responses.message().await?.is_none());
         assert!(state.is_complete());
     }
@@ -2525,6 +2530,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 
     let scalar = run_public_session(
         deps,
+        environment.id,
         &user.token,
         public_start(
             application_name,
@@ -2561,6 +2567,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 
     let produced = run_public_session(
         deps,
+        environment.id,
         &user.token,
         public_start(
             application_name,
@@ -2640,7 +2647,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             "provisionalRef": input_reference
         }))]),
     );
-    let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let mut socket =
+        connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(&mut socket, &start).await?;
     let accepted = receive_public_response(&mut socket).await?;
     let input_channel = match accepted {
@@ -2723,7 +2731,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             "provisionalRef": blocked_reference
         }))]),
     );
-    let mut blocked_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let mut blocked_socket =
+        connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(&mut blocked_socket, &blocked).await?;
     let accepted = receive_public_response(&mut blocked_socket).await?;
     let (blocked_session_token, blocked_channel) = match accepted {
@@ -2755,10 +2764,18 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     .map_err(|_| anyhow::anyhow!("blocked invocation close handshake timed out"))??;
     drop(blocked_socket);
 
-    resume_public_input_with_end(deps, &user.token, blocked_session_token, blocked_channel).await?;
+    resume_public_input_with_end(
+        deps,
+        environment.id,
+        &user.token,
+        blocked_session_token,
+        blocked_channel,
+    )
+    .await?;
 
     let subsequent = run_public_session(
         deps,
+        environment.id,
         &user.token,
         public_start(
             application_name,
@@ -2778,7 +2795,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     )));
 
     let capability_reference = uuid::Uuid::new_v4();
-    let mut capability_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let mut capability_socket =
+        connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(
         &mut capability_socket,
         &public_start(
@@ -2838,6 +2856,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 
     resume_public_input_with_end(
         deps,
+        environment.id,
         &user.token,
         capability_session_token,
         capability_channel,
@@ -2847,6 +2866,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         std::time::Duration::from_secs(30),
         run_public_session(
             deps,
+            environment.id,
             &user.token,
             public_start(
                 application_name,
@@ -2868,7 +2888,8 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
 async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
-    let missing_auth = connect_public_invocation_socket(deps, None)
+    let environment_id = EnvironmentId(uuid::Uuid::new_v4());
+    let missing_auth = connect_public_invocation_socket(deps, environment_id, None)
         .await
         .expect_err("missing authentication must reject the WebSocket upgrade");
     assert!(matches!(
@@ -2877,7 +2898,7 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
     ));
 
     let invalid_token = TokenSecret::trusted("not-a-valid-token".to_string());
-    let invalid_auth = connect_public_invocation_socket(deps, Some(&invalid_token))
+    let invalid_auth = connect_public_invocation_socket(deps, environment_id, Some(&invalid_token))
         .await
         .expect_err("invalid authentication must reject the WebSocket upgrade");
     assert!(matches!(
@@ -2887,10 +2908,14 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
 
     let user = deps.user().await?;
     for subprotocol in [None, Some("unsupported.invocation.v1")] {
-        let error =
-            connect_public_invocation_socket_with_subprotocol(deps, Some(&user.token), subprotocol)
-                .await
-                .expect_err("missing or unsupported subprotocol must reject the WebSocket upgrade");
+        let error = connect_public_invocation_socket_with_subprotocol(
+            deps,
+            environment_id,
+            Some(&user.token),
+            subprotocol,
+        )
+        .await
+        .expect_err("missing or unsupported subprotocol must reject the WebSocket upgrade");
         assert!(matches!(
             error,
             WebSocketError::Http(response) if response.status().as_u16() == 400
@@ -2901,7 +2926,8 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
         Message::Text("not json".into()),
         Message::Binary(vec![0x0a, 0x00].into()),
     ] {
-        let mut socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+        let mut socket =
+            connect_public_invocation_socket(deps, environment_id, Some(&user.token)).await?;
         socket.send(invalid_message).await?;
         let Some(Ok(Message::Close(Some(close)))) = socket.next().await else {
             anyhow::bail!("invalid public frame did not receive a close response")
@@ -2915,6 +2941,7 @@ async fn public_websocket_invocation_enforces_auth_frames_and_rejections(
 
     let rejected = run_public_session(
         deps,
+        environment_id,
         &user.token,
         public_start(
             "application-that-does-not-exist",

@@ -60,6 +60,8 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
             let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
                 unreachable!()
             };
+            call.component_id = harness.component_id;
+            call.agent_type = harness.agent_type.type_name.clone();
             let map = binding.ends_with("map");
             let input_type = if map {
                 let ty = SchemaType::map(SchemaType::string(), SchemaType::bool());

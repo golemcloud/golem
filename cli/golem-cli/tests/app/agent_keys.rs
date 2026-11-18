@@ -506,7 +506,7 @@ async fn agent_list_pages_over_two_agent_types_with_one_cursor() {
         .await;
     assert!(!rejected.success());
     assert!(
-        rejected.stderr_contains("The cursor continues agent types that are not listed"),
+        rejected.stdout_contains("The cursor continues agent types that are not listed"),
         "a cursor naming an unlisted agent type must be rejected"
     );
 }
