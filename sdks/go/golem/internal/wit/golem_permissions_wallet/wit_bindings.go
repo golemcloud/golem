@@ -60,7 +60,7 @@ func SelfWallet() []golem_permissions_types.WalletCard {
 	result0 := make([]golem_permissions_types.WalletCard, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*8)
-		result := wasm_lift_1_t951(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t970(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -79,7 +79,7 @@ func SelfVersion() golem_permissions_types.WalletVersionToken {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (8 + 2*4), 8))
 	wasm_import_self_version(returnArea)
-	result := wasm_lift_1_t947(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t966(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -138,7 +138,7 @@ func InstallCard(card *golem_core_types.PermissionCard, target golem_permissions
 
 		result4 = witTypes.Ok[witTypes.Unit, golem_permissions_types.PermissionError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t948(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t967(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result4 = witTypes.Err[witTypes.Unit, golem_permissions_types.PermissionError](result)
 	default:
@@ -150,7 +150,7 @@ func InstallCard(card *golem_core_types.PermissionCard, target golem_permissions
 }
 
 //go:noinline
-func wasm_lift_1_t951(src unsafe.Pointer) golem_permissions_types.WalletCard {
+func wasm_lift_1_t970(src unsafe.Pointer) golem_permissions_types.WalletCard {
 	var variant golem_permissions_types.WalletCard
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -173,14 +173,14 @@ func wasm_lift_1_t951(src unsafe.Pointer) golem_permissions_types.WalletCard {
 }
 
 //go:noinline
-func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.WalletVersionToken {
+func wasm_lift_1_t966(src unsafe.Pointer) golem_permissions_types.WalletVersionToken {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return golem_permissions_types.WalletVersionToken{WalletIdHash: value0, Generation: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))}
 }
 
 //go:noinline
-func wasm_lift_1_t948(src unsafe.Pointer) golem_permissions_types.PermissionError {
+func wasm_lift_1_t967(src unsafe.Pointer) golem_permissions_types.PermissionError {
 	var variant golem_permissions_types.PermissionError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

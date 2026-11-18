@@ -16,6 +16,88 @@ use super::*;
 use serde_json::{Value, json};
 use test_r::test;
 
+#[cfg(feature = "full")]
+#[test]
+fn http_openapi_variants_have_distinct_wire_tags() {
+    use poem_openapi::registry::{MetaSchemaRef, Registry};
+    use poem_openapi::types::Type;
+
+    fn has_tag(registry: &Registry, branch: &MetaSchemaRef, tag: &Value) -> bool {
+        let schema = match branch {
+            MetaSchemaRef::Reference(name) => &registry.schemas[name],
+            MetaSchemaRef::Inline(schema) => schema,
+        };
+        schema.properties.iter().any(|(name, prop)| {
+            *name == "type"
+                && match prop {
+                    MetaSchemaRef::Inline(prop) => prop.enum_items.contains(tag),
+                    MetaSchemaRef::Reference(name) => {
+                        registry.schemas[name].enum_items.contains(tag)
+                    }
+                }
+        }) || schema
+            .all_of
+            .iter()
+            .any(|part| has_tag(registry, part, tag))
+    }
+
+    let mut registry = Registry::new();
+    HttpMethod::register(&mut registry);
+    PathSegment::register(&mut registry);
+    for (name, values) in [
+        (
+            "HttpMethod",
+            vec![
+                HttpMethod::Get(Empty {}),
+                HttpMethod::Head(Empty {}),
+                HttpMethod::Post(Empty {}),
+                HttpMethod::Put(Empty {}),
+                HttpMethod::Delete(Empty {}),
+                HttpMethod::Connect(Empty {}),
+                HttpMethod::Options(Empty {}),
+                HttpMethod::Trace(Empty {}),
+                HttpMethod::Patch(Empty {}),
+                HttpMethod::Custom(CustomHttpMethod {
+                    value: "REPORT".into(),
+                }),
+            ]
+            .into_iter()
+            .map(|value| serde_json::to_value(value).unwrap())
+            .collect::<Vec<_>>(),
+        ),
+        (
+            "PathSegment",
+            vec![
+                PathSegment::Literal(LiteralSegment {
+                    value: "reports".into(),
+                }),
+                PathSegment::PathVariable(PathVariable {
+                    variable_name: "id".into(),
+                }),
+                PathSegment::RemainingPathVariable(PathVariable {
+                    variable_name: "rest".into(),
+                }),
+            ]
+            .into_iter()
+            .map(|value| serde_json::to_value(value).unwrap())
+            .collect(),
+        ),
+    ] {
+        let schema = &registry.schemas[name];
+        for value in values {
+            assert_eq!(
+                schema
+                    .one_of
+                    .iter()
+                    .filter(|branch| has_tag(&registry, branch, &value["type"]))
+                    .count(),
+                1,
+                "{name} must have exactly one branch for {value}"
+            );
+        }
+    }
+}
+
 #[test]
 fn shared_request_path_corpus() {
     let corpus: Value = serde_json::from_str(include_str!(

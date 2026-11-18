@@ -294,32 +294,7 @@ pub fn validate_file_response_headers(
         })?;
         let normalized = name.as_str();
         if !names.insert(normalized.to_owned())
-            || normalized.starts_with("access-control-")
-            || matches!(
-                normalized,
-                "age"
-                    | "accept-ranges"
-                    | "cache-control"
-                    | "connection"
-                    | "content-encoding"
-                    | "content-length"
-                    | "content-range"
-                    | "content-type"
-                    | "etag"
-                    | "expires"
-                    | "keep-alive"
-                    | "last-modified"
-                    | "pragma"
-                    | "proxy-authenticate"
-                    | "proxy-authorization"
-                    | "proxy-connection"
-                    | "te"
-                    | "trailer"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "vary"
-                    | "x-content-type-options"
-            )
+            || golem_schema::http::is_managed_response_header(normalized)
         {
             return Err(HttpAgentValidationError::InvalidFileResponseHeader(
                 header.name.clone(),

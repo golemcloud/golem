@@ -33,10 +33,12 @@ test "ambient tool facade preserves nominal source syntax after core split" {
     globals: { options: [], flags: [], },
     subcommands: [],
     body: None,
+    http: None,
   }
   let def : @tool.ToolDef = {
     version: "1.0.0",
     requires_filesystem: false,
+    http_mount: None,
     commands: [root],
   }
   assert_true(def.tool_name() is Ok("facade"))

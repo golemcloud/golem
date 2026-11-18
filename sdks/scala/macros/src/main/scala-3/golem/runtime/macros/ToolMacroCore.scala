@@ -784,6 +784,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     toolName: String,
     version: String,
     requiresFilesystem: Boolean,
+    httpMount: Option[ToolHttpMount],
     traitDoc: Doc,
     rootMethod: Option[MethodIR],
     childMethods: List[MethodIR]
@@ -797,7 +798,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val toolDefAnns = annotationsOf(traitSym, ToolDefinitionFQN)
     if (toolDefAnns.isEmpty)
       report.errorAndAbort(s"missing @toolDefinition(...) on tool trait: ${traitSym.fullName}")
-    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version", "requiresFilesystem"))
+    val toolDefValues = annotationValues(toolDefAnns.head, List("name", "version", "requiresFilesystem", "mount"))
     val explicitName  =
       toolDefValues.get("name").map(constString(_, "name", toolDefAnns.head.pos)).filter(_.nonEmpty)
     val version =
@@ -854,6 +855,8 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
       toolName = toolName,
       version = version,
       requiresFilesystem = requiresFilesystem,
+      httpMount =
+        toolDefValues.get("mount").map(value => ToolHttpMount(httpPath(constString(value, "mount", value.pos)))),
       traitDoc = docOf(traitSym),
       rootMethod = rootCandidates.headOption,
       childMethods = children
@@ -861,6 +864,47 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   }
 
   private def quoteStr(s: String): String = "\"" + s + "\""
+
+  private def httpPath(value: String): List[golem.runtime.http.PathSegment] = {
+    import golem.runtime.http.*
+    val parsed = HttpRouteParser.parse(value).fold(report.errorAndAbort(_), identity)
+    if (parsed.queryVars.nonEmpty) report.errorAndAbort("tool mounts and prefixes cannot contain query bindings")
+    if (parsed.pathSegments.exists(_.isInstanceOf[PathSegment.SystemVariable]))
+      report.errorAndAbort("tool HTTP paths cannot contain system variables")
+    parsed.pathSegments
+  }
+
+  def commandHttp(method: Symbol): Option[CommandHttp] = {
+    import golem.runtime.http.*
+    val anns = annotationsOf(method, "golem.runtime.annotations.endpoint")
+    if (anns.size > 1) report.errorAndAbort("a tool command accepts at most one @endpoint")
+    anns.headOption.map { ann =>
+      val values =
+        annotationValues(ann, List("method", "path", "auth", "cors", "mode", "prefix", "routeId", "responseHeaders"))
+      if (values.contains("auth") || values.contains("cors"))
+        report.errorAndAbort("tool endpoints do not accept auth or cors")
+      values.get("prefix") match {
+        case Some(prefix) =>
+          if (values.keySet != Set("prefix")) report.errorAndAbort("a tool prefix cannot contain endpoint options")
+          CommandHttp.Prefix(httpPath(constString(prefix, "prefix", prefix.pos)))
+        case None =>
+          val endpoints = AgentDefinitionMacro.extractEndpoints(method, AgentDefinitionMacro.extractHeaderVars(method))
+          val endpoint  = endpoints.head
+          if (endpoint.pathSuffix.exists(_.isInstanceOf[PathSegment.SystemVariable]))
+            report.errorAndAbort("tool HTTP paths cannot contain system variables")
+          CommandHttp.Endpoint(
+            values.get("routeId").map(v => constString(v, "routeId", v.pos)),
+            endpoint.httpMethod,
+            endpoint.pathSuffix,
+            endpoint.queryVars,
+            endpoint.headerVars,
+            HttpDeclarationMacro.headerValues(method, "endpoint", 7, "responseHeaders"),
+            endpoint.mode,
+            endpoint.durableStreams
+          )
+      }
+    }
+  }
 
   private def parseMethod(sym: Symbol, toolName: String): MethodIR = {
     val pos = sym.pos.getOrElse(Position.ofMacroExpansion)

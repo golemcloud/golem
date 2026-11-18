@@ -35,7 +35,8 @@ final case class WitTool(
   version: String,
   requiresFilesystem: Boolean,
   commands: WitCommandTree,
-  schema: WitSchemaGraph
+  schema: WitSchemaGraph,
+  httpMount: Option[ToolHttpMount] = None
 )
 
 /** Flattened command hierarchy; always non-empty, root at index 0. */
@@ -47,7 +48,8 @@ final case class WitCommandNode(
   doc: Doc,
   globals: WitGlobals,
   subcommands: List[Int],
-  body: Option[WitCommandBody]
+  body: Option[WitCommandBody],
+  http: Option[CommandHttp] = None
 )
 
 final case class WitGlobals(

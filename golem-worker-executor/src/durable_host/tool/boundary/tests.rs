@@ -48,12 +48,14 @@ fn tool(input: SchemaType, result: SchemaType, error_name: &str) -> Tool {
     Tool {
         version: "1".into(),
         requires_filesystem: false,
+        http_mount: None,
         schema: SchemaGraph::empty(),
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "outer".into(),
                 aliases: vec![],
                 doc: Default::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: vec![],
                 body: Some(CommandBody {

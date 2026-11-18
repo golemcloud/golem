@@ -29,6 +29,10 @@ fn canonical_tool(tool: &Tool) -> Option<serde_json::Value> {
     }
 
     let mut result = tool.clone();
+    result.http_mount = None;
+    for node in &mut result.commands.nodes {
+        node.http = None;
+    }
     erase_ignored_tool_documentation(&mut result);
     let defs: HashMap<_, _> = result
         .schema

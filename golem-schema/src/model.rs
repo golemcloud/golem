@@ -31,9 +31,8 @@ use serde::{Deserialize, Serialize};
 )]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
 

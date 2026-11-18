@@ -8,6 +8,7 @@ fn registry_tool(name : String) -> @toolCommon.Tool {
   {
     version: "0.1.0",
     requires_filesystem: false,
+    http_mount: None,
     commands: {
       nodes: [
         {
@@ -16,6 +17,7 @@ fn registry_tool(name : String) -> @toolCommon.Tool {
           doc: registry_doc(name),
           globals: { options: [], flags: [], },
           subcommands: [],
+          http: None,
           body: None,
         },
       ],

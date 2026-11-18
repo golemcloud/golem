@@ -507,6 +507,7 @@ fn __golem_tool_rebase_node(
     globals: node.globals,
     subcommands: node.subcommands.map(index => index + offset),
     body: node.body,
+    http: node.http,
   }
 }
 
@@ -516,6 +517,7 @@ fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
   {
     version: def.version,
     requires_filesystem: def.requires_filesystem,
+    http_mount: def.http_mount,
     commands: def.commands[1:].map(node => __golem_tool_rebase_node(node, -1)),
   }
 }
@@ -536,6 +538,7 @@ fn __golem_tool_append_prepared(
     globals: root.globals,
     subcommands: __golem_tool_concat_array(root.subcommands, [offset]),
     body: root.body,
+    http: root.http,
   }
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
@@ -543,6 +546,7 @@ fn __golem_tool_append_prepared(
   {
     version: def.version,
     requires_filesystem: def.requires_filesystem,
+    http_mount: def.http_mount,
     commands,
   }
 }
@@ -554,6 +558,7 @@ fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "1.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "moonbit-streaming",
@@ -562,6 +567,7 @@ fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
+          http: None,
         },
         {
           name: "stream",
@@ -621,6 +627,7 @@ fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -638,11 +645,13 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "1.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -651,6 +660,7 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -662,6 +672,7 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -677,6 +688,7 @@ fn __golem_tool_def_MoonBitStreaming() -> @tool.ToolDef {
   __golem_tool_def_prepare_MoonBitStreaming(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -803,6 +815,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "2.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "canonical-grep",
@@ -998,6 +1011,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "replace",
@@ -1131,6 +1145,7 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -1148,11 +1163,13 @@ fn __golem_tool_def_prepare_CanonicalGrep(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "2.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -1161,6 +1178,7 @@ fn __golem_tool_def_prepare_CanonicalGrep(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -1172,6 +1190,7 @@ fn __golem_tool_def_prepare_CanonicalGrep(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -1187,6 +1206,7 @@ fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalGrep(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -1581,6 +1601,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "canonical-git",
@@ -1593,6 +1614,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1, 2],
           body: None,
+          http: None,
         },
         {
           name: "commit",
@@ -1843,6 +1865,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "log",
@@ -2068,6 +2091,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -2085,11 +2109,13 @@ fn __golem_tool_def_prepare_CanonicalGit(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -2098,6 +2124,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -2109,6 +2136,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let descendant_ancestors = __golem_tool_concat_globals(
@@ -2208,6 +2236,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
         examples: [],
       }),
       Some(["rmt"]),
+      None,
     )
     let def = __golem_tool_append_prepared(def, child)
     let child = __golem_tool_def_prepare_CanonicalStash(
@@ -2267,6 +2296,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
         examples: [],
       }),
       None,
+      None,
     )
     let def = __golem_tool_append_prepared(def, child)
     def
@@ -2281,6 +2311,7 @@ fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalGit(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -3825,6 +3856,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "remote",
@@ -3837,6 +3869,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1, 2, 3],
           body: None,
+          http: None,
         },
         {
           name: "add",
@@ -3972,6 +4005,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "remove",
@@ -4019,6 +4053,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "set-url",
@@ -4132,6 +4167,7 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -4149,11 +4185,13 @@ fn __golem_tool_def_prepare_CanonicalRemote(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -4162,6 +4200,7 @@ fn __golem_tool_def_prepare_CanonicalRemote(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -4173,6 +4212,7 @@ fn __golem_tool_def_prepare_CanonicalRemote(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -4188,6 +4228,7 @@ fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalRemote(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -4645,6 +4686,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "stash",
@@ -4716,6 +4758,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "pop",
@@ -4778,6 +4821,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "apply",
@@ -4840,6 +4884,7 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -4857,11 +4902,13 @@ fn __golem_tool_def_prepare_CanonicalStash(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -4870,6 +4917,7 @@ fn __golem_tool_def_prepare_CanonicalStash(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -4881,6 +4929,7 @@ fn __golem_tool_def_prepare_CanonicalStash(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -4896,6 +4945,7 @@ fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalStash(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -5269,6 +5319,7 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "canonical-big-bound",
@@ -5321,6 +5372,7 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -5338,11 +5390,13 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -5351,6 +5405,7 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -5362,6 +5417,7 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -5377,6 +5433,7 @@ fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
   __golem_tool_def_prepare_CanonicalBigBound(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -5507,6 +5564,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
     let def : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: true,
+      http_mount: None,
       commands: [
         {
           name: "moonbit-reflection-test",
@@ -5515,6 +5573,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
           globals: { options: [], flags: [], },
           subcommands: [1, 2, 3],
           body: None,
+          http: None,
         },
         {
           name: "echo",
@@ -5566,6 +5625,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "optional",
@@ -5618,6 +5678,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
         {
           name: "canonical-values",
@@ -5720,6 +5781,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
               open_world: true,
             }),
           }),
+          http: None,
         },
       ],
     }
@@ -5737,11 +5799,13 @@ fn __golem_tool_def_prepare_MoonBitReflectionTest(
   override_name : String?,
   override_doc : @toolCommon.Doc?,
   override_aliases : Array[String]?,
+  override_http : @toolCommon.CommandHttp?,
 ) -> @tool.ToolDef {
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
       requires_filesystem: true,
+      http_mount: None,
       commands: [
         {
           name: "__golem_ancestry",
@@ -5750,6 +5814,7 @@ fn __golem_tool_def_prepare_MoonBitReflectionTest(
           globals: strict_ancestors,
           subcommands: [],
           body: None,
+          http: None,
         },
       ],
     }
@@ -5761,6 +5826,7 @@ fn __golem_tool_def_prepare_MoonBitReflectionTest(
         override_name,
         override_doc,
         override_aliases,
+        override_http?,
       ),
     )
     let def = prepared
@@ -5776,6 +5842,7 @@ fn __golem_tool_def_MoonBitReflectionTest() -> @tool.ToolDef {
   __golem_tool_def_prepare_MoonBitReflectionTest(
     { options: [], flags: [], },
     { options: [], flags: [], },
+    None,
     None,
     None,
     None,
@@ -6118,6 +6185,7 @@ fn __golem_tool_wire_MoonBitStreaming() -> @toolCommon.Tool {
         globals: { options: [], flags: [], },
         subcommands: [1],
         body: None,
+        http: None,
       },
       {
         name: "stream",
@@ -6179,12 +6247,14 @@ fn __golem_tool_wire_MoonBitStreaming() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "1.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -6430,6 +6500,7 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "replace",
@@ -6550,12 +6621,14 @@ fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "2.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -6585,6 +6658,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
         globals: { options: [], flags: [], },
         subcommands: [1, 2, 6, 9],
         body: None,
+        http: None,
       },
       {
         name: "commit",
@@ -6872,6 +6946,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "remote",
@@ -6970,6 +7045,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
         },
         subcommands: [3, 4, 5],
         body: None,
+        http: None,
       },
       {
         name: "add",
@@ -7108,6 +7184,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "remove",
@@ -7166,6 +7243,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "set-url",
@@ -7288,6 +7366,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "stash",
@@ -7407,6 +7486,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "pop",
@@ -7481,6 +7561,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "apply",
@@ -7555,6 +7636,7 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "log",
@@ -7799,12 +7881,14 @@ fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -7900,12 +7984,14 @@ fn __golem_tool_wire_CanonicalBigBound() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
       requires_filesystem: false,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,
@@ -7931,6 +8017,7 @@ fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
         globals: { options: [], flags: [], },
         subcommands: [1, 2, 3],
         body: None,
+        http: None,
       },
       {
         name: "echo",
@@ -7984,6 +8071,7 @@ fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "optional",
@@ -8038,6 +8126,7 @@ fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
       {
         name: "canonical-values",
@@ -8146,12 +8235,14 @@ fn __golem_tool_wire_MoonBitReflectionTest() -> @toolCommon.Tool {
             open_world: true,
           }),
         }),
+        http: None,
       },
     ]
     let root = __golem_schema.push(@types.RecordType([]))
     {
       version: "0.0.0",
       requires_filesystem: true,
+      http_mount: None,
       commands: { nodes, },
       schema: {
         type_nodes: __golem_schema.nodes,

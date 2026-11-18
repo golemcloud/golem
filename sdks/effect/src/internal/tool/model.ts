@@ -10,6 +10,13 @@ import { Uint32 } from "../../WitTypes.js"
 import type { HostServices } from "../../host/HostLive.js"
 import type { Scope } from "effect"
 import { registerTool } from "./registry.js"
+import {
+  compileToolHttp,
+  compileToolMount,
+  type EndpointDef,
+  type MountDef,
+  type PrefixDef,
+} from "../../Http.js"
 export { registeredTools, resetTools } from "./registry.js"
 
 export type DocInput = string | Partial<ToolCommon.Doc>
@@ -300,6 +307,7 @@ type ModelServices<M extends CommandModel> =
       : { [K in keyof M["children"]]: ModelServices<M["children"][K]> }[keyof M["children"]])
 export interface CommandModel {
   readonly name: string
+  readonly http?: ToolCommon.CommandHttp
   readonly aliases: readonly string[]
   readonly doc?: DocInput
   readonly body?: BodyModel
@@ -310,6 +318,10 @@ export class CommandBuilder<M extends CommandModel = CommandModel> {
   readonly requiresFilesystem = false
   constructor(readonly model: M) {}
   declare readonly name: M["name"]
+  /** Declare this command's HTTP endpoint or prefix. @since 1.6.0 @category constructors */
+  http(spec: EndpointDef<string> | PrefixDef): CommandBuilder<M> {
+    return new CommandBuilder({ ...this.model, http: compileToolHttp(spec) })
+  }
   /** Bind this complete definition to its registered tool name. @since 1.6.0 @category constructors */
   client(
     options?: import("../../Tool.js").ClientOptions,
@@ -371,6 +383,7 @@ export interface ToolDefinition<
   readonly version: string
   readonly model: M
   readonly requiresFilesystem: boolean
+  readonly httpMount?: ToolCommon.ToolHttpMount
 }
 
 let toolClientFactory:
@@ -404,6 +417,7 @@ export const toolDefinition = <N extends string>(
     doc?: DocInput
     version?: string
     requiresFilesystem?: boolean
+    http?: MountDef<string, string>
   } = {},
 ): CommandBuilder<{ name: N; aliases: readonly string[]; children: Record<never, never> }> => {
   let model: CommandModel = {
@@ -416,6 +430,11 @@ export const toolDefinition = <N extends string>(
     name,
     version: options.version ?? "0.1.0",
     requiresFilesystem: options.requiresFilesystem ?? false,
+    httpMount: options.http ? compileToolMount(options.http) : undefined,
+    http: (spec: EndpointDef<string> | PrefixDef) => {
+      model = { ...model, http: compileToolHttp(spec) }
+      return definition
+    },
     body: (build: (body: BodyBuilder) => BodyBuilder<any, any, any>) => {
       model = { ...model, body: build(new BodyBuilder()).model }
       return definition
@@ -602,6 +621,7 @@ export function compileDefinition(
       name: m.name,
       aliases: [...m.aliases],
       doc: doc(m.doc),
+      http: m.http,
       globals: globalsWire(localGlobals),
       subcommands: children,
       body: cb ? bodyWire(cb) : undefined,
@@ -769,6 +789,7 @@ export function compileDefinition(
     wire: {
       version: definition.version,
       requiresFilesystem: definition.requiresFilesystem,
+      httpMount: definition.httpMount,
       commands: { nodes },
       schema: enc.finish(),
     },
