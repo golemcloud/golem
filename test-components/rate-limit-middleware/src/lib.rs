@@ -183,7 +183,7 @@ async fn persistent_rate_limit(
     );
     let admission = backend
         .admit(
-            principal_key(context.caller().immediate()),
+            principal_key(context.caller().original()),
             generate_idempotency_key().to_string(),
         )
         .await;

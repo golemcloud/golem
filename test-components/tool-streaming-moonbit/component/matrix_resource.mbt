@@ -306,7 +306,8 @@ struct MatrixResourceTyped {}
 
 ///|
 fn matrix_resource_principal(context : @tool.InvocationContext) -> String {
-  context.caller().immediate.to_string()
+  let caller = context.caller()
+  caller.original.to_string() + "|" + caller.immediate.to_string()
 }
 
 ///|
