@@ -19,6 +19,7 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::caller::{PublicCaller, PublicPrincipal};
+use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
     MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
@@ -476,44 +477,8 @@ impl TextOutput for PublicOplogEntry {
             }
             PublicOplogEntry::PendingUpdate(params) => {
                 logln(format_message_highlight("ENQUEUED UPDATE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}target revision:   {}",
-                    format_id(&params.target_revision),
-                ));
-                logln(format!(
-                    "{pad}update attempt:    {}",
-                    format_id(&params.update_attempt_index),
-                ));
-                match &params.description {
-                    PublicUpdateDescription::Automatic(_) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("automatic")
-                        ));
-                    }
-                    PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("snapshot assisted automatic")
-                        ));
-                    }
-                    PublicUpdateDescription::SnapshotBased(inner_params) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("snapshot based")
-                        ));
-                        logln(format!(
-                            "{pad}snapshot:          {}",
-                            BASE64_STANDARD.encode(&inner_params.payload),
-                        ));
-                        if let Some(name) = &inner_params.filesystem_snapshot {
-                            logln(format!("{pad}filesystem:        {}", format_id(name)));
-                        }
-                    }
+                for line in render_pending_update_lines(pad, params) {
+                    logln(line);
                 }
             }
             PublicOplogEntry::SuccessfulUpdate(params) => {
@@ -1237,9 +1202,61 @@ fn render_agent_invocation(
                 "{pad}target revision:   {}",
                 format_id(&params.target_revision)
             ));
+            lines.extend(render_requester_lines(pad, &params.requester));
         }
     }
 
+    lines
+}
+
+/// The lines of a `PendingUpdate` entry below its title: the update, and who requested it.
+fn render_pending_update_lines(pad: &str, params: &PendingUpdateParams) -> Vec<String> {
+    let mut lines = vec![
+        format!("{pad}at:                {}", format_id(&params.timestamp)),
+        format!(
+            "{pad}target revision:   {}",
+            format_id(&params.target_revision)
+        ),
+        format!(
+            "{pad}update attempt:    {}",
+            format_id(&params.update_attempt_index)
+        ),
+    ];
+    match &params.description {
+        PublicUpdateDescription::Automatic(_) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("automatic")
+            ));
+        }
+        PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("snapshot assisted automatic")
+            ));
+        }
+        PublicUpdateDescription::SnapshotBased(inner_params) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("snapshot based")
+            ));
+            lines.push(format!(
+                "{pad}snapshot:          {}",
+                BASE64_STANDARD.encode(&inner_params.payload),
+            ));
+            if let Some(name) = &inner_params.filesystem_snapshot {
+                lines.push(format!("{pad}filesystem:        {}", format_id(name)));
+            }
+        }
+    }
+    lines.extend(render_requester_lines(pad, &params.requester));
+    lines
+}
+
+/// The requester of an update: the caller of the update request, with its role and token lines.
+fn render_requester_lines(pad: &str, requester: &PublicCaller) -> Vec<String> {
+    let mut lines = vec![format!("{pad}requested by:")];
+    lines.extend(render_caller_lines(&format!("{pad}  "), requester));
     lines
 }
 
@@ -1675,6 +1692,7 @@ mod tests {
     fn manual_update() -> PublicAgentInvocation {
         PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
             target_revision: ComponentRevision::new(5).unwrap(),
+            requester: caller(),
         })
     }
 
@@ -1697,13 +1715,15 @@ mod tests {
     }
 
     /// Every invocation with a caller shows both roles and the tokens, and no claims line when the
-    /// entry holds no claims. A manual update has no caller.
+    /// entry holds no claims. A manual update has no caller: it shows the same lines for its
+    /// requester, under `requested by:`.
     fn assert_caller_lines(invocation: &PublicAgentInvocation, rendered: &str) {
-        if invocation.caller().is_some() {
-            assert_contains_all(rendered, &CALLER_LINES);
-        } else {
-            assert!(!rendered.contains("caller:"), "{rendered}");
-        }
+        assert_contains_all(rendered, &CALLER_LINES);
+        assert_eq!(
+            rendered.contains("requested by:"),
+            invocation.caller().is_none(),
+            "{rendered}"
+        );
         assert!(!rendered.contains("claims:"), "{rendered}");
     }
 
@@ -2030,6 +2050,48 @@ mod tests {
                 "process-oplog-entry count must not be rendered without a public count field:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn pending_update_renders_its_requester_under_requested_by() {
+        let params = PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            description: PublicUpdateDescription::Automatic(golem_schema::Empty {}),
+            update_attempt_index: golem_common::model::OplogIndex::from_u64(12),
+            requester: caller(),
+        };
+        let rendered =
+            strip_ansi_escapes::strip_str(render_pending_update_lines("    ", &params).join("\n"));
+        let at = format!("    at:                {}", timestamp());
+        assert_eq!(
+            rendered,
+            [
+                at.as_str(),
+                "    target revision:   3",
+                "    update attempt:    12",
+                "    type:              automatic",
+                "    requested by:",
+                r#"      original caller:   user ("http://test-idp.com","bob")"#,
+                r#"      immediate caller:  agent ("https://golem.example","agent:relay")"#,
+                "      tokens:",
+                r#"        - 00000000-0000-0000-0000-0000000070c1 made by ("https://golem.example","account:1")"#,
+                "        - 00000000-0000-0000-0000-0000000070c2 (no maker)",
+            ]
+            .join("\n")
+        );
+
+        // The claims of a requester show only when the entry holds them.
+        let claims = serde_json::json!({"email": "bob@mail.example"});
+        let mut with_claims = params;
+        with_claims.requester.original = bob(Some(claims));
+        let rendered = strip_ansi_escapes::strip_str(
+            render_pending_update_lines("    ", &with_claims).join("\n"),
+        );
+        assert!(
+            rendered.contains(r#"      claims:            {"email":"bob@mail.example"}"#),
+            "{rendered}"
+        );
     }
 
     #[test]

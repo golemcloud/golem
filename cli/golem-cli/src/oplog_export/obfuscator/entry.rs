@@ -626,13 +626,15 @@ impl Walker<'_, '_> {
                     .add("caller", self.caller(caller))
                     .build(),
             ),
-            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Some(
-                    Fields::new()
-                        .add("targetRevision", number(target_revision.get()))
-                        .build(),
-                )
-            }
+            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+                target_revision,
+                requester,
+            }) => Some(
+                Fields::new()
+                    .add("targetRevision", number(target_revision.get()))
+                    .add("requester", self.caller(requester))
+                    .build(),
+            ),
         };
         kept_case(
             CaseKind::Variant,
@@ -1113,10 +1115,12 @@ impl Walker<'_, '_> {
                 target_revision,
                 description,
                 update_attempt_index,
+                requester,
             }) => Fields::new()
                 .add("targetRevision", number(target_revision.get()))
                 .add("description", self.update_description(description))
                 .add("updateAttemptIndex", idx(update_attempt_index))
+                .add("requester", self.caller(requester))
                 .build(),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp: _,

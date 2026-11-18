@@ -2755,12 +2755,14 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 mime_type: "application/octet-stream".to_string(),
                 filesystem_snapshot: Some("u-8e1a7f2c-4d3b-4e5f-9a6b-7c8d9e0f1a2b".to_string()),
             }),
+            requester: relayed_caller(),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
             update_attempt_index: OplogIndex::from_u64(18),
             description: PublicUpdateDescription::Automatic(Empty {}),
+            requester: account_caller(),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
@@ -2769,6 +2771,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             description: PublicUpdateDescription::SnapshotAssistedAutomatic(
                 SnapshotAssistedAutomaticUpdateParameters {},
             ),
+            requester: tool_caller(),
         }),
         PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
             timestamp: timestamp(),
@@ -2973,6 +2976,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             not_before: None,
             invocation: PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
                 target_revision: ComponentRevision::new(5).unwrap(),
+                requester: account_caller(),
             }),
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
@@ -3008,6 +3012,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             target_revision: ComponentRevision::new(8).unwrap(),
             update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
+            requester: account_caller(),
         }),
     ];
     let create = entries
