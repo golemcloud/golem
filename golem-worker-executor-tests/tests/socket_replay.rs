@@ -1519,3 +1519,80 @@ async fn p3_udp_failed_connect_that_disconnects_replays_as_disconnected(
     assert_eq!(other.receive().await?, (b"free".to_vec(), local));
     session.finish().await
 }
+
+/// The endpoint rebuild binds the native socket on the recorded port, so Linux keeps that port on
+/// a later disconnect, unlike the implicit bind or the bind on port 0 that selected it. The entry
+/// records the rebuild and keeps the port too: the getter reports the address the peer sees after
+/// the disconnect, live and after a second reconstruction.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "udp-rebuilt-disc",
+    )
+    .await?;
+
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("i".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind_any", data_value!("w".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let mut ports = Vec::new();
+    for slot in ["i", "w"] {
+        let connected: Result<(), String> = session
+            .call("p3_udp_connect", data_value!(slot.to_string(), peer.port()))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let local = local_address(&session, slot).await?;
+        let port = local
+            .strip_prefix("127.0.0.1:")
+            .expect("interface address")
+            .to_string();
+        ports.push(port);
+    }
+
+    session.restart_executor().await?;
+    for (slot, port) in ["i", "w"].into_iter().zip(&ports) {
+        send_to(&session, slot, None, slot.as_bytes()).await?;
+        let (_, source) = peer.receive().await?;
+        assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
+        let disconnected: Result<(), String> = session
+            .call("p3_udp_disconnect", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(disconnected, Ok(()));
+        assert_eq!(
+            local_address(&session, slot).await?,
+            format!("0.0.0.0:{port}")
+        );
+        send_to(&session, slot, Some(other.port()), b"live").await?;
+        let (_, source) = other.receive().await?;
+        assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
+    }
+
+    session.restart_executor().await?;
+    for (slot, port) in ["i", "w"].into_iter().zip(&ports) {
+        assert_eq!(
+            local_address(&session, slot).await?,
+            format!("0.0.0.0:{port}")
+        );
+        send_to(&session, slot, Some(other.port()), b"replayed").await?;
+        let (_, source) = other.receive().await?;
+        assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
+    }
+    session.finish().await
+}

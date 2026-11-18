@@ -1062,7 +1062,10 @@ request, or to the unspecified address with port 0 after an implicit bind, becau
 socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
 binds the native socket on the bind request's address with the recorded port and connects it again
 when the entry is connected, without sending a packet; an unspecified address with port 0 stays
-unbound until the next send binds it implicitly. When that
+unbound until the next send binds it implicitly. A rebuild on a fixed port is recorded as
+`Rebound` in the response of the call that performed it, because Linux then keeps that port on a
+disconnect; the entry takes the rebuilt port into its bind request. Receive records the endpoint
+change of its rebuild too. When that
 fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
 is not checked against grants again, each datagram still is. Send records only the target and the
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent

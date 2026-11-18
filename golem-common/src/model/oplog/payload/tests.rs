@@ -1583,9 +1583,9 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
         HostResponseP3SocketsUdpReceive {
             result: Ok(SerializableP3UdpDatagram {
                 data: b"incoming udp bytes".to_vec(),
-                remote_address,
+                remote_address: remote_address.clone(),
             }),
-            endpoint: None,
+            endpoint: Some(SerializableP3UdpEndpoint::Rebound(remote_address)),
         },
     );
 }

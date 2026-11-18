@@ -789,6 +789,9 @@ pub enum SerializableP3UdpEndpoint {
     /// The local address of the socket changed to this address: an implicit bind, or the
     /// interface address that a connect selected for a wildcard bind.
     Bound(SerializableP3IpSocketAddress),
+    /// The endpoint rebuild bound the native socket again on the port of this local address. The
+    /// port now stays bound on a disconnect, as after an explicit bind of that port.
+    Rebound(SerializableP3IpSocketAddress),
     /// The socket could not get its recorded local address back after recovery.
     Lost,
 }

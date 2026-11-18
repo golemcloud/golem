@@ -95,6 +95,19 @@ fn apply_endpoint(entry: &mut SocketEntry, endpoint: &Option<SerializableP3UdpEn
                 entry.phase = SocketPhase::Bound;
             }
         }
+        Some(SerializableP3UdpEndpoint::Rebound(local_address)) => {
+            entry.bind_request = Some(SerializableP3IpSocketAddress {
+                port: local_address.port,
+                ..entry
+                    .bind_request
+                    .clone()
+                    .unwrap_or_else(|| unspecified_address(entry.family))
+            });
+            entry.local_address = Some(local_address.clone());
+            if entry.phase == SocketPhase::Created {
+                entry.phase = SocketPhase::Bound;
+            }
+        }
         Some(SerializableP3UdpEndpoint::Lost) => entry.phase = SocketPhase::Lost,
         None => {}
     }
@@ -138,11 +151,15 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
                 port: local_address.port,
                 ..entry.bind_request.clone().unwrap_or(unspecified.clone())
             });
+    let mut rebound = false;
     let restored = match bind_address {
         // No endpoint, or one that a disconnect released: the next send binds implicitly.
         None => Ok(()),
         Some(bind_address) if bind_address == unspecified => Ok(()),
         Some(bind_address) => {
+            // A bind on a fixed port keeps that port on a disconnect, unlike the implicit bind or
+            // the bind on port 0 that selected it, so the next endpoint change records it.
+            rebound = bind_address.port != 0;
             let remote_address = entry.remote_address.clone();
             let mut wasi = ctx.as_wasi_view();
             let mut view = wasi.sockets();
@@ -165,6 +182,7 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     match restored {
         Ok(()) => {
             entry.native_bound = true;
+            entry.native_rebound = rebound;
             Ok(true)
         }
         Err(error) => {
@@ -176,9 +194,10 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     }
 }
 
-/// The new local address of the native socket after a live connect or send, when it differs
-/// from the entry: an implicit bind, or the interface address that a connect selects for a
-/// wildcard bind.
+/// The new local address of the native socket after a live connect, send or receive, when it
+/// differs from the entry: an implicit bind, the interface address that a connect selects for a
+/// wildcard bind, or the port that a rebuild on port 0 selected. After a rebuild on a fixed port
+/// it is always `Rebound`.
 fn endpoint_change<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     rep: u32,
@@ -191,9 +210,14 @@ fn endpoint_change<Ctx: WorkerCtx>(
             .map(SerializableP3IpSocketAddress::from)
     };
     let entry = udp_entry(ctx, rep)?;
-    Ok(native
-        .filter(|address| entry.local_address.as_ref() != Some(address))
-        .map(SerializableP3UdpEndpoint::Bound))
+    let rebound = std::mem::take(&mut entry.native_rebound);
+    Ok(match native {
+        Some(address) if rebound => Some(SerializableP3UdpEndpoint::Rebound(address)),
+        Some(address) if entry.local_address.as_ref() != Some(&address) => {
+            Some(SerializableP3UdpEndpoint::Bound(address))
+        }
+        _ => None,
+    })
 }
 
 fn unspecified_address(family: types::IpAddressFamily) -> SerializableP3IpSocketAddress {
@@ -496,9 +520,10 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         observe_function_call(&*self.0, "sockets::types::udp-socket", "disconnect");
         // Not recorded: the entry decides the result, live and on replay. The native socket is
         // disconnected only when it holds the entry's endpoint; otherwise the endpoint rebuild
-        // binds it without connecting. Linux keeps only the address and port that an explicit
-        // bind named, so the local address goes back to the bind request, or to the unspecified
-        // address and port 0 after an implicit bind. The next send records its new endpoint.
+        // binds it without connecting. Linux keeps only the address and port that a native bind
+        // named, so the local address goes back to the bind request (with the port of a recorded
+        // rebuild), or to the unspecified address and port 0 after an implicit bind. The next send
+        // records its new endpoint.
         let rep = socket.rep();
         let entry = udp_entry(self.0.durable_ctx_mut(), rep).map_err(SocketError::trap)?;
         if entry.phase == SocketPhase::Lost {
@@ -787,6 +812,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
                 // Only native receive is interruptible. Replay, terminal persistence and
                 // completion delivery remain owned by the durable call outside this select.
                 let result = interruptible_receive(native, interrupt).await?;
+                let endpoint = store.with(|mut access| {
+                    endpoint_change(durable_worker_ctx::<Ctx, U>(access.data_mut()), rep)
+                })?;
 
                 Ok::<_, wasmtime::Error>(HostResponseP3SocketsUdpReceive {
                     result: match result {
@@ -796,7 +824,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
                         }),
                         Err(error) => Err(serialize_socket_error(error)?),
                     },
-                    endpoint: None,
+                    endpoint,
                 })
             })
             .await
