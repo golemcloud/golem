@@ -379,6 +379,7 @@ sealed trait JsProcessOplogEntriesParameters extends js.Object {
 @js.native
 sealed trait JsManualUpdateParameters extends js.Object {
   def targetRevision: js.BigInt = js.native
+  def requester: JsPublicCaller = js.native
 }
 
 // --- AgentInvocation  –  tagged union ---
@@ -546,6 +547,7 @@ sealed trait JsPendingUpdateParameters extends js.Object {
   def timestamp: JsDatetime            = js.native
   def targetRevision: js.BigInt        = js.native
   def description: JsUpdateDescription = js.native
+  def requester: JsPublicCaller        = js.native
 }
 
 // --- SuccessfulUpdateParameters ---
