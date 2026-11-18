@@ -297,6 +297,10 @@ const Caller = defineAgent({
       input: { payload: s.bytes() },
       returns: Evidence,
     }),
+    timerExportBoundary: method({
+      input: { awaitTimer: z.boolean() },
+      returns: Evidence,
+    }),
     typedStdoutFailure: method({
       input: {},
       returns: z.string(),
@@ -651,6 +655,23 @@ Caller.implement({
         output.set(chunk, offset);
         offset += chunk.byteLength;
       }
+      return { output, bytesRead };
+    },
+    async timerExportBoundary({ awaitTimer }) {
+      const stdin = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+      const invocation = TsStreamingClient.newClient().ts_streaming(
+        awaitTimer ? 'referenced-timer-awaited' : 'referenced-timer-unawaited',
+        stdin,
+      );
+      if (!invocation.stdout) throw new Error('TypeScript tool omitted stdout');
+      const [bytesRead, output] = await Promise.all([
+        invocation.result,
+        collect(invocation.stdout.getReader()),
+      ]);
       return { output, bytesRead };
     },
     async typedStdoutFailure() {
