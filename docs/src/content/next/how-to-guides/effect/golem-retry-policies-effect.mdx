@@ -168,9 +168,12 @@ Use `Retry.withPolicy` when the policy should apply only while one Effect runs:
 const result = yield* Retry.withPolicy(httpTransient, doHostWork);
 ```
 
-`Retry.withPolicy` restores the previous policy with the same name, or removes the temporary
-policy when none existed, on success, typed failure, or interruption. A policy introduced only by
-`withPolicy` is therefore not visible after the wrapped Effect completes.
+`Retry.withPolicy` runs the Effect inside a retry policy scope. While the scope is open, the
+policy overrides the agent-wide policy with the same name for host calls. The scope closes on
+success, typed failure, or interruption. It changes no agent-wide policy and records no oplog
+entry, so the policy is not visible after the wrapped Effect completes. JavaScript code of one
+agent runs on one component-model task, so other fibers of the same invocation that run while
+the scope is open also see the policy.
 
 Do not wrap implementation setup itself in `Retry.withPolicy` and expect the policy to remain
 active for later method calls. Use `Retry.setPolicy` for persistent installation.

@@ -100,8 +100,20 @@ pub struct EnvBasedTestDependenciesConfig {
     pub redis_host: String,
     pub redis_port: u16,
     pub registry_http_port: u16,
+    pub registry_grpc_port: u16,
+    pub shard_manager_http_port: u16,
+    pub shard_manager_grpc_port: u16,
+    pub compilation_http_port: u16,
+    pub compilation_grpc_port: u16,
+    pub worker_http_port: u16,
+    pub worker_grpc_port: u16,
+    pub worker_custom_request_port: u16,
+    pub worker_mcp_port: u16,
+    pub executor_base_http_port: u16,
+    pub executor_base_grpc_port: u16,
     pub redis_key_prefix: String,
     pub golem_repo_root: PathBuf,
+    pub bin_profile: String,
     pub unique_network_id: String,
 }
 
@@ -110,33 +122,83 @@ impl EnvBasedTestDependenciesConfig {
         Self::default().with_env_overrides()
     }
 
-    pub fn with_env_overrides(mut self) -> Self {
-        if let Some(quiet) = opt_env_var_bool("QUIET") {
+    /// Adds `GOLEM_TEST_PORT_OFFSET` to the listener ports, then applies absolute
+    /// `REDIS_PORT` and `REGISTRY_HTTP_PORT` overrides.
+    pub fn with_env_overrides(self) -> Self {
+        self.with_env_overrides_from(opt_env_var)
+    }
+
+    /// Applies environment values supplied by the caller, without changing the process environment.
+    pub fn with_env_overrides_from(mut self, env: impl Fn(&str) -> Option<String>) -> Self {
+        if let Some(offset) = env("GOLEM_TEST_PORT_OFFSET") {
+            let offset: u16 = offset
+                .parse()
+                .expect("Failed to parse GOLEM_TEST_PORT_OFFSET");
+            for port in [
+                &mut self.redis_port,
+                &mut self.registry_http_port,
+                &mut self.registry_grpc_port,
+                &mut self.shard_manager_http_port,
+                &mut self.shard_manager_grpc_port,
+                &mut self.compilation_http_port,
+                &mut self.compilation_grpc_port,
+                &mut self.worker_http_port,
+                &mut self.worker_grpc_port,
+                &mut self.worker_custom_request_port,
+                &mut self.worker_mcp_port,
+                &mut self.executor_base_http_port,
+                &mut self.executor_base_grpc_port,
+            ] {
+                *port = port
+                    .checked_add(offset)
+                    .expect("GOLEM_TEST_PORT_OFFSET overflows a test port");
+            }
+        }
+
+        if let Some(quiet) = env("QUIET").and_then(|value| value.parse::<bool>().ok()) {
             self.quiet = quiet;
         }
 
-        if let Some(redis_port) = opt_env_var("REDIS_PORT") {
+        if let Some(redis_port) = env("REDIS_PORT") {
             self.redis_port = redis_port.parse().expect("Failed to parse REDIS_PORT");
         }
 
-        if let Some(registry_http_port) = opt_env_var("REGISTRY_HTTP_PORT") {
+        if let Some(registry_http_port) = env("REGISTRY_HTTP_PORT") {
             self.registry_http_port = registry_http_port
                 .parse()
                 .expect("Failed to parse REGISTRY_HTTP_PORT");
         }
 
-        if let Some(redis_key_prefix) = opt_env_var("REDIS_KEY_PREFIX") {
+        if let Some(redis_key_prefix) = env("REDIS_KEY_PREFIX") {
             self.redis_key_prefix = redis_key_prefix;
         }
 
-        if let Some(redis_prefix) = opt_env_var("REDIS_PREFIX") {
+        if let Some(redis_prefix) = env("REDIS_PREFIX") {
             self.redis_key_prefix = redis_prefix;
         }
 
-        if let Some(golem_repo_root) = opt_env_var("GOLEM_REPO_ROOT") {
+        if let Some(golem_repo_root) = env("GOLEM_REPO_ROOT") {
             self.golem_repo_root = golem_repo_root.into();
         }
 
+        if let Some(profile) = env("GOLEM_TEST_BIN_PROFILE") {
+            assert!(
+                matches!(profile.as_str(), "debug" | "dev-ci"),
+                "GOLEM_TEST_BIN_PROFILE must be debug or dev-ci"
+            );
+            self.bin_profile = profile;
+        }
+
+        if let Some(last_index) = self.worker_executor_cluster_size.checked_sub(1) {
+            let last_index =
+                u16::try_from(last_index).expect("worker executor cluster is too large");
+            self.executor_base_http_port
+                .checked_add(last_index)
+                .expect("worker executor HTTP port overflows");
+            self.executor_base_grpc_port
+                .checked_add(last_index)
+                .expect("worker executor gRPC port overflows");
+        }
         self
     }
 
@@ -172,21 +234,31 @@ impl EnvBasedTestDependenciesConfig {
         self.golem_repo_root.join("test-components")
     }
 
-    fn debug_targets_dirs(&self) -> PathBuf {
-        resolve_cargo_target_dir(&self.golem_repo_root).join("debug")
+    fn service_binaries_dir(&self) -> PathBuf {
+        resolve_cargo_target_dir(&self.golem_repo_root).join(&self.bin_profile)
     }
 }
 
 /// Resolves the cargo target directory for the workspace rooted at `repo_root`.
 ///
-/// Instead of assuming `<repo_root>/target`, this asks cargo itself via `cargo metadata`,
-/// so it honors `CARGO_TARGET_DIR`, `build.target-dir` in cargo config, and cargo wrapper
-/// scripts that redirect the target directory. If cargo cannot be queried it falls back to
-/// the legacy `<repo_root>/target` location.
+/// Uses `CARGO_TARGET_DIR` directly when supplied, without invoking Cargo. Otherwise,
+/// asks Cargo via `cargo metadata` to honor `build.target-dir` and Cargo wrappers.
+/// If Cargo cannot be queried it falls back to `<repo_root>/target`.
 ///
-/// The result is memoized per `repo_root` for the lifetime of the process.
+/// The metadata result is memoized per `repo_root` for the lifetime of the process.
 fn resolve_cargo_target_dir(repo_root: &Path) -> PathBuf {
     use std::sync::{Mutex, OnceLock};
+
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let target_dir = PathBuf::from(target_dir);
+        return if target_dir.is_absolute() {
+            target_dir
+        } else {
+            std::env::current_dir()
+                .expect("Failed to resolve relative CARGO_TARGET_DIR")
+                .join(target_dir)
+        };
+    }
 
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, PathBuf>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -279,8 +351,20 @@ impl Default for EnvBasedTestDependenciesConfig {
             redis_host: "localhost".to_string(),
             redis_port: 6379,
             registry_http_port: 8081,
+            registry_grpc_port: 9091,
+            shard_manager_http_port: 9021,
+            shard_manager_grpc_port: 9020,
+            compilation_http_port: 8083,
+            compilation_grpc_port: 9094,
+            worker_http_port: 8082,
+            worker_grpc_port: 9092,
+            worker_custom_request_port: 9093,
+            worker_mcp_port: 9095,
+            executor_base_http_port: 9000,
+            executor_base_grpc_port: 9100,
             redis_key_prefix: "".to_string(),
             golem_repo_root: PathBuf::from(".."),
+            bin_profile: "debug".to_string(),
             unique_network_id: Uuid::new_v4().to_string(),
         }
     }
@@ -356,10 +440,10 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn RegistryService> {
         Arc::new(
             SpawnedRegistryService::new(
-                &config.debug_targets_dirs().join("golem-registry-service"),
+                &config.service_binaries_dir().join("golem-registry-service"),
                 &config.golem_repo_root.join("golem-registry-service"),
                 config.registry_http_port,
-                9091,
+                config.registry_grpc_port,
                 rdb,
                 Some(component_compilation_service),
                 config.default_verbosity(),
@@ -378,13 +462,13 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn ShardManager> {
         Arc::new(
             SpawnedShardManager::new(
-                &config.debug_targets_dirs().join("golem-shard-manager"),
+                &config.service_binaries_dir().join("golem-shard-manager"),
                 &config.golem_repo_root.join("golem-shard-manager"),
                 config.number_of_shards_override,
                 None,
                 false,
-                9021,
-                9020,
+                config.shard_manager_http_port,
+                config.shard_manager_grpc_port,
                 rdb,
                 registry_service,
                 config.default_verbosity(),
@@ -402,13 +486,13 @@ impl EnvBasedTestDependencies {
         Arc::new(
             SpawnedComponentCompilationService::new(
                 &config
-                    .debug_targets_dirs()
+                    .service_binaries_dir()
                     .join("golem-component-compilation-service"),
                 &config
                     .golem_repo_root
                     .join("golem-component-compilation-service"),
-                8083,
-                9094,
+                config.compilation_http_port,
+                config.compilation_grpc_port,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
@@ -428,12 +512,12 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn WorkerService> {
         Arc::new(
             SpawnedWorkerService::new(
-                &config.debug_targets_dirs().join("golem-worker-service"),
+                &config.service_binaries_dir().join("golem-worker-service"),
                 &config.golem_repo_root.join("golem-worker-service"),
-                8082,
-                9092,
-                9093,
-                9095,
+                config.worker_http_port,
+                config.worker_grpc_port,
+                config.worker_custom_request_port,
+                config.worker_mcp_port,
                 shard_manager,
                 rdb,
                 redis,
@@ -459,9 +543,9 @@ impl EnvBasedTestDependencies {
         Arc::new(
             SpawnedWorkerExecutorCluster::new(
                 config.worker_executor_cluster_size,
-                9000,
-                9100,
-                &config.debug_targets_dirs().join("worker-executor"),
+                config.executor_base_http_port,
+                config.executor_base_grpc_port,
+                &config.service_binaries_dir().join("worker-executor"),
                 &config.golem_repo_root.join("golem-worker-executor"),
                 rdb,
                 shard_manager,
@@ -1170,16 +1254,6 @@ fn opt_env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn opt_env_var_bool(name: &str) -> Option<bool> {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| match value.as_str() {
-            "true" => Some(true),
-            "false" => Some(false),
-            _ => None,
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1187,11 +1261,134 @@ mod tests {
         RegistryServiceDescriptor, ShardManagerDescriptor, TestTempDir, WorkerExecutorDescriptor,
         WorkerServiceDescriptor, locate_service_executable,
     };
+    use crate::config::EnvBasedTestDependenciesConfig;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
     use uuid::Uuid;
+
+    fn ports(config: &EnvBasedTestDependenciesConfig) -> Vec<u16> {
+        let mut ports = vec![
+            config.redis_port,
+            config.registry_http_port,
+            config.registry_grpc_port,
+            config.shard_manager_http_port,
+            config.shard_manager_grpc_port,
+            config.compilation_http_port,
+            config.compilation_grpc_port,
+            config.worker_http_port,
+            config.worker_grpc_port,
+            config.worker_custom_request_port,
+            config.worker_mcp_port,
+        ];
+        for index in 0..config.worker_executor_cluster_size as u16 {
+            ports.push(config.executor_base_http_port + index);
+            ports.push(config.executor_base_grpc_port + index);
+        }
+        ports
+    }
+
+    #[test]
+    fn bin_profile_defaults_and_overrides() {
+        let defaults = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|_| None);
+        assert_eq!(defaults.bin_profile, "debug");
+        let repo_root = TempDir::new().unwrap();
+        let target_dir = match std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from) {
+            Some(path) if path.is_absolute() => path,
+            Some(path) => std::env::current_dir().unwrap().join(path),
+            None => repo_root.path().join("target"),
+        };
+        for profile in ["debug", "dev-ci"] {
+            let config =
+                EnvBasedTestDependenciesConfig::default().with_env_overrides_from(
+                    |key| match key {
+                        "GOLEM_TEST_BIN_PROFILE" => Some(profile.to_string()),
+                        "GOLEM_REPO_ROOT" => Some(repo_root.path().to_str().unwrap().to_string()),
+                        _ => None,
+                    },
+                );
+            assert_eq!(config.bin_profile, profile);
+            assert_eq!(config.service_binaries_dir(), target_dir.join(profile));
+        }
+        for profile in ["", "release", "../debug", "DEV-CI"] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
+                        (key == "GOLEM_TEST_BIN_PROFILE").then(|| profile.to_string())
+                    })
+                })
+                .is_err(),
+                "accepted invalid binary profile {profile}"
+            );
+        }
+    }
+
+    #[test]
+    fn port_offset_defaults_and_subflows() {
+        let defaults = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|_| None);
+        let expected = vec![
+            6379, 8081, 9091, 9021, 9020, 8083, 9094, 8082, 9092, 9093, 9095, 9000, 9100, 9001,
+            9101, 9002, 9102, 9003, 9103,
+        ];
+        assert_eq!(ports(&defaults), expected);
+        let mut seen = std::collections::HashSet::new();
+        for offset in [0u16, 10000, 20000, 30000] {
+            let config = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
+                (key == "GOLEM_TEST_PORT_OFFSET").then(|| offset.to_string())
+            });
+            assert_eq!(
+                ports(&config),
+                expected
+                    .iter()
+                    .map(|port| port + offset)
+                    .collect::<Vec<_>>()
+            );
+            for port in ports(&config) {
+                assert!(seen.insert(port), "subflows share port {port}");
+            }
+        }
+    }
+
+    #[test]
+    fn port_offset_explicit_ports_are_absolute() {
+        for offset in [None, Some("10000")] {
+            let config = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
+                match key {
+                    "GOLEM_TEST_PORT_OFFSET" => offset,
+                    "REDIS_PORT" => Some("12345"),
+                    "REGISTRY_HTTP_PORT" => Some("23456"),
+                    _ => None,
+                }
+                .map(str::to_string)
+            });
+            assert_eq!(config.redis_port, 12345);
+            assert_eq!(config.registry_http_port, 23456);
+            assert_eq!(
+                config.registry_grpc_port,
+                if offset.is_some() { 19091 } else { 9091 }
+            );
+        }
+    }
+
+    #[test]
+    fn port_offset_invalid_and_overflow_are_rejected() {
+        for offset in ["", "invalid", "-1", "65536", "60000", "56433"] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
+                        (key == "GOLEM_TEST_PORT_OFFSET").then(|| offset.to_string())
+                    })
+                })
+                .is_err(),
+                "accepted invalid or overflowing offset {offset}"
+            );
+        }
+        let config = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
+            (key == "GOLEM_TEST_PORT_OFFSET").then(|| "56432".to_string())
+        });
+        assert_eq!(ports(&config).into_iter().max(), Some(u16::MAX));
+    }
 
     #[test]
     fn service_executable_prefers_the_test_binary_profile_directory() {

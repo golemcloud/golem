@@ -45,6 +45,7 @@ pub mod filesystem_inspection;
 pub mod filesystem_snapshots;
 pub mod fork;
 pub mod fuel;
+pub mod gc_heap;
 pub mod hot_update;
 pub mod http;
 pub mod ignite_service;
@@ -77,6 +78,7 @@ pub mod revert;
 pub mod revert_replay_tail;
 pub mod rpc;
 pub mod scalability;
+pub mod scan_budget;
 pub mod scheduled_durable;
 pub mod scheduled_ephemeral;
 pub mod scheduler_storage;
@@ -138,6 +140,7 @@ tag_suite!(owner_tool_isolation, group2);
 tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
+tag_suite!(scan_budget, group2);
 tag_suite!(retry_policies, group2);
 tag_suite!(scope_cards, group2);
 
@@ -295,8 +298,8 @@ test_component!(
 test_component!(
     rate_limit_middleware,
     "rate_limit_middleware",
-    "golem_rate_limit_middleware_release",
-    "golem:rate-limit-middleware"
+    "golem_it_tool_streaming_rate_limit_middleware_release",
+    "golem-it:tool-streaming-rate-limit-middleware"
 );
 test_component!(
     tool_runtime_bypass_owner,
@@ -485,6 +488,18 @@ test_component!(
     "large_dynamic_memory",
     "scalability_large_dynamic_memory_release",
     "scalability:large-dynamic-memory"
+);
+test_component!(
+    gc_heap,
+    "gc_heap",
+    "golem_it_gc_heap_release",
+    "golem-it:gc-heap"
+);
+test_component!(
+    gc_initializer,
+    "gc_initializer",
+    "golem_it_gc_initializer_release",
+    "golem-it:gc-heap"
 );
 test_component!(
     large_initial_memory,

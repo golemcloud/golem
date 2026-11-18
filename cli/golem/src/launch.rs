@@ -105,8 +105,14 @@ pub async fn launch_golem_services(
         "Golem server is starting, requests are answered with 503 Service Unavailable until it is ready"
     );
 
-    let started_components =
-        start_components(config, &golem_issuer, &startup_progress, &mut join_set).await?;
+    let started_components = start_components(
+        config,
+        &golem_issuer,
+        &startup_progress,
+        router_port,
+        &mut join_set,
+    )
+    .await?;
 
     if accounts_with_well_known_token(config).is_empty()
         && revoke_well_known_token(&started_components.registry_service.endpoint).await?
@@ -155,6 +161,7 @@ async fn start_components(
     config: &GolemServerConfig,
     golem_issuer: &GolemIssuer,
     startup_progress: &StartupProgress,
+    router_port: u16,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
     let component_compilation_service_config = config.component_compilation_service.clone();
@@ -184,6 +191,18 @@ async fn start_components(
     )
     .await?;
 
+    // Agent sockets never reach a port of this process.
+    let refused_ports = vec![
+        router_port,
+        component_compilation_service.grpc_port,
+        component_compilation_service.http_port,
+        registry_service.grpc_port,
+        shard_manager.grpc_port,
+        shard_manager.http_port,
+        worker_service.grpc_port,
+        worker_service.custom_request_port,
+        worker_service.mcp_port,
+    ];
     let worker_executor = run_worker_executor(
         worker_executor_config(
             config,
@@ -191,6 +210,7 @@ async fn start_components(
             &shard_manager,
             &registry_service,
             &worker_service,
+            refused_ports,
         ),
         join_set,
     )
@@ -250,8 +270,10 @@ fn worker_executor_config(
     shard_manager: &golem_shard_manager::RunDetails,
     registry_service: &golem_registry_service::SingleExecutableRunDetails,
     worker_service: &golem_worker_service::TrafficReadyEndpoints,
+    refused_ports: Vec<u16>,
 ) -> WorkerExecutorConfig {
     let mut config = config.worker_executor.clone();
+    config.agent_sockets.refused_ports.extend(refused_ports);
     config.golem_issuer = Some(golem_issuer.clone());
     config.shard_manager.host = INTERNAL_HOST.to_string();
     config.shard_manager.port = shard_manager.grpc_port;
@@ -375,6 +397,7 @@ mod tests {
             &shard_manager,
             &registry_service,
             &worker_service,
+            Vec::new(),
         );
         assert_eq!(service_config.golem_issuer, Some(issuer.clone()));
         assert_eq!(executor_config.golem_issuer, Some(issuer));

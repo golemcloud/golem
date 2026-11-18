@@ -72,19 +72,16 @@ pub fn remove_retry_policy(name : String) -> Unit {
 }
 
 ///|
-/// Temporarily sets a named retry policy. When the returned guard is dropped,
-/// the previous policy with the same name is restored (or removed if it
-/// didn't exist before).
+/// Opens a retry policy scope for a named retry policy. While the returned
+/// guard is not dropped, the policy overrides the agent-wide policy with the
+/// same name for the host calls of the current task. The scope changes no
+/// agent-wide policy and records no oplog entry.
 pub fn use_retry_policy(policy : NamedRetryPolicy) -> RetryPolicyGuard {
-  let previous = @retry.get_retry_policy_by_name(policy.name)
-  let name = policy.name
-  @retry.set_retry_policy(policy)
-  { previous, name, }
+  { scope: Some(@retry_scope.RetryPolicyScope::retry_policy_scope(policy)) }
 }
 
 ///|
-/// Temporarily sets a high-level named retry policy. The previous raw policy
-/// with the same name is restored when the returned guard is dropped.
+/// Opens a retry policy scope for a high-level named retry policy.
 pub fn use_named_policy(
   policy : NamedPolicy,
 ) -> RetryPolicyGuard raise RetryBuilderError {
@@ -92,9 +89,8 @@ pub fn use_named_policy(
 }
 
 ///|
-/// Runs a function with a named retry policy temporarily set.
-/// The previous policy is restored (or removed) after the function completes,
-/// even if it raises.
+/// Runs a function inside a retry policy scope for a named retry policy.
+/// The scope ends when the function completes, even if it raises.
 pub fn[T] with_retry_policy(policy : NamedRetryPolicy, f : () -> T) -> T {
   let g = use_retry_policy(policy)
   defer g.drop()
@@ -102,8 +98,8 @@ pub fn[T] with_retry_policy(policy : NamedRetryPolicy, f : () -> T) -> T {
 }
 
 ///|
-/// Runs a function with a high-level named retry policy temporarily set.
-/// The previous raw policy is restored even if the function raises.
+/// Runs a function inside a retry policy scope for a high-level named retry
+/// policy. The scope ends even if the function raises.
 pub fn[T] with_named_policy(
   policy : NamedPolicy,
   f : () -> T,
@@ -114,19 +110,16 @@ pub fn[T] with_named_policy(
 }
 
 ///|
-/// Guard that restores the previous state of a named retry policy on drop.
-/// If the policy existed before, it is restored; if it was newly added, it
-/// is removed.
-pub(all) struct RetryPolicyGuard {
-  previous : NamedRetryPolicy?
-  name : String
+/// Guard of an open retry policy scope.
+pub struct RetryPolicyGuard {
+  priv mut scope : @retry_scope.RetryPolicyScope?
 }
 
 ///|
-/// Restores the previous retry policy (or removes it if it was newly added).
+/// Ends the retry policy scope. Dropping the guard again does nothing.
 pub fn RetryPolicyGuard::drop(self : RetryPolicyGuard) -> Unit {
-  match self.previous {
-    Some(original) => @retry.set_retry_policy(original)
-    None => @retry.remove_retry_policy(self.name)
+  if self.scope is Some(scope) {
+    self.scope = None
+    scope.drop()
   }
 }

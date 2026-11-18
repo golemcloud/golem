@@ -61,7 +61,7 @@ use golem_common::model::oplog::public_oplog_entry::{
     CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
     DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
     FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, ManualUpdateParameters, OplogProcessorCheckpointParams,
+    LogParams, ManualUpdateParameters, MemorySizeReconciledParams, OplogProcessorCheckpointParams,
     PendingAgentInvocationParams, PendingUpdateParams, PluginInstallationDescription,
     PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,

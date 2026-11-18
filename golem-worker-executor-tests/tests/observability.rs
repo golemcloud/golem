@@ -714,14 +714,19 @@ async fn get_oplog_with_api_changing_updates(
     let oplog = oplog
         .into_iter()
         .filter(|entry| !matches!(entry.entry, PublicOplogEntry::PendingAgentInvocation(_)))
-        .filter(|entry| !matches!(entry.entry, PublicOplogEntry::GrowMemory(_)))
+        .filter(|entry| {
+            !matches!(
+                entry.entry,
+                PublicOplogEntry::GrowMemory(_) | PublicOplogEntry::MemorySizeReconciled(_)
+            )
+        })
         .collect::<Vec<_>>();
 
     assert_eq!(result.into_typed::<u64>()?, 11);
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 16);
+    assert_eq!(oplog.len(), 16, "unexpected oplog: {oplog:#?}");
 
     Ok(())
 }

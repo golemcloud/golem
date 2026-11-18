@@ -545,6 +545,30 @@ async fn adapter_uses_lookup_identity_with_presented_metadata_and_generated_clie
         .await;
     assert!(help.success_or_dump());
     assert!(help.stdout_text().contains("presented-adapter"));
+
+    let help = ctx
+        .cli([
+            cmd::TOOL,
+            cmd::INVOKE,
+            flag::FORMAT,
+            "json",
+            "--agent",
+            &constructor,
+            "compat-leaf",
+            "--",
+            "--help",
+        ])
+        .await;
+    assert!(help.success_or_dump());
+    let documents = help.stdout_json::<Value>();
+    assert_eq!(documents.len(), 1, "{documents:?}");
+    assert_eq!(documents[0]["$type"], "tool.invoke-help");
+    assert!(
+        documents[0]["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("presented-adapter")),
+        "{documents:?}"
+    );
 }
 
 #[test]

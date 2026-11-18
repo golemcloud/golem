@@ -187,7 +187,11 @@ let policy = NamedPolicy::named(
 
 ### Scoped Usage with `with_named_policy`
 
-Apply a policy for a block of code — the previous policy is restored when the block exits:
+Apply a policy for a block of code. The block runs inside a retry policy scope: the policy
+overrides the agent-wide policy with the same name for the host calls of the current task,
+including every future the task polls meanwhile (joined futures and futures spawned with
+`spawn_local`), until the block exits. The scope
+changes no agent-wide policy, applies to no other invocation, and records no oplog entry:
 
 ```rust
 with_named_policy(&policy, || {
@@ -298,6 +302,6 @@ When no user-defined retry policies are set, Golem activates a default catch-all
 - Policies are defined **per-environment** — different environments can have different retry behaviors
 - Policy names must be unique within an environment
 - Higher priority policies are evaluated first; the first matching predicate wins
-- `with_named_policy` is scoped — the policy is restored when the closure exits
+- `with_named_policy` is scoped — the scope ends when the closure exits, and the agent-wide policies never change
 - Inline retries (automatic transparent retries for transient network errors) already use the semantic retry policy system
 - Changes made via CLI or REST API take effect immediately for running agents

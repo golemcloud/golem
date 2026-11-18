@@ -8,6 +8,152 @@ use super::*;
 use test_r::test;
 
 #[test]
+#[timeout("5m")]
+async fn builtin_node_tcp_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for enabled in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let environment = Arc::new(TestEnvironmentStateService::default());
+        let overrides = || TestExecutorOverrides {
+            environment_state_service: Some(environment.clone()),
+            configure: Some(Arc::new(move |config| {
+                config.agent_sockets.enabled = enabled;
+                config.retry.max_attempts = 0;
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides()).await?;
+        let caller_component = executor
+            .component_dep(&context.default_environment_id, caller)
+            .store()
+            .await?;
+        let provider = executor
+            .component_dep(&context.default_environment_id, javascript_tools)
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", javascript_tools.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let mut deployment = deployment_state(
+            context.account_id,
+            provider.id,
+            provider.revision,
+            "golem:javascript-tools",
+            "ToolStreamingCaller",
+            metadata.tools,
+        );
+        for bindings in deployment.tool_bindings.values_mut() {
+            for binding in bindings.values_mut() {
+                binding.filesystem_access = ToolFilesystemAccess::Allowed;
+            }
+        }
+        environment.set_tool_deployment(
+            context.default_environment_id,
+            caller_component.id,
+            caller_component.revision,
+            Some(deployment),
+        );
+        let agent_name = format!("node-tcp-{enabled}");
+        let worker_id = executor
+            .start_agent(
+                &caller_component.id,
+                agent_id!("ToolStreamingCaller", agent_name.clone()),
+            )
+            .await?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let script = format!(
+            r#"
+const net = require('node:net');
+await new Promise((resolve, reject) => {{
+    const socket = net.createConnection({{host: '127.0.0.1', port: {port}}});
+    let response = '';
+    socket.on('connect', () => socket.end('request-17\n'));
+    socket.on('data', chunk => {{ response += chunk.toString(); }});
+    socket.on('error', reject);
+    socket.on('close', hadError => {{
+        if (!hadError) console.log(response.trim());
+        resolve();
+    }});
+}});
+"#
+        );
+        let invocation = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            &agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", &script],
+        );
+        let peer = async {
+            if enabled {
+                let (mut connection, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                connection.read_to_end(&mut request).await?;
+                assert_eq!(request, b"request-17\n");
+                connection.write_all(b"response-29\n").await?;
+                connection.shutdown().await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        let (result, ()) = tokio::try_join!(invocation, peer)?;
+        if enabled {
+            assert_eq!(result.exit_code, 0, "{result:?}");
+            assert_eq!(result.stdout, b"response-29\n");
+            assert!(result.stderr.is_empty(), "{result:?}");
+        } else {
+            assert_eq!(result.exit_code, 1, "{result:?}");
+            assert!(result.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&result.stderr).contains("AccessDenied"));
+        }
+
+        executor.commit_oplog(&worker_id).await?;
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides()).await?;
+        let next = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            &agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", "console.log('after-restart')"],
+        )
+        .await?;
+        assert_eq!(next.exit_code, 0, "enabled={enabled}: {next:?}");
+        assert_eq!(next.stdout, b"after-restart\n");
+        assert!(next.stderr.is_empty(), "enabled={enabled}: {next:?}");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+            "replay failed with sockets enabled={enabled}: {oplog:?}",
+        );
+        assert_collector_history_settled(&oplog);
+        let listener = listener.into_std()?;
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "completed tool replay must not reconnect (enabled={enabled})",
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[timeout("3m")]
 async fn builtin_node_and_npm_dispatch_bound_tools(
     last_unique_id: &LastUniqueId,

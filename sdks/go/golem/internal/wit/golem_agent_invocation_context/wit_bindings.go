@@ -59,28 +59,14 @@ func InvocationId() witTypes.Option[golem_core_types.InvocationId] {
 
 		option = witTypes.None[golem_core_types.InvocationId]()
 	case 1:
-		var variant golem_core_types.InvocationOwner
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))) {
-		case 0:
-			value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 32))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 1*4))))
+		result := wasm_lift_1_t10(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-			variant = golem_core_types.MakeInvocationOwnerAgent(golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 24)))}}, AgentId: value})
-
-		case 1:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 1*4))))
-
-			variant = golem_core_types.MakeInvocationOwnerTool(value0)
-
-		default:
-			panic("unreachable")
-		}
-
-		option = witTypes.Some[golem_core_types.InvocationId](golem_core_types.InvocationId{Owner: variant, Id: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 2*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 2*4))))}})
+		option = witTypes.Some[golem_core_types.InvocationId](result)
 	default:
 		panic("unreachable")
 	}
-	result := option
-	return result
+	result0 := option
+	return result0
 
 }
 
@@ -93,106 +79,73 @@ func Caller() golem_agent_common.Caller {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (32 + 48*4), 8))
 	wasm_import_caller(returnArea)
-	var variant golem_agent_common.Principal
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
+	result := wasm_lift_1_t495(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result0 := result
+	return result0
+
+}
+
+//go:noinline
+func wasm_lift_1_t10(src unsafe.Pointer) golem_core_types.InvocationId {
+	result := wasm_lift_1_t9(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), (24 + 2*4)))
+
+	return golem_core_types.InvocationId{Owner: result, Id: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t495(src unsafe.Pointer) golem_agent_common.Caller {
+	result := wasm_lift_1_t494(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t494(unsafe.Add(unsafe.Pointer(src), (16 + 24*4)))
+
+	return golem_agent_common.Caller{Original: result, Immediate: result0}
+}
+
+//go:noinline
+func wasm_lift_1_t9(src unsafe.Pointer) golem_core_types.InvocationOwner {
+	var variant golem_core_types.InvocationOwner
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
-		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4))))
-		var option witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4)))) {
-		case 0:
+		result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 8))
 
-			option = witTypes.None[string]()
-		case 1:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4))))
-
-			option = witTypes.Some[string](value1)
-		default:
-			panic("unreachable")
-		}
-		var option3 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 7*4)))) {
-		case 0:
-
-			option3 = witTypes.None[string]()
-		case 1:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 9*4))))
-
-			option3 = witTypes.Some[string](value2)
-		default:
-			panic("unreachable")
-		}
-		var option4 witTypes.Option[bool]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4)))) {
-		case 0:
-
-			option4 = witTypes.None[bool]()
-		case 1:
-
-			option4 = witTypes.Some[bool]((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (9 + 10*4)))) != 0))
-		default:
-			panic("unreachable")
-		}
-		var option6 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))) {
-		case 0:
-
-			option6 = witTypes.None[string]()
-		case 1:
-			value5 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 12*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 13*4))))
-
-			option6 = witTypes.Some[string](value5)
-		default:
-			panic("unreachable")
-		}
-		var option8 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 14*4)))) {
-		case 0:
-
-			option8 = witTypes.None[string]()
-		case 1:
-			value7 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 15*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 16*4))))
-
-			option8 = witTypes.Some[string](value7)
-		default:
-			panic("unreachable")
-		}
-		var option10 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 17*4)))) {
-		case 0:
-
-			option10 = witTypes.None[string]()
-		case 1:
-			value9 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 18*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 19*4))))
-
-			option10 = witTypes.Some[string](value9)
-		default:
-			panic("unreachable")
-		}
-		var option12 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 20*4)))) {
-		case 0:
-
-			option12 = witTypes.None[string]()
-		case 1:
-			value11 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 21*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 22*4))))
-
-			option12 = witTypes.Some[string](value11)
-		default:
-			panic("unreachable")
-		}
-		value13 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 23*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 24*4))))
-
-		variant = golem_agent_common.MakePrincipalOidc(golem_agent_common.OidcPrincipal{Sub: value, Issuer: value0, Email: option, Name: option3, EmailVerified: option4, GivenName: option6, FamilyName: option8, Picture: option10, PreferredUsername: option12, Claims: value13})
+		variant = golem_core_types.MakeInvocationOwnerAgent(result)
 
 	case 1:
-		value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 24))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 1*4))))
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
 
-		variant = golem_agent_common.MakePrincipalAgent(golem_agent_common.AgentPrincipal{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}}, AgentId: value14}})
+		variant = golem_core_types.MakeInvocationOwnerTool(value0)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
+
+	return golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 8)))}
+}
+
+//go:noinline
+func wasm_lift_1_t494(src unsafe.Pointer) golem_agent_common.Principal {
+	var variant golem_agent_common.Principal
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		result := wasm_lift_1_t491(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = golem_agent_common.MakePrincipalOidc(result)
+
+	case 1:
+		result0 := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), 8))
+
+		variant = golem_agent_common.MakePrincipalAgent(result0)
 
 	case 2:
+		result1 := wasm_lift_1_t493(unsafe.Add(unsafe.Pointer(src), 8))
 
-		variant = golem_agent_common.MakePrincipalGolemUser(golem_agent_common.GolemUserPrincipal{AccountId: golem_core_types.AccountId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 16)))}}})
+		variant = golem_agent_common.MakePrincipalGolemUser(result1)
 
 	case 3:
 
@@ -201,115 +154,134 @@ func Caller() golem_agent_common.Caller {
 	default:
 		panic("unreachable")
 	}
-	var variant32 golem_agent_common.Principal
-	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 24*4)))) {
+
+	return variant
+}
+
+//go:noinline
+func wasm_lift_1_t8(src unsafe.Pointer) golem_core_types.AgentId {
+	result := wasm_lift_1_t7(unsafe.Add(unsafe.Pointer(src), 0))
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4))))
+
+	return golem_core_types.AgentId{ComponentId: result, AgentId: value0}
+}
+
+//go:noinline
+func wasm_lift_1_t491(src unsafe.Pointer) golem_agent_common.OidcPrincipal {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+	var option witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))) {
 	case 0:
-		value15 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 24*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 25*4))))
-		value16 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 26*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 27*4))))
-		var option18 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 28*4)))) {
-		case 0:
 
-			option18 = witTypes.None[string]()
-		case 1:
-			value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 29*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 30*4))))
-
-			option18 = witTypes.Some[string](value17)
-		default:
-			panic("unreachable")
-		}
-		var option20 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 31*4)))) {
-		case 0:
-
-			option20 = witTypes.None[string]()
-		case 1:
-			value19 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 32*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 33*4))))
-
-			option20 = witTypes.Some[string](value19)
-		default:
-			panic("unreachable")
-		}
-		var option21 witTypes.Option[bool]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 34*4)))) {
-		case 0:
-
-			option21 = witTypes.None[bool]()
-		case 1:
-
-			option21 = witTypes.Some[bool]((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (25 + 34*4)))) != 0))
-		default:
-			panic("unreachable")
-		}
-		var option23 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 35*4)))) {
-		case 0:
-
-			option23 = witTypes.None[string]()
-		case 1:
-			value22 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 36*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 37*4))))
-
-			option23 = witTypes.Some[string](value22)
-		default:
-			panic("unreachable")
-		}
-		var option25 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 38*4)))) {
-		case 0:
-
-			option25 = witTypes.None[string]()
-		case 1:
-			value24 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 39*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 40*4))))
-
-			option25 = witTypes.Some[string](value24)
-		default:
-			panic("unreachable")
-		}
-		var option27 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 41*4)))) {
-		case 0:
-
-			option27 = witTypes.None[string]()
-		case 1:
-			value26 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 42*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 43*4))))
-
-			option27 = witTypes.Some[string](value26)
-		default:
-			panic("unreachable")
-		}
-		var option29 witTypes.Option[string]
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 44*4)))) {
-		case 0:
-
-			option29 = witTypes.None[string]()
-		case 1:
-			value28 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 45*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 46*4))))
-
-			option29 = witTypes.Some[string](value28)
-		default:
-			panic("unreachable")
-		}
-		value30 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 47*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 48*4))))
-
-		variant32 = golem_agent_common.MakePrincipalOidc(golem_agent_common.OidcPrincipal{Sub: value15, Issuer: value16, Email: option18, Name: option20, EmailVerified: option21, GivenName: option23, FamilyName: option25, Picture: option27, PreferredUsername: option29, Claims: value30})
-
+		option = witTypes.None[string]()
 	case 1:
-		value31 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 24*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (40 + 25*4))))
+		value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))
 
-		variant32 = golem_agent_common.MakePrincipalAgent(golem_agent_common.AgentPrincipal{AgentId: golem_core_types.AgentId{ComponentId: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 24*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 24*4))))}}, AgentId: value31}})
-
-	case 2:
-
-		variant32 = golem_agent_common.MakePrincipalGolemUser(golem_agent_common.GolemUserPrincipal{AccountId: golem_core_types.AccountId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (24 + 24*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (32 + 24*4))))}}})
-
-	case 3:
-
-		variant32 = golem_agent_common.MakePrincipalAnonymous()
-
+		option = witTypes.Some[string](value2)
 	default:
 		panic("unreachable")
 	}
-	result := golem_agent_common.Caller{Original: variant, Immediate: variant32}
-	return result
+	var option4 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4)))) {
+	case 0:
 
+		option4 = witTypes.None[string]()
+	case 1:
+		value3 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (9 * 4))))
+
+		option4 = witTypes.Some[string](value3)
+	default:
+		panic("unreachable")
+	}
+	var option5 witTypes.Option[bool]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (10 * 4)))) {
+	case 0:
+
+		option5 = witTypes.None[bool]()
+	case 1:
+
+		option5 = witTypes.Some[bool]((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (1 + 10*4)))) != 0))
+	default:
+		panic("unreachable")
+	}
+	var option7 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (11 * 4)))) {
+	case 0:
+
+		option7 = witTypes.None[string]()
+	case 1:
+		value6 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (12 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (13 * 4))))
+
+		option7 = witTypes.Some[string](value6)
+	default:
+		panic("unreachable")
+	}
+	var option9 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (14 * 4)))) {
+	case 0:
+
+		option9 = witTypes.None[string]()
+	case 1:
+		value8 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 * 4))))
+
+		option9 = witTypes.Some[string](value8)
+	default:
+		panic("unreachable")
+	}
+	var option11 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (17 * 4)))) {
+	case 0:
+
+		option11 = witTypes.None[string]()
+	case 1:
+		value10 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (18 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (19 * 4))))
+
+		option11 = witTypes.Some[string](value10)
+	default:
+		panic("unreachable")
+	}
+	var option13 witTypes.Option[string]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (20 * 4)))) {
+	case 0:
+
+		option13 = witTypes.None[string]()
+	case 1:
+		value12 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (22 * 4))))
+
+		option13 = witTypes.Some[string](value12)
+	default:
+		panic("unreachable")
+	}
+	value14 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (23 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 * 4))))
+
+	return golem_agent_common.OidcPrincipal{Sub: value0, Issuer: value1, Email: option, Name: option4, EmailVerified: option5, GivenName: option7, FamilyName: option9, Picture: option11, PreferredUsername: option13, Claims: value14}
+}
+
+//go:noinline
+func wasm_lift_1_t492(src unsafe.Pointer) golem_agent_common.AgentPrincipal {
+	result := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_agent_common.AgentPrincipal{AgentId: result}
+}
+
+//go:noinline
+func wasm_lift_1_t493(src unsafe.Pointer) golem_agent_common.GolemUserPrincipal {
+	result := wasm_lift_1_t11(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_agent_common.GolemUserPrincipal{AccountId: result}
+}
+
+//go:noinline
+func wasm_lift_1_t7(src unsafe.Pointer) golem_core_types.ComponentId {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_core_types.ComponentId{Uuid: result}
+}
+
+//go:noinline
+func wasm_lift_1_t11(src unsafe.Pointer) golem_core_types.AccountId {
+	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
+
+	return golem_core_types.AccountId{Uuid: result}
 }

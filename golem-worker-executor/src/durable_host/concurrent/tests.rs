@@ -358,6 +358,27 @@ async fn completion_delivery_suppress_records_no_marker() {
 
 #[test]
 #[test_r::timeout("10s")]
+async fn completion_delivery_continuation_error_records_no_discard() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let delivery = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+    let result = delivery
+        .continue_with(async {
+            Err::<(), _>("injected post-acquire failure")?;
+            Ok::<_, &str>(())
+        })
+        .await;
+    assert!(matches!(result, Err("injected post-acquire failure")));
+    if let Ok(DropEvent::AwaitCompletionMarker { receipt, .. }) = rx.try_recv() {
+        await_marker_receipt(&mut receipt.unwrap()).await.unwrap();
+    }
+    assert!(oplog.entries.lock().await.is_empty());
+    assert_eq!(counter.load(Ordering::Acquire), 0);
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn replay_discarded_accessor_delivery_waits_for_cancellation_after_restoration() {
     let mut config = wasmtime::Config::new();
     config.concurrency_support(true);
@@ -393,6 +414,11 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
     let counter = Arc::new(AtomicUsize::new(0));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+    let (value, token) = token
+        .continue_with(async { Ok::<_, ()>(17) })
+        .await
+        .unwrap();
+    assert_eq!(value, 17);
     token.delivered();
     assert_eq!(counter.load(Ordering::Acquire), 1);
     match rx.try_recv() {
@@ -543,7 +569,9 @@ async fn completion_delivery_armed_drop_records_marker_via_drain() {
     {
         let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
         assert_eq!(counter.load(Ordering::Acquire), 1);
-        drop(token);
+        let mut setup = Box::pin(token.continue_with(std::future::pending::<Result<(), ()>>()));
+        assert!(futures::poll!(&mut setup).is_pending());
+        drop(setup);
     }
     assert_eq!(
         counter.load(Ordering::Acquire),
@@ -783,6 +811,49 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
         oplog.entries.lock().await.is_empty(),
         "a teardown tear must not append a CompletionDiscarded marker"
     );
+}
+
+#[test]
+async fn the_delivered_hook_runs_only_when_the_guest_receives_the_terminal() {
+    // A host call has returned its result and armed the observer. The guest then either
+    // receives the terminal or cancels it unread (`subtask.cancel` on a returned terminal).
+    for (consumption, expected_hook, expected_marker) in [
+        (TerminalConsumption::Delivered, true, "delivered"),
+        (TerminalConsumption::NotDelivered, false, "discarded"),
+    ] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hook_ran = ran.clone();
+        let guard = AccessorDeliveryGuard {
+            delivery: Some(token),
+            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+        };
+        guard.consume(consumption);
+        assert_eq!(
+            ran.load(Ordering::Acquire),
+            expected_hook,
+            "{expected_marker}"
+        );
+        if let Ok(DropEvent::AwaitCompletionMarker {
+            receipt: Some(mut receipt),
+            ..
+        }) = rx.try_recv()
+        {
+            await_marker_receipt(&mut receipt)
+                .await
+                .expect("marker append must succeed");
+        }
+        let entries = oplog.entries.lock().await;
+        let marker = match entries.as_slice() {
+            [OplogEntry::CompletionDelivered { .. }] => "delivered",
+            [OplogEntry::CompletionDiscarded { .. }] => "discarded",
+            other => panic!("expected one completion marker, got {other:?}"),
+        };
+        assert_eq!(marker, expected_marker);
+    }
 }
 
 #[test]

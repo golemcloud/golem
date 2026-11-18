@@ -64,6 +64,21 @@ pub(crate) fn skipped_regions(entries: &BTreeMap<OplogIndex, OplogEntry>) -> Del
     fold_skipped_regions(entries, None)
 }
 
+/// The history in `entries` that no replay of the agent runs: the regions that a revert deleted
+/// or a `Jump` skipped, and the attempts of failed snapshot-based updates. Unlike
+/// [`skipped_regions`], it keeps the history that a successful update committed: the agent ran it
+/// before the update, and only its state comes from the snapshot.
+pub(crate) fn unreplayed_regions(entries: &BTreeMap<OplogIndex, OplogEntry>) -> DeletedRegions {
+    fold(
+        &AgentStatusRecord::default(),
+        VecDeque::new(),
+        entries,
+        None,
+        FoldScope::History,
+    )
+    .skipped
+}
+
 /// The skipped regions that a revert which drops `dropped` must respect. The regions of
 /// snapshot-based and snapshot-assisted updates whose outcome (successful or failed) is inside
 /// `dropped`, and the override of a snapshot-based queue head inside `dropped`, are left out;
@@ -124,6 +139,9 @@ enum FoldScope {
     /// Nothing that the skipped regions do not need: the manual update invocations do not reach
     /// the queue, which then holds no manual admissions, and the fold keeps no update step.
     Regions,
+    /// [`FoldScope::Regions`] without the history that successful updates committed and
+    /// without the override of the queue head.
+    History,
 }
 
 /// The fold of `entries` in `scope`.
@@ -159,7 +177,7 @@ fn fold(
         |(queue, mut skipped, mut steps, mut last_outcome), (index, entry)| {
             let is_deleted = deleted.is_in_deleted_region(*index);
             let (queue, step) = match entry {
-                OplogEntry::PendingAgentInvocation { .. } if scope == FoldScope::Regions => {
+                OplogEntry::PendingAgentInvocation { .. } if scope != FoldScope::Status => {
                     (queue, UpdateStep::Unchanged)
                 }
                 _ => queue.after(*index, entry, is_deleted),
@@ -176,7 +194,9 @@ fn fold(
                     && let Some(ended) = step.ended()
                 {
                     let regions = match entry {
-                        OplogEntry::SuccessfulUpdate { bootstrap, .. } => {
+                        OplogEntry::SuccessfulUpdate { bootstrap, .. }
+                            if scope != FoldScope::History =>
+                        {
                             committed_update_regions(ended, bootstrap.as_ref())
                         }
                         OplogEntry::FailedUpdate { .. } => {
@@ -211,6 +231,7 @@ fn fold(
     if let Some(head) = queue.head()
         && matches!(head.kind, PendingUpdateKind::SnapshotBased { .. })
         && !is_ignored(head.oplog_index)
+        && scope != FoldScope::History
     {
         skipped.set_override(DeletedRegions::from_regions([prefix_through(
             head.oplog_index,

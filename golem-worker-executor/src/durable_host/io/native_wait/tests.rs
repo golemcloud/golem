@@ -176,7 +176,7 @@ fn pending_pollable() -> (wasmtime_wasi::IoCtx, ResourceTable, u32) {
         std::io::empty(),
         |duration| wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration)),
         None,
-        true,
+        None,
     )
     .unwrap();
     let parent = table.push(PendingReadiness).unwrap();
@@ -256,7 +256,7 @@ async fn check_connect(source: Source, order: Order) {
                 std::io::empty(),
                 |duration| wasmtime::Error::from(crate::durable_host::SuspendForSleep(duration)),
                 None,
-                true,
+                None,
             )
             .unwrap();
             let observed = Arc::new(ReadinessObserved::default());

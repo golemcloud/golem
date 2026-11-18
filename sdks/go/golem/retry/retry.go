@@ -47,9 +47,10 @@
 // them back with [Policies], [ByName], [Resolve] and [PolicyNames]. From
 // agent code you overlay them: [Set] registers a rule that persists (and takes
 // precedence over a live rule of the same name — use it when the code owns that
-// rule), while [With] applies a rule only for the current call and restores the
-// previous one on return. A common split: manifest for operator-tunable base
-// rules, [Set] in the constructor for code-owned rules, [With] for per-call tweaks.
+// rule), while [With] opens a scope in which a rule applies until the scope is
+// closed, without changing the registered rules. A common split: manifest for
+// operator-tunable base rules, [Set] in the constructor for code-owned rules,
+// [With] for per-call tweaks.
 //
 // # Retrying the agent's own code
 //
@@ -60,13 +61,12 @@
 //
 // # Concurrency
 //
-// [Set], [Remove] and [With] apply at the worker level — the retry scope is per
-// worker, not per goroutine. Golem runs an agent single-threaded with cooperative
-// task-switching only at await points (RPC, promise, sleep), so [With] is safe
-// when its scope does not await while other goroutines run concurrently; nesting
-// on a single logical flow is fine. To keep an override from affecting concurrent
-// work, don't hold a scope open across a concurrent await (e.g. a CallAsync
-// fan-out); for concurrency, distribute work across agent instances.
+// [Set] and [Remove] apply at the worker level and are recorded in the oplog.
+// [With] opens a retry policy scope on the host instead. The scope belongs to the
+// component-model task of the current export call: its rule applies to the host
+// calls of that task, including those of goroutines it runs, until the scope is
+// closed, and to no other invocation. It changes no registered rule and records
+// nothing in the oplog. Scopes nest; the innermost open scope with a name wins.
 package retry
 
 import (
@@ -77,6 +77,7 @@ import (
 	"time"
 
 	apiRetry "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_retry"
+	apiRetryScope "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_retry_scope"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -389,27 +390,16 @@ func Set(n NamedPolicy) {
 // Remove deletes the named rule.
 func Remove(name string) { apiRetry.RemoveRetryPolicy(name) }
 
-// With applies the rule for the current call only and returns a function that
-// restores the previously registered rule of the same name (or removes it if
-// there was none). Use it with defer to scope a per-invocation override:
-// defer retry.With(n)(). Because invocations run sequentially, the override does
-// not affect the next invocation. Panics if invalid. See the package "Concurrency"
-// note before using it across an await.
+// With opens a retry policy scope in which the rule overrides the registered
+// rule of the same name, and returns the function that closes the scope. Use it
+// with defer to scope a per-call override: defer retry.With(n)(). The registered
+// rules do not change. Panics if invalid. See the package "Concurrency" note.
 func With(n NamedPolicy) (restore func()) {
 	raw, err := n.lower()
 	if err != nil {
 		panic(fmt.Errorf("golem/retry: %w", err))
 	}
-	name := n.name
-	prev := apiRetry.GetRetryPolicyByName(name)
-	apiRetry.SetRetryPolicy(raw)
-	return func() {
-		if prev.IsSome() {
-			apiRetry.SetRetryPolicy(prev.Some())
-		} else {
-			apiRetry.RemoveRetryPolicy(name)
-		}
-	}
+	return apiRetryScope.MakeRetryPolicyScope(raw).Drop
 }
 
 // PolicyNames returns the names of the rules active for this agent (the built-in
