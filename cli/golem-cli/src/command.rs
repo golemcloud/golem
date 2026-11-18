@@ -1881,6 +1881,11 @@ pub mod worker {
             /// response. By default the CLI reads each omitted entry in full.
             #[arg(long, conflicts_with = "obfuscate")]
             omit_payloads: bool,
+            /// Show the verified claims of the users among the callers of each invocation. The
+            /// server shows them only to a reader who may read the oplog. An obfuscated export
+            /// never shows claims.
+            #[arg(long, conflicts_with = "obfuscate")]
+            show_claims: bool,
             #[command(flatten)]
             viewer: OplogViewerArgs,
             #[command(flatten)]
@@ -3399,6 +3404,19 @@ mod test {
         let error = parse_oplog(&["--omit-payloads", "--obfuscate"]).unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         assert!(parse_oplog(&["--omit-payloads"]).is_ok());
+    }
+
+    #[test]
+    fn oplog_show_claims_conflicts_with_obfuscate() {
+        let error = parse_oplog(&["--show-claims", "--obfuscate"]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        for extra in [
+            vec!["--show-claims"],
+            vec!["--show-claims", "--html", "report.html"],
+            vec!["--show-claims", "--serve"],
+        ] {
+            assert!(parse_oplog(&extra).is_ok(), "{extra:?}");
+        }
     }
 
     #[test]

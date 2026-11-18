@@ -30,7 +30,7 @@ use crate::oplog_export::export::{OplogExportError, OplogExportOptions, OplogExp
 use crate::oplog_export::model::{OplogExportCoverage, ReportEntry};
 use crate::oplog_export::obfuscator::TokenKey;
 use golem_client::api::WorkerClient;
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogCursor, OplogInclude, PublicOplogPageEntry};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
 use poem::web::{Data, Html, Json, Query};
@@ -38,6 +38,11 @@ use poem::{EndpointExt, Route, Server, get, handler};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// The `include` parameter of an oplog read: the claims only for `--show-claims`.
+pub fn oplog_include(show_claims: bool) -> Option<OplogInclude> {
+    show_claims.then_some(OplogInclude::Claims)
+}
 
 pub struct OplogViewerServer {
     pub ctx: Arc<Context>,
@@ -49,6 +54,8 @@ pub struct OplogViewerServer {
     pub page_size: u64,
     /// Show the entries that oplog pages omit in their omitted form instead of reading them.
     pub omit_payloads: bool,
+    /// Ask the server for the verified claims of the users among the callers.
+    pub show_claims: bool,
     /// The export session of `--serve --obfuscate`. It holds the `Start` functions for the whole
     /// server process, and the mutex serialises the page calls.
     pub export: Option<tokio::sync::Mutex<OplogExportSession<RestOplogReads>>>,
@@ -63,6 +70,7 @@ pub async fn oplog_page_entry_view(
     agent_name: &str,
     page_entry: PublicOplogPageEntry,
     omit_payloads: bool,
+    show_claims: bool,
 ) -> anyhow::Result<AgentOplogEntryView> {
     let omitted = match page_entry {
         PublicOplogPageEntry::Included(entry) => return Ok(entry.into()),
@@ -80,6 +88,7 @@ pub async fn oplog_page_entry_view(
             agent_name,
             omitted.oplog_index.as_u64(),
             Some(omitted.component_revision.into()),
+            oplog_include(show_claims).as_ref(),
         )
         .await
         .map_service_error()
@@ -183,6 +192,7 @@ async fn oplog_page(
             count,
             cursor.as_ref(),
             query.as_deref(),
+            oplog_include(server.show_claims).as_ref(),
         )
         .await
         .map_service_error()
@@ -197,6 +207,7 @@ async fn oplog_page(
                 &server.agent_id,
                 page_entry,
                 server.omit_payloads,
+                server.show_claims,
             )
             .await
             .map_err(upstream_error)?,
@@ -320,6 +331,7 @@ pub async fn serve_oplog_export_viewer(
             page,
             page_size,
             omit_payloads: false,
+            show_claims: false,
             export: Some(tokio::sync::Mutex::new(session)),
         },
         port,

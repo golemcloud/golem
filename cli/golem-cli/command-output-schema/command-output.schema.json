@@ -7112,28 +7112,80 @@
         { "$ref": "#/definitions/PublicAgentInvocationAgentInitialization" },
         { "$ref": "#/definitions/PublicAgentInvocationAgentMethodInvocation" },
         { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
-        { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "invocationId"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "caller"], "properties": { "type": { "const": "SaveSnapshot" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "snapshot", "caller"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "invocationId", "caller"], "properties": { "type": { "const": "ProcessOplogEntries" }, "invocationId": { "type": "string" }, "caller": { "$ref": "#/definitions/PublicCaller" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "targetRevision"], "properties": { "type": { "const": "ManualUpdate" }, "targetRevision": { "type": "integer", "minimum": 0 } }, "additionalProperties": false }
       ]
     },
     "PublicAgentInvocationAgentInitialization": {
       "type": "object",
-      "required": ["type", "invocationId", "constructorParameters", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentInitialization" }, "invocationId": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "constructorParameters", "traceId", "traceStates", "invocationContext", "caller"],
+      "properties": { "type": { "const": "AgentInitialization" }, "invocationId": { "type": "string" }, "constructorParameters": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" }, "caller": { "$ref": "#/definitions/PublicCaller" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationAgentMethodInvocation": {
       "type": "object",
-      "required": ["type", "invocationId", "methodName", "functionInput", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "AgentMethodInvocation" }, "invocationId": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "methodName", "functionInput", "traceId", "traceStates", "invocationContext", "caller"],
+      "properties": { "type": { "const": "AgentMethodInvocation" }, "invocationId": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" }, "caller": { "$ref": "#/definitions/PublicCaller" } },
       "additionalProperties": false
     },
     "PublicAgentInvocationExternalTool": {
       "type": "object",
-      "required": ["type", "invocationId", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
-      "properties": { "type": { "const": "ExternalTool" }, "invocationId": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "required": ["type", "invocationId", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext", "caller"],
+      "properties": { "type": { "const": "ExternalTool" }, "invocationId": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" }, "caller": { "$ref": "#/definitions/PublicCaller" } },
+      "additionalProperties": false
+    },
+    "PublicCaller": {
+      "type": "object",
+      "description": "The caller of a recorded invocation: the principal that started the chain, the principal that made the call, and the tokens presented at the entry point. A user's claims show only with --show-claims.",
+      "required": ["original", "immediate", "tokens"],
+      "properties": {
+        "original": { "$ref": "#/definitions/PublicPrincipal" },
+        "immediate": { "$ref": "#/definitions/PublicPrincipal" },
+        "tokens": { "type": "array", "items": { "$ref": "#/definitions/PublicTokenProvenance" } }
+      },
+      "additionalProperties": false
+    },
+    "PublicPrincipal": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "pair", "authenticatedAt"],
+          "properties": { "kind": { "const": "user" }, "pair": { "$ref": "#/definitions/Pair" }, "authenticatedAt": { "type": "string" }, "claims": { "type": "object" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pair", "accountId", "authentication"],
+          "properties": { "kind": { "const": "account" }, "pair": { "$ref": "#/definitions/Pair" }, "accountId": { "type": "string", "format": "uuid" }, "authentication": { "enum": ["apiToken", "bootstrapToken", "signIn"] } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pair", "agentId", "agentType", "environmentId"],
+          "properties": { "kind": { "const": "agent" }, "pair": { "$ref": "#/definitions/Pair" }, "agentId": { "$ref": "#/definitions/AgentId" }, "agentType": { "type": "string" }, "environmentId": { "type": "string", "format": "uuid" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pair", "environmentId", "toolName"],
+          "properties": { "kind": { "const": "tool" }, "pair": { "$ref": "#/definitions/Pair" }, "environmentId": { "type": "string", "format": "uuid" }, "toolName": { "type": "string" } },
+          "additionalProperties": false
+        },
+        { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "anonymous" } }, "additionalProperties": false }
+      ]
+    },
+    "Pair": {
+      "type": "object",
+      "required": ["issuer", "subject"],
+      "properties": { "issuer": { "type": "string" }, "subject": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "PublicTokenProvenance": {
+      "type": "object",
+      "required": ["id", "maker"],
+      "properties": { "id": { "type": "string", "format": "uuid" }, "maker": { "anyOf": [{ "$ref": "#/definitions/Pair" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicAgentInvocationResult": {

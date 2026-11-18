@@ -65,6 +65,8 @@ impl OplogReads for RestOplogReads {
                 count,
                 cursor,
                 query,
+                // An export never asks for claims.
+                None,
             )
             .await
             .map_service_error()
@@ -88,6 +90,7 @@ impl OplogReads for RestOplogReads {
                 &self.agent_name,
                 oplog_index,
                 Some(component_revision.into()),
+                None,
             )
             .await
             .map_service_error()

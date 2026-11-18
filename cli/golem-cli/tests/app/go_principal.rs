@@ -101,4 +101,60 @@ async fn test_go_principal() {
         relayed.contains(r#"method=agent:RelayAgent("r") agent=agent:RelayAgent("r")"#),
         "{relayed}"
     );
+
+    // The oplog of the CLI's ledger shows the roles of each invocation: the CLI's account for
+    // its own call, the relay for the relayed one.
+    let oplog = ctx
+        .cli([cmd::AGENT, "oplog", "LedgerAgent(\"direct\")"])
+        .await;
+    assert!(oplog.success_or_dump());
+    let text = oplog.stdout_text();
+    for expected in [
+        "original caller:   account (",
+        "immediate caller:  account (",
+        "original caller:   agent (",
+        "immediate caller:  agent (",
+        "tokens:            none",
+    ] {
+        assert!(text.contains(expected), "{expected} in {text}");
+    }
+    assert!(!text.contains("claims:"), "{text}");
+
+    let json = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            "LedgerAgent(\"direct\")",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(json.success_or_dump());
+    let callers = json
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .filter_map(|entry| entry["entry"]["invocation"].get("caller").cloned())
+        .collect::<Vec<_>>();
+    assert!(
+        callers
+            .iter()
+            .any(|caller| caller["original"]["kind"] == "account"),
+        "{callers:?}"
+    );
+    for caller in &callers {
+        assert_eq!(caller["tokens"], serde_json::json!([]), "{caller}");
+        assert!(caller["original"].get("claims").is_none(), "{caller}");
+    }
+
+    // Account and agent callers have no claims, also when the reader asks for them.
+    let with_claims = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            "LedgerAgent(\"direct\")",
+            "--show-claims",
+        ])
+        .await;
+    assert!(with_claims.success_or_dump());
+    assert!(!with_claims.stdout_text().contains("claims:"));
 }

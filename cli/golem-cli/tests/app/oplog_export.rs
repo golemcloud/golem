@@ -638,6 +638,28 @@ async fn oplog_export_hides_customer_data() {
     // --keep-scalars and --keep-shape at the arguments of `record`.
     let record_index = invocation_indices(&plain, "record")[0];
     let default_record = entry_at(&documents, record_index);
+
+    // The caller of `record`: the kinds stay, the issuer and the subject are tokens.
+    let plain_record = plain
+        .iter()
+        .find(|document| document["index"] == record_index)
+        .unwrap();
+    let original = &plain_record["entry"]["invocation"]["caller"]["original"];
+    assert_eq!(original["kind"], "account", "{plain_record}");
+    let exported_record = serde_json::to_string(default_record).unwrap();
+    for pair_text in [&original["pair"]["issuer"], &original["pair"]["subject"]] {
+        let pair_text = pair_text.as_str().unwrap();
+        assert!(
+            !exported_record.contains(pair_text),
+            "{pair_text} in {exported_record}"
+        );
+    }
+    assert!(
+        objects(default_record)
+            .iter()
+            .any(|object| object.get("case") == Some(&Value::from("account"))),
+        "{default_record}"
+    );
     assert!(
         !serde_json::to_string(&documents)
             .unwrap()
