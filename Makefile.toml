@@ -675,6 +675,30 @@ args = [
 
 ## ** TEST **
 
+[tasks.js-guest-tests]
+description = "Runs in-process JS guest tests on prebuilt TS and Effect templates"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-js-guest-tests --test js-guest -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.check-js-bundle-fixtures]
+description = "Checks committed JS bundles against the SDK component bundlers"
+script_runner = "@duckscript"
+script = '''
+root = pwd
+cd sdks/ts
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk run build
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk exec vitest run tests/component-bundle.test.mjs -t "checks JS guest bundle fixtures"
+cd ${root}/sdks/effect
+exec --fail-on-error npm exec -- vitest run test/component-build.test.ts -t "checks JS guest bundle fixtures"
+'''
+
+[tasks.generate-js-bundle-fixtures]
+description = "Updates committed JS bundles and source maps from SDK fixture sources"
+env = { GOLEM_UPDATE_JS_BUNDLES = "1" }
+run_task = "check-js-bundle-fixtures"
+
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [

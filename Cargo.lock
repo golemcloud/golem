@@ -4295,6 +4295,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-js-guest-tests"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "camino",
+ "golem-common",
+ "tempfile",
+ "test-r",
+ "wasm-rquickjs",
+]
+
+[[package]]
 name = "golem-mcp-import"
 version = "0.0.0"
 dependencies = [

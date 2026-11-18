@@ -119,6 +119,13 @@ the local metadata. Service compilation can then overlap workers without replaci
 live worker executables. Test consumers use local nextest binaries metadata, not
 cross-job archives.
 
+Preparation runs `main-validation-js-guests` after TypeScript and Effect SDK
+validation. It uses their fresh local guest templates and the general native
+producer's metadata to run the in-process `golem-js-guest-tests` crate, which
+does not depend on the CLI.
+Missing guests or failed smoke tests fail preparation. SDK Vitest suites check
+the committed bundles and maps; see `test-components/js-bundle-fixtures/README.md`.
+
 Executor snapshots use ordinary copies, not links. Dependency checks reject
 unresolved libraries and libraries from the mutable Cargo target, and require
 library resolution to remain unchanged after copying. The snapshot remains below

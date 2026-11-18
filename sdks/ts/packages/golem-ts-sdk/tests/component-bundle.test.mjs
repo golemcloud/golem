@@ -14,6 +14,7 @@ import { ToolType } from '../src/toolReflection';
 import '../src/schema/zod';
 import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import { checkBundleFixtures } from '../../../../javascript/js-bundle-fixtures.mjs';
 
 const nativeRequire = createRequire(import.meta.url);
 const fixtures = path.resolve('tests/components');
@@ -45,7 +46,7 @@ function configuration(main) {
   };
 }
 
-async function build(name, pluginOptions = {}, format = 'cjs') {
+async function build(name, pluginOptions = {}, format = 'cjs', outputOptions = {}) {
   const main = path.join(fixtures, `${name}.ts`);
   const config = configuration(main);
   if (expected[name]) expect(discoverCapabilities(config)).toEqual(expected[name]);
@@ -89,12 +90,28 @@ async function build(name, pluginOptions = {}, format = 'cjs') {
     ],
   });
   try {
-    const { output } = await bundle.generate({ format, inlineDynamicImports: true });
+    const { output } = await bundle.generate({
+      format,
+      inlineDynamicImports: true,
+      ...outputOptions,
+    });
     return { ...output[0], unminified };
   } finally {
     await bundle.close();
   }
 }
+
+it('checks JS guest bundle fixtures', async () => {
+  const chunk = await build('js-guest-smoke', {}, 'es', {
+    file: path.resolve('../../../../test-components/js-bundle-fixtures/ts/smoke.mjs'),
+    sourcemap: true,
+    sourcemapPathTransform: (source) => source.replaceAll('\\', '/'),
+  });
+  checkBundleFixtures('ts', {
+    'smoke.mjs': chunk.code,
+    'smoke.mjs.map': chunk.map.toString() + '\n',
+  });
+}, 30000);
 
 const unit = { valueNodes: [{ tag: 'record-value', val: [] }], root: 0 };
 function wireValue(schema, value) {

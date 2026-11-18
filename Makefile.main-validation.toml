@@ -23,7 +23,7 @@ run_task = [
 
 [tasks.main-validation-prepare]
 private = true
-env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-general-native unit-tests-and-checks build-cli-test-bins validate-sdk-scala validate-sdk-ts validate-sdk-effect validate-sdk-moonbit main-validation-fixtures main-validation-executor-native" }
+env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-general-native unit-tests-and-checks build-cli-test-bins validate-sdk-scala validate-sdk-ts validate-sdk-effect main-validation-js-guests validate-sdk-moonbit main-validation-fixtures main-validation-executor-native" }
 script_runner = "@duckscript"
 script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
@@ -93,6 +93,12 @@ for binary in ${binaries}
     cp ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/dev-ci/${binary} ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/${binary}
 end
 '''
+
+[tasks.main-validation-js-guests]
+private = true
+description = "Validate real JS guests using freshly built SDK templates and local native binaries"
+env = { TEST_R_BUILD_OPTS = "--binaries-metadata ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json" }
+run_task = "js-guest-tests"
 
 [tasks.main-validation-executor-native]
 private = true

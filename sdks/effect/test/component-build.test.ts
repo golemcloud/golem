@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { rollup, type OutputChunk } from "rollup"
+import { rollup, type OutputChunk, type OutputOptions } from "rollup"
 import ts from "typescript"
 import { nodeResolve } from "@rollup/plugin-node-resolve"
 import { describe, expect, it, vi } from "vitest"
@@ -21,6 +21,7 @@ import { __setEnvironment } from "./mocks/wasi-cli-environment.js"
 import { componentConfiguration } from "../build/component.mjs"
 import config from "../vitest.config.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { checkBundleFixtures } from "../../javascript/js-bundle-fixtures.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sdk = resolve(root, "dist/component")
@@ -72,7 +73,7 @@ const sourcePlugin = () => ({
   },
 })
 
-const build = async (fixture: string, execute = true) => {
+const build = async (fixture: string, execute = true, outputOptions: OutputOptions = {}) => {
   const source = resolve(root, `test/fixtures/capabilities/${fixture}`)
   const options = await componentConfiguration(rollup, () => ({
     input: existsSync(`${source}.ts`) ? `${source}.ts` : `${source}.mjs`,
@@ -94,6 +95,7 @@ const build = async (fixture: string, execute = true) => {
       format: "cjs",
       inlineDynamicImports: true,
       dynamicImportInCjs: false,
+      ...outputOptions,
     })
     const chunk = output.find((item): item is OutputChunk => item.type === "chunk")!
     const capabilities = output.find(
@@ -131,6 +133,19 @@ const build = async (fixture: string, execute = true) => {
     await bundle.close()
   }
 }
+
+it("checks JS guest bundle fixtures", async () => {
+  const { chunk } = await build("js-guest-smoke", false, {
+    format: "es",
+    file: resolve(root, "../../test-components/js-bundle-fixtures/effect/smoke.mjs"),
+    sourcemap: true,
+    sourcemapPathTransform: (source) => source.replaceAll("\\", "/"),
+  })
+  checkBundleFixtures("effect", {
+    "smoke.mjs": chunk.code,
+    "smoke.mjs.map": chunk.map!.toString() + "\n",
+  })
+}, 30000)
 
 describe("capability-sensitive component exports", () => {
   it("keeps supported public subpath imports inside the modular component graph", async () => {

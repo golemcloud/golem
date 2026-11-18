@@ -1,0 +1,27 @@
+[package]
+name = "golem-js-guest-tests"
+version = "0.0.0"
+edition = "2024"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+description = "In-process JavaScript guest injection and preinitialization tests"
+license-file = "../LICENSE"
+publish = false
+autotests = false
+
+[lints]
+workspace = true
+
+[[test]]
+name = "js-guest"
+path = "tests/js_guest.rs"
+harness = false
+
+[dev-dependencies]
+golem-common = { workspace = true, default-features = true }
+
+anyhow = { workspace = true }
+camino = { workspace = true }
+tempfile = { workspace = true }
+test-r = { workspace = true }
+wasm-rquickjs = { workspace = true }
