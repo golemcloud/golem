@@ -23,7 +23,7 @@ use crate::config::{
     AuthenticationSource, Config, NamedProfile,
 };
 use crate::config::{ClientConfig, ProfileName, resolved_builtin_local_url};
-use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
+use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, ProfileMissing};
 use crate::log::{LogColorize, LogOutput, Output, log_action, set_log_output};
 use crate::model::app::{
     ApplicationConfig, ApplicationPreload, ApplicationSourceMode, ComponentPresetName,
@@ -34,7 +34,9 @@ use crate::model::app_raw::{
     Server,
 };
 use crate::model::config::server::ToFormattedServerContext;
-use crate::model::environment::{EnvironmentReference, SelectedManifestEnvironment};
+use crate::model::environment::{
+    EnvironmentReference, ResolvedEnvironmentIdentity, SelectedManifestEnvironment,
+};
 use crate::model::format::Format;
 use crate::model::masking::MaskingConfig;
 use crate::model::plugin::PluginGrantKey;
@@ -54,7 +56,9 @@ use golem_common::model::http_api_deployment::{
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, enabled};
 use url::Url;
 
@@ -77,11 +81,17 @@ pub struct Context {
     explicit_profile_name: Option<ProfileName>,
     environment_reference: Option<EnvironmentReference>,
     global_environment_selector: Option<GlobalEnvironmentSelector>,
+    pinned_environment: Option<ResolvedEnvironmentIdentity>,
     manifest_environment: Option<SelectedManifestEnvironment>,
     manifest_environment_deployment_options: Option<DeploymentOptions>,
     manifest_version_source: Option<AppVersionSource>,
     manifest_local_server: Option<ResolvedLocalServer>,
     app_context_config: Option<ApplicationContextConfig>,
+    /// How the global flags select the manifests: the root manifest, the search for it, or none.
+    manifest_discovery: ApplicationSourceMode,
+    /// The directory that the manifest search at start began in, when it found the manifests.
+    /// A tool call of `golem mcp serve` searches again from it.
+    manifest_search_dir: Option<PathBuf>,
     http_batch_size: u64,
     http_parallelism: usize,
     agent_stream_ping_interval: Duration,
@@ -92,6 +102,7 @@ pub struct Context {
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
+    cancellation: Cancellation,
 
     file_download_client: reqwest::Client,
 
@@ -102,6 +113,47 @@ pub struct Context {
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
     caches: Caches,
+}
+
+/// The cancellation of a command: the MCP client cancels its tool call. A cancelled command is
+/// dropped at once, so it starts no more work, unless it holds a [`CancellationCleanup`]: then it
+/// ends the remote work that it holds, such as the streams of an invocation, and returns.
+#[derive(Clone, Default)]
+pub struct Cancellation {
+    token: CancellationToken,
+    cleanups: Arc<AtomicUsize>,
+}
+
+impl Cancellation {
+    pub fn new(token: CancellationToken) -> Self {
+        Self {
+            token,
+            cleanups: Arc::default(),
+        }
+    }
+
+    pub fn token(&self) -> &CancellationToken {
+        &self.token
+    }
+
+    /// Marks, while the hold lives, that the command ends its remote work itself when it is
+    /// cancelled, and that it starts no new work after the cancellation.
+    pub fn hold_cleanup(&self) -> CancellationCleanup {
+        self.cleanups.fetch_add(1, Ordering::SeqCst);
+        CancellationCleanup(self.cleanups.clone())
+    }
+
+    pub fn has_cleanup(&self) -> bool {
+        self.cleanups.load(Ordering::SeqCst) > 0
+    }
+}
+
+pub struct CancellationCleanup(Arc<AtomicUsize>);
+
+impl Drop for CancellationCleanup {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Context {
@@ -158,8 +210,12 @@ impl Context {
             )?;
         }
 
-        let preloaded_app =
-            ApplicationContext::preload_application(app_source_mode, global_flags.dev_mode)?;
+        let manifest_discovery = app_source_mode.clone();
+        let preloaded_app = ApplicationContext::preload_application(
+            app_source_mode,
+            &crate::fs::current_dir_lexical()?,
+            global_flags.dev_mode,
+        )?;
 
         if preloaded_app.loaded_with_warnings
             && log_output_for_help.is_none()
@@ -169,6 +225,10 @@ impl Context {
         }
 
         let app_source_mode = preloaded_app.source_mode;
+        let manifest_search_dir = match &app_source_mode {
+            ApplicationSourceMode::Preloaded(loaded) => Some(loaded.calling_working_dir.clone()),
+            _ => None,
+        };
         let manifest_local_server = preloaded_app.resolved_local_server;
         let application_preload = preloaded_app.application_preload;
 
@@ -363,6 +423,7 @@ impl Context {
             auth_token_override: global_flags.auth_token,
             environment_reference,
             global_environment_selector,
+            pinned_environment: None,
             manifest_environment,
             manifest_environment_deployment_options,
             manifest_version_source,
@@ -381,7 +442,88 @@ impl Context {
                 SHOULD_COLORIZE.should_colorize(),
                 app_source_mode,
             )),
+            manifest_discovery,
+            manifest_search_dir,
             caches: Caches::new(),
+            cancellation: Cancellation::default(),
+        })
+    }
+
+    /// The context of one tool call of `golem mcp serve`, made from the server's context: the
+    /// same profile, server, manifest selection and settings, without a new selection of the
+    /// profile or the manifest environment. Only the profile's login token and the manifests are
+    /// read again: the token from the config, so that a login in a terminal applies to the next
+    /// call, and the manifests from the same root and directory as at start, so that a call
+    /// selects the components that the manifests have now. The application, its environments and
+    /// their deployment settings stay as at start. It works only in
+    /// `environment`, the server's environment. It confirms a command only when the call
+    /// confirms, so neither `--yes` nor the manifest's `cli.autoConfirm` confirms a command. The
+    /// questions about the manifest itself keep the answer that the server got at start.
+    /// `cancellation` is the call's: the client cancels it.
+    pub fn for_tool_call(
+        &self,
+        confirmed: bool,
+        environment: ResolvedEnvironmentIdentity,
+        cancellation: Cancellation,
+    ) -> anyhow::Result<Self> {
+        let mut profile = self.profile.clone();
+        // The built-in profiles are always in the config; a custom one can be gone.
+        let Some(stored) = Config::get_profile(&self.config_dir, &profile.name)? else {
+            bail!(ProfileMissing {
+                profile: profile.name,
+            });
+        };
+        profile.profile.auth = stored.profile.auth;
+        let app_source_mode = match &self.manifest_search_dir {
+            Some(search_dir) => {
+                ApplicationContext::preload_application(
+                    self.manifest_discovery.clone(),
+                    search_dir,
+                    self.dev_mode,
+                )?
+                .source_mode
+            }
+            None => ApplicationSourceMode::None,
+        };
+        Ok(Self {
+            config_dir: self.config_dir.clone(),
+            format: self.format,
+            help_mode: self.help_mode,
+            post_deploy_args: self.post_deploy_args.clone(),
+            profile,
+            explicit_profile_name: self.explicit_profile_name.clone(),
+            environment_reference: self.environment_reference.clone(),
+            global_environment_selector: self.global_environment_selector.clone(),
+            pinned_environment: Some(environment),
+            manifest_environment: self.manifest_environment.clone(),
+            manifest_environment_deployment_options: self
+                .manifest_environment_deployment_options
+                .clone(),
+            manifest_version_source: self.manifest_version_source.clone(),
+            manifest_local_server: self.manifest_local_server.clone(),
+            app_context_config: self.app_context_config.clone(),
+            manifest_discovery: self.manifest_discovery.clone(),
+            manifest_search_dir: self.manifest_search_dir.clone(),
+            http_batch_size: self.http_batch_size,
+            http_parallelism: self.http_parallelism,
+            agent_stream_ping_interval: self.agent_stream_ping_interval,
+            auth_token_override: self.auth_token_override.clone(),
+            server_config: self.server_config.clone(),
+            yes: confirmed,
+            show_secrets: self.show_secrets,
+            dev_mode: self.dev_mode,
+            server_no_limit_change: self.server_no_limit_change,
+            should_colorize: self.should_colorize,
+            file_download_client: self.file_download_client.clone(),
+            golem_clients: tokio::sync::OnceCell::new(),
+            selected_context_logging: std::sync::OnceLock::new(),
+            app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
+                self.yes,
+                self.should_colorize,
+                app_source_mode,
+            )),
+            caches: Caches::new(),
+            cancellation,
         })
     }
 
@@ -413,6 +555,13 @@ impl Context {
 
     pub fn yes(&self) -> bool {
         self.yes
+    }
+
+    /// Cancelled when the result of the command is no longer wanted: the MCP client cancelled
+    /// the tool call. A command that holds work on the server, such as a streaming invocation,
+    /// ends it as on Ctrl+C.
+    pub fn cancellation(&self) -> &Cancellation {
+        &self.cancellation
     }
 
     pub fn dev_mode(&self) -> bool {
@@ -447,6 +596,12 @@ impl Context {
 
     pub(crate) fn global_environment_selector(&self) -> Option<&GlobalEnvironmentSelector> {
         self.global_environment_selector.as_ref()
+    }
+
+    /// The only environment that commands may work in, when the process is bound to one, as
+    /// `golem mcp serve` is.
+    pub fn pinned_environment(&self) -> Option<&ResolvedEnvironmentIdentity> {
+        self.pinned_environment.as_ref()
     }
 
     pub fn explicit_profile_name(&self) -> Option<&ProfileName> {
@@ -795,6 +950,7 @@ impl Context {
     }
 }
 
+#[derive(Clone)]
 struct ResolvedServerConfig {
     builtin_local_url: Url,
     client_config: ClientConfig,
@@ -845,6 +1001,7 @@ impl ResolvedServerConfig {
     }
 }
 
+#[derive(Clone)]
 struct ApplicationContextConfig {
     #[allow(unused)]
     app_manifest_path: Option<PathBuf>,

@@ -77,6 +77,18 @@ pub(super) async fn published_interrupt_receipt<
     }
 }
 
+pub(super) fn ephemeral_owner_key(
+    executor: &TestWorkerExecutor,
+    key: &IdempotencyKey,
+    method: &str,
+) -> IdempotencyKey {
+    golem_common::model::InvocationRequestKey::external(
+        executor.auth_ctx().idempotency_scope(),
+        Some(key),
+    )
+    .owner_key(method)
+}
+
 pub(super) const FUEL_BUDGET: u64 = 1_000_000_000;
 
 pub(super) fn managed_filesystem_config(

@@ -362,6 +362,7 @@ ttl = "8h"
 
 [worker_executor.agent_sockets]
 enabled = false
+refused_ports = []
 
 [worker_executor.agent_status_checkpoint]
 enabled = true
@@ -502,6 +503,7 @@ min_delay = "200ms"
 multiplier = 2.0
 
 [worker_executor.limits]
+agent_scan_batch_size = 100
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
 epoch_ticks = 1
@@ -519,6 +521,10 @@ max_oplog_query_page_bytes = 8388608
 max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
+
+[worker_executor.limits.scan_budget]
+entries = 100000
+time = "5s"
 
 [worker_executor.mcp_transport]
 concurrency = 16
@@ -801,9 +807,10 @@ http2_max_pending_accept_reset_streams = 20
 cleanup_timeout = "2s"
 command_queue_frames = 16
 event_queue_frames = 2
-exchange_timeout = "5m"
+file_lookup_timeout = "5m"
 max_event_bytes = 17825792
 max_resume_attempts = 4
+request_body_idle_timeout = "1m"
 retained_input_bytes = 4194304
 retained_input_frames = 32
 retry_deadline = "10s"
@@ -1332,6 +1339,7 @@ type = "Disabled"
 #
 # [worker_executor.agent_sockets]
 # enabled = false
+# refused_ports = []
 #
 # [worker_executor.agent_status_checkpoint]
 # enabled = true
@@ -1502,6 +1510,7 @@ type = "Disabled"
 # multiplier = 2.0
 #
 # [worker_executor.limits]
+# agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
 # epoch_ticks = 1
@@ -1519,6 +1528,10 @@ type = "Disabled"
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [worker_executor.limits.scan_budget]
+# entries = 100000
+# time = "5s"
 #
 # [worker_executor.mcp_transport]
 # concurrency = 16
@@ -1828,9 +1841,10 @@ type = "Disabled"
 # cleanup_timeout = "2s"
 # command_queue_frames = 16
 # event_queue_frames = 2
-# exchange_timeout = "5m"
+# file_lookup_timeout = "5m"
 # max_event_bytes = 17825792
 # max_resume_attempts = 4
+# request_body_idle_timeout = "1m"
 # retained_input_bytes = 4194304
 # retained_input_frames = 32
 # retry_deadline = "10s"

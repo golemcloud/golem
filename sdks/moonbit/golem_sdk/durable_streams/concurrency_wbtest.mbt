@@ -122,22 +122,16 @@ test "independent writers can finish in either order" {
 }
 
 ///|
-test "native producer failure fails its operation task group" {
+test "native producer failure becomes a catchable stream outcome" {
   run_async(async fn() {
     let base : Reader[Int32] = json_reader("https://example.test/stream")
     let reader = { ..base, read_batch: (_, _) => Err(error(GONE)), }
     let @durable-streams.DurableStreamReader(handle) = reader.resource.unwrap()
-    try
-      @async-core.with_task_group(async fn(_) {
-        let stream = reader.into_stream()
-        ignore(stream.read())
-      })
-    catch {
-      DurableStreamError::Remote(e) => assert_eq(e.kind, GONE)
-      e => raise e
-    } noraise {
-      _ => fail("producer failure disappeared at operation boundary")
-    }
+    @async-core.with_task_group(async fn(_) {
+      let stream = reader.into_stream()
+      assert_true(stream.read() is Some(Err(@schema.StreamError::Failed(_))))
+      assert_true(stream.read() is None)
+    })
     assert_eq(resource_stat(handle, 3), 1)
   })
 }
@@ -154,8 +148,8 @@ test "nested schema transfer preserves the ordinary native stream source" {
     )
     assert_eq(metadata, "metadata")
     let restored = restored.unwrap()
-    assert_eq(restored.read(), Some(13))
-    assert_eq(restored.read(), Some(4))
+    assert_eq(restored.read(), Some(Ok(13)))
+    assert_eq(restored.read(), Some(Ok(4)))
     assert_true(restored.read() is None)
   })
 }

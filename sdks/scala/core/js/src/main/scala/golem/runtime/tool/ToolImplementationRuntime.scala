@@ -352,7 +352,7 @@ private final class JsMiddlewareOutputBuffer(source: JsWasiOutputStream) {
 
 private final class JsMiddlewareStreamLifecycle(iterator: () => JsByteStreamIterator) {
   private implicit val ec: scala.concurrent.ExecutionContext =
-    scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+    golem.concurrent.GolemExecutionContext.global
 
   private var closed: Option[Future[Unit]] = None
 

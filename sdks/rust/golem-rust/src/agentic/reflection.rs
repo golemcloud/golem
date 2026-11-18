@@ -1003,7 +1003,10 @@ impl TestReflectedTransport {
         Invocation {
             metadata: InvocationMetadata {
                 agent_id: ParsedAgentId::new("test-agent"),
-                idempotency_key: "test-key".to_string(),
+                invocation_id: OwnedInvocationId::new(
+                    ParsedAgentId::new("test-agent"),
+                    InvocationId(Uuid::nil()),
+                ),
             },
             value: self.value.clone(),
         }
@@ -1026,7 +1029,7 @@ impl TestReflectedTransport {
     ) -> ReflectedTransportPending {
         let completion = self.completion();
         ReflectedTransportPending {
-            metadata: completion.metadata.clone(),
+            metadata: Some(completion.metadata.clone()),
             cancel: Rc::new(|| {}),
             future: Box::pin(std::future::ready(Ok(completion))),
         }
@@ -1369,10 +1372,94 @@ impl DynamicAgentMethod {
     }
 }
 
+/// The UUID assigned to an accepted invocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InvocationId(pub Uuid);
+
+impl Display for InvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+impl std::str::FromStr for InvocationId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+/// Identifies an invocation and its agent. Its text form is `<agent-id>.<uuid>`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OwnedInvocationId {
+    agent_id: ParsedAgentId,
+    id: InvocationId,
+}
+
+impl OwnedInvocationId {
+    pub fn new(agent_id: ParsedAgentId, id: InvocationId) -> Self {
+        Self { agent_id, id }
+    }
+
+    pub fn agent_id(&self) -> &ParsedAgentId {
+        &self.agent_id
+    }
+
+    pub fn id(&self) -> InvocationId {
+        self.id
+    }
+}
+
+impl Display for OwnedInvocationId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.agent_id, self.id)
+    }
+}
+
+impl std::str::FromStr for OwnedInvocationId {
+    type Err = String;
+
+    /// Splits off the last 37 characters (`.` and the UUID), because the agent ID can contain `.`.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let invalid = || format!("invalid invocation id: expected <agent-id>.<uuid>, got {value}");
+        let suffix_start = value.len().checked_sub(37).ok_or_else(invalid)?;
+        let agent_id = value.get(..suffix_start).ok_or_else(invalid)?;
+        let uuid = value
+            .get(suffix_start..)
+            .and_then(|suffix| suffix.strip_prefix('.'))
+            .and_then(|uuid| Uuid::parse_str(uuid).ok())
+            .ok_or_else(invalid)?;
+        if agent_id.is_empty() {
+            return Err(invalid());
+        }
+        Ok(Self::new(ParsedAgentId::new(agent_id), InvocationId(uuid)))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InvocationMetadata {
     pub agent_id: ParsedAgentId,
-    pub idempotency_key: String,
+    pub invocation_id: OwnedInvocationId,
+}
+
+impl From<crate::golem_agentic::golem::agent::host::InvocationMetadata> for InvocationMetadata {
+    fn from(metadata: crate::golem_agentic::golem::agent::host::InvocationMetadata) -> Self {
+        Self::from_host(metadata.agent_id, metadata.invocation_id)
+    }
+}
+
+impl InvocationMetadata {
+    fn from_host(agent_id: String, invocation_id: crate::schema::wit::wire::InvocationId) -> Self {
+        let agent_id = ParsedAgentId::new(agent_id);
+        Self {
+            invocation_id: OwnedInvocationId::new(
+                agent_id.clone(),
+                InvocationId(crate::wire_uuid_to_schema(invocation_id.id)),
+            ),
+            agent_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1381,13 +1468,31 @@ pub struct Invocation<T> {
     pub value: T,
 }
 
+/// Cancels a scheduled invocation. Generated clients and the reflection API create it from
+/// different host bindings of the same `cancellation-token` resource.
 pub struct CancellationToken {
-    raw: host::CancellationToken,
+    cancel: Box<dyn Fn() + Send + Sync>,
+}
+
+impl From<host::CancellationToken> for CancellationToken {
+    fn from(raw: host::CancellationToken) -> Self {
+        Self {
+            cancel: Box::new(move || raw.cancel()),
+        }
+    }
+}
+
+impl From<crate::golem_agentic::golem::agent::host::CancellationToken> for CancellationToken {
+    fn from(raw: crate::golem_agentic::golem::agent::host::CancellationToken) -> Self {
+        Self {
+            cancel: Box::new(move || raw.cancel()),
+        }
+    }
 }
 
 impl CancellationToken {
     pub fn cancel(&self) {
-        self.raw.cancel();
+        (self.cancel)();
     }
 }
 
@@ -1403,11 +1508,24 @@ pub struct ScheduledInvocation {
     pub cancellation_token: CancellationToken,
 }
 
+impl From<crate::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt>
+    for ScheduledInvocation
+{
+    fn from(
+        receipt: crate::golem_agentic::golem::agent::host::CancelableScheduledInvocationReceipt,
+    ) -> Self {
+        Self {
+            metadata: receipt.metadata.into(),
+            cancellation_token: receipt.cancellation_token.into(),
+        }
+    }
+}
+
 type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
 type PendingResultFuture = Pin<Box<dyn Future<Output = PendingResult>>>;
 
 struct ReflectedTransportPending {
-    metadata: InvocationMetadata,
+    metadata: Option<InvocationMetadata>,
     cancel: Rc<dyn Fn()>,
     future: PendingResultFuture,
 }
@@ -1420,8 +1538,10 @@ impl Future for ReflectedTransportPending {
     }
 }
 
+/// `metadata` is absent when the host rejected the call before accepting it; awaiting the
+/// invocation then returns the rejection.
 pub struct PendingInvocation {
-    pub metadata: InvocationMetadata,
+    pub metadata: Option<InvocationMetadata>,
     raw: Rc<host::FutureInvokeResult>,
     state: RefCell<Option<Pin<Box<dyn Future<Output = PendingResult>>>>>,
 }
@@ -1438,8 +1558,8 @@ struct CheckedReflectedOutput<F> {
 }
 
 impl ReflectedPendingInvocation {
-    pub fn metadata(&self) -> &InvocationMetadata {
-        &self.checked.inner.metadata
+    pub fn metadata(&self) -> Option<&InvocationMetadata> {
+        self.checked.inner.metadata.as_ref()
     }
 
     pub fn cancel(&self) {
@@ -1501,6 +1621,7 @@ impl Future for PendingInvocation {
             let metadata = this.metadata.clone();
             *this.state.borrow_mut() = Some(Box::pin(async move {
                 let result = raw.get().await.map_err(rpc_error_to_reflect)?;
+                let metadata = accepted_metadata(metadata)?;
                 let value = result
                     .map(crate::decode_schema_value)
                     .transpose()
@@ -1521,8 +1642,10 @@ type CallerPendingResult<T> = Result<Invocation<T>, GolemReflectError>;
 type CallerPendingFuture<T> = Pin<Box<dyn Future<Output = CallerPendingResult<T>>>>;
 
 /// A cancellable pending invocation generated for a full caller-owned client.
+/// `metadata` is absent when the host rejected the call before accepting it; awaiting the
+/// invocation then returns the rejection.
 pub struct CallerPendingInvocation<T> {
-    pub metadata: InvocationMetadata,
+    pub metadata: Option<InvocationMetadata>,
     raw: Rc<crate::golem_agentic::golem::agent::host::FutureInvokeResult>,
     state: RefCell<Option<CallerPendingFuture<T>>>,
     decode: Rc<dyn Fn(Option<SchemaValue>) -> Result<T, GolemReflectError>>,
@@ -1556,7 +1679,7 @@ impl<T: 'static> Future for CallerPendingInvocation<T> {
                     .transpose()
                     .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
                 Ok(Invocation {
-                    metadata,
+                    metadata: accepted_metadata(metadata)?,
                     value: decode(value)?,
                 })
             }));
@@ -1582,13 +1705,24 @@ pub fn start_caller_pending<T: 'static>(
         .map_err(|error| GolemReflectError::SchemaEncode(error.to_string()))?;
     let invocation = crate::permissions::__async_invoke_and_await(rpc, method, input, scope_card);
     Ok(CallerPendingInvocation {
-        metadata: InvocationMetadata {
-            agent_id: ParsedAgentId::new(invocation.metadata.agent_id),
-            idempotency_key: invocation.metadata.idempotency_key,
-        },
+        metadata: invocation.metadata.map(|metadata| {
+            InvocationMetadata::from_host(metadata.agent_id, metadata.invocation_id)
+        }),
         raw: Rc::new(invocation.future),
         state: RefCell::new(None),
         decode: Rc::new(decode),
+    })
+}
+
+/// The host omits the metadata only for a call it rejected, and then completes the call with
+/// the rejection, so a successful completion always has it.
+fn accepted_metadata(
+    metadata: Option<InvocationMetadata>,
+) -> Result<InvocationMetadata, GolemReflectError> {
+    metadata.ok_or_else(|| {
+        GolemReflectError::ProtocolError(
+            "the host completed an RPC call it did not accept".to_string(),
+        )
     })
 }
 
@@ -1630,12 +1764,13 @@ impl RpcTransport {
         let invocation =
             self.raw
                 .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
-        let metadata = self.metadata(invocation.metadata);
-        let value = invocation
+        let result = invocation
             .future
             .get()
             .await
-            .map_err(rpc_error_to_reflect)?
+            .map_err(rpc_error_to_reflect)?;
+        let metadata = accepted_metadata(invocation.metadata.map(|raw| self.metadata(raw)))?;
+        let value = result
             .map(crate::decode_schema_value)
             .transpose()
             .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
@@ -1667,7 +1802,7 @@ impl RpcTransport {
         let pending =
             self.raw
                 .async_invoke_and_await(method, input, scope_card.map(ScopeCard::raw));
-        let metadata = self.metadata(pending.metadata);
+        let metadata = pending.metadata.map(|raw| self.metadata(raw));
         Ok(PendingInvocation {
             metadata,
             raw: Rc::new(pending.future),
@@ -1689,17 +1824,12 @@ impl RpcTransport {
             .map_err(rpc_error_to_reflect)?;
         Ok(ScheduledInvocation {
             metadata: self.metadata(receipt.metadata),
-            cancellation_token: CancellationToken {
-                raw: receipt.cancellation_token,
-            },
+            cancellation_token: receipt.cancellation_token.into(),
         })
     }
 
     fn metadata(&self, raw: host::InvocationMetadata) -> InvocationMetadata {
-        InvocationMetadata {
-            agent_id: ParsedAgentId::new(raw.agent_id),
-            idempotency_key: raw.idempotency_key,
-        }
+        InvocationMetadata::from_host(raw.agent_id, raw.invocation_id)
     }
 }
 
@@ -1869,6 +1999,39 @@ mod tests {
     use std::collections::HashSet;
     use std::rc::Rc;
     use test_r::test;
+
+    #[test]
+    fn invocation_id_text_form_splits_off_the_trailing_uuid() {
+        let agent_id = super::ParsedAgentId::new(r#"shop.v2/cart("a.b", "x/y")"#);
+        let uuid = crate::Uuid::parse_str("0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c").unwrap();
+        let id = super::OwnedInvocationId::new(agent_id.clone(), super::InvocationId(uuid));
+        let text = id.to_string();
+        assert_eq!(
+            text,
+            r#"shop.v2/cart("a.b", "x/y").0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"#
+        );
+        let parsed: super::OwnedInvocationId = text.parse().unwrap();
+        assert_eq!(parsed.agent_id(), &agent_id);
+        assert_eq!(parsed.id(), super::InvocationId(uuid));
+        assert_eq!(
+            parsed
+                .id()
+                .to_string()
+                .parse::<super::InvocationId>()
+                .unwrap(),
+            parsed.id()
+        );
+        assert!(
+            ".0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
+                .parse::<super::OwnedInvocationId>()
+                .is_err()
+        );
+        assert!(
+            "agent-0b9f3d9e-5f43-4c3a-9e7c-0d6f1f2a3b4c"
+                .parse::<super::OwnedInvocationId>()
+                .is_err()
+        );
+    }
 
     #[test]
     fn schema_ref_packs_validates_and_unpacks_canonical_json() {
@@ -3178,8 +3341,8 @@ pub struct TypedPendingInvocation<O> {
 }
 
 impl<O> TypedPendingInvocation<O> {
-    pub fn metadata(&self) -> &InvocationMetadata {
-        &self.inner.metadata
+    pub fn metadata(&self) -> Option<&InvocationMetadata> {
+        self.inner.metadata.as_ref()
     }
 
     pub fn cancel(&self) {

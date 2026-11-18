@@ -188,11 +188,6 @@ async fn recovery_and_update(template: &str, path: &str, source: &str) {
     ctx.startup_ports = None;
     ctx.start_server().await;
     inspect(&ctx, agent, 0).await;
-    // A Go component makes a durable environment call at start, before the
-    // snapshot loads, and the executor rejects a snapshot-based update then.
-    if template == "go" {
-        return;
-    }
 
     fs::write_str(
         ctx.cwd_path_join(path),

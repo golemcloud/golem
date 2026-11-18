@@ -45,9 +45,7 @@ use golem_cli::bridge_gen::go::tool::GoToolBridgeGenerator;
 use golem_cli::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use golem_cli::model::app::ApplicationConfig;
 use golem_cli::sdk_overrides::workspace_root;
-use golem_common::model::agent::{
-    AgentConfigSource, AgentMode, CorsOptions, FileMapping, HttpMountDetails,
-};
+use golem_common::model::agent::{AgentConfigSource, AgentMode, CorsOptions, HttpMountDetails};
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
     DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
@@ -60,6 +58,7 @@ use golem_common::schema::tool::{
     ResultSpec as ToolResultSpec, StreamSpec, Tool,
 };
 use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, Role, SchemaType};
+use golem_schema::http::FileMapping;
 use std::process::Command;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -408,8 +407,8 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "func (c CounterAgentClient) MustAdd(by uint32) {",
         "func (c CounterAgentClient) IncrementAsync() *golem.Future[float64] {",
         "func (c CounterAgentClient) AddAsync(by uint32) *golem.Future[golem.Unit] {",
-        "func (c CounterAgentClient) TriggerAdd(by uint32) (golem.InvocationID, error) {",
-        "func (c CounterAgentClient) MustTriggerAdd(by uint32) golem.InvocationID {",
+        "func (c CounterAgentClient) TriggerAdd(by uint32) (golem.InvocationMetadata, error) {",
+        "func (c CounterAgentClient) MustTriggerAdd(by uint32) golem.InvocationMetadata {",
         "func (c CounterAgentClient) ScheduleAdd(at time.Time, by uint32) (*golem.ScheduledInvocation, error) {",
         "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.ScheduledInvocation {",
         "func MustGetCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",

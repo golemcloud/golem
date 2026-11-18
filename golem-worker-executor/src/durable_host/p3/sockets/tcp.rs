@@ -14,38 +14,41 @@
 
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
-use crate::durable_host::TcpSocketStreamDirection;
-use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, Cancellable, DemandDelivery, DemandDeliveryMode,
-    DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource,
+    AccessClaimOptions, CallReplayOutcome, Cancellable, CompletionDelivery,
+    DeferredCallReplayOutcome, DemandDelivery, DemandDeliveryMode, DurableCallSession,
+    DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
     ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
     reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
-    CustomInvocationContext, DurabilityHost, DurableCallTrapContext,
-    find_durable_call_trap_context, mark_durable_call_trap_context,
+    DurabilityHost, DurableCallTrapContext, GuestTaskContext, find_durable_call_trap_context,
+    mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
-    observe_function_call_store, run_deniable_access, run_read_access, wasi_sockets_view,
+    observe_function_call_store, run_deniable_access, wasi_sockets_view,
 };
+use crate::durable_host::sockets::{SocketEntry, SocketPhase, TcpSocketOptions};
 use crate::durable_host::tail_work::TailActivity;
+use crate::durable_host::{DurableWorkerCtx, TcpSocketStreamDirection};
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::{
-    P3SocketsTypesTcpSocketConnect, P3SocketsTypesTcpSocketReceive,
+    P3SocketsTypesTcpSocketBind, P3SocketsTypesTcpSocketConnect, P3SocketsTypesTcpSocketReceive,
     P3SocketsTypesTcpSocketReceiveAcquire, P3SocketsTypesTcpSocketReceiveChunk,
     P3SocketsTypesTcpSocketSend, P3SocketsTypesTcpSocketSendAcquire,
 };
 use golem_common::model::oplog::types::{SerializableP3SocketErrorCode, SerializableP3TcpChunk};
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostRequestP3SocketsConnect,
-    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostRequestP3SocketsBind,
+    HostRequestP3SocketsConnect, HostResponseP3SocketsBind, HostResponseP3SocketsTcpAcquire,
+    HostResponseP3SocketsTcpConnect, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend, OplogIndex,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -62,19 +65,62 @@ use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
 
-pub(super) const UNSUPPORTED_SOCKET_TARGET: &str = "unsupported socket address";
-
-pub(super) fn socket_target(
-    address: &types::IpSocketAddress,
-) -> Option<golem_common::model::card::PermissionTarget> {
-    match address {
-        types::IpSocketAddress::Ipv4(address) => {
-            let (a, b, c, d) = address.address;
-            let host = std::net::Ipv4Addr::new(a, b, c, d).to_string();
-            tcp_target(&host, address.port).ok()
-        }
-        types::IpSocketAddress::Ipv6(_) => None,
+fn tcp_entry<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    rep: u32,
+) -> wasmtime::Result<&mut SocketEntry> {
+    if !ctx.state.socket_entries.contains_key(&rep) {
+        // Native accept creates resources outside `create`.
+        let entry = {
+            let mut wasi = ctx.as_wasi_view();
+            let mut view = wasi.sockets();
+            let family =
+                types::HostTcpSocket::get_address_family(&mut view, Resource::new_borrow(rep))?;
+            let mut entry = SocketEntry::new(family);
+            entry.local_address =
+                types::HostTcpSocket::get_local_address(&mut view, Resource::new_borrow(rep))
+                    .ok()
+                    .map(Into::into);
+            entry.remote_address =
+                types::HostTcpSocket::get_remote_address(&mut view, Resource::new_borrow(rep))
+                    .ok()
+                    .map(Into::into);
+            entry.phase = if entry.remote_address.is_some() {
+                SocketPhase::Connected
+            } else if entry.local_address.is_some() {
+                SocketPhase::Bound
+            } else {
+                SocketPhase::Created
+            };
+            entry
+        };
+        ctx.state.socket_entries.insert(rep, entry);
     }
+    Ok(ctx
+        .state
+        .socket_entries
+        .get_mut(&rep)
+        .expect("TCP socket entry"))
+}
+
+fn tcp_options<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    rep: u32,
+) -> SocketResult<&mut TcpSocketOptions> {
+    let entry = tcp_entry(ctx, rep).map_err(SocketError::trap)?;
+    match &entry.phase {
+        SocketPhase::Closed(error) => Err(types::ErrorCode::from(error.clone()).into()),
+        SocketPhase::Connecting => Err(types::ErrorCode::InvalidState.into()),
+        _ => Ok(&mut entry.options),
+    }
+}
+
+/// The permission target of a connect or datagram from the Store to `address`.
+pub(super) fn socket_target<Ctx: WorkerCtx, U: 'static>(
+    store: &Accessor<U, DurableP3<Ctx>>,
+    address: std::net::SocketAddr,
+) -> Result<golem_common::model::card::PermissionTarget, String> {
+    store.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).socket_target(address))
 }
 
 fn serialize_tcp_stream_result(
@@ -487,8 +533,57 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         local_address: types::IpSocketAddress,
     ) -> SocketResult<()> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "bind");
-        let mut view = WasiSocketsView::sockets(self.0);
-        types::HostTcpSocket::bind(&mut view, socket, local_address).await
+        let rep = socket.rep();
+        let mut bound_live = false;
+        let response = DurableCallSession::<P3SocketsTypesTcpSocketBind, NotCancellable>::invoke(
+            self.0.durable_ctx_mut(),
+            HostRequestP3SocketsBind {
+                local_address: local_address.into(),
+            },
+            DurableFunctionType::WriteLocal,
+            async |ctx| -> wasmtime::Result<_> {
+                let result = if tcp_entry(ctx, rep)?.phase != SocketPhase::Created {
+                    Err(types::ErrorCode::InvalidState.into())
+                } else {
+                    let mut wasi = ctx.as_wasi_view();
+                    let mut view = wasi.sockets();
+                    match types::HostTcpSocket::bind(&mut view, socket, local_address).await {
+                        Ok(()) => {
+                            bound_live = true;
+                            types::HostTcpSocket::get_local_address(
+                                &mut view,
+                                Resource::new_borrow(rep),
+                            )
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                Ok(HostResponseP3SocketsBind {
+                    result: match result {
+                        Ok(address) => Ok(address.into()),
+                        Err(error) => Err(serialize_socket_error(error)?),
+                    },
+                })
+            },
+        )
+        .await
+        .map_err(SocketError::trap)?;
+        match response.result {
+            Ok(address) => {
+                let entry = self
+                    .0
+                    .durable_ctx_mut()
+                    .state
+                    .socket_entries
+                    .get_mut(&rep)
+                    .expect("TCP socket entry");
+                entry.phase = SocketPhase::Bound;
+                entry.local_address = Some(address);
+                entry.native_bound = bound_live;
+                Ok(())
+            }
+            Err(error) => Err(types::ErrorCode::from(error).into()),
+        }
     }
 
     fn create(
@@ -496,7 +591,14 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         address_family: types::IpAddressFamily,
     ) -> SocketResult<Resource<TcpSocket>> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "create");
-        types::HostTcpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)
+        let socket =
+            types::HostTcpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)?;
+        self.0
+            .durable_ctx_mut()
+            .state
+            .socket_entries
+            .insert(socket.rep(), SocketEntry::new(address_family));
+        Ok(socket)
     }
 
     fn get_local_address(
@@ -504,7 +606,17 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::IpSocketAddress> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-local-address");
-        types::HostTcpSocket::get_local_address(&mut WasiSocketsView::sockets(self.0), socket)
+        let entry = tcp_entry(self.0.durable_ctx_mut(), socket.rep()).map_err(SocketError::trap)?;
+        match &entry.phase {
+            SocketPhase::Closed(error) => return Err(types::ErrorCode::from(error.clone()).into()),
+            SocketPhase::Connecting => return Err(types::ErrorCode::InvalidState.into()),
+            _ => {}
+        }
+        entry
+            .local_address
+            .clone()
+            .map(Into::into)
+            .ok_or_else(|| types::ErrorCode::InvalidState.into())
     }
 
     fn get_remote_address(
@@ -512,7 +624,15 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::IpSocketAddress> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-remote-address");
-        types::HostTcpSocket::get_remote_address(&mut WasiSocketsView::sockets(self.0), socket)
+        let entry = tcp_entry(self.0.durable_ctx_mut(), socket.rep()).map_err(SocketError::trap)?;
+        if let SocketPhase::Closed(error) = &entry.phase {
+            return Err(types::ErrorCode::from(error.clone()).into());
+        }
+        entry
+            .remote_address
+            .clone()
+            .map(Into::into)
+            .ok_or_else(|| types::ErrorCode::InvalidState.into())
     }
 
     fn get_is_listening(&mut self, socket: Resource<TcpSocket>) -> wasmtime::Result<bool> {
@@ -525,7 +645,7 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<types::IpAddressFamily> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-address-family");
-        types::HostTcpSocket::get_address_family(&mut WasiSocketsView::sockets(self.0), socket)
+        Ok(tcp_entry(self.0.durable_ctx_mut(), socket.rep())?.family)
     }
 
     fn set_listen_backlog_size(
@@ -545,13 +665,30 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
         )
     }
 
-    fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
+    async fn get_keep_alive_enabled(&mut self, socket: Resource<TcpSocket>) -> SocketResult<bool> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-keep-alive-enabled",
         );
-        types::HostTcpSocket::get_keep_alive_enabled(&mut WasiSocketsView::sockets(self.0), socket)
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_enabled
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = types::HostTcpSocket::get_keep_alive_enabled(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_enabled {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_enabled(
@@ -564,14 +701,21 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "set-keep-alive-enabled",
         );
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_keep_alive_enabled(
             &mut WasiSocketsView::sockets(self.0),
             socket,
             value,
-        )
+        )?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .keep_alive_enabled = Some(OnceLock::new());
+        Ok(())
     }
 
-    fn get_keep_alive_idle_time(
+    async fn get_keep_alive_idle_time(
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
@@ -580,10 +724,24 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "get-keep-alive-idle-time",
         );
-        types::HostTcpSocket::get_keep_alive_idle_time(
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_idle_time
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = types::HostTcpSocket::get_keep_alive_idle_time(
             &mut WasiSocketsView::sockets(self.0),
             socket,
         )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_idle_time {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_idle_time(
@@ -596,14 +754,21 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "set-keep-alive-idle-time",
         );
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_keep_alive_idle_time(
             &mut WasiSocketsView::sockets(self.0),
             socket,
             value,
-        )
+        )?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .keep_alive_idle_time = Some(OnceLock::new());
+        Ok(())
     }
 
-    fn get_keep_alive_interval(
+    async fn get_keep_alive_interval(
         &mut self,
         socket: Resource<TcpSocket>,
     ) -> SocketResult<types::Duration> {
@@ -612,7 +777,24 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "get-keep-alive-interval",
         );
-        types::HostTcpSocket::get_keep_alive_interval(&mut WasiSocketsView::sockets(self.0), socket)
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_interval
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = types::HostTcpSocket::get_keep_alive_interval(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_interval {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_interval(
@@ -625,20 +807,44 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "set-keep-alive-interval",
         );
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_keep_alive_interval(
             &mut WasiSocketsView::sockets(self.0),
             socket,
             value,
-        )
+        )?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .keep_alive_interval = Some(OnceLock::new());
+        Ok(())
     }
 
-    fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
+    async fn get_keep_alive_count(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u32> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-keep-alive-count",
         );
-        types::HostTcpSocket::get_keep_alive_count(&mut WasiSocketsView::sockets(self.0), socket)
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .keep_alive_count
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = types::HostTcpSocket::get_keep_alive_count(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.keep_alive_count {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_keep_alive_count(
@@ -651,30 +857,76 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "set-keep-alive-count",
         );
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_keep_alive_count(
             &mut WasiSocketsView::sockets(self.0),
             socket,
             value,
-        )
+        )?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .keep_alive_count = Some(OnceLock::new());
+        Ok(())
     }
 
-    fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
+    async fn get_hop_limit(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u8> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "get-hop-limit");
-        types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .hop_limit
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value =
+            types::HostTcpSocket::get_hop_limit(&mut WasiSocketsView::sockets(self.0), socket)
+                .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.hop_limit {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_hop_limit(&mut self, socket: Resource<TcpSocket>, value: u8) -> SocketResult<()> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "set-hop-limit");
-        types::HostTcpSocket::set_hop_limit(&mut WasiSocketsView::sockets(self.0), socket, value)
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
+        types::HostTcpSocket::set_hop_limit(&mut WasiSocketsView::sockets(self.0), socket, value)?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .hop_limit = Some(OnceLock::new());
+        Ok(())
     }
 
-    fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+    async fn get_receive_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-receive-buffer-size",
         );
-        types::HostTcpSocket::get_receive_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .receive_buffer_size
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = types::HostTcpSocket::get_receive_buffer_size(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.receive_buffer_size {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_receive_buffer_size(
@@ -687,20 +939,44 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "set-receive-buffer-size",
         );
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_receive_buffer_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
             value,
-        )
+        )?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .receive_buffer_size = Some(OnceLock::new());
+        Ok(())
     }
 
-    fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
+    async fn get_send_buffer_size(&mut self, socket: Resource<TcpSocket>) -> SocketResult<u64> {
         observe_function_call(
             &*self.0,
             "sockets::types::tcp-socket",
             "get-send-buffer-size",
         );
-        types::HostTcpSocket::get_send_buffer_size(&mut WasiSocketsView::sockets(self.0), socket)
+        let rep = socket.rep();
+        if let Some(value) = tcp_options(self.0.durable_ctx_mut(), rep)?
+            .send_buffer_size
+            .as_ref()
+            .and_then(OnceLock::get)
+            .copied()
+        {
+            return Ok(value);
+        }
+        let value = types::HostTcpSocket::get_send_buffer_size(
+            &mut WasiSocketsView::sockets(self.0),
+            socket,
+        )
+        .await?;
+        if let Some(cache) = &tcp_options(self.0.durable_ctx_mut(), rep)?.send_buffer_size {
+            return Ok(*cache.get_or_init(|| value));
+        }
+        Ok(value)
     }
 
     fn set_send_buffer_size(
@@ -713,20 +989,27 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
             "sockets::types::tcp-socket",
             "set-send-buffer-size",
         );
+        let rep = socket.rep();
+        tcp_options(self.0.durable_ctx_mut(), rep)?;
         types::HostTcpSocket::set_send_buffer_size(
             &mut WasiSocketsView::sockets(self.0),
             socket,
             value,
-        )
+        )?;
+        tcp_entry(self.0.durable_ctx_mut(), rep)
+            .map_err(SocketError::trap)?
+            .options
+            .send_buffer_size = Some(OnceLock::new());
+        Ok(())
     }
 
     fn drop(&mut self, sock: Resource<TcpSocket>) -> wasmtime::Result<()> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "drop");
-        // Clear the one-shot send/receive taken shadow before the resource (and
-        // its rep) can be reused, so a future socket cannot inherit stale flags.
         self.0
             .durable_ctx_mut()
-            .forget_tcp_taken_streams(sock.rep());
+            .state
+            .socket_entries
+            .remove(&sock.rep());
         types::HostTcpSocket::drop(&mut WasiSocketsView::sockets(self.0), sock)
     }
 }
@@ -1329,10 +1612,10 @@ where
 /// The durable wrappers replay `send`/`receive` from the oplog and never invoke
 /// the native host call on replay, so the native taken flag is not advanced
 /// across a replay boundary. This helper records the acquisition outcome durably
-/// and maintains a Golem-side shadow of the taken flag, so that a live call made
-/// after replay returns the same result uninterrupted execution would.
+/// and restores the entry's taken flags. Recorded acquisitions keep their original
+/// outcomes; new acquisitions on a lost connection return `connection-broken`.
 ///
-/// On the live path the shadow check, the read-only connectivity probe and the
+/// On the live path the phase check, the taken-flag check and the
 /// shadow mutation all happen inside a single `accessor.with` closure with no
 /// `.await` between them, so concurrent acquisitions on the same socket are
 /// linearized — exactly one observes a free stream and acquires it. The recorded
@@ -1346,7 +1629,7 @@ async fn tcp_acquire_stream<Ctx, U>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket_rep: u32,
     direction: TcpSocketStreamDirection,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+) -> wasmtime::Result<(Result<(), types::ErrorCode>, CompletionDelivery)>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1371,7 +1654,7 @@ async fn tcp_run_acquire<Ctx, U, Pair>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     socket_rep: u32,
     direction: TcpSocketStreamDirection,
-) -> wasmtime::Result<Result<(), types::ErrorCode>>
+) -> wasmtime::Result<(Result<(), types::ErrorCode>, CompletionDelivery)>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1382,43 +1665,63 @@ where
     // an incomplete replay. The actual byte transmission is a `WriteRemote` call. The
     // recorded outcome is still persisted and replayed for determinism, exactly
     // like the clock `ReadLocal` calls.
-    let response = run_read_access::<_, _, Ctx, Pair, _>(
+    let call = DurableCallSession::<Pair, Cancellable>::start_access(
         accessor,
+        durable_worker_ctx::<Ctx, U>,
         HostRequestNoInput {},
         DurableFunctionType::ReadLocal,
-        || async {
-            accessor.with(
+    )
+    .await?;
+    let (call, replayed) = if call.is_live() {
+        (Some(call), None)
+    } else {
+        match call
+            .replay_access_deferred(accessor, durable_worker_ctx::<Ctx, U>)
+            .await?
+        {
+            DeferredCallReplayOutcome::Replayed(response, delivery) => {
+                (None, Some((response, delivery)))
+            }
+            DeferredCallReplayOutcome::Incomplete(call) => (Some(call), None),
+        }
+    };
+    // The acquire is observed only when the send/receive host function returns its
+    // handles. Keep delivery deferred while that function starts its durable task.
+    let (response, delivery) = if let Some(mut call) = call {
+        let response = accessor
+            .with(
                 |mut access| -> wasmtime::Result<HostResponseP3SocketsTcpAcquire> {
-                    // Read-only connectivity probe: `remote-address` succeeds only when
-                    // the socket is connected, mirroring the precondition the native
-                    // `take_*_stream` checks (modulo the taken flag, tracked below).
-                    let probe = {
-                        let mut view = wasi_sockets_view::<Ctx, U>(access.data_mut());
-                        types::HostTcpSocket::get_remote_address(
-                            &mut view,
-                            Resource::new_borrow(socket_rep),
-                        )
-                    };
                     let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    let result = if ctx.is_tcp_stream_taken(socket_rep, direction) {
+                    let phase = tcp_entry(ctx, socket_rep)?.phase.clone();
+                    let result = if phase == SocketPhase::Lost {
+                        Err(SerializableP3SocketErrorCode::from(
+                            types::ErrorCode::ConnectionBroken,
+                        ))
+                    } else if ctx.is_tcp_stream_taken(socket_rep, direction) {
                         Err(SerializableP3SocketErrorCode::from(
                             types::ErrorCode::InvalidState,
                         ))
                     } else {
-                        match probe {
-                            Ok(_) => {
+                        match phase {
+                            SocketPhase::Connected => {
                                 ctx.mark_tcp_stream_taken(socket_rep, direction);
                                 Ok(())
                             }
-                            Err(error) => Err(serialize_socket_error(error)?),
+                            SocketPhase::Closed(error) => Err(error),
+                            _ => Err(SerializableP3SocketErrorCode::from(
+                                types::ErrorCode::InvalidState,
+                            )),
                         }
                     };
                     Ok(HostResponseP3SocketsTcpAcquire { result })
                 },
             )
-        },
-    )
-    .await?;
+            .map_err(|error| wasmtime::Error::from_anyhow(call.trap(error)))?;
+        call.complete_access_deferred(accessor, durable_worker_ctx::<Ctx, U>, response)
+            .await?
+    } else {
+        replayed.expect("a completed acquire retains its delivery")
+    };
 
     // Reapply the recorded outcome to the shadow so replay rehydrates the taken
     // flag before any later live call runs (idempotent on the live path, where
@@ -1430,7 +1733,7 @@ where
         });
     }
 
-    Ok(deserialize_tcp_stream_result(response.result))
+    Ok((deserialize_tcp_stream_result(response.result), delivery))
 }
 
 impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for DurableP3<Ctx> {
@@ -1448,10 +1751,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let targets = socket_target(&remote_address)
-            .map(|target| vec![target])
-            .ok_or_else(|| UNSUPPORTED_SOCKET_TARGET.to_string());
+        let targets = socket_target(store, remote_address.into()).map(|target| vec![target]);
         let request_address = remote_address;
+        let rep = socket.rep();
+        let mut connected_live = false;
         let response = run_deniable_access::<_, _, Ctx, P3SocketsTypesTcpSocketConnect, _>(
             store,
             HostRequestP3SocketsConnect {
@@ -1460,6 +1763,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             DurableFunctionType::WriteRemote,
             targets,
             || async {
+                let (phase, binding_lost) = store.with(|mut access| -> wasmtime::Result<_> {
+                    let entry = tcp_entry(durable_worker_ctx::<Ctx, U>(access.data_mut()), rep)?;
+                    Ok((
+                        entry.phase.clone(),
+                        entry.phase == SocketPhase::Bound && !entry.native_bound,
+                    ))
+                })?;
+                if binding_lost {
+                    // The recorded endpoint is observational state, not a reserved native port.
+                    return Ok(HostResponseP3SocketsTcpConnect {
+                        result: Err(types::ErrorCode::ConnectionBroken.into()),
+                        closed: false,
+                    });
+                }
+                if !matches!(phase, SocketPhase::Created | SocketPhase::Bound) {
+                    return Ok(HostResponseP3SocketsTcpConnect {
+                        result: Err(types::ErrorCode::InvalidState.into()),
+                        closed: false,
+                    });
+                }
+                store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .state
+                        .socket_entries
+                        .get_mut(&rep)
+                        .expect("TCP socket entry")
+                        .phase = SocketPhase::Connecting;
+                });
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
                 let result = <WasiSockets as types::HostTcpSocketWithStore<U>>::connect(
                     &sockets,
@@ -1467,9 +1798,51 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                     remote_address,
                 )
                 .await;
-                Ok(HostResponseP3SocketsConnect {
+                let closed = if result.is_err() {
+                    store.with(|mut access| -> wasmtime::Result<bool> {
+                        let mut view = wasi_sockets_view::<Ctx, U>(access.data_mut());
+                        match types::HostTcpSocket::get_remote_address(
+                            &mut view,
+                            Resource::new_borrow(rep),
+                        ) {
+                            Ok(_) => Ok(false),
+                            Err(error) => Ok(serialize_socket_error(error)?
+                                != SerializableP3SocketErrorCode::InvalidState),
+                        }
+                    })?
+                } else {
+                    false
+                };
+                store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut())
+                        .state
+                        .socket_entries
+                        .get_mut(&rep)
+                        .expect("TCP socket entry")
+                        .phase = phase;
+                });
+                Ok(HostResponseP3SocketsTcpConnect {
+                    closed,
                     result: match result {
-                        Ok(()) => Ok(()),
+                        Ok(()) => {
+                            connected_live = true;
+                            store
+                                .with(|mut access| -> wasmtime::Result<_> {
+                                    let mut view = wasi_sockets_view::<Ctx, U>(access.data_mut());
+                                    let local = types::HostTcpSocket::get_local_address(
+                                        &mut view,
+                                        Resource::new_borrow(rep),
+                                    )
+                                    .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+                                    let remote = types::HostTcpSocket::get_remote_address(
+                                        &mut view,
+                                        Resource::new_borrow(rep),
+                                    )
+                                    .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+                                    Ok((local.into(), remote.into()))
+                                })
+                                .map(Ok)?
+                        }
                         Err(error) => Err(serialize_socket_error(error)?),
                     },
                 })
@@ -1477,11 +1850,44 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         )
         .await
         .map_err(SocketError::trap)?;
-        response
-            .result
-            .map_err(|error| types::ErrorCode::from(error).into())
+        match response.result {
+            Ok((local, remote)) => {
+                store.with(|mut access| {
+                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                    let entry = ctx
+                        .state
+                        .socket_entries
+                        .get_mut(&rep)
+                        .expect("TCP socket entry");
+                    entry.local_address = Some(local);
+                    entry.remote_address = Some(remote);
+                    entry.phase = if connected_live {
+                        SocketPhase::Connected
+                    } else {
+                        SocketPhase::Lost
+                    };
+                });
+                Ok(())
+            }
+            Err(error) => {
+                if response.closed {
+                    store.with(|mut access| {
+                        durable_worker_ctx::<Ctx, U>(access.data_mut())
+                            .state
+                            .socket_entries
+                            .get_mut(&rep)
+                            .expect("TCP socket entry")
+                            .phase = SocketPhase::Closed(error.clone());
+                    });
+                }
+                Err(types::ErrorCode::from(error).into())
+            }
+        }
     }
 
+    /// Agents expose no ports, so `listen` is always refused and its implicit bind never happens.
+    /// A socket that is recorded as bound but has no native bind after reconstruction reports
+    /// `connection-broken` first, like the other operations on it.
     async fn listen(
         mut store: Access<'_, U, Self>,
         socket: Resource<TcpSocket>,
@@ -1491,9 +1897,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
             "sockets::types::tcp-socket",
             "listen",
         );
-        let store =
-            Access::<U, WasiSockets>::new(store.as_context_mut(), wasi_sockets_view::<Ctx, U>);
-        <WasiSockets as types::HostTcpSocketWithStore<U>>::listen(store, socket).await
+        let rep = socket.rep();
+        {
+            let mut store = store.as_context_mut();
+            let entry = tcp_entry(durable_worker_ctx::<Ctx, U>(store.data_mut()), rep)
+                .map_err(SocketError::trap)?;
+            if entry.phase == SocketPhase::Bound && !entry.native_bound {
+                return Err(types::ErrorCode::ConnectionBroken.into());
+            }
+        }
+        Err(types::ErrorCode::AccessDenied.into())
     }
 
     async fn send(
@@ -1506,73 +1919,98 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // socket is not connected) this returns an error, which we surface
         // without invoking the native send, mirroring the native `take_send_stream`
         // contract while keeping replay deterministic.
-        if let Err(error) =
+        let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Send)
-                .await?
-        {
-            return accessor.with(|mut store| {
-                data.close(&mut store)?;
-                FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })
-            });
-        }
+                .await?;
+        let (future, delivery) = delivery
+            .continue_with(async {
+                if let Err(error) = acquired {
+                    let future = accessor.with(|mut store| {
+                        data.close(&mut store)?;
+                        FutureReader::new(
+                            &mut store,
+                            async move { wasmtime::error::Ok(Err(error)) },
+                        )
+                    })?;
+                    return Ok(future);
+                }
 
-        let call = DurableCallSession::<P3SocketsTypesTcpSocketSend, Cancellable>::start_access_with_options(
-            accessor,
-            durable_worker_ctx::<Ctx, U>,
-            DurableFunctionType::WriteRemote,
-            AccessClaimOptions {
-                incomplete_repair_authorized_by_scope: true,
-                ..Default::default()
-            },
-            HostRequestNoInput {},
-        )
-        .await?;
-        let (result_tx, result_rx) = oneshot::channel();
+                let call: DurableCallSession<P3SocketsTypesTcpSocketSend, Cancellable> =
+                    DurableCallSession::start_access_with_options(
+                        accessor,
+                        durable_worker_ctx::<Ctx, U>,
+                        DurableFunctionType::WriteRemote,
+                        AccessClaimOptions {
+                            incomplete_repair_authorized_by_scope: true,
+                            ..Default::default()
+                        },
+                        HostRequestNoInput {},
+                    )
+                    .await?;
+                let (result_tx, result_rx) = oneshot::channel();
 
-        if call.is_live() {
-            if call.is_persisted() {
-                // Fence the original send Start before any bytes can reach the socket.
-                let public_state = accessor.with(|mut store| {
-                    durable_worker_ctx::<Ctx, U>(store.data_mut())
-                        .public_state
-                        .clone()
-                });
-                public_state
-                    .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await?;
-            }
-            // Forward the guest's outgoing bytes straight to the socket; only the
-            // transmission result is persisted (no bytes in the oplog).
-            let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-            let socket_result_future =
-                <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, data)
-                    .await?;
-            let (socket_result_tx, socket_result_rx) = oneshot::channel();
-            accessor.with(|mut store| {
-                socket_result_future
-                    .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
-                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                    .tail_work_tracker()
-                    .activity();
-                let task =
-                    TcpSocketSendTask::<Ctx>::live(call, socket_result_rx, result_tx, activity);
-                store.spawn(async move |store| task.run(store).await)?;
-                FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                let future = if call.is_live() {
+                    if call.is_persisted() {
+                        // Fence the original send Start before any bytes can reach the socket.
+                        let public_state = accessor.with(|mut store| {
+                            durable_worker_ctx::<Ctx, U>(store.data_mut())
+                                .public_state
+                                .clone()
+                        });
+                        public_state
+                            .worker()
+                            .commit_oplog_and_update_state(CommitLevel::Always)
+                            .await?;
+                    }
+                    // Forward the guest's outgoing bytes straight to the socket; only the
+                    // transmission result is persisted (no bytes in the oplog).
+                    let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
+                    let socket_result_future =
+                        <WasiSockets as types::HostTcpSocketWithStore<U>>::send(
+                            &sockets, socket, data,
+                        )
+                        .await?;
+                    let (socket_result_tx, socket_result_rx) = oneshot::channel();
+                    accessor.with(|mut store| {
+                        socket_result_future
+                            .pipe(&mut store, TcpSocketResultConsumer::new(socket_result_tx))?;
+                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .tail_work_tracker()
+                            .activity();
+                        let task = TcpSocketSendTask::<Ctx>::live(
+                            call,
+                            socket_result_rx,
+                            result_tx,
+                            activity,
+                        );
+                        let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .attribution
+                            .capture();
+                        store.spawn(async move |store| captured.run(task.run(store)).await)?;
+                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                    })
+                } else {
+                    // Drain the replayed bytes without repeating a possibly completed send.
+                    let (input_tx, input_rx) = oneshot::channel();
+                    accessor.with(|mut store| {
+                        data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
+                        let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .tail_work_tracker()
+                            .activity();
+                        let task =
+                            TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
+                        let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .attribution
+                            .capture();
+                        store.spawn(async move |store| captured.run(task.run(store)).await)?;
+                        FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
+                    })
+                }?;
+                wasmtime::error::Ok(future)
             })
-        } else {
-            // Drain the replayed bytes without repeating a possibly completed send.
-            let (input_tx, input_rx) = oneshot::channel();
-            accessor.with(|mut store| {
-                data.pipe(&mut store, TcpSendDrainConsumer::new(input_tx))?;
-                let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                    .tail_work_tracker()
-                    .activity();
-                let task = TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
-                store.spawn(async move |store| task.run(store).await)?;
-                FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
-            })
-        }
+            .await?;
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(future)
     }
 
     async fn receive(
@@ -1580,7 +2018,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
         let invocation_id = access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
-        let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let custom_invocation_context = accessor.guest_task_context::<GuestTaskContext>()?;
         let observational_owner = accessor.with(|mut access| {
             resolve_current_observational_owner(
                 durable_worker_ctx::<Ctx, U>(access.data_mut()),
@@ -1591,51 +2029,65 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         // socket is not connected) this returns an error, surfaced as an empty
         // stream plus an immediately-failing result future, mirroring the native
         // `take_receive_stream` contract while keeping replay deterministic.
-        if let Err(error) =
+        let (acquired, delivery) =
             tcp_acquire_stream::<Ctx, U>(accessor, socket.rep(), TcpSocketStreamDirection::Receive)
-                .await?
-        {
-            return accessor.with(|mut store| {
-                Ok((
-                    StreamReader::new(&mut store, std::iter::empty::<u8>())?,
-                    FutureReader::new(&mut store, async move { wasmtime::error::Ok(Err(error)) })?,
-                ))
-            });
-        }
-
-        // Capacity 1 suffices (and bounds memory as defense in depth): the
-        // producer keeps at most one demand in flight at a time.
-        let (demand_tx, demand_rx) = demand_channel();
-        let (result_tx, result_rx) = oneshot::channel();
-
-        // Build both guest-facing handles before spawning the durable task. The
-        // task appends the `receive` `Start`; the guest cannot poll either handle
-        // until this host call returns, so spawning first would risk committing a
-        // `Start` with no terminal if a later handle construction fails.
-        accessor.with(|mut store| {
-            let mut stream =
-                StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
-            let future = match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
-                Ok(future) => future,
-                Err(error) => {
-                    let _ = stream.close(store.as_context_mut());
-                    return Err(error);
+                .await?;
+        let (handles, delivery) = delivery
+            .continue_with(async {
+                if let Err(error) = acquired {
+                    let handles = accessor.with(|mut store| {
+                        wasmtime::error::Ok((
+                            StreamReader::new(&mut store, std::iter::empty::<u8>())?,
+                            FutureReader::new(&mut store, async move {
+                                wasmtime::error::Ok(Err(error))
+                            })?,
+                        ))
+                    })?;
+                    return Ok(handles);
                 }
-            };
-            let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
-                .tail_work_tracker()
-                .activity();
-            let task = TcpSocketReceiveTask::<Ctx>::new(
-                socket,
-                demand_rx,
-                result_tx,
-                observational_owner,
-                invocation_id,
-                activity,
-            );
-            store.spawn(async move |store| task.run(store).await)?;
-            Ok((stream, future))
-        })
+
+                // Capacity 1 suffices (and bounds memory as defense in depth): the
+                // producer keeps at most one demand in flight at a time.
+                let (demand_tx, demand_rx) = demand_channel();
+                let (result_tx, result_rx) = oneshot::channel();
+
+                // Build both guest-facing handles before spawning the durable task. The
+                // task appends the `receive` `Start`; the guest cannot poll either handle
+                // until this host call returns, so spawning first would risk committing a
+                // `Start` with no terminal if a later handle construction fails.
+                let handles = accessor.with(|mut store| {
+                    let mut stream =
+                        StreamReader::new(&mut store, DurableTcpReceiveProducer::new(demand_tx))?;
+                    let future =
+                        match FutureReader::new(&mut store, wait_tcp_receive_result(result_rx)) {
+                            Ok(future) => future,
+                            Err(error) => {
+                                let _ = stream.close(store.as_context_mut());
+                                return Err(error);
+                            }
+                        };
+                    let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .tail_work_tracker()
+                        .activity();
+                    let task = TcpSocketReceiveTask::<Ctx>::new(
+                        socket,
+                        demand_rx,
+                        result_tx,
+                        observational_owner,
+                        invocation_id,
+                        activity,
+                    );
+                    let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .attribution
+                        .capture();
+                    store.spawn(async move |store| captured.run(task.run(store)).await)?;
+                    Ok((stream, future))
+                })?;
+                wasmtime::error::Ok(handles)
+            })
+            .await?;
+        delivery.deliver_at_accessor_terminal(accessor).await?;
+        Ok(handles)
     }
 }
 

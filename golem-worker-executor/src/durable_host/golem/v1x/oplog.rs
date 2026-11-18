@@ -128,7 +128,11 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
                 entries
                     .into_iter()
                     .map(|(index, entry)| {
-                        OplogEnrichmentEntry::try_from(entry).map(|entry| (index, entry))
+                        let entry = OplogEnrichmentEntry::try_from(entry)?;
+                        if let OplogEnrichmentEntry::Other(entry) = &entry {
+                            entry.check_well_formed()?;
+                        }
+                        Ok((index, entry))
                     })
                     .collect::<Result<Vec<_>, _>>()
             });
@@ -231,8 +235,10 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         agent_type.as_ref(),
         current_component_revision,
         entry.next_oplog_index,
+        entry.last_oplog_index,
         entry.page_size,
         &entry.query,
+        ctx.state.config.limits.scan_budget,
     )
     .await
 }
@@ -322,17 +328,20 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
                         current_component_revision: chunk.current_component_revision,
+                        last_oplog_index: None,
                     }
                 }
                 Ok(chunk) => HostResponseGolemApiOplogChunk {
                     result: Ok(None),
                     next_oplog_index: chunk.next_oplog_index,
                     current_component_revision: chunk.current_component_revision,
+                    last_oplog_index: None,
                 },
                 Err(error) => HostResponseGolemApiOplogChunk {
                     result: Err(error),
                     next_oplog_index: entry.next_oplog_index,
                     current_component_revision: entry.current_component_revision,
+                    last_oplog_index: None,
                 },
             };
             handle.complete(self, response).await?
@@ -508,17 +517,20 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                             .map_err(|error| error.to_string()),
                         next_oplog_index: chunk.next_oplog_index,
                         current_component_revision: chunk.current_component_revision,
+                        last_oplog_index: Some(chunk.last_index),
                     }
                 }
                 Ok(chunk) => HostResponseGolemApiOplogChunk {
                     result: Ok(None),
                     next_oplog_index: chunk.next_oplog_index,
                     current_component_revision: chunk.current_component_revision,
+                    last_oplog_index: Some(chunk.last_index),
                 },
                 Err(error) => HostResponseGolemApiOplogChunk {
                     result: Err(error),
                     next_oplog_index: entry.next_oplog_index,
                     current_component_revision: entry.current_component_revision,
+                    last_oplog_index: entry.last_oplog_index,
                 },
             };
             handle.complete(self, response).await?
@@ -527,11 +539,16 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let denied = is_denied_oplog_read(&response);
         self.as_wasi_view().table().get_mut(&self_).map(|entry| {
             if denied {
-                entry.update(entry.next_oplog_index, entry.current_component_revision);
+                entry.update(
+                    entry.next_oplog_index,
+                    entry.current_component_revision,
+                    entry.last_oplog_index,
+                );
             } else {
                 entry.update(
                     response.next_oplog_index,
                     response.current_component_revision,
+                    response.last_oplog_index,
                 );
             }
         })?;
@@ -574,6 +591,10 @@ pub struct SearchOplogEntry {
     pub owned_agent_id: OwnedAgentId,
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
+    /// The last entry that the search reads, fixed by its first page. Each page adds entries to
+    /// the oplog of the caller, so a search of its own oplog that read up to the current end could
+    /// fall behind the end on every page and never finish.
+    pub last_oplog_index: Option<OplogIndex>,
     pub page_size: usize,
     pub query: String,
     pub initialized: bool,
@@ -591,6 +612,7 @@ impl SearchOplogEntry {
             owned_agent_id,
             next_oplog_index: initial_oplog_index,
             current_component_revision: initial_component_revision,
+            last_oplog_index: None,
             page_size,
             query,
             initialized: false,
@@ -601,9 +623,11 @@ impl SearchOplogEntry {
         &mut self,
         next_oplog_index: OplogIndex,
         current_component_revision: ComponentRevision,
+        last_oplog_index: Option<OplogIndex>,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_revision = current_component_revision;
+        self.last_oplog_index = last_oplog_index;
         self.initialized = true;
     }
 }

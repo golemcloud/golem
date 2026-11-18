@@ -20,7 +20,6 @@
 use super::InputStream;
 use crate::golem_agentic::exports::golem::tool::tool_middleware_guest as middleware;
 use crate::golem_agentic::exports::golem::{agent::guest as agent, tool::guest as tool};
-use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 use crate::load_snapshot::exports::golem::api::load_snapshot as load;
 use crate::save_snapshot::exports::golem::api::save_snapshot as save;
@@ -34,12 +33,10 @@ pub(crate) type ExportFuture<T> = Pin<Box<dyn Future<Output = T>>>;
 
 #[allow(clippy::type_complexity)]
 pub(crate) struct AgentHooks {
-    pub initialize:
-        fn(String, SchemaValueTree, Principal) -> ExportFuture<Result<(), agent::AgentError>>,
+    pub initialize: fn(String, SchemaValueTree) -> ExportFuture<Result<(), agent::AgentError>>,
     pub invoke: fn(
         String,
         SchemaValueTree,
-        Principal,
     ) -> ExportFuture<Result<Option<SchemaValueTree>, agent::AgentError>>,
     pub get_definition: fn() -> agent::AgentType,
     pub discover: fn() -> Result<Vec<agent::AgentType>, agent::AgentError>,
@@ -58,7 +55,6 @@ pub(crate) struct ToolHooks {
         Option<InputStream>,
         Option<ToolOutputWriter>,
         Option<ToolOutputWriter>,
-        Principal,
     ) -> ExportFuture<Result<tool::InvocationResult, tool::ToolError>>,
 }
 
@@ -76,7 +72,6 @@ pub(crate) struct MiddlewareHooks {
         Option<InputStream>,
         Option<ToolOutputWriter>,
         Option<ToolOutputWriter>,
-        Principal,
         UnderlyingTool,
     ) -> ExportFuture<Result<tool::InvocationResult, tool::ToolError>>,
 }
@@ -92,10 +87,9 @@ impl agent::Guest for Component {
     async fn initialize(
         agent_type: String,
         input: SchemaValueTree,
-        principal: Principal,
     ) -> Result<(), agent::AgentError> {
         match AGENT.get() {
-            Some(hooks) => (hooks.initialize)(agent_type, input, principal).await,
+            Some(hooks) => (hooks.initialize)(agent_type, input).await,
             None => Err(agent::AgentError::InvalidInput(
                 "component has no agent implementation".into(),
             )),
@@ -105,10 +99,9 @@ impl agent::Guest for Component {
     async fn invoke(
         method: String,
         input: SchemaValueTree,
-        principal: Principal,
     ) -> Result<Option<SchemaValueTree>, agent::AgentError> {
         match AGENT.get() {
-            Some(hooks) => (hooks.invoke)(method, input, principal).await,
+            Some(hooks) => (hooks.invoke)(method, input).await,
             None => Err(agent::AgentError::InvalidInput(
                 "component has no agent implementation".into(),
             )),
@@ -171,12 +164,9 @@ impl tool::Guest for Component {
         stdin: Option<InputStream>,
         stdout: Option<ToolOutputWriter>,
         stderr: Option<ToolOutputWriter>,
-        principal: Principal,
     ) -> Result<tool::InvocationResult, tool::ToolError> {
         match TOOL.get() {
-            Some(hooks) => {
-                (hooks.invoke)(name, path, input, stdin, stdout, stderr, principal).await
-            }
+            Some(hooks) => (hooks.invoke)(name, path, input, stdin, stdout, stderr).await,
             None => Err(tool::ToolError::InvalidToolName(name)),
         }
     }
@@ -207,14 +197,13 @@ impl middleware::Guest for Component {
         stdin: Option<InputStream>,
         stdout: Option<ToolOutputWriter>,
         stderr: Option<ToolOutputWriter>,
-        principal: Principal,
         wrapped: UnderlyingTool,
     ) -> Result<tool::InvocationResult, tool::ToolError> {
         match MIDDLEWARE.get() {
             Some(hooks) => {
                 (hooks.invoke)(
                     name, tool_name, metadata, parameters, path, input, stdin, stdout, stderr,
-                    principal, wrapped,
+                    wrapped,
                 )
                 .await
             }

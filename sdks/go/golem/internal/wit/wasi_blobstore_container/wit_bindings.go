@@ -184,20 +184,20 @@ func (self *Container) Info() witTypes.Result[wasi_blobstore_types.ContainerMeta
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (16 + 2*4), 8))
 	wasm_import_method_container_info((self).Handle(), returnArea)
-	var result witTypes.Result[wasi_blobstore_types.ContainerMetadata, string]
+	var result0 witTypes.Result[wasi_blobstore_types.ContainerMetadata, string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
+		result := wasm_lift_1_t1097(unsafe.Add(unsafe.Pointer(returnArea), 8))
+
+		result0 = witTypes.Ok[wasi_blobstore_types.ContainerMetadata, string](result)
+	case 1:
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 
-		result = witTypes.Ok[wasi_blobstore_types.ContainerMetadata, string](wasi_blobstore_types.ContainerMetadata{Name: value, CreatedAt: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4))))})
-	case 1:
-		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
-
-		result = witTypes.Err[wasi_blobstore_types.ContainerMetadata, string](value0)
+		result0 = witTypes.Err[wasi_blobstore_types.ContainerMetadata, string](value)
 	default:
 		panic("unreachable")
 	}
-	result1 := result
+	result1 := result0
 	return result1
 
 }
@@ -389,22 +389,21 @@ func (self *Container) ObjectInfo(name string) witTypes.Result[wasi_blobstore_ty
 	utf8 := unsafe.Pointer(unsafe.StringData(name))
 	pinner.Pin(utf8)
 	wasm_import_method_container_object_info((self).Handle(), uintptr(utf8), uint32(len(name)), returnArea)
-	var result witTypes.Result[wasi_blobstore_types.ObjectMetadata, string]
+	var result0 witTypes.Result[wasi_blobstore_types.ObjectMetadata, string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
-		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4))))
+		result := wasm_lift_1_t1098(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
-		result = witTypes.Ok[wasi_blobstore_types.ObjectMetadata, string](wasi_blobstore_types.ObjectMetadata{Name: value, Container: value0, CreatedAt: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4)))), Size: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 4*4))))})
+		result0 = witTypes.Ok[wasi_blobstore_types.ObjectMetadata, string](result)
 	case 1:
-		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
+		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 
-		result = witTypes.Err[wasi_blobstore_types.ObjectMetadata, string](value1)
+		result0 = witTypes.Err[wasi_blobstore_types.ObjectMetadata, string](value)
 	default:
 		panic("unreachable")
 	}
-	result2 := result
-	return result2
+	result1 := result0
+	return result1
 
 }
 
@@ -432,4 +431,19 @@ func (self *Container) Clear() witTypes.Result[witTypes.Unit, string] {
 	result0 := result
 	return result0
 
+}
+
+//go:noinline
+func wasm_lift_1_t1097(src unsafe.Pointer) wasi_blobstore_types.ContainerMetadata {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+
+	return wasi_blobstore_types.ContainerMetadata{Name: value0, CreatedAt: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))}
+}
+
+//go:noinline
+func wasm_lift_1_t1098(src unsafe.Pointer) wasi_blobstore_types.ObjectMetadata {
+	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
+	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
+
+	return wasi_blobstore_types.ObjectMetadata{Name: value0, Container: value1, CreatedAt: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))), Size: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (8 + 4*4))))}
 }

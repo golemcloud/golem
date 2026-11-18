@@ -1,4 +1,58 @@
 interface http {
+  variant http-method {
+    get,
+    head,
+    post,
+    put,
+    delete,
+    connect,
+    options,
+    trace,
+    patch,
+    custom(string),
+  }
+
+  variant path-segment {
+    literal(string),
+    path-variable(path-variable),
+    // only allowed as the last segment
+    remaining-path-variable(path-variable),
+  }
+
+  record path-variable {
+    variable-name: string,
+  }
+
+  record header-variable {
+    header-name: string,
+    variable-name: string,
+  }
+
+  record query-variable {
+    query-param-name: string,
+    variable-name: string,
+  }
+
+  variant file-mapping {
+    exact(exact-file-mapping),
+    subtree(subtree-file-mapping),
+  }
+
+  record exact-file-mapping {
+    public-path: list<string>,
+    file-path: string,
+  }
+
+  record subtree-file-mapping {
+    public-prefix: list<string>,
+    filesystem-root: string,
+  }
+
+  record file-response-header {
+    name: string,
+    value: string,
+  }
+
   enum http-route-mode {
     durable-streams,
     plain,

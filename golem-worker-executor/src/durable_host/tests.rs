@@ -55,6 +55,7 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
                 index: OplogIndex::from_u64(7),
                 component_revision: ComponentRevision::new(2).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         })),
     };
@@ -178,6 +179,7 @@ fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_
                 index: OplogIndex::from_u64(7),
                 component_revision: ComponentRevision::new(2).unwrap(),
                 filesystem_snapshot: None,
+                bootstrap: None,
             },
         },
     )));
@@ -698,6 +700,7 @@ pub(super) fn replay_usage_tracker() -> LinearMemoryTracker {
         0,
         AgentMode::Durable,
         true,
+        true,
         Arc::new(AtomicResourceEntry::new(
             0,
             usize::MAX,
@@ -993,6 +996,7 @@ fn aggregate_memory_growth_over_worker_limit_is_rejected() {
         60,
         AgentMode::Durable,
         false,
+        false,
         Arc::new(AtomicResourceEntry::new(0, 100, 0, 0, 0)),
         Arc::new(Mutex::new(MemoryGrant::inert(60))),
         now,
@@ -1135,7 +1139,7 @@ fn snapshot_boundary_is_checkpoint_boundary_without_live_resources() {
     }
 }
 
-fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
+fn permission_id_test_inputs() -> (OwnedAgentId, golem_common::model::InvocationId) {
     (
         OwnedAgentId {
             environment_id: EnvironmentId(
@@ -1148,7 +1152,7 @@ fn permission_id_test_inputs() -> (OwnedAgentId, IdempotencyKey) {
                 agent_id: "cart/primary".to_string(),
             },
         },
-        IdempotencyKey::new("checkout-invocation".to_string()),
+        Uuid::from_u128(801).into(),
     )
 }
 
@@ -1162,40 +1166,6 @@ fn invocation_scope_card(root_card_ids: Vec<CardId>) -> ScopeCard {
         upper_negative: Vec::new(),
         expires_at: None,
     }
-}
-
-#[test]
-fn unrelated_revocation_preserves_invocation_scope_and_handles() {
-    let scope_root = CardId(Uuid::from_u128(1));
-    let unrelated = CardId(Uuid::from_u128(2));
-    let mut scope_card = Some(invocation_scope_card(vec![scope_root]));
-    let mut handles = HashMap::from([(7, vec![scope_root])]);
-
-    assert_eq!(
-        remove_invocation_scope_for_revoked_roots(&mut scope_card, &mut handles, &[unrelated],),
-        (false, HashSet::new())
-    );
-    assert!(scope_card.is_some());
-    assert_eq!(handles, HashMap::from([(7, vec![scope_root])]));
-}
-
-#[test]
-fn matching_revocation_removes_scope_and_dependent_handles_only() {
-    let revoked_root = CardId(Uuid::from_u128(1));
-    let unrelated_root = CardId(Uuid::from_u128(2));
-    let mut scope_card = Some(invocation_scope_card(vec![revoked_root]));
-    let mut handles = HashMap::from([
-        (7, vec![revoked_root]),
-        (11, vec![unrelated_root]),
-        (13, vec![revoked_root, unrelated_root]),
-    ]);
-
-    assert_eq!(
-        remove_invocation_scope_for_revoked_roots(&mut scope_card, &mut handles, &[revoked_root],),
-        (true, HashSet::from([7, 13]))
-    );
-    assert!(scope_card.is_none());
-    assert_eq!(handles, HashMap::from([(11, vec![unrelated_root])]));
 }
 
 #[test]
@@ -1276,23 +1246,6 @@ fn inherited_scope_detects_revoked_and_expired_roots() {
 }
 
 #[test]
-fn invocation_end_clears_scope_card_and_all_invocation_handles() {
-    let mut scope_card = Some(invocation_scope_card(vec![CardId(Uuid::from_u128(1))]));
-    let mut handles = HashMap::from([
-        (7, vec![CardId(Uuid::from_u128(1))]),
-        (11, vec![CardId(Uuid::from_u128(2))]),
-    ]);
-
-    let (scope_changed, removed_handles) =
-        clear_invocation_scope_state(&mut scope_card, &mut handles);
-
-    assert!(scope_changed);
-    assert!(scope_card.is_none());
-    assert!(handles.is_empty());
-    assert_eq!(removed_handles, HashSet::from([7, 11]));
-}
-
-#[test]
 fn permission_id_derivation_has_golden_vectors() {
     let (owned_agent_id, invocation_key) = permission_id_test_inputs();
     let oplog_index = OplogIndex::from_u64(42);
@@ -1324,19 +1277,19 @@ fn permission_id_derivation_has_golden_vectors() {
 
     assert_eq!(
         card_id,
-        Uuid::parse_str("00000000-002a-7cdd-b83d-c9e9f32d880c").unwrap()
+        Uuid::parse_str("00000000-002a-7517-811a-f8ff9897ce5b").unwrap()
     );
     assert_eq!(
         transfer_id,
-        Uuid::parse_str("00000000-002a-7646-b8aa-b84e348196f6").unwrap()
+        Uuid::parse_str("00000000-002a-7125-abba-aa83c50adf19").unwrap()
     );
     assert_eq!(
         installed_child_id,
-        Uuid::parse_str("00000000-002a-7607-aaa4-0b04c840169d").unwrap()
+        Uuid::parse_str("00000000-002a-70fd-8321-769fffab2675").unwrap()
     );
     assert_eq!(
         scope_card_id,
-        Uuid::parse_str("00000000-002a-7680-bbdb-7f78bd28fc43").unwrap()
+        Uuid::parse_str("00000000-002a-769f-bab5-c87f60c1800a").unwrap()
     );
     assert_eq!(card_id.as_bytes()[6] >> 4, 7);
     assert_eq!(card_id.as_bytes()[8] >> 6, 2);
@@ -2290,7 +2243,7 @@ fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
 fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
     let mut status = AgentStatusRecord {
         status: AgentStatus::Interrupted,
-        current_idempotency_key: Some(IdempotencyKey::fresh()),
+        current_idempotency_key: Some(Uuid::new_v4().into()),
         ..AgentStatusRecord::default()
     };
     assert!(!should_restart_after_shard_assignment_change(&status));
@@ -2299,7 +2252,7 @@ fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
         timestamp: Timestamp::now_utc(),
         not_before: None,
         oplog_index: OplogIndex::INITIAL,
-        idempotency_key: Some(IdempotencyKey::fresh()),
+        idempotency_key: Some(Uuid::new_v4().into()),
         manual_update_target_revision: None,
     });
     status.pending_updates.push_back(PendingUpdateRef {

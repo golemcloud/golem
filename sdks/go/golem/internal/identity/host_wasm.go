@@ -9,4 +9,7 @@ package identity
 
 import host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 
-var platform = operations{parse: host.ParseAgentId, construct: host.MakeAgentId, connect: host.WasmRpcCreate}
+var platform = operations{
+	parse: host.ParseAgentId, construct: host.MakeAgentId, connect: host.WasmRpcCreate,
+	bindSelf: host.WasmRpcBindSelf, drop: func(rpc *host.WasmRpc) { rpc.Drop() },
+}

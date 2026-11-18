@@ -86,9 +86,18 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
-something from the right column to survive a restart is wrong. Sockets and other OS resources are
-recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect or explicitly handle loss. Replayed websocket handles use their connect-time
+something from the right column to survive a restart is wrong. Native resources are not preserved.
+P3 TCP bind records the selected local address; connect records both endpoints. The per-Store
+`SocketEntries` table in `durable_host/sockets/mod.rs` reconstructs these addresses and the stream-taken
+flags without binding or connecting natively during replay. A replayed successful connect is `Lost`:
+recorded acquisitions still replay, but a new live send or receive acquisition returns `connection-broken`,
+even if that direction was already taken. Address getters use the entry; guest-set option getters use
+cached effective values. A successful setter invalidates its option cache; the next async getter reads
+and caches the native effective value, including OS rounding and buffer limits. Unset option getters
+still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
+socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
+reconnects as described below. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -121,9 +130,30 @@ errors remain retryable. Timer and quota producers capture their resident worker
 Scheduled promise completion acquires that worker, takes the local oplog lifecycle guard,
 rechecks the stored identity, and persists/notifies through `complete_without_wakeup`. It releases
 the guard before starting the pinned worker, and retries startup even when completion was already
-persisted. Duplicate completion notifies with the original stored payload. Ordinary promise
-completion still activates the worker. This guard serializes local deletion/recreation, not
-cross-executor promise writes: promise storage still uses agent ID and oplog index.
+persisted. Duplicate completion notifies with the original stored payload. This guard
+serializes local deletion/recreation, not cross-executor promise writes.
+
+A `PromiseId` is `{ agent_id, fingerprint, oplog_idx }`: the creating incarnation's
+`AgentFingerprint` (from its initial metadata, for both guest `create-promise` and
+`WakeupScheduler::sleep_until`) is part of the ID, of the per-incarnation storage namespace
+`KeyValueStorageNamespace::Promise { agent_id, fingerprint }`, and of the webhook ID and its HMAC
+input (`AgentWebhookId`). A re-created agent restarts its oplog, so its promises reuse oplog
+indexes of the deleted incarnation; an ID of the deleted incarnation finds no entry and gets
+`PromiseNotFound`, and awaiting `get-promise-result.get` traps on an ID of another incarnation.
+Delete removes the deleted incarnation's promise namespace after its oplog, because promises
+cannot be rebuilt from the oplog: a delete that the fence refuses keeps the agent with its
+promises, and a crash between the two leaves rows that no live ID reaches. `WorkerService::remove`
+holds the agent's lifecycle gate exclusively, and ordinary promise completion
+(`PromiseService::complete`) makes its existence check and its result write while it holds the
+gate shared (`run_excluding_removal`). On this executor a completion therefore writes before the
+removal, which removes its row too, or finds the promise gone; it cannot write a row after the
+removal. The gate is not the oplog lifecycle guard: a guest that completes its own promise inside
+a host call must not wait for a guard whose holder waits for that guest to stop. Ordinary promise
+completion activates only the incarnation that created the promise, through
+`enqueue_exact_existing(.., Resume)`, after it releases the gate; it never creates an agent, and a
+missing or re-created agent is left alone.
+
+Keyed invocation admission checks fatal agent health inside the status actor's append job, after result-generation validation and before appending the pending entry. Acquiring a worker earlier does not authorize work after its constructor fails. A failed or exited agent refuses new immediate and scheduled methods without writing to its oplog. Generation changes return the caller to same-key result lookup first; recorded outcomes keep precedence. If failed health comes from recovery and a startup attempt is pending, ingress waits for that exact attempt's `WorkerLoaded` result without holding the lifecycle guard, then retries result lookup and admission. It does not wait for queued methods to finish or bypass the serialized health check. Keyless manual updates use their separate admission path so failed agents can still be repaired.
 
 Durable scheduling commits `PendingAgentInvocation { not_before }` in the target oplog before
 returning acceptance, without starting its guest. Local and remote guest calls use the same target
@@ -247,6 +277,8 @@ replay tolerance.
 | Durable calls | `durable_host/concurrent/{mod.rs,call.rs,delivery.rs,replay.rs}` | `DurableCallSession` state machine, drop policies, completion delivery tokens |
 | Durability guard | `durable_host/durability.rs` | `begin_durable_function`/`end_durable_function`, `DurableFunctionType`, in-function retry |
 | Host context | `durable_host/mod.rs`, `durable_host/recovery.rs` | `prepare_instance`, `replay`, `switch_to_live`, `PendingReplayToLive`, `IdempotencyKeyPosition`, snapshot boundary checks |
+| Attribution | `durable_host/attribution.rs` | `InvocationKey`, the task-group hook, Golem's scoped value, arming of export calls |
+| Per-invocation state | `durable_host/execution_state.rs` | `Invocations` entries keyed by `InvocationKey`, `InvocationAuthority`, the loop-key fallback |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
 | RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
@@ -443,10 +475,26 @@ filesystem creation. A live limit update uses the same resolver and the existing
 on failure. Unlimited policy remains available on unmanaged storage; Registry's finite policy is a
 deployment requirement, not permission for an unsupported backend to omit enforcement.
 
-A live invocation still holds its allocated linear memory and filesystem stock while waiting for
+A live invocation still holds its allocated linear memory, GC heap capacity and filesystem stock while waiting for
 host I/O. Its live allocations accrue byte-time during these permit-held waits even when no Wasm
-executes. The memory meter measures allocated linear-memory bytes, not the configured maximum.
+executes. The memory meter measures allocated linear-memory bytes plus GC heap capacity, not the configured maximum.
 The parked guest itself burns no fuel.
+
+Primary reconstruction consumes its saved memory reservation across all linear-memory and GC heap allocations, including repeated growth during core initialization. Growth beyond the reservation needs physical admission before allocation. Live publication releases unused reservation but preserves capacity for prepared growth; a failed growth releases that excess capacity.
+
+The tracker's `shrink_retained_reservation` shares mechanics, not policy. Publication shrinks only after reconciliation, to allocation or pending growth, then enforces quota before clearing replay flags. Growth failure first rolls back provisional bytes and the failed grant; eligible shrinkage retains the replay floor. Both paths release private guards before callbacks while holding the transition gate, and enforce quota even if no capacity was released. Preparation remains separate: reconciliation invokes quota callbacks before merging pending grants, then InstanceHost shrinks only if the grant was tracked before reconciliation. Keep that captured decision: merging may adopt a controller, and shrinking an inert grant changes its byte count. Shrinking never acquires capacity; pending grants also contribute to reserved bytes.
+
+`LinearMemoryTracker` defines the accounted total for one Store as allocated linear-memory bytes plus GC heap capacity, not reachable objects or process RSS. Retained linear-memory accounting names use this combined quantity; individual Wasmtime linear memories remain distinct. Initial allocations can contribute provisional bytes before success, so the total is not always a fresh physical measurement. Construction starts allocation and its inactive meter at zero. The saved baseline and prepaid reservation are separate inputs; quota protection starts at the reservation before any allocation. Pass replay and historical admission independently: primary reconstruction replays with current admission, while completed and incomplete entity replay use historical admission. Live entities use neither. Test fixtures that model allocated memory must report that allocation through growth or reconciliation, preserving the intended phase and clock.
+
+`LinearMemoryTracker` keeps transition-owned flags, provisional allocations, pending grants and growth-refusal state in `TrackerState`. Allocation reconciliation and replay are independent facts: live publication can precede enumeration, and accounting can start during replay. Mutations lock the shared transition gate, then private state, then the retained grant. State-only readers never acquire the gate. Release private state and grant guards before enqueue/limit callbacks or owner activation; retain the gate across baseline enqueue and accounting activation. Async reservation acquisition releases synchronous guards before awaiting admission and rechecks the required bytes before installation. Cancellation drops partial grants and permits a later activation retry. Atomic allocation, quota and billing observations remain separate; the gate still synchronizes metering and identifies Worker receipts.
+
+The Wasmtime fork preserves limiter `Err` as an immediate trap. Golem returns `Ok(false)` for quota/capacity refusal of growth of a nonempty GC heap, allowing collection and retry; linear memory and the first nonempty GC allocation still return typed errors. Refusal rolls back provisional admission itself: Wasmtime calls no growth-failure callback after `Ok(false)`. The production Auto collector currently selects Copying. This policy does not classify Null collector `AllocationTooLarge` failures as GC OOM, and explicit host heap-growth errors are distinct from guest allocation failures.
+
+The per-Store tracker retains a refusal until another admission attempt, ordinary growth failure, committed growth, instantiation or invocation entry. Terminal `GcHeapOutOfMemory<()>` uses it to distinguish `ExceededMemoryLimit` from `OutOfMemory`; absent a refusal, it is `OutOfMemory`. A guest GC allocation trap exits the component event loop before root completion or settlement, preserving the reason until classification. Primary exports, tool/middleware bodies and core instantiation retain typed memory failures. Collection reclaims objects without reducing allocated capacity. Heap doubling and collector headroom can still reject an allocation whose live bytes are below the plan limit; the limit applies to capacity.
+
+At the replay tail, the tracker synchronously enqueues `MemorySizeReconciled { bytes }` if allocation differs from the saved baseline, and enables subsequent `GrowMemory` recording under the same transition lock. The lifecycle actor orders the absolute reset before later deltas, including growth during reconstruction settlement. `Worker` owns the commit receipts through `MemoryAccounting` in `worker/residency.rs`, keyed by weak references to each tracker's transition identity. Publication and snapshot resets join that tracker's previous receipt before starting another cutover. Cancellation preserves the receipt and a failed commit remains authoritative for that tracker; a replacement Store does not inherit it. Receipt ownership retains no tracker or memory grants, and the next reconciliation prunes expired identities. A fresh, already-live primary enables growth recording when finalization enqueues its initial delta and awaits its commit before exposing the instance. Successful snapshot-only recovery and manual snapshot loading reset the baseline after the load, even when the cursor was already live. Snapshot recovery with a replay suffix waits for the normal replay-tail boundary. Both entries are replay-skippable accounting hints, not assertions that GC capacity must match on replay. Completed entity replay retains historical admission; an incomplete entity acquires its own live reservation before continuation.
+
+If accounting starts inside a core initializer, the tracker captures its baseline even when the sample equals the saved baseline and needs no hint. Initializer growth remains unrecorded until enumeration. Final reconciliation records allocation above that sample whether primary live publication has happened or is still pending. Without an accounting sample, replay reconciliation emits no delta and live reconciliation uses the saved startup value. Primary finalization joins the generation's preceding accounting receipt, ends reconciliation once, and enqueues its residual through the lifecycle actor under the tracker transition lock. It retains the final commit receipt before awaiting; retries and forced resets join that receipt rather than repeating the delta, and failed receipts remain authoritative. The actor updates the startup requirement after committing even if the initiating caller was cancelled. Finalization never waits for live publication or native disposal, and entities do not enqueue primary memory hints.
 
 Reconstruction keeps physical admission, the concurrent-agent permit, allocation observations,
 per-agent limits and cleanup ownership. Materialization and replay do not start customer byte-time.
@@ -1010,7 +1058,7 @@ that setting. A fixture without this opt-in can return access-denied before reac
 native wait. Check the actual error rather than assuming the intended wait was reached.
 
 P3 UDP `receive` in `durable_host/p3/sockets/udp/mod.rs` selects the same typed signal only
-around the native live receive. `run_read_access` leaves an interrupted
+around the native live receive. Its durable call session leaves an interrupted
 `P3SocketsTypesUdpSocketReceive` Start incomplete; its call-owned trap context preserves the
 `InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
 bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
@@ -1312,6 +1360,25 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+
+After admission, executor create and REST create await `Worker::await_initialization`, not
+`WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
+`InvocationId`. A recorded success returns the original fingerprint without starting a Store. A terminal constructor
+Invocation Error or Exited becomes `AgentCreationFailed` with the agent ID and cause. Pending
+initialization uses ordinary startup, never another constructor reservation. An interrupted retry
+remains interrupted. Startup, storage and routing errors keep their operational classification;
+synthetic warm-cache failures cannot establish a recorded constructor failure. A later method
+failure cannot replace constructor success. Forks resolve the retained source initialization key.
+Preparation remains suspended and neither starts nor waits for initialization.
+
+`Worker::resolve_old_invocation_result_index` falls back to scanning the worker's open oplog handle,
+bounded by the status oplog index. An ephemeral completion can precede its archive write, so
+storage-only reads can falsely report a gap. The handle includes entries handed to the asynchronous
+writer but not yet stored; result lookup does not need a storage barrier.
+Test: `oplog_unreadable::an_ephemeral_constructor_completes_while_its_archive_write_is_pending`
+holds that write until Create returns.
+
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
@@ -1319,14 +1386,16 @@ principal and its invocation context. Callers pass a `CreateIntent`. An explicit
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
-no key. The recorded `wasm-rpc` activation call sends the key derived from its own `Start`, so a
-repaired activation sends the same key. Later re-activations send no key and check the recorded
-fingerprint. A fork target records `Fork`, no key and the forker's principal. A self fork also
-records the forking agent's current invocation context; a fork through the worker service records a
-fresh context. When a reload finds only `Create`, `prepare_worker_data` enqueues
-`AgentInitialization` with the recorded principal and context, not with the loading request's. The
-resident `unpublished_create` flag only records that an attempt committed `Create` and the worker is
-not published yet; it carries no principal or context. Tests:
+no key. An invocation session passes the owner key of its `request_key`, from which clients derive
+an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
+from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
+target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
+target records `Fork`, no key and the forker's principal. A self fork also records the forking
+agent's current invocation context; a fork through the worker service records a fresh context.
+When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
+recorded principal and context, not with the loading request's. The resident `unpublished_create`
+flag only records that an attempt committed `Create` and the worker is not published yet; it
+carries no principal or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
 `grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
@@ -1335,6 +1404,28 @@ not published yet; it carries no principal or context. Tests:
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+`ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
+`AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
+whether the worker was resident or loaded cold. A caller that joined another caller's load loads
+again with its own fingerprint when that load answered not found. Invocation admission uses the
+guard for every mode when `InvocationStart.expected_callee_fingerprint` is set, before any
+schedule or `PendingAgentInvocation`, and validates a schedule against the pinned worker; such a
+request cannot be `KnownFresh`. A generation under deletion stays cached until the deletion ends,
+so with a fingerprint set `Worker::get_exact_existing_suspended_for_response` and a refused
+task-scope bind answer with `Worker::pinned_deletion_refusal`: `AgentNotFound` once the deletion
+has completed `DurableStateRemoved`, because nothing committed to the generation can run after
+that, and the unpinned "Worker is being deleted" refusal before then, because the deletion can
+still fail and leave an invocation an earlier attempt with the same key committed. A failed
+deletion attempt and a lost-shard retirement keep their own errors. Admission reads a resident
+worker's status before the bind, with or without a fingerprint, without panicking on a stopped
+status actor (`Worker::try_get_last_known_status`, `try_lookup_invocation_result`): a failed
+deletion leaves its stopped generation cached, and such a read answers "Worker is being deleted",
+as reads do, until a retried delete claims it. Failures after the bind keep
+their errors: a bound request holds a task token, so the deletion cannot pass `RuntimeStopped`
+while it runs. External-tool sessions bind the same way after each acquisition. A call on an
+existing owner must carry the owner's fingerprint and is pinned to it in every mode; a virtual
+owner (`fresh_owner`) has no incarnation a caller can name, so a fingerprint with it is an invalid
+request in every mode.
 `ensure_existing_with_fingerprint` resolves identity and metadata, not execution readiness. A resolved
 Worker with failed cleanup remains accessible to ordinary public Delete so the owning filesystem
 generation can repair disposal. Startup and readiness still reject that retained failure. Delete
@@ -1768,7 +1859,28 @@ the body. This reproduces outward completion order, not the skipped body's polls
 entries. A completed sibling therefore cannot return early and change a later root call's ordinal
 while another sibling remains incomplete. Sync combinators retain the direct begin/finish path.
 
-**Non-Rust SDK limitation:** TypeScript, Effect, Scala, MoonBit, and Go custom combinators support
+**TypeScript scope integration:** `durableAsync` follows the Rust order: async begin, then
+`enterLive` from wasm-rquickjs's `wasm-rquickjs:custom-invocation-context` in the parent's scope,
+then the body, `finish-async` and the drop under the child token, then `close`. The runtime's
+promise hook, timer and callback wrappers and import-bridge wrappers capture the scope at
+registration or initiation, install it around each job, poll, sleep and drop, restore the previous
+scope afterwards, and restore the root before control returns to the host. A parent finishes only
+after the operations that started inside it have settled; an operation that begins after that wait
+ended begins in the nearest enclosing scope that still waits, or at the root. A closed token
+resolves to its nearest open ancestor, or to the root, and never installs its stale snapshot.
+`durable` is sync-only.
+
+**Effect scope integration:** each fiber carries its custom scope token in `CurrentCustomScope`
+(`sdks/effect/src/internal/customScope.ts`). A composed `Tracer.context` hook swaps the
+`wasm-rquickjs:custom-invocation-context` token for each run segment, and the runtime carries it
+across the Promise jobs, timers and import calls that the segment creates. Concurrent fibers are
+supported. A parent finishes or drops only after its registered children close; escaped work runs
+in the nearest open ancestor or the invocation root. Agent, tool and middleware entries install a
+scheduler that yields through Promise jobs. The default `setImmediate` yield is a root
+`monotonic-clock::wait-for` call, which replay of a completed operation does not repeat, so its
+unclaimed `Start` stopped recovery (`tests/durability_effect.rs`).
+
+**Non-Rust SDK limitation:** MoonBit custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1777,7 +1889,32 @@ invocation failure. Misuse is not reliably detected. Await nested operations; do
 Stop and join outstanding work before the body exits, including on failure or cancellation. A
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
-durability outside custom operations or to the Rust poll/drop scope integration.
+durability outside custom operations, to the Rust poll/drop scope integration, to TypeScript's or
+Scala's `durableAsync`, to Effect's fiber-local scopes, or to Go. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
+`wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
+scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
+completes. A Scala parent finishes only after its nested operations close and no task that
+`GolemExecutionContext` submitted in its scope waits to run; it is then sealed (`DurableScope`),
+and an operation started in a sealed scope begins and enters in the nearest admitting ancestor,
+so host and SDK agree on its parent. Callbacks run by
+other execution contexts, and work escaping an outermost operation, are not attributed to it.
+
+**Go custom operations** (`sdks/go/golem/durability.Run`, `internal/cdctx`) use async admission
+like Rust. The golemcloud/go runtime calls a switch hook whenever the goroutine about to run has
+another host context, and `cdctx` exchanges the task's context slot there; each scoped goroutine
+owns one snapshot handle while parked. Goroutines started in a body, and `time.AfterFunc`
+callbacks of its timers, inherit the scope, and `Run` waits for them before `finish-async`. An
+`iter.Pull` coroutine runs as part of the goroutine that switches to it: `coroswitch` hands over
+the switching goroutine's context and domain, whoever created the iterator. Because a completed
+body is skipped on replay, runtime state shared by every goroutine would carry the body's effects
+out of it. The runtime therefore makes no host call for itself on wasip1 (the
+scheduler, GC and scavenger read the latest clock reading the program made; a receive or select
+on a timer channel that is in no heap reads the clock itself), and each operation
+runs in its own runtime domain: its own clock (advanced only by reads in the domain and by the
+domain's recorded `wait-until`), timers heap, and random state seeded from its parent's stream on
+both the live and the replay path. go-pkg arms one clock wait per domain, in the domain's host
+context. Heap addresses are not isolated. Tests:
+`golem-worker-executor-tests/tests/agent_sdk_go/custom_durability_concurrency.rs`.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
@@ -1953,7 +2090,8 @@ finish; cancellation destroys descendants before the enclosing live resource and
 Closing a resource absent from the current stack is normal and leaves that stack unchanged.
 Finish validates active children and response decoding before removing the resource or scope.
 Nested work must complete or be dropped before its parent finishes. Detached work does not
-automatically acquire the scope. Other SDKs have synchronized bindings but do not yet propagate
+automatically acquire the scope. Go propagates scopes per goroutine through a runtime hook (see
+Go custom operations above). The other SDKs have synchronized bindings but do not yet propagate
 custom scopes across concurrent continuations; do not infer a cross-SDK concurrency fix.
 The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
 would capture host-task context too early for the per-poll switch.
@@ -2175,6 +2313,153 @@ cursor drains (`await_natural_tail_end`) with a live-armed delivery token
 (`CompletionDelivery::prepare_delivery`), which makes "crash after End, before delivery" safe
 without re-executing.
 
+## Invocation identity
+
+An invocation's owner-qualified identity is `OwnedInvocationId`: the owner agent and an
+`InvocationId`, the UUID-backed unique part. The server prints the owner-qualified identity as
+`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only `InvocationId`, in
+the `invocation_id` field of `PendingAgentInvocation`, `AgentInvocationStarted`,
+`AgentInvocationFinished` and the invocation `Error`. Status (`InvocationResultMembership`),
+dedupe and `lookup_invocation_result` use the same value. A caller's idempotency key is only an
+input to the ID; the raw key is not stored.
+
+A request carries an `InvocationRequestKey`, and admission finalizes it with
+`finalize(agent_id, fingerprint, operation)` once the target's fingerprint is known
+(`grpc/invocation_session/admission.rs`, `services/rpc/direct.rs`, `durable_host/rpc/target.rs`,
+`durable_host/rpc/schedule.rs`):
+
+| Variant | Source | Unique part |
+|---|---|---|
+| `External { scope, key }` | an authenticated caller's key; `IdempotencyScope` is `user:`, `agent:` or `admin:…:as:` (`AuthCtx::idempotency_scope`) | UUIDv5 of (fingerprint, scope, operation, key) |
+| `Internal(key)` | a key Golem derived, such as `derive_idempotency_key` of the parent ID and the call's `Start` index | the same, with the fixed scope `internal` |
+| `RouteSession { scope, key }` | a Durable Streams session, scoped to the route for every caller | the same, with `route:<scope>` |
+| `Unkeyed(uuid)` | no key, or a caller without a scope: `AuthCtx::System`, and the HTTP route (`custom_api`) and MCP paths, which pass no scope | the retained random UUID |
+
+`InvocationRequestKey::external` turns a key from a caller without a scope into `Unkeyed`: such a
+key is ignored, never rejected or deduped. The operation is the method name, or
+`tool:<tool-name>/<command path>` for an agent-hosted tool. Every field is length-prefixed. The
+fingerprint makes an old ID unresolvable on a successor incarnation. An ephemeral or phantom owner
+has no fingerprint before it exists, so its owner ID comes from `owner_key(operation)`; the CLI
+derives the same owner to subscribe to its events. Keep the prepared request key, not the final ID,
+when a request is retried or forwarded: every retry finalizes it again against the same target.
+
+A key that is already accepted with a different request is an `IdempotencyConflict` (REST 422):
+`worker/ingress.rs::ensure_matching_invocation_payload` compares the stored request with
+`AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
+sessions compare their stream descriptor instead (`worker/streaming/mod.rs`). The stored request
+is read from one entry, never searched for: a pending invocation's `PendingAgentInvocation`, the
+running invocation's `AgentInvocationStarted` (`AgentStatusRecord::current_invocation_started_at`),
+or the request position kept with every result (`InvocationResultPosition::request`, in the
+in-memory membership and in the persisted result index). The status fold sets it to the
+`AgentInvocationStarted` entry of a started invocation and to the `PendingAgentInvocation` entry of
+one cancelled or denied before it started (`fields.rs::InvocationRequests`). A duplicate check
+therefore reads the same number of entries however long the invocation ran.
+
+Terminals name their invocation. Replay rejects an `AgentInvocationFinished` whose ID differs from
+the started invocation (`replay_state/cursor/reads.rs::get_oplog_entry_agent_invocation_finished`).
+An invocation `Error` is a hint: a background retry task can outlive its invocation, so an `Error`
+naming a finished invocation is legal. The status fold attributes it only while that invocation
+runs, or for the agent's `PermissionDenied` rejection of a cancelled pending invocation
+(`worker/status/fields.rs`). A `Recovery` error never names an invocation (`check_well_formed`).
+
+Guests read their identity and caller through `golem:agent/invocation-context`
+(`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the
+invocation start recorded, so they are not durable calls. An entity Store answers for its
+enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
+(initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
+`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
+
+## Invocation attribution and per-invocation state
+
+The host, never the guest, decides which invocation a host call belongs to
+(`durable_host/attribution.rs`). `InvocationKey` is `Invocation(InvocationId)` for an agent or
+entity invocation, or `AgentLevel` for work outside any invocation. An entity invocation has its
+own `InvocationId` (`EntityInvocationScope::idempotency_key`), and each Store holds only its own
+invocations, so one variant covers both. `InvocationAttribution::resolve` reads, in order:
+
+1. **The task group.** The executor enables Wasmtime's `task-group-hook`. Wasmtime starts one task
+   group per host-to-guest export call, and every subtask that call creates joins it. The invocation
+   loop arms the key right before the export call (`InvocationAttribution::armed`, around every
+   bindgen `call_*` in `worker/invocation.rs` and `tool/sidecar.rs`); `handle_start` consumes it in
+   the call's first poll, before guest code runs. `handle_enter` and `handle_exit` track the current
+   group, and `handle_finish` removes it, because group IDs are reused. So `spawn_local` futures,
+   subtasks and work after `task.return` resolve to their export's invocation. Instantiation runs
+   under `instantiating(key)`, so the core initializer's groups belong to the loop's key: the entity
+   invocation in an entity Store, `AgentLevel` in a fresh primary Store.
+2. **Golem's scoped value**, a thread-local tagged with the Store, for host work that runs outside
+   any guest thread: loop-owned host scopes of an invocation (`scoped`), store tasks spawned for a
+   call (`let captured = ctx.attribution.capture(); captured.run(task)`), and host stream producers
+   and consumers after their first poll (`Attributed`, which captures the attribution of the read or
+   write on its first poll, on the guest thread). The Store tag keeps an inner Store polled inline
+   from inheriting the outer Store's answer.
+3. **Nothing**: the call is outside any invocation.
+
+A store task spawned without `capture()` resolves to no invocation and reads the loop's entry
+(`Invocations::key`). The guest-task context slot (`GuestTaskContext`) holds custom-durability scopes and
+retry policy scopes, never the invocation, so a guest cannot carry attribution between tasks.
+
+Missed paths are logged, never denied: `error!` "A guest host call has no attributed invocation"
+(the `CallingHost` call hook, `worker/instance/mod.rs`), "An export call started a task group
+without an armed invocation" (the group then resolves to `AgentLevel`), and "An armed export call
+did not start a task group" (an armed key not consumed while the call runs). An armed call that
+ends in its first poll, such as one Wasmtime refused to enter, ran no guest code and logs `debug!`.
+
+Per-invocation state lives in `InvocationExecutionState` entries of `Invocations`
+(`durable_host/execution_state.rs`): start index, invocation ID, principal, invocation context and
+current span, read-only strictness, retry point, per-invocation call counters, a tail-work count,
+the guest-trap retry scopes, and the invocation's `InvocationAuthority`. The `AgentLevel` entry
+always exists. The loop runs one invocation at a time. `set_current_idempotency_key` calls
+`Invocations::begin`, which carries the previous entry to the new key (it copies the `AgentLevel`
+entry, but moves its authority), clears its tail-work count and trap retry scopes, and resets a
+reached final outcome; other fields persist until the loop overwrites them. Removing an entity
+scope begins `AgentLevel` again (`clear_current_idempotency_key`), which moves the authority back.
+`get_current_idempotency_key` returns the key of the entry the running code reads.
+`Invocations::key` falls back to the loop's key for unattributed work, agent-level work and work of
+a replaced invocation, which keeps the serial loop's behaviour. `own_mut` gives no entry to
+unattributed work or to a replaced invocation, for state only the invocation's own work may write.
+Loop-owned writers write the loop's entry explicitly. Custom-durability maps stay Store-level,
+keyed by start index and scope ID, and each record names its owner key.
+
+- **Tail work.** Settlement and the idle check read only the per-worker `TailWorkTracker`
+  (`tail_work.rs`). Each entry also counts the activities of trackers obtained while it was
+  attributed (`tail_work_tracker()` returns a tracker `counting_on` the entry's count). A retained
+  task keeps counting on the invocation that obtained its tracker.
+- **Retry policy scopes.** `golem:api/retry-scope` `retry-policy-scope` opens a named policy for the
+  calling task (`golem/retry_scope.rs`). It lives in the task's `GuestTaskContext`, so subtasks
+  created while it is open and host calls started while it is open keep it. Policy resolution
+  overlays the calling task's scopes on the agent-wide policies; the innermost open scope with a
+  given name wins (`retry_policy_mutations`). Opening and dropping a scope records nothing; replay re-runs the
+  guest, which opens the same scopes. A guest trap names no task, so its retry decision reads
+  `trap_retry_scopes`, written only through the invocation's own entry.
+- **Authority.** `InvocationAuthority` holds the scope card, its root cards and handles, its card
+  interest and the effective surface with its cache state. Its fields are private. The scope
+  transitions (`install_scope`, `clear_scope`, `remove_scope_for_revoked_roots`,
+  `reach_final_outcome`) keep the card, its handles and its interest consistent; `invalidate` and
+  `synchronize_at` change the cache state. The setters for the surface, its expiry, the root cards
+  and an entity Store's interest leave invalidation to the caller. Wallet-wide changes
+  (re-derivation, root revocation, `interested_card_ids`, invalidation) loop over every entry.
+  Two states are explicit. `ScopeBinding` is `Unscoped`, `Bound(card)` or
+  `FinalOutcome { admitted }`: `reach_final_outcome` enters `FinalOutcome` when the invocation's
+  guest call ends or its failure gives up, so `bound_scope_card()` is none and the invocation has
+  the agent's authority only. Removing the card keeps the reached final outcome. `install_scope`
+  binds a new card; `begin` after a reached final outcome binds the admitted card again, if any,
+  and marks the surface stale. `Synchronization` is `Stale { last_generation }` or
+  `Synchronized { generation }`; a stale surface keeps the generation it was last synchronized at,
+  which a durable call's admission reads. `is_current_at` lets the cached surface authorize only
+  when it is synchronized at the published generation, card authority is open and none of its
+  cards expired.
+- **Card decisions** name the attributed invocation in their request
+  (see "Card authorization decisions").
+
+Tests: the unit tests in `attribution.rs`, `execution_state.rs` and `tail_work.rs`;
+`tests/invocation_context.rs::{a_spawned_guest_future_reads_its_method_invocation_live_and_after_restart,
+background_work_after_the_method_returns_reads_its_invocation_live_and_after_restart}`,
+`tests/http.rs::assert_body_recorders_numbered_under_their_invocations` (store tasks),
+`tests/in_function_retry/http_request.rs::{a_retry_policy_scope_applies_to_a_future_spawned_inside_it_and_ends_with_it,
+a_retry_policy_scope_reopened_by_replay_keeps_retrying_after_a_restart}` and
+`tests/scope_cards.rs::card_decisions_survive_reconstruction`.
+
 ## Invocation queue and results
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
 (anything other than `LookupResult::New` returns without appending), then append
@@ -2184,7 +2469,35 @@ invocation loop appends `AgentInvocationStarted`, runs the guest, and
 result and waits for the commit receipt before waiters are notified. Durable agents use
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
-reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
+`on_invocation_failure`; decoded outer method errors take the separate path below.
+
+### Invocation-local method errors
+
+A valid outer guest `agent-error` from an agent method becomes `InvokeResult::MethodFailed`, not
+a trap. `on_agent_method_failure` (`durable_host/invocation.rs`) finishes required cleanup and
+appends `AgentInvocationFailed { invocation_id, error, start_index, entity_parent_start_index }`.
+It uses the same durable `Always` / ephemeral `Deferred` completion barrier before publishing
+the existing `InvocationFailed` response for that key. A failed cleanup or commit retains its
+infrastructure failure path and does not publish the method outcome.
+
+Mutations before the error remain. Mutating methods invalidate the read-only cache before
+publication. The status fold indexes a completed failure and clears its running key without
+setting fatal `last_error_kind`. The durable serial loop keeps the same Store and runs queued
+work; it neither retries the method nor fails other keys. Ephemeral owners still archive after
+their one accepted method. A persisted local outcome is observable after archival, but a lost
+incomplete ephemeral method is never replayed to manufacture a result.
+
+`AgentInvocationFailed` is a positional terminal, not an error hint. Re-execution reconstructs partial state and validates the invocation ID, error payload, invocation anchor and entity parent before consuming the terminal. A success
+or actual trap instead of that terminal is divergence. Completed replay neither appends nor
+publishes another terminal; cold same-key lookup reads the stored failure without guest execution.
+Only an incomplete durable invocation at the natural history tail may settle live.
+
+Declared schema error values stay ordinary results. Constructors, Rust panics, actual Wasm
+traps and malformed ABI errors keep their fatal paths. Go normalizes only handler-stage panics;
+Scala marks handler throws and failed Futures before encoding; Effect catches escaped handler
+failures/defects before codecs and HTTP cleanup, leaving interruption distinct. SDK machinery
+failures are not permission to reuse a damaged instance.
 
 The live loop hydrates an ordinary invocation from its committed Pending entry into an
 executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
@@ -2228,12 +2541,23 @@ offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download 
 
 ## Durable RPC exactly-once
 
-`RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
-Deferred durable activation records or replays its own decision (`Recorded`). Non-deferred
-targets return `LiveOnly(PermissionTarget)`; their asynchronous permission check runs only in
-`ResolvedCall::Live`, after resolution, preserving operator authorization and decision telemetry.
-Denials use `persist_*_denial_from_begun` to record on the already-begun call, not begin another
-one. Recorded calls, including incomplete repairs, retain admission without re-authorizing.
+Concrete durable client creation calls `Rpc::create_and_initialize` and waits for the child's
+recorded constructor outcome. Explicit creation requires `Invoke` on `Any` for the concrete child;
+later method calls still require their concrete method permission. The connection's `WriteRemote`
+Start commits before dispatch and supplies the derived creation key. Its `HostResponseGolemRpcCreate.result`
+records success with the actual fingerprint, or a terminal constructor failure or permission
+refusal. Infrastructure errors and interruption leave the call incomplete. Repair reuses its
+Start and key. Completed replay returns the recorded success or failure without contacting the
+child; a reconstructed successful handle retains that fingerprint for existing-only reactivation.
+`wasm-rpc.bind-self()` binds the current durable incarnation without creating, starting or waiting for it. It takes no type argument: the host derives self from the owner context and records a separate local binding call. Its Start records the ID, environment and fingerprint. Completed replay and incomplete repair reconstruct that same binding without target contact, even when a fork changes the current owner.
+
+Typed clients in every SDK validate the type parsed from the returned recorded ID before constructing the client. They reuse the returned connection rather than creating another target. Rust and MoonBit expose fallible `bind_self()`, TypeScript and Effect expose `bindSelf()`, Go exposes `BindSelf()`, and Scala generates `bindSelf()`. Use these for constructor self-scheduling. Do not replace the returned recorded ID with a separate current-environment read. Later scheduling still checks the exact method authority. Phantom-less ephemeral clients remain
+logical per-invocation proxies. Fixed ephemeral handles remain observation/control identities,
+and `create_demand` remains non-running preparation.
+
+Method permission checks run inside `ResolvedCall::Live`, after resolution. Denials use
+`persist_*_denial_from_begun` on that already-begun call. Recorded calls, including incomplete
+repairs, retain admission without re-authorizing.
 
 1. The caller opens a durable call; its own `Start` index is the call identity. Live
    computes the request when it appends the `Start` (`start_live_at_index`), so the request
@@ -2254,8 +2578,27 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    Streaming RPC consumes this hint during target preparation, before it builds stream mappings
    with the returned fingerprint; the subsequent invocation uses `MayExist`.
    Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
-   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the idempotency key — deterministic,
-   never random.
+   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
+   `owner_key(operation)` — deterministic, never random.
+7. A durable call is pinned to the incarnation its activation recorded. The recorded activation
+   (`golem::rpc::wasm-rpc.activate`, live or repaired) is the only step that may create the
+   target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
+   recorded fingerprint) builds a `ReplayedDemand` and sends no create request. Every scalar
+   `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
+   targets carry none. Pinned local dispatch (`services/rpc/direct.rs`) resolves the callee only
+   through `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
+   the exact-existing lookup too. An unpinned ephemeral call may still create its phantom, keyed by
+   the owner key of its `request_key`. Pinned local dispatch holds no task-scope bind, so a deletion
+   can still finish between the lookup and the enqueue; a refusal before admission is therefore
+   answered with `Worker::deleted_incarnation_as_not_found`, which applies the same
+   `pinned_deletion_refusal` rule as admission. Remote dispatch sends the fingerprint in
+   `InvokeAgentRequest.expected_callee_fingerprint`; the worker service checks the incarnation
+   before it validates the method, and the target executor applies the same existing-only check.
+   Both pin the incarnation before they validate the method against its revision. A deleted
+   or re-created child therefore fails the call with `RpcError::NotFound`, which is permanent
+   and recorded in the call's `End`; a call that meets a deletion still running gets the
+   refusal an unpinned caller gets. The method never runs on another incarnation, and an
+   executor restart does not create the deleted child again.
 
 ### Pending RPC waits and proactive suspension
 `OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
@@ -2359,6 +2702,87 @@ record. A record with a name on an executor without filesystem snapshots gives `
   replays the remaining old history against the new component; success is recorded during that
   replay.
 - No pending update — `try_load_snapshot` loads the selected periodic record.
+
+### Bootstrap blocks
+
+Snapshot-assisted recovery refreshes the replay target only while the primary cursor is not live. Once Live is published, new accounting hints belong to live history; extending that cursor would reopen a completed wallet prefix and force a restart. A successful snapshot-only load can therefore record `MemorySizeReconciled` without changing the replay target. Recovery from an older snapshot can reach the same allocation through its replay suffix without emitting that hint; compare guest calls and recovered state separately from these accounting entries.
+
+The core initializer of a component runs during `instantiate`, before `prepare_instance` loads
+any snapshot, and its durable calls (clock reads, random seeds, the environment) shape the state
+that the snapshot then restores into. The entries of those calls are the *bootstrap block* of the
+instantiation; the *bootstrap range* is the region from the first to the last entry the
+initializer claimed or appended (hints inside it belong to the main history). Durability is never
+suppressed for `instantiate`.
+
+Every restore point names its range, and the status records carry it: `Snapshot.bootstrap` (the
+range of the generation that wrote the periodic record), `SuccessfulUpdate.bootstrap` (the
+target's own block for a snapshot-based update, the selected record's range for a
+snapshot-assisted one), and
+`SnapshotAssistedAutomatic.snapshot_bootstrap` in the strategy entry. On these entries `None` means
+the initializer made no durable call; the `SuccessfulUpdate` of a plain automatic update always
+names `None`.
+
+`ReplayBaseline.bootstrap` (`BootstrapSource`, filled by `plan_start`) decides where the
+initializer runs; `ReplayBaseline::initializer_replay` and `attempt_region` turn it into the
+cursor choice (`worker/filesystem_snapshots/mod.rs`):
+
+| Source | Baselines | Initializer runs on | Main cursor also skips |
+|---|---|---|---|
+| `Recorded(range)` | `Periodic`, `AssistedPending` (the selected record's range), `ManualPromoted`, `AssistedPromoted` (also under a plain `Automatic` head) | A `BootstrapTail::Strict` bootstrap cursor over the range; `None` is an empty strict cursor | — (the range lies in the skipped prefix of a periodic record, or in the regions a successful update committed) |
+| `Attempt { anchor }` | `ManualPending` (anchor `P`) | A `BootstrapTail::Live` cursor after the anchor: it replays what an interrupted earlier attempt recorded, then appends live | The attempt region `anchor+1..=horizon` |
+| `Positional` | `InitialFiles` | The main cursor, in its position | — |
+
+The bootstrap cursor (`ReplayState::new_for_bootstrap`) skips `1..=skip_through` and the deleted
+regions; a `Live` cursor also skips what the status skips after its anchor
+(`bootstrap_skipped_regions`), so it never replays the block of an earlier update in the queue. It
+has no owner wallet, records no replay events (so its `ReplayFinished` never reaches
+`replay_application::reserve`), and switches to live locally without publishing the
+generation's liveness or touching linear-memory reconciliation. `runtime.rs` installs it with
+`enter_bootstrap_phase` around `instantiate` and restores the main cursor with
+`finish_bootstrap_phase`, which checks that every recorded call of the block was claimed
+(`ensure_bootstrap_consumed`) and records the observed range on `DurableWorkerCtx`. While a
+bootstrap cursor is installed, only direct `ReadLocal`/`ReadRemote` calls outside the
+permission-card and fork families are admitted, and accessor calls are refused. The rule holds on
+the live cursor of a pending manual update too: every later start from the update replays the
+block on a strict cursor, which holds no invocation and no owner wallet, so it can return a
+recorded result but cannot repair a write or rebuild its pending state. A language runtime's
+initializer (Go's, Rust's) reads the environment, the arguments, clocks and random values, and
+those calls pass; a core initializer that makes a durable write fails a manual update and makes
+periodic records unusable, so its agent recovers by full replay. A refusal or a
+divergence is `RawStartError::Replay { diverged: true }`: a periodic record is rejected, a pending
+update fails (`UPDATE_REPLAY_FAILED` for a plain automatic one, `UPDATE_SNAPSHOT_INCOMPATIBLE` for
+a snapshot-assisted one, a failed update without a code for a manual one), and any other start ends
+with the error. No invocation is current during the phase.
+
+A pending snapshot-assisted update replays the source tail after its selected record on the
+target. That tail was recorded with the inputs of the record's bootstrap block, so the target's
+initializer replays that block strictly and records none of its own; its calls replay recorded
+results and run no live authorization. A target whose initializer makes other durable calls fails
+with `UPDATE_SNAPSHOT_INCOMPATIBLE`, as a plain automatic update fails when its initializer
+diverges from the original revision's block.
+
+The writers: `invocation_loop/snapshots.rs` writes the generation's range into every periodic
+`Snapshot`; `finalize_pending_snapshot_update` writes it into the snapshot-based
+`SuccessfulUpdate`, and `reserve` the replayed range into the snapshot-assisted one. `reserve` never takes a
+`SnapshotBased` update, so no `ReplayFinished` of the main cursor takes a manual update; only
+`finalize_pending_snapshot_update` finalizes it.
+`status/regions.rs` commits a successful snapshot-based update's `2..=P` with its bootstrap range,
+and a successful snapshot-assisted update's `2..=S`, which holds its range, as skipped; a failed
+snapshot-based update commits its attempt region `max(P, last_outcome)+1..=F-1`, where
+`last_outcome` is the latest outcome that ended a queue element, so the source revision never
+replays the target's calls. A snapshot-assisted attempt appends no target entry.
+`cut_point::validate_restore_point_ranges` refuses a revert or fork cut that retains a restore
+point but not its whole range.
+
+Tests: `tests/durability.rs::automatic_snapshot_every_2nd_invocation` (the initializer seed hash
+survives periodic recovery), and in `tests/hot_update.rs` the
+`a_snapshot_based_update_*`, `a_snapshot_assisted_update_*` (among them
+`a_snapshot_assisted_update_replays_a_source_tail_that_depends_on_the_initializer_seed`),
+`a_restart_right_after_a_snapshot_based_update_recovers_the_target_initializer_state`, `a_failed_snapshot_*_update_keeps_the_source_and_its_initializer_state`,
+`an_interrupted_snapshot_based_update_attempt_replays_its_initializer_calls_on_the_next_attempt`,
+`a_manual_update_whose_target_initializer_makes_a_write_fails_and_keeps_the_source` and
+`a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot` tests, and
+`tests/durability.rs::a_periodic_snapshot_whose_bootstrap_block_holds_a_write_is_rejected`.
 
 Every start failure goes through `worker/start_outcome.rs::decide(role, head, RawStartError,
 lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `ManualPromoted`,
@@ -2832,7 +3256,15 @@ update then fails as a failed update, and the agent stays on its revision: chang
 `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and a failed check gives the details "failed to check the
 agent filesystem for the update: <cause>", with no code (`UPDATE_CHECK_FAILED` is only the name of
 the Rust constant). A periodic boundary that writes no record waits one period before the next attempt
-(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+(`invocation_loop/snapshots.rs::snapshot_baseline_timestamp`). A periodic snapshot is needed only
+when an invocation that can change the state, not a `read_only` method, finished after the
+automatic record that a start would select (`invocation_loop/snapshots.rs::state_changed_since_snapshot`,
+`snapshot_selection::periodic_snapshot_holding_state`), so an idle agent writes no record. A record
+whose upload failed or that a start rejected does not count, so the next period takes the snapshot
+again. The
+Store records the index of that `AgentInvocationFinished` entry for replayed and live invocations
+alike (`DurableWorkerCtx::last_state_change`), so a change replayed after a restart still takes its
+pending snapshot. A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
@@ -2969,6 +3401,43 @@ P2 UDP records explicit remote-address permission decisions in
 request holds the addresses; replay returns the recorded decision without consulting current
 permissions. Connected sends without an explicit address retain their stream's admission.
 
+The socket address policy (`durable_host/sockets/policy.rs`) is shared by P2 and P3. Before any
+grant check, `SocketPolicy::target` refuses cloud metadata and link-local destinations, and the
+executor's gRPC and HTTP ports and `agent_sockets.refused_ports` on loopback, unspecified and this
+host's own addresses. Operator authorization does not bypass it. Otherwise the target is a
+`NetworkResourcePattern::SocketAddress`: a grant with a wildcard host matches it only for an
+`AddressClass::Public` address that is not an address of this host (D28, `this_host`), while
+denials with a wildcard host still cover every address, and a denial of an IPv4 host covers the
+NAT64, 6to4 and IPv4-compatible forms that embed it. HTTP and WebSocket targets keep plain host
+matching and refuse IPv6 hosts. A refusal is recorded as the
+call's denial, like a grant denial (the P2 check call, or the `Start` of the P3 connect or send), so
+replay returns it. The Wasmtime `socket_addr_check`
+backstop refuses TCP listen, binds other than port 0 or loopback, and the refused destinations,
+from its arguments and the configuration only. The executor binds its gRPC and HTTP listeners
+before it creates any agent, so the configuration holds the bound ports. Tests:
+`tests/scope_cards/socket_policy.rs`.
+
+**Hostname links.** Each Store keeps a `ResolvedNames` index
+(`durable_host/sockets/resolved_names.rs`) that links the addresses of its completed P2 and P3
+address lookups to the looked-up hostname. The permission target of a connect or outgoing datagram
+carries the hostnames linked to its address, so an exact hostname grant such as `db.test` reaches
+the addresses that a lookup of `db.test` returned, also internal ones. A wildcard hostname grant
+reaches only public addresses that are not this host's own (`this_host`) through a link (D28), and a denial still matches linked hostnames.
+The index holds at most 1024 links (`MAX_RESOLVED_NAME_LINKS`) and evicts the least recently
+linked one. Only lookups that replay returns again link: lookups in snapshotting mode and the
+physical calls of a custom durable invocation do not. A P2 lookup links when its call returns, a
+P3 lookup when its completion reaches the guest (its `CompletionDelivered` marker): the DNS call
+sets a deferred link that the delivery observer's `Delivered` branch adds, so a P3 completion that
+the guest discards, also after the host call returned it, links nothing. Replay fills the index again from the recorded lookups. A snapshot
+recovery skips the history before the snapshot, so `rebuild_resolved_names` scans it twice: once
+for the regions that no replay runs (deleted, jumped and failed update attempts), then for the
+completed lookups of the primary Store, which go into the bounded index at their link point. It
+leaves out entity bodies and observational calls, and keeps only open lookups and scopes. The
+links of a core initializer whose bootstrap range lies in the scanned history are already in the
+result; only an initializer after the snapshot, such as an update target's, adds newer links. The lookup itself is
+checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
+a port needs a portless grant for the lookup too.
+
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
 capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
 filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
@@ -3028,6 +3497,8 @@ delivery must be the tail operation of a host function. Tests: `tests/concurrent
 is not — the properties replay relies on), `replay_state` unit tests
 `switch_to_live_wakes_parked_awaiter_as_incomplete`, `await_natural_tail_end_returns_once_tail_drains`.
 
+P3 TCP `send` and `receive` record their one-shot stream acquisition before creating the guest-facing handles. The acquisition's `CompletionDelivery` stays deferred while the host starts the send call or spawns the receive task. `CompletionDelivery::continue_with` suppresses the token if this setup returns a host error, including while constructing handles for an acquisition error; cancelling the setup still drops the armed token and records a discard. Only a successful final host return arms its terminal observer, including when acquisition failed. Replay restores the recorded taken flag before building the handles, then delivers at that same boundary. The built-in `node:net` regression `builtin_node_tcp_replays_after_restart` checks successful traffic with sockets enabled, denial with sockets disabled, and completed tool replay without reconnecting in both cases.
+
 For p3 HTTP sends, `TerminalConsumption::NotDelivered` is a positive guest
 cancellation/abandonment signal. Store teardown and observer supersession suppress it. The send's
 span-only cleanup appends a live `SpanClosed` hint when the send terminal did not already close
@@ -3051,7 +3522,7 @@ handle goes through `ensure_websocket_connection_live_access` in
 `durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
-still sees its own gate in the entry applies the policy. With the default
+still sees its own gate in the entry applies the policy. With an explicit
 `reconnect-automatically`, it proceeds to take one pool permit, run the handshake, and
 publish `Live` in a single store window re-verified against the current entry. A queued peer
 therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
@@ -3079,8 +3550,9 @@ interruption. Tests:
 `websocket_closed_connection_stays_terminal_after_replay`.
 
 The third optional WIT `connect` parameter is `option<reconstruction-policy>`. Absence selects
-`reconnect-automatically`; `report-connection-loss` publishes terminal `SessionLost` at the first
-live access to a reconstructed successful handle, without a pool permit or handshake. Recorded
+`report-connection-loss`, which publishes terminal `SessionLost` at the first live access to a
+reconstructed successful handle, without a pool permit or handshake. Only an explicit
+`reconnect-automatically` opens a replacement connection. Recorded
 send, receive, timeout, error, and close outcomes replay unchanged under either policy. Suspension,
 restart, and crash all use this reconstruction path; the option does not change ordinary live
 disconnect retry behavior. Live `close` on the lost handle reports loss without reconnecting;
@@ -3113,7 +3585,7 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
 - **Two owner-relative journals are authoritative, nothing else.** A producer records
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` in its own oplog. Its persisted
+  `StreamRegistered`/`StreamItems`/`StreamTerminal` in its own oplog. Its persisted
   `LocalStreamId` is the registration oplog index, not a globally meaningful handle. Every
   cross-record source is explicit `StreamRecordReference::{Local, Foreign}`; a received handle
   remains `Foreign` even when it happens to name the receiving oplog's owner. Consumer records
@@ -3132,8 +3604,9 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   so those writes always commit. The receipt still means durable and folded.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
-  Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
-  later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
+  Streaming keys follow the RPC identity rule above. Terminals finalize once; the first selected
+  terminal fences competing terminals. Completed replay still validates the recorded terminal.
+  Terminal outputs reconstruct from committed records without reattachment.
   The persisted request also retains the original logical streaming origin, so retries and caller
   forks do not rewrite who originated the logical RPC.
 
@@ -3244,7 +3717,11 @@ cursor (`OwnerExecution`, `worker/instance/mod.rs`).
 - `HistoricalReconstruction` fences keep the primary's `PendingReplayToLive` fail-closed until
   every completed body has validated (`primary_publication_requires_completed_reconstruction_validation`).
 - `worker/invocation.rs::permanent_tool_guest_trap` isolates only its fixed Wasm
-  instruction-trap allowlist. The tool terminal has `body_execution: Trapped` and
+  instruction-trap allowlist and uncaught Wasm exceptions. Agent and tool classification share
+  `model::deterministic_guest_trap`, including GC cast failures, array bounds failures and
+  oversized allocations. Agent stack overflow keeps its separate classification; tool host-call
+  markers take precedence over the predicate. GC heap OOM remains a resource failure.
+  The tool terminal has `body_execution: Trapped` and
   `RemoteInternalError`. Typed quotas, policy exhaustion, `WorkerOutOfMemory`, infrastructure
   and lifecycle failures retain owner recovery even when the retry decision is exhausted.
   Physical Wasmtime Store destruction retains the original `Ctx` for cleanup. Supervisors
@@ -3329,7 +3806,9 @@ Four exactly-once contracts coexist and must not be conflated: RPC exactly-once 
 target invocation per key), oplog-processor delivery (batch key + checkpoints), stream-item
 exactly-once (each `StreamOffset` consumed once per consumer session, owned by
 `durable_stream/mod.rs`/`durable_session.rs`), and exactly-once finalization (one terminal per
-stream, protocol terminal fencing guest terminals). A change that
+stream, the first terminal fencing competing terminals). Terminal origin is independent of
+author and outcome: reconstruction validates the recorded prefix, then reproduces a `Source`
+terminal exactly or stops at a `Control` terminal without waiting for the source. A change that
 satisfies one does not imply the others.
 
 Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
@@ -3346,8 +3825,16 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. The delivery protocol retains its recorded target,
-range and key across retries, independently of a rebuilt per-executor processor cache.
+otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
+installed plugin and source metadata, including the guest-visible status, revision, environment
+and configuration. Its status contains only the guest-visible status, revision and latest retry
+state. Historical host indexes and processor checkpoints are excluded so snapshot size does not
+grow with source history. Reconstruction reuses this snapshot rather than current source metadata, even
+when the plugin is no longer attached. Both local and remote ambiguous failures retain the recorded
+target: a missing response does not prove that admission failed. Confirmation clears the snapshot
+but retains `source_component_revision`; public rendering resolves the installation at that revision,
+even after an update removes it. Request equality still compares the full delivered request; it has no processor-specific exemption.
 
 ## Permission-card handles
 
@@ -3404,21 +3891,24 @@ after `CardDerived` reuses the recorded child instead of creating it again. Test
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that
-records nothing therefore sees on replay the card events that live execution applied only to a
-later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
-each make their authorization decision in a `ReadLocal` call
-(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
-`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
-derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
-the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
-the typed permission error, and on success the serialized data the operation continues with: the
-wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
-parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
-parent), and the `install-card` target with its holder identity. Replay returns the recorded
-decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
-answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
-`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
-incomplete decision decides at its own `Start`. Tests:
+records nothing therefore sees on replay the card events that live execution applied only to a later
+call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card` each make
+their authorization decision in a `ReadLocal` call (`permissions/decisions.rs::record_card_decision`):
+`golem::permissions::inspect::inspect-card-decision`, `golem::permissions::derive::{derive-decision,
+derive-from-wallet-decision, derive-scope-decision}` and
+`golem::permissions::wallet::install-card-decision`. The request holds the ID of the agent or entity
+invocation that the deciding host call is attributed to (`None` for work no invocation is attributed
+to) and the card ids of the handles. It records the attribution itself, not the fallback to the
+loop's invocation, whose key after a snapshot is random; replay and repair trap when the recorded
+invocation differs from the attributed one. The `End` (`PermissionCardDecision`) records the
+outcome, allowed or the typed permission error, and on success the serialized data the operation
+continues with: the wallet copy of the `derive` parent, the selected `derive-from-wallet` parent,
+each `derive-scope` parent (a valid scope card, the wallet copy of a persistent parent, or the
+refusal of an unusable parent), and the `install-card` target with its holder identity. Replay
+returns the recorded decision; the rest of the operation is deterministic from it and from the
+recorded `card-liveness` answers. Each decision keeps its place relative to the handle's liveness
+call: `inspect-card`, `derive` and `derive-scope` decide first, `install-card` resolves its handle
+first. A repaired incomplete decision decides at its own `Start`. Tests:
 `tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
 
 ## Wrong model → right model
@@ -3434,6 +3924,8 @@ incomplete decision decides at its own `Start`. Tests:
 | "Repair should generate a fresh RPC key." | Repair retains the call's own `Start` and derived key. A new saga attempt appends new calls. | RPC crash-recovery tests |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |
 | "A snapshot load is just a fast-forwarded replay, so its host calls are recorded/consumed like any other." | Snapshotting mode (`durability_is_suppressed`) neither appends nor consumes; the loaded state replaces skipped history from a revision-scoped baseline. | `tests/hot_update.rs::{auto_update_invalidates_snapshot_from_previous_revision, automatic_snapshot_invalid_entry_fallback_recreates_replay_context}` |
+| "A start from a snapshot can run the core initializer with durability suppressed, because the snapshot restores the state anyway." | The initializer runs before the load, and the application snapshot does not hold the state that the initializer derived from its durable inputs (seeds, clocks, environment); with durability suppressed, those calls would run unrecorded and get fresh values. Recovery replays the bootstrap range that the restore point names on a bootstrap cursor; a snapshot-based update target records and replays its own block, and a snapshot-assisted one replays the selected record's block. | `tests/durability.rs::automatic_snapshot_every_2nd_invocation`, `tests/hot_update.rs::{a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot, a_snapshot_assisted_update_replays_the_source_initializer_block_for_its_target}` |
+| "The Store has one current invocation, so host code can read the invocation from Store fields." | Host code reads the entry of the invocation its task is attributed to (task group, then Golem's scoped value); only unattributed work, agent-level work and work of a replaced invocation fall back to the loop's entry. The guest never names its invocation. | `invocation_context.rs::a_spawned_guest_future_reads_its_method_invocation_live_and_after_restart`, `scope_cards.rs::card_decisions_survive_reconstruction` |
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |

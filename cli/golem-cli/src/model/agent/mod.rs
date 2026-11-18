@@ -17,6 +17,7 @@ pub mod extraction;
 pub mod files;
 pub mod invocation_session;
 pub mod oplog;
+pub mod oplog_export_view;
 pub mod oplog_html;
 pub mod stream;
 
@@ -351,7 +352,11 @@ impl AgentMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct AgentsMetadataResponseView {
     pub agents: Vec<AgentMetadataView>,
+    /// Without `--page`: the scan cursor of each component that has more agents.
     pub cursors: BTreeMap<String, String>,
+    /// With `--page`: the cursor of the next page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 impl Masked for AgentsMetadataResponseView {
@@ -795,6 +800,13 @@ impl TextOutput for AgentsMetadataResponseView {
             logln(format!(
                 "Cursor for more results for component {}: {}",
                 component_name.log_color_highlight(),
+                cursor.log_color_highlight()
+            ));
+        }
+        if let Some(cursor) = &self.cursor {
+            logln("");
+            logln(format!(
+                "Cursor of the next page: {}",
                 cursor.log_color_highlight()
             ));
         }

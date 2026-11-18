@@ -333,7 +333,8 @@ impl
         let mut source = underlying.produce(tag).await?;
         let (mut writer, output) = AgentStream::new();
         spawn_local(async move {
-            while let Some(item) = source.next().await.expect("read provider typed output") {
+            while let Some(item) = source.next().await {
+                let item = item.expect("read provider typed output");
                 writer
                     .write_one(presented_typed_output::Item {
                         label: item.label,
@@ -342,6 +343,7 @@ impl
                     .await
                     .expect("write projected typed output");
             }
+            writer.close().await.unwrap();
         });
         Ok(output)
     }
@@ -491,6 +493,7 @@ struct HumanApprovalRequest {
     request_id: String,
     owner: HumanApprovalOwner,
     promise_oplog_idx: u64,
+    promise_fingerprint: String,
     policy: String,
     tool_name: String,
     command_path: Vec<String>,
@@ -548,6 +551,7 @@ async fn human_approval(
         request_id: request_id.to_string(),
         owner,
         promise_oplog_idx: promise.oplog_idx,
+        promise_fingerprint: promise.fingerprint.to_string(),
         policy: parameters.policy,
         tool_name,
         command_path: command_path.clone(),

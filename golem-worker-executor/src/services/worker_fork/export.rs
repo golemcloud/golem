@@ -31,7 +31,7 @@ use golem_common::model::oplog::{
     CreateRequest, CreateRequestKind, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OplogIndex, OwnedAgentId, Timestamp,
 };
 use golem_common::schema::SchemaGraph;
 use golem_common::serialization::serialize;
@@ -135,6 +135,8 @@ async fn execute<Ctx: WorkerCtx>(
     );
     let source = OwnedAgentId::new(environment_id, &source_id);
     let target = OwnedAgentId::new(environment_id, &target_id);
+    golem_common::model::durable_stream::validate_durable_stream_route_scope(&request.route_scope)
+        .map_err(WorkerExecutorError::invalid_request)?;
     if source_id.component_id != target_id.component_id || source == target {
         return Err(reject(Reason::Conflict));
     }
@@ -168,7 +170,12 @@ async fn execute<Ctx: WorkerCtx>(
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
     let slot = worker
-        .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
+        .resolve_export_fork_slot(
+            &request.route_scope,
+            &request.session,
+            &request.slot,
+            &request.expected_method,
+        )
         .await?;
     let Some(slot) = slot else {
         return Err(reject(Reason::NotFound));
@@ -215,6 +222,7 @@ async fn execute<Ctx: WorkerCtx>(
         metadata.fingerprint,
         (
             request.session.clone(),
+            request.route_scope.clone(),
             request.slot.clone(),
             request.expected_method.clone(),
         ),
@@ -362,6 +370,17 @@ async fn execute<Ctx: WorkerCtx>(
             );
         }
         let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
+        let prepared = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
+            scope: candidate.export.route_scope.clone(),
+            key: IdempotencyKey::from_uuid(candidate.target_session_key.0),
+        };
+        candidate.target_session_key = prepared
+            .finalize(
+                target_id.clone(),
+                target_fingerprint,
+                &candidate.export.expected_method,
+            )
+            .id();
         let expiry_deadline_millis = admitted_publication_deadline(&candidate);
         append_target_initialization(oplog.as_ref(), &candidate, hash, expiry_deadline_millis)
             .await?;
@@ -641,7 +660,8 @@ async fn append_target_initialization(
         StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             public_session_id: candidate.export.session.clone(),
-            session_key: candidate.target_session_key.clone(),
+            route_scope: candidate.export.route_scope.clone(),
+            session_key: candidate.target_session_key,
             source_invocation: candidate.source_invocation.clone(),
             request_hash: request_hash.to_vec(),
             expiry_policy: candidate.expiry_policy,
@@ -684,7 +704,7 @@ async fn schedule_expiry<Ctx: WorkerCtx>(
                 owned_agent_id: target.clone(),
                 target_agent_fingerprint: fingerprint,
                 public_session_id: candidate.export.session.clone(),
-                session_key: candidate.target_session_key.clone(),
+                session_key: candidate.target_session_key,
                 expected_deadline_millis: deadline_millis,
             },
         )
@@ -704,7 +724,12 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         .commit_oplog_and_update_state(CommitLevel::Always)
         .await?;
     let slot = worker
-        .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
+        .resolve_export_fork_slot(
+            &request.route_scope,
+            &request.session,
+            &request.slot,
+            &request.expected_method,
+        )
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
     if slot.tombstoned {
@@ -816,6 +841,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
             source_fingerprint: fingerprint,
             source_path: request.source_path.clone(),
             session: request.session.clone(),
+            route_scope: request.route_scope.clone(),
             slot: request.slot.clone(),
             expected_method: request.expected_method.clone(),
             requested_offset,
@@ -830,7 +856,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         cut: cut.oplog_index,
         selected: handle.stream_id,
         source_invocation: handle.source_invocation,
-        target_session_key: IdempotencyKey::new(Uuid::new_v4().to_string()),
+        target_session_key: InvocationId(Uuid::new_v4()),
         expiry_policy,
         expiry_deadline_millis,
         retained_through: cut.last_item_offset,
@@ -863,7 +889,7 @@ pub(crate) fn response(
     export: &StreamExportFork,
     cut: OplogIndex,
     replayed: bool,
-    invocation_key: &IdempotencyKey,
+    invocation_key: &InvocationId,
 ) -> ForkStreamSlotSuccess {
     ForkStreamSlotSuccess {
         replayed,
@@ -874,7 +900,7 @@ pub(crate) fn response(
             .unwrap_or_default(),
         sub_offset: export.sub_offset,
         oplog_index: cut.as_u64(),
-        invocation_key: Some(invocation_key.clone().into()),
+        invocation_key: Some((*invocation_key).into()),
     }
 }
 
@@ -888,6 +914,7 @@ pub(super) fn matches_request(
             == Some(export.source_environment_id)
         && export.source_path == request.source_path
         && export.session == request.session
+        && export.route_scope == request.route_scope
         && export.slot == request.slot
         && export.expected_method == request.expected_method
         && export.requested_offset.map(|offset| offset.0.to_vec()) == request.fork_offset
@@ -917,6 +944,7 @@ fn matching_receipt_export<'a>(
         .ok_or_else(|| reject(Reason::Conflict))?;
     if receipt.initialized.request_hash != receipt.cut.request_hash
         || receipt.initialized.public_session_id != request.session
+        || receipt.initialized.route_scope != request.route_scope
         || receipt.initialized.expiry_policy != export.target_expiry_policy
     {
         return Err(reject(Reason::Conflict));
@@ -1000,6 +1028,7 @@ async fn creation_receipt(
                             |initialized: &StreamExportForkInitializedRecord| {
                                 initialized.session_key == record.session_key
                                     && initialized.public_session_id == record.public_session_id
+                                    && initialized.route_scope == record.route_scope
                             },
                         ) && current_deadline_millis
                             == Some(record.expected_deadline_millis) =>
@@ -1011,6 +1040,7 @@ async fn creation_receipt(
                             |initialized: &StreamExportForkInitializedRecord| {
                                 initialized.session_key == record.session_key
                                     && initialized.public_session_id == record.public_session_id
+                                    && initialized.route_scope == record.route_scope
                             },
                         ) && current_deadline_millis
                             == Some(record.expected_deadline_millis) =>
@@ -1083,7 +1113,9 @@ mod tests {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         StreamSessionExpiryPolicy as ProtoExpiryPolicy, stream_session_expiry_policy,
     };
+    use golem_common::model::InvocationId;
     use test_r::test;
+    use uuid::Uuid;
 
     /// A creation receipt of no export, which is `live` or not.
     fn receipt(live: bool) -> CreationReceipt {
@@ -1106,14 +1138,19 @@ mod tests {
             initialized: StreamExportForkInitializedRecord {
                 format_version: 1,
                 public_session_id: String::new(),
-                session_key: IdempotencyKey::fresh(),
+                route_scope: golem_common::model::durable_stream::durable_stream_route_scope(
+                    "environment",
+                    "1",
+                    "route",
+                ),
+                session_key: InvocationId(Uuid::new_v4()),
                 source_invocation: golem_common::model::durable_stream::StreamInvocationId {
                     callee_environment_id: golem_common::model::environment::EnvironmentId(
                         Uuid::new_v4(),
                     ),
                     callee: agent,
                     callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::fresh(),
+                    idempotency_key: InvocationId(Uuid::new_v4()),
                 },
                 request_hash: Vec::new(),
                 expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 },

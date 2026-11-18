@@ -112,6 +112,7 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
     match err {
         WorkerExecutorError::InvalidRequest { .. }
         | WorkerExecutorError::AgentAlreadyExists { .. }
+        | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
         | WorkerExecutorError::AgentNotFound { .. }
         | WorkerExecutorError::PromiseNotFound { .. }
         | WorkerExecutorError::PromiseDropped { .. }
@@ -1041,7 +1042,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Principal::Agent(AgentPrincipal {
                     agent_id: self.agent_id().clone(),
                 }),
-                &self.clone_as_inherited_stack(&self.state.current_span_id),
+                &self.clone_as_inherited_stack(&self.state.invocation_state().current_span_id),
             );
             let fork_result = loop {
                 let fork_result = self

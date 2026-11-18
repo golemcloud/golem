@@ -1,4 +1,5 @@
 use super::*;
+use golem_common::model::AgentId;
 use test_r::test;
 
 #[test]
@@ -46,7 +47,7 @@ async fn k3_rate_configuration_is_part_of_backend_identity(
         );
     }
     // Returning to the old identity reconstructs the old policy, not the latest configuration.
-    let old_worker = executor.start_agent(&component.id, old.clone()).await?;
+    let old_worker = AgentId::from_agent_id(component.id, &old).map_err(anyhow::Error::msg)?;
     executor.simulated_crash(&old_worker).await?;
     executor
         .invoke_and_await_agent(&component, &old, "admit", data_value!("principal", "first"))
@@ -166,7 +167,7 @@ macro_rules! setup_k3_rate_limit_chain_with_checkpoint {
             &tool_name,
             $rate_limit_component.id,
             $rate_limit_component.revision,
-            "golem:rate-limit-middleware",
+            "golem-it:tool-streaming-rate-limit-middleware",
             &rate_limit_metadata.tool_middlewares,
             vec![(
                 rate_limit_definition.name.as_str(),
@@ -490,7 +491,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
         &ToolName::try_from("middleware-probe").unwrap(),
         rate_limit_component.id,
         rate_limit_component.revision,
-        "golem:rate-limit-middleware",
+        "golem-it:tool-streaming-rate-limit-middleware",
         std::slice::from_ref(&definition),
         vec![(
             definition.name.as_str(),
@@ -514,10 +515,9 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
 
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: checkpoint.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;

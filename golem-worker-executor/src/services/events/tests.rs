@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use uuid::Uuid;
+
+use golem_common::model::InvocationId;
+
 use super::*;
 use golem_common::base_model::component::ComponentId;
 use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
@@ -43,7 +47,7 @@ fn output(value: &str) -> AgentInvocationOutput {
 fn invocation_completed(agent_id: AgentId, key: &str, value: &str) -> Event {
     Event::InvocationCompleted {
         agent_id,
-        idempotency_key: IdempotencyKey::new(key.to_string()),
+        idempotency_key: test_invocation_id(key.to_string()),
         result: Box::new(Ok(output(value))),
     }
 }
@@ -103,7 +107,7 @@ async fn waiters_ignore_multiple_unrelated_large_outputs_and_match_agent_and_key
                 idempotency_key,
                 result,
             } if agent_id == &first_agent
-                && idempotency_key == &IdempotencyKey::new("first-key".to_string()) =>
+                && idempotency_key == &test_invocation_id("first-key".to_string()) =>
             {
                 Some(*result.clone())
             }
@@ -119,7 +123,7 @@ async fn waiters_ignore_multiple_unrelated_large_outputs_and_match_agent_and_key
                 idempotency_key,
                 result,
             } if agent_id == &second_agent
-                && idempotency_key == &IdempotencyKey::new("second-key".to_string()) =>
+                && idempotency_key == &test_invocation_id("second-key".to_string()) =>
             {
                 Some(*result.clone())
             }
@@ -221,4 +225,8 @@ async fn wait_for_reports_closed_channel() {
         subscription.wait_for(|_| Some(())).await,
         Err(RecvError::Closed)
     ));
+}
+
+fn test_invocation_id(value: String) -> InvocationId {
+    InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }

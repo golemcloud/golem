@@ -17,6 +17,8 @@
 package golem
 
 import (
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	invocationContext "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_invocation_context"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	environment "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_cli_0_3_0_environment"
@@ -28,6 +30,9 @@ var hostOps agentHost = witHost{}
 // selfAgentID reads the agent's id through the durable host environment on
 // each call: replay sees the id the call saw when it ran, and a copy made by a
 // fork sees its own. os.Getenv would return the value captured at start-up.
+// The host shows GOLEM_AGENT_ID only when the agent's permission card allows
+// env(?agent) @ ?agent : read : GOLEM_AGENT_ID; without that grant the result
+// is "".
 var selfAgentID = func() string {
 	for _, kv := range environment.GetEnvironment() {
 		if kv.F0 == agentIDEnvVar {
@@ -36,6 +41,9 @@ var selfAgentID = func() string {
 	}
 	return ""
 }
+
+// immediateCaller reads the principal that made the running invocation.
+var immediateCaller = func() common.Principal { return invocationContext.Caller().Immediate }
 
 type witHost struct{}
 

@@ -36,6 +36,10 @@ GOLDENS = HERE / "goldens"
 DOCKERFILE = HERE / "oracle.Dockerfile"
 ORACLE_IMAGE = "golem-cooperative-bash5-oracle:local"
 TIMEOUT = 15  # Default per-case run timeout, either side; see `Case.timeout` to override one.
+WASMTIME_OPTIONS = (
+    "-Sp3", "-Shttp", "-Wcomponent-model-async=y", "-Ccache=n",
+    "-Wmax-wasm-stack=1048576", "-Wasync-stack-size=2621440",
+)
 # A line holding this comment, optionally followed by a directory, splits a script into separate
 # calls. Each call is a fresh shell, as each `run` of the tool is: our shell's example starts every
 # call in the directory the previous one ended in, as a caller passing back the returned `cwd`
@@ -162,11 +166,9 @@ def outcome(result):
 
 
 def wasm_outcome(result, status_file):
-    """Read the shell status from its report and check that the WASI process status agrees.
+    """Read the shell status from its report and check that the WASI process exits with it.
 
-    Rust 1.100 and later exit with the status itself. Earlier toolchains, such as the one
-    builtin-tools/bash/rust-toolchain.toml pins for the released bash.wasm, report only success
-    or failure, so a nonzero status exits with 1.
+    A process status that differs from the report is a runtime failure after the report.
     """
     try:
         status = int(status_file.read_text(encoding="ascii"))
@@ -176,8 +178,7 @@ def wasm_outcome(result, status_file):
         ) from error
     if not 0 <= status <= 255:
         raise ValueError(f"shell status is outside the u8 range: {status}")
-    process_statuses = {0} if status == 0 else {1, status}
-    if result.returncode not in process_statuses:
+    if result.returncode != status:
         raise ValueError(
             f"WASI process status {result.returncode} disagrees with reported shell status {status}"
         )
@@ -286,21 +287,30 @@ def golden_for(case, loaded, fingerprint):
 # --- Running our shell ----------------------------------------------------------------------
 
 
-def run_ours(case, wasm, wasmtime, base, cache):
-    """Run one case in the wasm shell with a fresh root; return its outcome."""
+def compile_ours(wasm, wasmtime, base):
+    """Compile once, outside the cases' execution timeouts and parallel workers."""
+    compiled = base / "shell.cwasm"
+    subprocess.run(
+        [wasmtime, "compile", *WASMTIME_OPTIONS, "-o", str(compiled), str(wasm)],
+        check=True, timeout=120,
+    )
+    return compiled
+
+
+def run_ours(case, compiled, wasmtime, base):
+    """Run one case in our locally compiled shell with a fresh root; return its outcome."""
     root = pathlib.Path(tempfile.mkdtemp(dir=base))
     if not case.options.get("no_tmp"):
         (root / "tmp").mkdir()
     report = pathlib.Path(tempfile.mkdtemp(dir=base)) / "status"
     command = [
-        wasmtime, "run", "-Sp3", "-Shttp", "-Wcomponent-model-async=y",
-        "-Wmax-wasm-stack=1048576", "-Wasync-stack-size=2621440",
-        "-Ccache-config=" + str(cache), "--dir", str(root) + "::/",
+        wasmtime, "run", *WASMTIME_OPTIONS, "--allow-precompiled",
+        "--dir", str(root) + "::/",
         "--dir", str(report.parent) + "::/.conformance",
     ]
     for key, value in GOLEM_ENV.items():
         command += ["--env", f"{key}={value}"]
-    command += [str(wasm), "--status-file", "/.conformance/status"]
+    command += [str(compiled), "--status-file", "/.conformance/status"]
     calls = split_calls(case.script)
     if len(calls) > 1:
         # The example carries each call's final directory itself; the markers' are the oracle's.
@@ -512,13 +522,11 @@ def failure_record(case, expected, actual, error):
 
 def compare_ours(args, cases, expectation):
     """Run our shell for each case and compare with `expectation(case)` -> (expected, error)."""
-    wasm = args.wasm.resolve()
     failures = []
     records = []
     with tempfile.TemporaryDirectory(prefix="golem-conformance-") as directory:
         base = pathlib.Path(directory)
-        cache = base / "cache.toml"
-        cache.write_text('[cache]\ndirectory = "' + str(base / "cache") + '"\n')
+        compiled = compile_ours(args.wasm.resolve(), args.wasmtime, base)
 
         def one(case):
             expected, error = expectation(case)
@@ -526,7 +534,7 @@ def compare_ours(args, cases, expectation):
                 records.append(failure_record(case, None, None, error))
                 return f"FAIL {case.name}: {error}"
             try:
-                actual = run_ours(case, wasm, args.wasmtime, base, cache)
+                actual = run_ours(case, compiled, args.wasmtime, base)
             except subprocess.TimeoutExpired:
                 records.append(
                     failure_record(case, expected, None, f"exceeded {case.timeout} seconds")
@@ -699,11 +707,10 @@ def shell_commands(args):
     shell's commands are not builtins; a fresh shell has no functions, aliases or `PATH`."""
     with tempfile.TemporaryDirectory(prefix="golem-conformance-") as directory:
         base = pathlib.Path(directory)
-        cache = base / "cache.toml"
-        cache.write_text('[cache]\ndirectory = "' + str(base / "cache") + '"\n')
+        compiled = compile_ours(args.wasm.resolve(), args.wasmtime, base)
         script = "compgen -b; echo --; compgen -c; echo --; compgen -k"
         case = Case("compgen", script, "coverage")
-        status, stdout, stderr = run_ours(case, args.wasm.resolve(), args.wasmtime, base, cache)
+        status, stdout, stderr = run_ours(case, compiled, args.wasmtime, base)
     if status != 0:
         raise ValueError(f"compgen failed: {stderr!r}")
     builtins, commands, keywords = (set(part.split()) for part in stdout.decode().split("--\n"))

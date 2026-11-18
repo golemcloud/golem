@@ -28,7 +28,7 @@ use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use golem_cli::model::language::GuestLanguage;
-use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
+use golem_common::model::agent::{AgentMode, CorsOptions, HttpMountDetails};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, PermissionCardSpec,
     QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
@@ -39,6 +39,7 @@ use golem_common::schema::unstructured::{
     unstructured_binary_schema_type, unstructured_text_schema_type,
 };
 use golem_common::schema::{AgentTypeSchema, MetadataEnvelope, SchemaType};
+use golem_schema::http::FileMapping;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
@@ -1624,7 +1625,8 @@ const port = wss.address().port;
 let connection = 0;
 const accepted = (start, mappings = []) => ({
   version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
-  idempotencyKey: start.idempotencyKey, sessionToken: 'session', mappings,
+  agentId: { componentId: '00000000-0000-0000-0000-000000000001', agentId: 'accepted-owner' },
+  idempotencyKey: '00000000-0000-0000-0000-000000000002', sessionToken: 'session', mappings,
 });
 const finish = (socket) => socket.send(JSON.stringify({
   version: 1, type: 'invocationFinished', outcome: { kind: 'success' },
@@ -1659,8 +1661,8 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {
       },
     }));
     socket.send(JSON.stringify({
-      version: 1, type: 'outputStreamEnd', channel: 2, sequence: '0',
-      cursorToken: 'cursor-end', outcome: { kind: 'ok' },
+      version: 1, type: 'stream-end', channel: 2, direction: 'output', sequence: '0',
+      cursorToken: 'cursor-end', outcome: { kind: 'finished' },
     }));
     finish(socket);
   } else {
@@ -2545,7 +2547,8 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {{
   const start = JSON.parse(raw);
   socket.send(JSON.stringify({{
     version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
-    idempotencyKey: start.idempotencyKey, sessionToken: 'session',
+    agentId: {{ componentId: '00000000-0000-0000-0000-000000000001', agentId: 'accepted-owner' }},
+    idempotencyKey: '00000000-0000-0000-0000-000000000002', sessionToken: 'session',
     mappings: [{{
       channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisionalRef(start.methodParameters),
       inputHighWater: {{ sequence: '0', terminal: false }},

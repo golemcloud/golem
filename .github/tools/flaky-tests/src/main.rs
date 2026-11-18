@@ -98,7 +98,7 @@ struct ArtifactWork {
 
 struct Args {
     repo: String,
-    workflow: String,
+    workflows: Vec<String>,
     days: u64,
     run_ids: Vec<u64>,
     limit: usize,
@@ -266,7 +266,7 @@ fn other_error(message: String) -> AnyError {
 
 fn parse_args() -> Result<Args> {
     let mut repo = env::var("GITHUB_REPOSITORY").ok();
-    let mut workflow = "ci.yaml".to_string();
+    let mut workflows = Vec::new();
     let mut days = 30;
     let mut run_ids = Vec::new();
     let mut limit = 100;
@@ -282,7 +282,7 @@ fn parse_args() -> Result<Args> {
         };
         match argument.as_str() {
             "--repo" => repo = Some(value(&mut arguments)?),
-            "--workflow" => workflow = value(&mut arguments)?,
+            "--workflow" => workflows.push(value(&mut arguments)?),
             "--days" => days = value(&mut arguments)?.parse()?,
             "--run-id" => run_ids.push(value(&mut arguments)?.parse()?),
             "--limit" => limit = value(&mut arguments)?.parse()?,
@@ -295,6 +295,9 @@ fn parse_args() -> Result<Args> {
     if days == 0 {
         return Err(other_error("--days must be at least 1".to_string()));
     }
+    if workflows.is_empty() {
+        workflows = vec!["ci.yaml".to_string(), "main-validation.yaml".to_string()];
+    }
     if env::var_os("GH_TOKEN").is_none() && env::var_os("GITHUB_TOKEN").is_none() {
         return Err(other_error(
             "GH_TOKEN or GITHUB_TOKEN is required".to_string(),
@@ -302,7 +305,7 @@ fn parse_args() -> Result<Args> {
     }
     Ok(Args {
         repo: repo.ok_or_else(|| other_error("--repo is required".to_string()))?,
-        workflow,
+        workflows,
         days,
         run_ids,
         limit,
@@ -325,29 +328,28 @@ fn collect_runs<G: GitHubApi>(github: &G, args: &Args, now: u64) -> Result<Vec<W
     let first_day = cutoff / 86_400;
     let last_day = now / 86_400;
     let mut runs = HashMap::new();
-    for day in first_day..=last_day {
-        let date = format_date(day as i64);
-        let endpoint = format!(
-            "/repos/{}/actions/workflows/{}/runs",
-            args.repo, args.workflow
-        );
-        for page in 1.. {
-            let response: WorkflowRuns = github.read_json(
-                &endpoint,
-                &[
-                    ("created", format!("{date}T00:00:00Z..{date}T23:59:59Z")),
-                    ("per_page", "100".to_string()),
-                    ("page", page.to_string()),
-                ],
-            )?;
-            let count = response.workflow_runs.len();
-            for run in response.workflow_runs {
-                if run.created_at >= format_timestamp(cutoff) {
-                    runs.insert(run.id, run);
+    for workflow in &args.workflows {
+        for day in first_day..=last_day {
+            let date = format_date(day as i64);
+            let endpoint = format!("/repos/{}/actions/workflows/{}/runs", args.repo, workflow);
+            for page in 1.. {
+                let response: WorkflowRuns = github.read_json(
+                    &endpoint,
+                    &[
+                        ("created", format!("{date}T00:00:00Z..{date}T23:59:59Z")),
+                        ("per_page", "100".to_string()),
+                        ("page", page.to_string()),
+                    ],
+                )?;
+                let count = response.workflow_runs.len();
+                for run in response.workflow_runs {
+                    if run.created_at >= format_timestamp(cutoff) {
+                        runs.insert(run.id, run);
+                    }
                 }
-            }
-            if count < 100 {
-                break;
+                if count < 100 {
+                    break;
+                }
             }
         }
     }
@@ -363,22 +365,28 @@ fn collect_artifacts<G: GitHubApi>(github: &G, runs: &[WorkflowRun]) -> Result<V
     let mut work = Vec::new();
     let endpoint = format!("/repos/{}/actions/artifacts", github.repo());
     for attempt in 1..=max_attempt {
-        let name = consolidated_artifact_name(attempt);
-        let artifacts = github.paginated(
-            &endpoint,
-            |value| Ok(serde_json::from_value::<Artifacts>(value)?.artifacts),
-            &[("name", name.clone())],
-        )?;
-        for artifact in artifacts {
-            if artifact.expired || artifact.name != name {
-                continue;
-            }
-            if let Some(run) = runs_by_id.get(&artifact.workflow_run.id) {
-                work.push(ArtifactWork {
-                    run: (*run).clone(),
-                    artifact,
-                    attempt,
-                });
+        // Only collect the published reports, not the raw Linux evidence containing
+        // the same CTRF files.
+        for name in [
+            consolidated_artifact_name(attempt),
+            format!("main-validation-test-report-attempt{attempt}"),
+        ] {
+            let artifacts = github.paginated(
+                &endpoint,
+                |value| Ok(serde_json::from_value::<Artifacts>(value)?.artifacts),
+                &[("name", name.clone())],
+            )?;
+            for artifact in artifacts {
+                if artifact.expired || artifact.name != name {
+                    continue;
+                }
+                if let Some(run) = runs_by_id.get(&artifact.workflow_run.id) {
+                    work.push(ArtifactWork {
+                        run: (*run).clone(),
+                        artifact,
+                        attempt,
+                    });
+                }
             }
         }
         eprintln!(
@@ -440,8 +448,9 @@ fn download_reports<G: GitHubApi>(github: &G, work: Vec<ArtifactWork>) -> Result
     })
 }
 
-fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Result<()> {
+fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> usize {
     let mut jobs_by_attempt = HashMap::<(u64, u32), Vec<Job>>::new();
+    let mut failed_attempts = 0;
     let mut cursors = vec![0; candidates.len()];
     loop {
         let mut pending = HashSet::new();
@@ -462,7 +471,7 @@ fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Resu
         }
         let queue = Mutex::new(VecDeque::from_iter(pending));
         let (sender, receiver) = mpsc::channel();
-        thread::scope(|scope| -> Result<()> {
+        thread::scope(|scope| {
             for _ in 0..4 {
                 let queue = &queue;
                 let sender = sender.clone();
@@ -490,10 +499,17 @@ fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Resu
             }
             drop(sender);
             for (key, result) in receiver {
-                jobs_by_attempt.insert(key, result?);
+                let jobs = result.unwrap_or_else(|error| {
+                    failed_attempts += 1;
+                    eprintln!(
+                        "Job metadata unavailable; using run-attempt links (run={}, attempt={}, error={error})",
+                        key.0, key.1
+                    );
+                    Vec::new()
+                });
+                jobs_by_attempt.insert(key, jobs);
             }
-            Ok(())
-        })?;
+        });
         for (test, cursor) in candidates.iter_mut().zip(&mut cursors) {
             if test.links.len() >= 3 {
                 continue;
@@ -522,7 +538,7 @@ fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Resu
         "Resolved failing job links (run_attempts={})",
         jobs_by_attempt.len()
     );
-    Ok(())
+    failed_attempts
 }
 
 fn find_issue<G: GitHubApi>(github: &G) -> Result<Option<Issue>> {
@@ -657,8 +673,10 @@ fn generate_report<G: GitHubApi>(
     now: u64,
 ) -> Result<(String, Option<Issue>)> {
     eprintln!(
-        "Discovering CI runs (repository={}, workflow={}, window_days={})",
-        args.repo, args.workflow, args.days
+        "Discovering CI runs (repository={}, workflows={}, window_days={})",
+        args.repo,
+        args.workflows.join(","),
+        args.days
     );
     let runs = collect_runs(github, args, now)?;
     eprintln!("Discovered CI runs (runs={})", runs.len());
@@ -684,7 +702,7 @@ fn generate_report<G: GitHubApi>(
     );
     let displayed_count = candidates.len().min(args.limit);
     eprintln!("Resolving failing job links (displayed_tests={displayed_count}, workers=4)");
-    add_job_links(github, &mut candidates[..displayed_count])?;
+    let failed_job_lookups = add_job_links(github, &mut candidates[..displayed_count]);
     let existing = if args.update_issue {
         eprintln!("Looking up the known-flaky-tests issue");
         find_issue(github)?
@@ -692,7 +710,7 @@ fn generate_report<G: GitHubApi>(
         None
     };
     let generated = format_timestamp(now).replace('T', " ").replace('Z', " UTC");
-    let body = render_report(
+    let mut body = render_report(
         &candidates,
         analyzed_run_count,
         runs.len(),
@@ -705,6 +723,13 @@ fn generate_report<G: GitHubApi>(
             .unwrap_or_default(),
         args.limit,
     );
+    if failed_job_lookups > 0 {
+        let warning = format!(
+            "**Job links incomplete:** job metadata was unavailable for {failed_job_lookups} run attempt(s). Those links open the run attempt instead of an individual job. Test observations and scores are unchanged."
+        );
+        eprintln!("::warning::{warning}");
+        body.insert_str(0, &format!("> {warning}\n\n"));
+    }
     Ok((body, existing))
 }
 
@@ -746,6 +771,7 @@ mod tests {
         label_exists: bool,
         pinned: bool,
         job_responses: HashMap<String, Vec<Value>>,
+        main_validation: bool,
     }
 
     impl FakeGitHub {
@@ -772,6 +798,7 @@ mod tests {
                 label_exists,
                 pinned,
                 job_responses: HashMap::new(),
+                main_validation: false,
             }
         }
 
@@ -808,6 +835,17 @@ mod tests {
                 return Ok(serde_json::to_vec(value)?);
             }
             let value = match endpoint {
+                "/repos/test/repo/actions/workflows/ci.yaml/runs"
+                | "/repos/test/repo/actions/workflows/main-validation.yaml/runs" => {
+                    let id = if endpoint.contains("/ci.yaml/") { 1 } else { 2 };
+                    json!({"workflow_runs": [{
+                        "id": id,
+                        "run_attempt": if id == 1 { 2 } else { 1 },
+                        "created_at": "2026-09-03T10:00:00Z",
+                        "head_branch": "main",
+                        "html_url": format!("https://example.test/runs/{id}")
+                    }]})
+                }
                 "/repos/test/repo/actions/runs/1" => json!({
                     "id": 1,
                     "run_attempt": 2,
@@ -824,21 +862,48 @@ mod tests {
                     let (id, created_at) = match name {
                         "ci-test-reports-attempt1" => (11, "2026-09-03T10:30:00Z"),
                         "ci-test-reports-attempt2" => (12, "2026-09-03T11:30:00Z"),
+                        "main-validation-test-report-attempt1" if self.main_validation => {
+                            (21, "2026-09-03T12:30:00Z")
+                        }
+                        "main-validation-test-report-attempt1"
+                        | "main-validation-test-report-attempt2" => {
+                            return Ok(serde_json::to_vec(&json!({"artifacts": []}))?);
+                        }
                         _ => return Err(other_error(format!("unexpected artifact name {name}"))),
                     };
-                    json!({"artifacts": [{
+                    let mut artifacts = vec![json!({
                         "id": id,
                         "name": name,
                         "created_at": created_at,
                         "expired": false,
-                        "workflow_run": {"id": 1}
-                    }]})
+                        "workflow_run": {"id": if id == 21 { 2 } else { 1 }}
+                    })];
+                    if self.main_validation {
+                        artifacts.push(json!({
+                            "id": 22,
+                            "name": "main-validation-linux-2",
+                            "created_at": created_at,
+                            "workflow_run": {"id": 2}
+                        }));
+                    }
+                    json!({"artifacts": artifacts})
                 }
                 "/repos/test/repo/actions/artifacts/11/zip" => {
                     return Ok(self.first_archive.clone());
                 }
                 "/repos/test/repo/actions/artifacts/12/zip" => {
                     return Ok(self.second_archive.clone());
+                }
+                "/repos/test/repo/actions/artifacts/21/zip" => {
+                    return Ok(report_archive(
+                        "main-validation-test-report-attempt1",
+                        json!([{"name": "suite::main-validation", "status": "failed",
+                            "extra": {"testR": {"attempts": [
+                                {"attempt": 1, "status": "failed"},
+                                {"attempt": 2, "status": "passed"}
+                            ]}}
+                        }]),
+                    ));
                 }
                 "/repos/test/repo/actions/runs/1/attempts/1/jobs"
                 | "/repos/test/repo/actions/runs/1/attempts/2/jobs" => json!({"jobs": [{
@@ -901,7 +966,7 @@ mod tests {
     fn test_args(update_issue: bool) -> Args {
         Args {
             repo: "test/repo".to_string(),
-            workflow: "ci.yaml".to_string(),
+            workflows: vec!["ci.yaml".to_string(), "main-validation.yaml".to_string()],
             days: 30,
             run_ids: vec![1],
             limit: 100,
@@ -952,7 +1017,7 @@ mod tests {
             failed_observation("other", 4, "unit-tests-report-attempt1"),
         ]);
         let mut candidates = aggregate(observations);
-        add_job_links(&github, &mut candidates).unwrap();
+        assert_eq!(add_job_links(&github, &mut candidates), 0);
         assert_eq!(candidates[0].name, "suite");
         assert_eq!(
             candidates[0].links,
@@ -978,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn job_link_lookup_paginates_and_propagates_errors() {
+    fn job_link_lookup_paginates_and_falls_back_on_errors() {
         let mut github = FakeGitHub::new(false, false, false);
         github.job_responses.insert(
             "/repos/test/repo/actions/runs/1/attempts/1/jobs".into(),
@@ -992,7 +1057,7 @@ mod tests {
             1,
             "unit-tests-report-attempt1",
         )]);
-        add_job_links(&github, &mut candidates).unwrap();
+        assert_eq!(add_job_links(&github, &mut candidates), 0);
         assert_eq!(candidates[0].links, ["https://example.test/jobs/page2"]);
         assert_eq!(github.reads.lock().unwrap().len(), 2);
         github.job_responses.insert(
@@ -1000,13 +1065,47 @@ mod tests {
             vec![Value::Null],
         );
         candidates[0].links.clear();
-        assert!(
-            add_job_links(&github, &mut candidates)
-                .unwrap_err()
-                .to_string()
-                .contains("job metadata unavailable")
+        assert_eq!(add_job_links(&github, &mut candidates), 1);
+        assert_eq!(
+            candidates[0].links,
+            ["https://example.test/runs/1/attempts/1"]
         );
-        assert!(candidates[0].links.is_empty());
+    }
+
+    #[test]
+    fn report_can_be_published_when_one_attempts_job_metadata_is_unavailable() {
+        let mut github = FakeGitHub::new(true, true, true);
+        github.second_archive = report_archive(
+            "unit-tests-report-attempt2",
+            json!([
+                {"name": "suite::flip", "status": "passed", "duration": 30},
+                {"name": "suite::retry", "status": "passed", "duration": 40},
+                {"name": "suite::other", "status": "failed", "duration": 50}
+            ]),
+        );
+        github.job_responses.insert(
+            "/repos/test/repo/actions/runs/1/attempts/1/jobs".into(),
+            vec![Value::Null],
+        );
+        let (body, existing) = generate_report(&github, &test_args(true), 1_788_480_000).unwrap();
+
+        assert!(body.contains("**Job links incomplete:**"));
+        assert!(body.contains("1 run attempt"));
+        assert!(body.contains("[log 1](https://example.test/runs/1/attempts/1)"));
+        assert!(body.contains("[log 1](https://example.test/jobs/unit-tests)"));
+        assert!(body.contains("<code>suite::flip</code> | 7"));
+        assert!(body.contains("<code>suite::retry</code> | 3"));
+        assert_eq!(
+            upsert_issue(&github, existing, &body).unwrap(),
+            "https://example.test/issues/42"
+        );
+    }
+
+    #[test]
+    fn invalid_test_data_still_prevents_publication() {
+        let mut github = FakeGitHub::new(true, true, true);
+        github.first_archive = b"not a report archive".to_vec();
+        assert!(generate_report(&github, &test_args(true), 1_788_480_000).is_err());
     }
 
     #[test]
@@ -1033,6 +1132,45 @@ mod tests {
     }
 
     #[test]
+    fn collects_old_ci_and_main_validation_reports_without_raw_evidence() {
+        let mut github = FakeGitHub::new(false, false, false);
+        github.main_validation = true;
+        let mut args = test_args(false);
+        args.run_ids.clear();
+        args.days = 1;
+        let runs = collect_runs(&github, &args, 1_788_480_000).unwrap();
+        assert_eq!(runs.len(), 2);
+        let work = collect_artifacts(&github, &runs).unwrap();
+        assert_eq!(work.len(), 3);
+        assert_eq!(work.iter().filter(|work| work.run.id == 1).count(), 2);
+        assert!(
+            work.iter()
+                .any(|work| work.artifact.name == "main-validation-test-report-attempt1")
+        );
+        let observations = download_reports(&github, work).unwrap();
+        assert_eq!(observations.len(), 5);
+        let candidates = aggregate(observations);
+        let recovered = candidates
+            .iter()
+            .find(|test| test.name == "suite::main-validation")
+            .unwrap();
+        assert_eq!(recovered.retries, 1);
+        assert_eq!(recovered.failures, 0);
+        assert_eq!(recovered.score(), 3);
+        assert!(
+            candidates
+                .iter()
+                .any(|test| test.name == "suite::flip" && test.flips == 1)
+        );
+
+        // A single explicit workflow restricts discovery; repeated days are deduplicated.
+        args.workflows = vec!["ci.yaml".into()];
+        let runs = collect_runs(&github, &args, 1_788_480_000).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, 1);
+    }
+
+    #[test]
     fn exercises_collection_aggregation_and_issue_creation_without_processes() {
         let github = FakeGitHub::new(false, false, false);
 
@@ -1051,7 +1189,7 @@ mod tests {
                 .iter()
                 .filter(|endpoint| endpoint.as_str() == "/repos/test/repo/actions/artifacts")
                 .count(),
-            2
+            4
         );
         assert_eq!(
             upsert_issue(&github, existing, &body).unwrap(),

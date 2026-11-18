@@ -1,14 +1,15 @@
 /**
  * Host service for `golem:api/retry@1.5.0`. Wraps the synchronous host
  * functions (`get-retry-policies`, `get-retry-policy-by-name`,
- * `resolve-retry-policy`, `set-retry-policy`, `remove-retry-policy`)
- * into an Effect-typed surface so SDK code can reach them via DI rather
+ * `resolve-retry-policy`, `set-retry-policy`, `remove-retry-policy`) and
+ * the `golem:api/retry-scope@1.5.0` resource into an Effect-typed surface so SDK code can reach them via DI rather
  * than importing the WIT specifier directly.
  *
  * @internal — not re-exported from `src/index.ts`.
  */
 import { Context, Layer } from "effect"
 import * as RetryHost from "golem:api/retry@1.5.0"
+import * as RetryScopeHost from "golem:api/retry-scope@1.5.0"
 import process from "node:process"
 
 export interface RetryClientShape {
@@ -28,6 +29,10 @@ export interface RetryClientShape {
   readonly setRetryPolicy: (policy: RetryHost.NamedRetryPolicy) => void
   /** Mirrors `golem:api/retry.remove-retry-policy`. */
   readonly removeRetryPolicy: (name: string) => void
+  /**
+   * Opens a `golem:api/retry-scope.retry-policy-scope` and returns the function that drops it.
+   */
+  readonly openRetryPolicyScope: (policy: RetryHost.NamedRetryPolicy) => () => void
 }
 
 export class RetryClient extends Context.Service<RetryClient, RetryClientShape>()(
@@ -49,5 +54,11 @@ export const RetryLive: Layer.Layer<RetryClient> = Layer.succeed(
       ),
     setRetryPolicy: (policy) => RetryHost.setRetryPolicy(policy),
     removeRetryPolicy: (name) => RetryHost.removeRetryPolicy(name),
+    openRetryPolicyScope: (policy) => {
+      const scope = new RetryScopeHost.RetryPolicyScope(policy) as unknown as {
+        [Symbol.dispose](): void
+      }
+      return () => scope[Symbol.dispose]()
+    },
   }),
 )

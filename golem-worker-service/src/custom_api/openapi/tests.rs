@@ -400,6 +400,7 @@ fn test_durable_stream_policy(call: &CallAgentBehaviour) -> DurableStreamRoutePo
         }
     }
     DurableStreamRoutePolicy {
+        family_id: 0,
         slots,
         allow_external_writes: true,
         allow_stream_delete: true,
@@ -538,8 +539,8 @@ fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() {
     use crate::custom_api::RichRequest;
     use crate::custom_api::cors::apply_cors_outgoing_middleware;
     use crate::custom_api::route_resolver::ResolvedRouteEntry;
-    use golem_common::model::agent::http_files::HttpRequestTarget;
     use golem_common::schema::NamedField;
+    use golem_schema::http::HttpRequestTarget;
     use golem_service_base::custom_api::{AgentRouteMode, OriginPattern};
 
     for fork in [false, true] {
@@ -656,7 +657,7 @@ fn durable_stream_get_cors_does_not_expose_head_only_expiry_headers() {
     use crate::custom_api::RichRequest;
     use crate::custom_api::cors::apply_cors_outgoing_middleware;
     use crate::custom_api::route_resolver::ResolvedRouteEntry;
-    use golem_common::model::agent::http_files::HttpRequestTarget;
+    use golem_schema::http::HttpRequestTarget;
     use golem_service_base::custom_api::{AgentRouteMode, OriginPattern};
 
     let mut route = call_agent_route(
@@ -708,7 +709,7 @@ fn durable_stream_base_put_cors_exposes_only_base_response_headers() {
     use crate::custom_api::RichRequest;
     use crate::custom_api::cors::apply_cors_outgoing_middleware;
     use crate::custom_api::route_resolver::ResolvedRouteEntry;
-    use golem_common::model::agent::http_files::HttpRequestTarget;
+    use golem_schema::http::HttpRequestTarget;
     use golem_service_base::custom_api::{AgentRouteMode, OriginPattern};
 
     let mut route = call_agent_route(
@@ -1160,6 +1161,7 @@ fn durable_stream_custom_policy_shapes_public_openapi() {
         SchemaType::stream(Some(SchemaType::u8())),
     )]);
     call.durable_streams = Some(DurableStreamRoutePolicy {
+        family_id: 0,
         slots: vec![
             DurableStreamSlot {
                 canonical_name: "payload".into(),
@@ -1226,6 +1228,7 @@ fn durable_stream_concrete_preflights_are_not_emitted_as_openapi_operations() {
         };
         call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
         call.durable_streams = Some(DurableStreamRoutePolicy {
+            family_id: 0,
             slots: vec![DurableStreamSlot {
                 canonical_name: "$result".into(),
                 public_name: "events".into(),
@@ -1924,7 +1927,7 @@ fn generated_pkce_security_describes_golem_authorization_endpoints() {
             id,
             revision: SecuritySchemeRevision::INITIAL,
             name: name.clone(),
-            provider_type: Provider::Google(golem_common::model::Empty {}),
+            provider_type: Provider::Google(golem_schema::Empty {}),
             client_id: ClientId::new("upstream-client".into()),
             client_secret: ClientSecret::new("upstream-secret".into()),
             redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
@@ -1958,7 +1961,7 @@ fn generated_pkce_security_describes_golem_authorization_endpoints() {
         };
         std::sync::Arc::get_mut(&mut security.security_scheme)
             .unwrap()
-            .login = SecuritySchemeLogin::Cookie(golem_common::model::Empty {});
+            .login = SecuritySchemeLogin::Cookie(golem_schema::Empty {});
     }
     let cookie_key = super::OpenApiKey::from_inputs("https://example.com", &[route.clone()]);
     assert_ne!(updated_key, cookie_key);
@@ -2667,7 +2670,8 @@ fn request_validation_errors_are_documented_without_a_request_body() {
 
 #[test]
 fn head_request_validation_errors_do_not_advertise_a_body() {
-    use golem_common::model::agent::{CustomHttpMethod, HttpMethod};
+    use golem_common::model::agent::HttpMethod;
+    use golem_schema::http::CustomHttpMethod;
 
     for custom in [false, true] {
         let mut route = call_agent_route(
@@ -2681,10 +2685,11 @@ fn head_request_validation_errors_do_not_advertise_a_body() {
             None,
         );
         if custom {
-            route.route_match = HttpMethod::Custom(CustomHttpMethod {
-                value: "HEAD".into(),
-            })
-            .into();
+            route.route_match =
+                HttpMethod::Method(golem_schema::http::HttpMethod::Custom(CustomHttpMethod {
+                    value: "HEAD".into(),
+                }))
+                .into();
         }
         let operation = operation_for(route, "/head", "head");
         assert!(operation["responses"]["400"].is_object());
@@ -2964,21 +2969,22 @@ fn raw_route(
 }
 
 fn test_route_match(method: Method) -> golem_service_base::custom_api::RouteMatch {
-    use golem_common::model::Empty;
     use golem_common::model::agent::HttpMethod;
-    match method {
-        Method::GET => HttpMethod::Get(Empty {}).into(),
-        Method::POST => HttpMethod::Post(Empty {}).into(),
-        Method::PUT => HttpMethod::Put(Empty {}).into(),
-        Method::DELETE => HttpMethod::Delete(Empty {}).into(),
-        Method::PATCH => HttpMethod::Patch(Empty {}).into(),
-        Method::HEAD => HttpMethod::Head(Empty {}).into(),
-        Method::OPTIONS => HttpMethod::Options(Empty {}).into(),
-        other => HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
+    use golem_schema::Empty;
+    use golem_schema::http as schema_http;
+    HttpMethod::Method(match method {
+        Method::GET => schema_http::HttpMethod::Get(Empty {}),
+        Method::POST => schema_http::HttpMethod::Post(Empty {}),
+        Method::PUT => schema_http::HttpMethod::Put(Empty {}),
+        Method::DELETE => schema_http::HttpMethod::Delete(Empty {}),
+        Method::PATCH => schema_http::HttpMethod::Patch(Empty {}),
+        Method::HEAD => schema_http::HttpMethod::Head(Empty {}),
+        Method::OPTIONS => schema_http::HttpMethod::Options(Empty {}),
+        other => schema_http::HttpMethod::Custom(golem_schema::http::CustomHttpMethod {
             value: other.to_string(),
-        })
-        .into(),
-    }
+        }),
+    })
+    .into()
 }
 
 #[test]
@@ -3227,7 +3233,6 @@ fn optional_header_parameter_is_not_required() {
 
 #[test]
 fn cors_preflight_emits_204_and_cors_headers() {
-    use golem_common::base_model::Empty;
     use golem_common::base_model::agent::HttpMethod;
     use golem_service_base::custom_api::{CorsPreflightBehaviour, CorsPreflightMethodPolicy};
     use std::collections::BTreeSet;
@@ -3240,7 +3245,9 @@ fn cors_preflight_emits_204_and_cors_headers() {
             }],
             RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
-                    method: HttpMethod::Get(Empty {}),
+                    method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(
+                        Default::default(),
+                    )),
                     allowed_origins: BTreeSet::new(),
                     allowed_headers: BTreeSet::new(),
                 }],

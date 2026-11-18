@@ -2,8 +2,8 @@ import { defineAgent, method } from "@golemcloud/golem-ts-sdk";
 import fs from "node:fs";
 import { Buffer } from "node:buffer";
 import * as git from "isomorphic-git";
-import { httpTransport } from "../../../builtin-tools/git/src/remote.ts";
-import { wasiHttp } from "../../../builtin-tools/git/src/wasi-http.ts";
+import { httpTransport } from "./http-transport.ts";
+import { wasiHttp } from "./wasi-http.ts";
 import { z } from "zod/v4";
 
 const GitNetworkProbe = defineAgent({

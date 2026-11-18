@@ -1,6 +1,102 @@
-import type { SchemaValueStream, SchemaValueTree } from "golem:core/types@2.0.0"
+import type { SchemaValueStream, SchemaValueTree, StreamOutcome } from "golem:core/types@2.0.0"
 import { STREAM_INTERNAL, type StreamInternal } from "./streamInternal.js"
 import { assertCapabilityReady } from "./capabilityTransaction.js"
+import { StreamError } from "./errors.js"
+import { schemaGraphToWit, schemaValueToWitAsync, typedSchemaValueFromWit } from "./wit.js"
+
+export async function wrapSchemaValueStream(
+  source: AsyncIterable<SchemaValueTree>,
+): Promise<SchemaValueStream> {
+  let resolve!: (outcome: StreamOutcome | undefined) => void
+  const outcome = new Promise<StreamOutcome | undefined>((done) => {
+    resolve = done
+  })
+  const items = {
+    [Symbol.asyncIterator]() {
+      let iterator: AsyncIterator<SchemaValueTree> | undefined
+      let closed = false
+      return {
+        async next(): Promise<IteratorResult<SchemaValueTree>> {
+          if (closed) return { done: true, value: undefined }
+          try {
+            iterator ??= source[Symbol.asyncIterator]()
+            const item = await iterator.next()
+            if (!item.done) return item
+            closed = true
+            resolve({ tag: "ok", val: undefined })
+          } catch (error) {
+            closed = true
+            const failure = StreamError.from(error).failure
+            resolve({
+              tag: "err",
+              val:
+                failure.tag === "failed"
+                  ? {
+                      tag: "failed",
+                      val: {
+                        graph: schemaGraphToWit(failure.val.graph),
+                        value: await schemaValueToWitAsync(failure.val.value),
+                      },
+                    }
+                  : failure,
+            })
+          }
+          return { done: true, value: undefined }
+        },
+        async return(): Promise<IteratorResult<SchemaValueTree>> {
+          if (!closed) {
+            closed = true
+            resolve(undefined)
+            iterator ??= source[Symbol.asyncIterator]()
+            await iterator.return?.()
+          }
+          return { done: true, value: undefined }
+        },
+      }
+    },
+  }
+  const { SchemaValueStream } = await import("golem:core/types@2.0.0")
+  return SchemaValueStream.wrap(items, outcome)
+}
+
+export async function unwrapSchemaValueStream(
+  value: SchemaValueStream,
+): Promise<AsyncIterable<SchemaValueTree>> {
+  const { SchemaValueStream } = await import("golem:core/types@2.0.0")
+  const [items, outcome] = await SchemaValueStream.unwrap(value)
+  return {
+    [Symbol.asyncIterator]() {
+      const iterator = items[Symbol.asyncIterator]()
+      let closed = false
+      return {
+        async next(): Promise<IteratorResult<SchemaValueTree>> {
+          if (closed) return { done: true, value: undefined }
+          const item = await iterator.next()
+          if (!item.done) return item
+          closed = true
+          const result = await outcome
+          if (result.tag === "err") {
+            const failure = result.val
+            throw new StreamError(
+              failure.tag === "failed"
+                ? {
+                    tag: "failed",
+                    val: typedSchemaValueFromWit(failure.val),
+                  }
+                : failure,
+            )
+          }
+          return { done: true, value: undefined }
+        },
+        async return(): Promise<IteratorResult<SchemaValueTree>> {
+          closed = true
+          await iterator.return?.()
+          return { done: true, value: undefined }
+        },
+      }
+    },
+  }
+}
 
 export type GuestSchemaValueStream =
   | { kind: "wrapped"; value: SchemaValueStream }

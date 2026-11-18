@@ -17,6 +17,8 @@ mod tests;
 
 use axum::http::header;
 use golem_common::SafeDisplay;
+use golem_common::base_model::api::error_code::AUTH_UNAUTHORIZED;
+use golem_common::base_model::error::ErrorBody;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::{
@@ -25,7 +27,7 @@ use golem_common::model::card::{
 use golem_common::model::plan::PlanId;
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
-use poem::Request;
+use poem::{Endpoint, EndpointExt, IntoEndpoint, IntoResponse, Request};
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::{ApiKey, Bearer};
 use std::collections::BTreeSet;
@@ -33,7 +35,6 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
-pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
 static EMPTY_ACCOUNT_ROLES: LazyLock<BTreeSet<AccountRole>> = LazyLock::new(BTreeSet::new);
 
 #[derive(SecurityScheme)]
@@ -52,6 +53,31 @@ pub struct GolemCookie(TokenSecret);
 
 async fn bearer_checker(_: &Request, bearer: Bearer) -> Option<TokenSecret> {
     TokenSecret::from_str(&bearer.token).ok()
+}
+
+/// The response to a request without usable credentials. It is the same response that the
+/// services give to a well-formed token that no account owns.
+fn could_not_authenticate() -> poem::Response {
+    poem::web::Json(ErrorBody {
+        code: AUTH_UNAUTHORIZED.to_string(),
+        error: "Could not authenticate user using token".to_string(),
+        cause: None,
+    })
+    .with_status(http::StatusCode::UNAUTHORIZED)
+    .into_response()
+}
+
+/// Answers every failure of the OpenAPI security schemes with the JSON 401 of
+/// `could_not_authenticate`. poem-openapi reports a missing, unparseable or malformed credential
+/// as its own `AuthorizationError`, whose default response has a plain-text body.
+pub fn with_json_auth_errors(
+    endpoint: impl IntoEndpoint,
+) -> impl Endpoint<Output = poem::Response> {
+    endpoint
+        .into_endpoint()
+        .catch_error(|_: poem_openapi::error::AuthorizationError| async {
+            could_not_authenticate()
+        })
 }
 
 async fn cookie_checker(_: &Request, cookie: ApiKey) -> Option<TokenSecret> {
@@ -142,7 +168,7 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
             .or_else(|| extract_cookie_token(cookie_jar))
             .ok_or_else(|| {
                 tracing::info!("No valid token or cookie present, returning error");
-                poem::Error::from_string(AUTH_ERROR_MESSAGE, http::StatusCode::UNAUTHORIZED)
+                poem::Error::from_response(could_not_authenticate())
             })?;
 
         Ok(WrappedGolemSecuritySchema(result))
@@ -225,6 +251,22 @@ impl AuthCtx {
     /// Get the sytem AuthCtx for system initiated action
     pub fn system() -> AuthCtx {
         AuthCtx::System
+    }
+
+    /// The authenticated caller namespace for external invocation idempotency.
+    /// System requests have no caller scope and must not gain internal trust here.
+    pub fn idempotency_scope(&self) -> Option<golem_common::model::IdempotencyScope> {
+        use golem_common::model::IdempotencyScope;
+
+        match self {
+            Self::System => None,
+            Self::User(ctx) => Some(IdempotencyScope::User(ctx.account_id)),
+            Self::Agent(ctx) => Some(IdempotencyScope::Agent(ctx.account_id)),
+            Self::AdminImpersonation(ctx) => Some(IdempotencyScope::AdminImpersonation {
+                admin: ctx.admin_account_id,
+                target: ctx.target_account_id,
+            }),
+        }
     }
 
     pub fn agent_with_effective_surface(
@@ -391,9 +433,63 @@ fn authorize_effective_surface_permission(
 }
 
 #[cfg(test)]
+mod invocation_scope_tests {
+    use super::*;
+    use golem_common::model::IdempotencyScope;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn invocation_id_auth_scope_mapping() {
+        let account = AccountId(Uuid::from_u128(10));
+        let target = AccountId(Uuid::from_u128(11));
+        let surface = EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: Vec::new(),
+            upper: Vec::new(),
+        };
+        let email = AccountEmail::new("caller@example.com".to_string());
+        let user = AuthCtx::User(UserAuthCtx {
+            account_id: account,
+            account_email: email.clone(),
+            account_plan_id: PlanId(Uuid::nil()),
+            account_roles: BTreeSet::new(),
+            effective_surface: surface.clone(),
+            delegation_surface: None,
+        });
+        let agent = AuthCtx::agent_with_effective_surface(account, email.clone(), surface.clone());
+        let admin = AuthCtx::admin_impersonation(
+            account,
+            target,
+            email,
+            BTreeSet::new(),
+            PlanId(Uuid::nil()),
+            surface,
+        );
+        assert_eq!(AuthCtx::system().idempotency_scope(), None);
+        assert_eq!(
+            user.idempotency_scope(),
+            Some(IdempotencyScope::User(account))
+        );
+        assert_eq!(
+            agent.idempotency_scope(),
+            Some(IdempotencyScope::Agent(account))
+        );
+        assert_eq!(
+            admin.idempotency_scope(),
+            Some(IdempotencyScope::AdminImpersonation {
+                admin: account,
+                target
+            })
+        );
+    }
+}
+
+#[cfg(test)]
 mod test {
-    use super::AUTH_ERROR_MESSAGE;
-    use super::{COOKIE_KEY, GolemSecurityScheme, WrappedGolemSecuritySchema};
+    use super::{
+        COOKIE_KEY, GolemSecurityScheme, WrappedGolemSecuritySchema, with_json_auth_errors,
+    };
     use http::StatusCode;
     use poem::{
         EndpointExt, Request,
@@ -481,7 +577,10 @@ mod test {
     }
 
     fn make_openapi() -> poem::Route {
-        poem::Route::new().nest("/", OpenApiService::new(TestApi, "test", "1.0"))
+        poem::Route::new().nest(
+            "/",
+            with_json_auth_errors(OpenApiService::new(TestApi, "test", "1.0")),
+        )
     }
 
     fn make_non_openapi() -> poem::Route {
@@ -506,11 +605,40 @@ mod test {
         response.assert_text(format!("cookie: {VALID_UUID}")).await;
     }
 
+    async fn assert_unauthorized(response: TestResponse) {
+        response.assert_status(StatusCode::UNAUTHORIZED);
+        response.assert_content_type("application/json; charset=utf-8");
+        response
+            .assert_json(serde_json::json!({
+                "code": "AUTH_UNAUTHORIZED",
+                "error": "Could not authenticate user using token",
+            }))
+            .await;
+    }
+
     async fn no_auth(api: poem::Route) {
         let client = TestClient::new(api);
-        let response = client.get("/test").send().await;
-        response.assert_status(StatusCode::UNAUTHORIZED);
-        response.assert_text(AUTH_ERROR_MESSAGE).await;
+        assert_unauthorized(client.get("/test").send().await).await;
+    }
+
+    async fn malformed_bearer_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        assert_unauthorized(make_bearer_request(&client, "rotated-token").await).await;
+    }
+
+    async fn unparseable_authorization_header(api: poem::Route) {
+        let client = TestClient::new(api);
+        let response = client
+            .get("/test")
+            .header(http::header::AUTHORIZATION, format!("Basic {VALID_UUID}"))
+            .send()
+            .await;
+        assert_unauthorized(response).await;
+    }
+
+    async fn malformed_cookie_only_auth(api: poem::Route) {
+        let client = TestClient::new(api);
+        assert_unauthorized(make_cookie_request(&client, "rotated-token").await).await;
     }
 
     async fn conflict_bearer_valid(api: poem::Route) {
@@ -556,6 +684,21 @@ mod test {
     }
 
     #[test]
+    async fn malformed_bearer_auth_openapi() {
+        malformed_bearer_auth(make_openapi()).await;
+    }
+
+    #[test]
+    async fn unparseable_authorization_header_openapi() {
+        unparseable_authorization_header(make_openapi()).await;
+    }
+
+    #[test]
+    async fn malformed_cookie_only_auth_openapi() {
+        malformed_cookie_only_auth(make_openapi()).await;
+    }
+
+    #[test]
     async fn conflict_bearer_valid_openapi() {
         conflict_bearer_valid(make_openapi()).await;
     }
@@ -589,6 +732,21 @@ mod test {
     #[test]
     async fn no_auth_non_openapi() {
         no_auth(make_non_openapi()).await;
+    }
+
+    #[test]
+    async fn malformed_bearer_auth_non_openapi() {
+        malformed_bearer_auth(make_non_openapi()).await;
+    }
+
+    #[test]
+    async fn unparseable_authorization_header_non_openapi() {
+        unparseable_authorization_header(make_non_openapi()).await;
+    }
+
+    #[test]
+    async fn malformed_cookie_only_auth_non_openapi() {
+        malformed_cookie_only_auth(make_non_openapi()).await;
     }
 
     #[test]

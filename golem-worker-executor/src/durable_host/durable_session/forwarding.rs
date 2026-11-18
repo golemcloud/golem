@@ -151,14 +151,7 @@ pub fn durable_stream_mapping_to_proto(
                 callee_fingerprint: Some(
                     mapping.handle.source_invocation.callee_fingerprint.0.into(),
                 ),
-                idempotency_key: Some(
-                    mapping
-                        .handle
-                        .source_invocation
-                        .idempotency_key
-                        .clone()
-                        .into(),
-                ),
+                idempotency_key: Some(mapping.handle.source_invocation.idempotency_key.into()),
             }),
             component_revision: Some(mapping.handle.component_revision.get()),
             element_schema_fingerprint: mapping.handle.element_schema_fingerprint.0.to_vec(),
@@ -289,31 +282,6 @@ pub fn durable_stream_mapping_from_proto(
         },
         role,
     })
-}
-
-pub(super) fn stream_cancel_reason_to_proto(
-    reason: StreamCancelReason,
-) -> golem_api_grpc::proto::golem::worker::StreamCancelReason {
-    match reason {
-        StreamCancelReason::Cancelled => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::Cancelled
-        }
-        StreamCancelReason::GuestDrop => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::ConsumerDrop
-        }
-        StreamCancelReason::Protocol => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::Protocol
-        }
-        StreamCancelReason::InvocationFailed => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::InvocationFailed
-        }
-        StreamCancelReason::SourceUnavailable => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-        }
-        StreamCancelReason::ProducerDeleting => {
-            golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting
-        }
-    }
 }
 
 impl ForwardedDurableInput {

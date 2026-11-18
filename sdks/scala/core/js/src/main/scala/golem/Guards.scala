@@ -25,11 +25,14 @@ import scala.concurrent.{ExecutionContext, Future}
 /**
  * Utility guards that mirror the ergonomics of the JS SDK's guard helpers.
  *
- * Each `use*` method applies a configuration change on the host and returns a
- * guard that will automatically restore the previous value when `drop()` (or
- * `close()`) is invoked. The `with*` variants execute the supplied block with
- * the new setting and guarantee restoration after the returned `Future`
- * completes.
+ * Each `use*` method opens a retry policy scope on the host and returns a guard
+ * that closes it when `drop()` (or `close()`) is invoked. While the scope is
+ * open, its named policy overrides the agent-wide policy with the same name for
+ * the host calls of the current task; the agent-wide policies do not change and
+ * no oplog entry is recorded. JavaScript code of one agent runs on one task, so
+ * other async work of the same invocation that runs while the scope is open
+ * also sees the policy. The `with*` variants execute the supplied block inside
+ * the scope and close it after the returned `Future` completes.
  */
 /** Scoped runtime controls for Scala.js agents. */
 object Guards {
@@ -39,22 +42,13 @@ object Guards {
   def withRetryPolicy[A](policy: Retry.NamedPolicy)(block: => Future[A]): Future[A] =
     withRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))(block)
 
-  def useRetryPolicy(policy: JsNamedRetryPolicy): RetryPolicyGuard = {
-    val previous = RetryApi.getRetryPolicyByName(policy.name)
-    val name     = policy.name
-    RetryApi.setRetryPolicy(policy)
-    new RetryPolicyGuard(() =>
-      previous match {
-        case Some(original) => RetryApi.setRetryPolicy(original)
-        case None           => RetryApi.removeRetryPolicy(name)
-      }
-    )
-  }
+  def useRetryPolicy(policy: JsNamedRetryPolicy): RetryPolicyGuard =
+    new RetryPolicyGuard(RetryApi.openRetryPolicyScope(policy))
 
   def useRetryPolicy(policy: Retry.NamedPolicy): RetryPolicyGuard =
     useRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))
 
-  private implicit val ec: ExecutionContext = ExecutionContext.global
+  private implicit val ec: ExecutionContext = golem.concurrent.GolemExecutionContext.global
 
   private def withGuard[A, G <: Guard](guard: => G)(block: => Future[A]): Future[A] = {
     val active = guard

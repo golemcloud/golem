@@ -3,12 +3,12 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Spread the multi-component applications across chunks to balance compilation cost.
-rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
-effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect")
-scala_test_apps=("tool-streaming-scala")
-moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
-go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go")
+rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests" "fault-matrix-rust" "gc-heap")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe" "fault-matrix-ts")
+effect_test_apps=("tool-streaming-effect" "snapshot-sqlite-effect" "permissions-effect" "http-update-effect" "custom-durability-effect" "fault-matrix-effect")
+scala_test_apps=("tool-streaming-scala" "fault-matrix-scala")
+moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40" "agent-sdk-moonbit" "fault-matrix-moonbit")
+go_test_apps=("agent-sdk-go" "agent-rpc-go" "tool-streaming-go" "fault-matrix-go")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
@@ -73,7 +73,7 @@ print_groups_json() {
     sep=","
   done
   printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
-  printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
+  printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifacts":"golem_it_tool_streaming_scala.wasm golem_it_fault_matrix_scala.wasm"}' "$sep"
   printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
   for ((i=1; i<=GO_CHUNKS; i++)); do
     printf ',{"name":"go-%d","needs-node":false,"needs-go":true}' "$i"
@@ -190,6 +190,17 @@ should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]
 }
 
+restore_fixture() {
+  [ -n "${GOLEM_FIXTURE_CACHE:-}" ] && [ "$clean_only" = false ] && [ "$check_only" = false ] &&
+    python3 "${REPO_ROOT}/.github/main-validation/fixture-cache.py" restore "$1" "$2"
+}
+
+stage_fixture() {
+  if [ -n "${GOLEM_FIXTURE_CACHE:-}" ] && [ "$clean_only" = false ] && [ "$check_only" = false ]; then
+    python3 "${REPO_ROOT}/.github/main-validation/fixture-cache.py" stage "$1" "$2"
+  fi
+}
+
 clean_failures=0
 
 clean_current_app() {
@@ -249,6 +260,11 @@ build_rust_apps() {
   for subdir in "${apps[@]}"; do
     pushd "$subdir" || exit
 
+    if restore_fixture "$subdir" release; then
+      popd || exit
+      continue
+    fi
+
     if should_clean; then
       echo "Cleaning $subdir..."
       clean_current_app
@@ -266,6 +282,7 @@ build_rust_apps() {
       fi
       "$GOLEM_CLI" --preset release build --yes --skip-check
       "$GOLEM_CLI" --preset release exec copy
+      stage_fixture "$subdir" release
     fi
 
     popd || exit
@@ -286,6 +303,11 @@ build_go_apps() {
   for subdir in "${apps[@]}"; do
     pushd "$subdir" || exit
 
+    if restore_fixture "$subdir" release; then
+      popd || exit
+      continue
+    fi
+
     if should_clean; then
       echo "Cleaning $subdir..."
       clean_current_app
@@ -298,6 +320,7 @@ build_go_apps() {
       echo "Building $subdir..."
       "$GOLEM_CLI" --preset release build --yes --skip-check
       "$GOLEM_CLI" --preset release exec copy
+      stage_fixture "$subdir" release
     fi
 
     popd || exit
@@ -317,6 +340,12 @@ build_node_apps() {
   for subdir in "${apps[@]}"; do
     pushd "$subdir" || exit
 
+    local preset="${GOLEM_TS_PRESET:-optimized}"
+    if restore_fixture "$subdir" "$preset"; then
+      popd || exit
+      continue
+    fi
+
     if should_clean; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
@@ -328,10 +357,10 @@ build_node_apps() {
       "$GOLEM_CLI" build --step check --yes
     elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
-      local preset="${GOLEM_TS_PRESET:-optimized}"
       npm install
       "$GOLEM_CLI" --preset "$preset" build --yes --skip-check
       "$GOLEM_CLI" --preset "$preset" exec copy
+      stage_fixture "$subdir" "$preset"
     fi
 
     popd || exit
@@ -352,6 +381,11 @@ build_sdk_apps() {
   for subdir in "${apps[@]}"; do
     pushd "$subdir" || exit
 
+    if restore_fixture "$subdir" release; then
+      popd || exit
+      continue
+    fi
+
     if should_clean; then
       echo "Cleaning $subdir..."
       clean_current_app
@@ -368,13 +402,23 @@ build_sdk_apps() {
         tool-streaming-scala)
           test -s ../golem_it_tool_streaming_scala.wasm
           ;;
+        fault-matrix-scala)
+          test -s ../golem_it_fault_matrix_scala.wasm
+          ;;
         tool-streaming-moonbit)
           test -s ../golem_it_tool_streaming_moonbit.wasm
           ;;
         tool-streaming-moonbit-lifecycle-gol40)
           test -s ../golem_it_tool_streaming_moonbit_lifecycle_gol40.wasm
           ;;
+        agent-sdk-moonbit)
+          test -s ../golem_it_agent_sdk_moonbit.wasm
+          ;;
+        fault-matrix-moonbit)
+          test -s ../golem_it_fault_matrix_moonbit.wasm
+          ;;
       esac
+      stage_fixture "$subdir" release
     fi
 
     popd || exit
@@ -436,38 +480,44 @@ fi
 
 if [ "$group" = "benchmarks" ]; then
   pushd "tool-streaming" || exit
-  if should_clean; then
-    echo "Cleaning tool-streaming..."
-    clean_current_app
-  fi
-  if [ "$check_only" = true ]; then
-    echo "Checking benchmark tool-streaming components..."
-    "$GOLEM_CLI" build golem-it:tool-streaming-rust-provider \
-      golem-it:tool-streaming-rust-caller --step check --yes
-  elif [ "$clean_only" = false ]; then
-    echo "Building benchmark tool-streaming components..."
-    "$GOLEM_CLI" --preset release build golem-it:tool-streaming-rust-provider \
-      golem-it:tool-streaming-rust-caller --yes --skip-check
-    cp "$(resolve_target_dir "$PWD/rust-provider")/wasm32-wasip2/release/golem_it_tool_streaming_rust_provider.wasm" \
-      ../golem_it_tool_streaming_rust_provider_release.wasm
-    cp "$(resolve_target_dir "$PWD/rust-caller")/wasm32-wasip2/release/golem_it_tool_streaming_rust_caller.wasm" \
-      ../golem_it_tool_streaming_rust_caller_release.wasm
+  if ! restore_fixture tool-streaming benchmark-rust; then
+    if should_clean; then
+      echo "Cleaning tool-streaming..."
+      clean_current_app
+    fi
+    if [ "$check_only" = true ]; then
+      echo "Checking benchmark tool-streaming components..."
+      "$GOLEM_CLI" build golem-it:tool-streaming-rust-provider \
+        golem-it:tool-streaming-rust-caller --step check --yes
+    elif [ "$clean_only" = false ]; then
+      echo "Building benchmark tool-streaming components..."
+      "$GOLEM_CLI" --preset release build golem-it:tool-streaming-rust-provider \
+        golem-it:tool-streaming-rust-caller --yes --skip-check
+      cp "$(resolve_target_dir "$PWD/rust-provider")/wasm32-wasip2/release/golem_it_tool_streaming_rust_provider.wasm" \
+        ../golem_it_tool_streaming_rust_provider_release.wasm
+      cp "$(resolve_target_dir "$PWD/rust-caller")/wasm32-wasip2/release/golem_it_tool_streaming_rust_caller.wasm" \
+        ../golem_it_tool_streaming_rust_caller_release.wasm
+    fi
+    stage_fixture tool-streaming benchmark-rust
   fi
   popd || exit
 
   pushd "agent-rpc" || exit
-  if should_clean; then
-    echo "Cleaning agent-rpc..."
-    clean_current_app
-  fi
-  if [ "$check_only" = true ]; then
-    echo "Checking golem-it:agent-rpc-rust..."
-    "$GOLEM_CLI" build golem-it:agent-rpc-rust --step check --yes
-  elif [ "$clean_only" = false ]; then
-    echo "Building golem-it:agent-rpc-rust..."
-    "$GOLEM_CLI" --preset release build golem-it:agent-rpc-rust --yes --skip-check
-    cp "$(resolve_target_dir "$PWD/golem-it-agent-rpc-rust")/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm" \
-      ../golem_it_agent_rpc_rust_release.wasm
+  if ! restore_fixture agent-rpc benchmark-rust; then
+    if should_clean; then
+      echo "Cleaning agent-rpc..."
+      clean_current_app
+    fi
+    if [ "$check_only" = true ]; then
+      echo "Checking golem-it:agent-rpc-rust..."
+      "$GOLEM_CLI" build golem-it:agent-rpc-rust --step check --yes
+    elif [ "$clean_only" = false ]; then
+      echo "Building golem-it:agent-rpc-rust..."
+      "$GOLEM_CLI" --preset release build golem-it:agent-rpc-rust --yes --skip-check
+      cp "$(resolve_target_dir "$PWD/golem-it-agent-rpc-rust")/wasm32-wasip2/release/golem_it_agent_rpc_rust.wasm" \
+        ../golem_it_agent_rpc_rust_release.wasm
+    fi
+    stage_fixture agent-rpc benchmark-rust
   fi
   popd || exit
 fi

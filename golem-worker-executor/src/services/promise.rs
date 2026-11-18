@@ -18,7 +18,7 @@ use crate::services::component;
 use crate::services::golem_config;
 use crate::services::oplog;
 use crate::services::worker;
-use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_activator::{ExactExistingDelivery, WorkerActivator};
 use crate::services::{
     HasComponentService, HasConfig, HasOplogService, HasWorkerService, UsesAllDeps,
 };
@@ -29,11 +29,10 @@ use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
+use futures::future::BoxFuture;
 
-use golem_common::model::agent::Principal;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PromiseId};
+use golem_common::model::{AgentFingerprint, AgentId, AgentStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
@@ -169,6 +168,7 @@ pub trait PromiseService: Send + Sync {
     async fn create(
         &self,
         agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError>;
 
@@ -182,7 +182,10 @@ pub trait PromiseService: Send + Sync {
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    /// Persists completion and notifies registered handles without activating an agent.
+    /// Persists completion and notifies registered handles without activating an agent. The
+    /// caller excludes a concurrent removal of the agent's promises: `complete` through
+    /// `PromiseWorkerAccess::run_excluding_removal`, scheduled completion through the agent's
+    /// oplog lifecycle guard, which deletion holds too.
     async fn complete_without_wakeup(
         &self,
         promise_id: PromiseId,
@@ -223,11 +226,12 @@ impl PromiseService for LazyPromiseService {
     async fn create(
         &self,
         agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
         self.implementation()
             .await
-            .create(agent_id, oplog_idx)
+            .create(agent_id, fingerprint, oplog_idx)
             .await
     }
 
@@ -319,12 +323,21 @@ impl PromiseRegistry {
 /// `All -> LazyPromiseService -> DefaultPromiseService -> All`.
 #[async_trait]
 pub trait PromiseWorkerAccess: Send + Sync {
-    /// Activates the worker that owns the given promise if it is in a
-    /// state that requires activation (Interrupted, Running, Suspended, Retrying).
+    /// Activates the incarnation that created the given promise if it is in a state that
+    /// requires activation (Interrupted, Running, Suspended, Retrying). Never creates an agent:
+    /// a missing agent or another incarnation is left alone.
     async fn activate_worker_if_needed(
         &self,
         promise_id: &PromiseId,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Runs `operation`, which checks and writes one of the agent's promises, while no removal of
+    /// the agent's state runs on this executor (`WorkerService::run_excluding_removal`).
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError>;
 }
 
 pub struct DefaultPromiseService {
@@ -349,9 +362,7 @@ impl DefaultPromiseService {
         self.key_value_storage
             .with("promise", "complete")
             .exists(
-                KeyValueStorageNamespace::Promise {
-                    agent_id: Arc::new(promise_id.agent_id.clone()),
-                },
+                promise_namespace(promise_id),
                 &get_promise_redis_key(promise_id),
             )
             .await
@@ -370,9 +381,7 @@ impl DefaultPromiseService {
             .key_value_storage
             .with_entity("promise", "get-completed", "promise")
             .get(
-                KeyValueStorageNamespace::Promise {
-                    agent_id: Arc::new(promise_id.agent_id.clone()),
-                },
+                promise_namespace(promise_id),
                 &get_promise_result_redis_key(promise_id),
             )
             .await
@@ -394,10 +403,12 @@ impl PromiseService for DefaultPromiseService {
     async fn create(
         &self,
         agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
         oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
         let promise_id = PromiseId {
             agent_id: agent_id.clone(),
+            fingerprint,
             oplog_idx,
         };
         debug!("Created promise {promise_id}");
@@ -406,9 +417,7 @@ impl PromiseService for DefaultPromiseService {
         self.key_value_storage
             .with_entity("promise", "create", "promise")
             .set_if_not_exists(
-                KeyValueStorageNamespace::Promise {
-                    agent_id: Arc::new(agent_id.clone()),
-                },
+                promise_namespace(&promise_id),
                 &key,
                 &RedisPromiseState::Pending,
             )
@@ -466,8 +475,16 @@ impl PromiseService for DefaultPromiseService {
         promise_id: PromiseId,
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError> {
+        // Agent deletion removes the deleted incarnation's promises while it excludes this
+        // operation. The existence check and the write therefore both precede that removal, which
+        // then removes the row too, or both follow it and find no promise. Activation runs after
+        // the exclusion ends.
         let written = self
-            .complete_without_wakeup(promise_id.clone(), data)
+            .worker_access
+            .run_excluding_removal(
+                &promise_id.agent_id,
+                self.complete_without_wakeup(promise_id.clone(), data),
+            )
             .await?;
         // Retry activation even for duplicate completions: persistence may have succeeded before
         // an earlier activation failed.
@@ -492,9 +509,7 @@ impl PromiseService for DefaultPromiseService {
             .key_value_storage
             .with_entity("promise", "complete", "promise")
             .set_if_not_exists(
-                KeyValueStorageNamespace::Promise {
-                    agent_id: Arc::new(promise_id.agent_id.clone()),
-                },
+                promise_namespace(&promise_id),
                 &key,
                 &RedisPromiseState::Complete(data.clone()),
             )
@@ -617,20 +632,24 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             agent_id,
         };
 
-        // Check if worker is active first, otherwise fall back to stored metadata
+        // Check if worker is active first, otherwise fall back to stored metadata. Only the
+        // incarnation that created the promise is activated; a deleted or re-created agent is not.
         let metadata = if let Some(worker) = self.active_agents.try_get(&owned_agent_id).await {
-            crate::worker::Worker::get_latest_metadata(worker.all(), &owned_agent_id)
-                .await?
-                .ok_or_else(|| {
-                    WorkerExecutorError::runtime(
-                        "worker disappeared while activating worker for promise",
-                    )
-                })?
+            if worker.get_initial_worker_metadata().fingerprint != promise_id.fingerprint {
+                return Ok(());
+            }
+            match crate::worker::Worker::get_latest_metadata(worker.all(), &owned_agent_id).await? {
+                Some(metadata) => metadata,
+                None => return Ok(()),
+            }
         } else if let Some(worker::GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
         }) = self.worker_service.get(&owned_agent_id).await?
         {
+            if initial_worker_metadata.fingerprint != promise_id.fingerprint {
+                return Ok(());
+            }
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),
                 config: self.config.clone(),
@@ -638,7 +657,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 worker_service: self.worker_service.clone(),
             };
             let agent_mode = initial_worker_metadata.agent_mode;
-            let last_known_status = calculate_last_known_status_with_checkpoint(
+            let Some(last_known_status) = calculate_last_known_status_with_checkpoint(
                 &status_deps,
                 &owned_agent_id,
                 initial_worker_metadata.fingerprint,
@@ -647,18 +666,18 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             )
             .await
             .map_err(WorkerExecutorError::from)?
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "worker oplog disappeared while activating worker for promise",
-                )
-            })?;
+            else {
+                return Ok(());
+            };
             initial_worker_metadata.last_known_status = last_known_status;
             initial_worker_metadata
         } else {
-            return Err(WorkerExecutorError::worker_not_found(
-                owned_agent_id.agent_id(),
-            ));
+            return Ok(());
         };
+
+        if metadata.fingerprint != promise_id.fingerprint {
+            return Ok(());
+        }
 
         let should_activate = match &metadata.last_known_status.status {
             AgentStatus::Interrupted
@@ -669,21 +688,43 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         };
 
         if should_activate {
+            // Never creates: an agent deleted or re-created since the check above is left alone.
             self.worker_activator
-                .get_or_create_running(
+                .enqueue_exact_existing(
                     &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    promise_id.fingerprint,
+                    ExactExistingDelivery::Resume,
                 )
                 .await?;
         }
 
         Ok(())
     }
+
+    async fn run_excluding_removal<'a>(
+        &self,
+        agent_id: &AgentId,
+        operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.worker_service
+            .run_excluding_removal(agent_id, operation)
+            .await
+    }
+}
+
+/// The storage namespace of the promises of one agent incarnation.
+pub fn promise_namespace_of(
+    agent_id: &AgentId,
+    fingerprint: AgentFingerprint,
+) -> KeyValueStorageNamespace {
+    KeyValueStorageNamespace::Promise {
+        agent_id: agent_id.clone(),
+        fingerprint,
+    }
+}
+
+fn promise_namespace(promise_id: &PromiseId) -> KeyValueStorageNamespace {
+    promise_namespace_of(&promise_id.agent_id, promise_id.fingerprint)
 }
 
 fn get_promise_redis_key(promise_id: &PromiseId) -> String {
@@ -732,6 +773,7 @@ impl PromiseService for PromiseServiceMock {
     async fn create(
         &self,
         _agent_id: &AgentId,
+        _fingerprint: AgentFingerprint,
         _oplog_idx: OplogIndex,
     ) -> Result<PromiseId, WorkerExecutorError> {
         unimplemented!()
@@ -788,6 +830,14 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
+
+        async fn run_excluding_removal<'a>(
+            &self,
+            _agent_id: &AgentId,
+            operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+        ) -> Result<bool, WorkerExecutorError> {
+            operation.await
+        }
     }
 
     fn promise_id() -> PromiseId {
@@ -796,6 +846,7 @@ mod tests {
                 component_id: ComponentId(Uuid::new_v4()),
                 agent_id: "promise-test".to_string(),
             },
+            fingerprint: AgentFingerprint::new(),
             oplog_idx: OplogIndex::from_u64(1),
         }
     }
@@ -808,7 +859,11 @@ mod tests {
         );
         let expected_id = promise_id();
         let id = service
-            .create(&expected_id.agent_id, expected_id.oplog_idx)
+            .create(
+                &expected_id.agent_id,
+                expected_id.fingerprint,
+                expected_id.oplog_idx,
+            )
             .await
             .unwrap();
 
@@ -833,6 +888,47 @@ mod tests {
         assert!(weak.upgrade().is_none());
         service.cleanup().await;
         assert!(service.registry.lock().await.handles.is_empty());
+    }
+
+    /// A re-created agent keeps its agent ID and starts its oplog again, so its promises reuse
+    /// the oplog indexes of the deleted incarnation. Only the fingerprint tells them apart.
+    #[test]
+    async fn promises_of_two_incarnations_at_the_same_oplog_index_are_separate() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let service =
+            DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
+        let current = promise_id();
+        let deleted = PromiseId {
+            fingerprint: AgentFingerprint::new(),
+            ..current.clone()
+        };
+        assert_ne!(promise_namespace(&current), promise_namespace(&deleted));
+
+        let current = service
+            .create(&current.agent_id, current.fingerprint, current.oplog_idx)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            service.poll(deleted.clone()).await,
+            Err(WorkerExecutorError::PromiseNotFound { .. })
+        ));
+        assert!(matches!(
+            service.complete(deleted.clone(), vec![1]).await,
+            Err(WorkerExecutorError::PromiseNotFound { .. })
+        ));
+        assert!(
+            storage
+                .keys("test", "test", promise_namespace(&deleted))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let handle = service.poll(current.clone()).await.unwrap();
+        assert!(!handle.is_ready().await);
+        assert!(service.complete(current, vec![2]).await.unwrap());
+        assert_eq!(handle.get().await, Some(vec![2]));
     }
 
     #[test]
@@ -864,7 +960,10 @@ mod tests {
             DefaultPromiseService::new(storage.clone(), Arc::new(NoopPromiseWorkerAccess));
         let service_b = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
         let id = promise_id();
-        let id = service_a.create(&id.agent_id, id.oplog_idx).await.unwrap();
+        let id = service_a
+            .create(&id.agent_id, id.fingerprint, id.oplog_idx)
+            .await
+            .unwrap();
         let handle = service_b.poll(id.clone()).await.unwrap();
 
         assert!(service_a.complete(id.clone(), vec![1]).await.unwrap());
@@ -882,6 +981,14 @@ mod tests {
         ) -> Result<(), WorkerExecutorError> {
             Err(WorkerExecutorError::runtime("activation refused"))
         }
+
+        async fn run_excluding_removal<'a>(
+            &self,
+            _agent_id: &AgentId,
+            operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+        ) -> Result<bool, WorkerExecutorError> {
+            operation.await
+        }
     }
 
     #[test]
@@ -891,7 +998,10 @@ mod tests {
             DefaultPromiseService::new(storage.clone(), Arc::new(RefusePromiseActivation));
         let service_b = DefaultPromiseService::new(storage, Arc::new(RefusePromiseActivation));
         let id = promise_id();
-        let id = service_a.create(&id.agent_id, id.oplog_idx).await.unwrap();
+        let id = service_a
+            .create(&id.agent_id, id.fingerprint, id.oplog_idx)
+            .await
+            .unwrap();
         let handle_a = service_a.poll(id.clone()).await.unwrap();
         let handle_b = service_b.poll(id.clone()).await.unwrap();
         assert!(
@@ -940,7 +1050,10 @@ mod tests {
         let completer = DefaultPromiseService::new(storage, Arc::new(NoopPromiseWorkerAccess));
 
         let id = promise_id();
-        let id = service.create(&id.agent_id, id.oplog_idx).await.unwrap();
+        let id = service
+            .create(&id.agent_id, id.fingerprint, id.oplog_idx)
+            .await
+            .unwrap();
         assert!(completer.complete(id.clone(), vec![1]).await.unwrap());
 
         // The first poll registers the handle, then pauses in its result read, which will fail.

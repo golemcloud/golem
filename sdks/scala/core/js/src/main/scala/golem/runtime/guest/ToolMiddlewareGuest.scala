@@ -16,7 +16,6 @@
 
 package golem.runtime.guest
 
-import golem.host.js.PrincipalConverter
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool._
 import golem.host.{SchemaWireInterop, ToolWireInterop}
@@ -75,7 +74,6 @@ object ToolMiddlewareGuest {
     stdin: js.UndefOr[JsWasiInputStream],
     stdout: js.UndefOr[ToolHostApi.RawToolOutputWriter],
     stderr: js.UndefOr[ToolHostApi.RawToolOutputWriter],
-    principal: js.Dynamic,
     wrapped: JsUnderlyingTool
   ): js.Promise[JsInvocationResult] =
     ToolMiddlewareRegistry.getInvoker(middlewareName) match {
@@ -85,7 +83,14 @@ object ToolMiddlewareGuest {
           stdout.toOption.map(new JsToolOutputStream(_)),
           stderr.toOption.map(new JsToolOutputStream(_))
         )
-        decodeInvocation(toolMetadata, parameters, input, stdin, principal, wrapped) match {
+        decodeInvocation(
+          toolMetadata,
+          parameters,
+          input,
+          stdin,
+          InvocationContextHost.immediatePrincipal(),
+          wrapped
+        ) match {
           case Left(error)    => rejectToolError(error)
           case Right(decoded) =>
             val invocation = invoker match {
@@ -151,7 +156,7 @@ object ToolMiddlewareGuest {
     parameters: JsTypedSchemaValue,
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream],
-    principal: js.Dynamic,
+    principal: golem.Principal,
     wrapped: JsUnderlyingTool
   ): Either[ToolInvokeError.InvalidInput, DecodedInvocation] =
     try {
@@ -161,7 +166,7 @@ object ToolMiddlewareGuest {
           SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(parameters)),
           SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(input)),
           stdin.toOption.map(new JsMiddlewareInputStream(_)),
-          PrincipalConverter.fromJs(principal),
+          principal,
           rawUnderlying(wrapped)
         )
       )
@@ -461,7 +466,7 @@ object ToolMiddlewareGuest {
     js.Dynamic.literal(
       discoverToolMiddlewares = js.Any.fromFunction0(() => discoverToolMiddlewares()),
       getToolMiddleware = js.Any.fromFunction1((name: String) => getToolMiddleware(name)),
-      invokeToolMiddleware = js.Any.fromFunction11(
+      invokeToolMiddleware = js.Any.fromFunction10(
         (
           middlewareName: String,
           toolName: String,
@@ -472,7 +477,6 @@ object ToolMiddlewareGuest {
           stdin: js.UndefOr[JsWasiInputStream],
           stdout: js.UndefOr[ToolHostApi.RawToolOutputWriter],
           stderr: js.UndefOr[ToolHostApi.RawToolOutputWriter],
-          principal: js.Dynamic,
           wrapped: JsUnderlyingTool
         ) =>
           invokeToolMiddleware(
@@ -485,7 +489,6 @@ object ToolMiddlewareGuest {
             stdin,
             stdout,
             stderr,
-            principal,
             wrapped
           )
       )

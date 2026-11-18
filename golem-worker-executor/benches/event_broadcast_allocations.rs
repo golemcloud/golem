@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 
 use golem_common::base_model::component::ComponentId;
-use golem_common::model::{AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey};
+use golem_common::model::{AgentId, AgentInvocationOutput, AgentInvocationResult, InvocationId};
 use golem_common::schema::SchemaValue;
 use golem_worker_executor::services::events::{Event, Events};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -56,7 +56,7 @@ fn event(payload_size: usize) -> Event {
             component_id: ComponentId::new(),
             agent_id: "allocation-benchmark".to_string(),
         },
-        idempotency_key: IdempotencyKey::new("target".to_string()),
+        idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
         result: Box::new(Ok(AgentInvocationOutput {
             result: AgentInvocationResult::AgentMethod {
                 output: SchemaValue::String("x".repeat(payload_size)),

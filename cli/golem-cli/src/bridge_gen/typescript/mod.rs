@@ -4904,9 +4904,9 @@ impl TypeScriptBridgeGenerator {
 #[cfg(test)]
 mod streaming_tests {
     use super::*;
-    use golem_common::model::Empty;
     use golem_common::model::agent::{AgentTypeName, Snapshotting};
     use golem_common::schema::{AgentConstructorSchema, NamedField, SchemaGraph};
+    use golem_schema::Empty;
     use tempfile::TempDir;
     use test_r::test;
 

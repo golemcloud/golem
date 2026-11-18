@@ -31,8 +31,12 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::application::{Application, ApplicationId};
-use golem_common::model::card::parse_polymorphic_permission;
+use golem_common::model::card::owner::{EmptyOwnerPattern, PolymorphicEmptyOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::{
+    NetworkResourcePattern, PolymorphicClassPermissionPattern, PolymorphicPermissionPattern,
+    ResourcePattern, parse_polymorphic_permission,
+};
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
@@ -83,10 +87,27 @@ pub fn default_test_agent_initial_permissions_for_account(
     })
 }
 
+/// The default initial card of agents, plus grants that name the loopback addresses: test peers
+/// listen there, and the default `network` wildcard reaches only public addresses over raw sockets.
 pub fn default_test_agent_initial_permissions(
     recipient: RecipientPattern,
 ) -> AgentTypeInitialPermissions {
-    AgentTypeInitialPermissions::default_for_recipient(recipient)
+    let mut permissions = AgentTypeInitialPermissions::default_for_recipient(recipient.clone());
+    for loopback in ["127.0.0.1", "[::1]"] {
+        permissions
+            .lower_bound
+            .positive
+            .push(PolymorphicPermissionPattern::Network(
+                PolymorphicClassPermissionPattern {
+                    owner: PolymorphicEmptyOwnerPattern::Concrete(EmptyOwnerPattern),
+                    recipient: recipient.clone(),
+                    verb: None,
+                    resource: NetworkResourcePattern::parse_resource(loopback)
+                        .expect("loopback network grants are valid"),
+                },
+            ));
+    }
+    permissions
 }
 
 pub(crate) fn default_agent_type_provision_config_creation_for_account(
@@ -562,6 +583,22 @@ pub trait TestDsl {
 
     async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()>;
 
+    /// The ID of the promise that the agent's current incarnation created at `oplog_idx`.
+    ///
+    /// It reads the fingerprint of the current incarnation, not the one the guest received. A test
+    /// that deletes and re-creates the agent must use the promise ID that the guest returned.
+    async fn promise_id(
+        &self,
+        agent_id: &AgentId,
+        oplog_idx: OplogIndex,
+    ) -> anyhow::Result<PromiseId> {
+        Ok(PromiseId {
+            agent_id: agent_id.clone(),
+            fingerprint: self.get_worker_metadata(agent_id).await?.fingerprint,
+            oplog_idx,
+        })
+    }
+
     async fn make_worker_log_event_stream(
         &self,
         agent_id: &AgentId,
@@ -799,7 +836,7 @@ pub trait TestDsl {
     async fn cancel_invocation(
         &self,
         agent_id: &AgentId,
-        idempotency_key: &IdempotencyKey,
+        idempotency_key: &golem_common::model::InvocationId,
     ) -> anyhow::Result<bool>;
 
     async fn get_file_system_node(
@@ -1256,6 +1293,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }
+        WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id } => {
+            format!("Create idempotency key conflict: {agent_id}")
+        }
         WorkerExecutorError::AgentCreationFailed { agent_id, details } => {
             format!("Worker creation failed: {:?}: {}", agent_id, details)
         }
@@ -1275,7 +1315,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         ),
         error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
         | WorkerExecutorError::ComponentServiceRefused { .. }
-        | WorkerExecutorError::OplogFailed { .. }) => error.to_string(),
+        | WorkerExecutorError::OplogFailed { .. }
+        | WorkerExecutorError::StaleCursor { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,
