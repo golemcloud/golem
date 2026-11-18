@@ -40,30 +40,10 @@ impl From<AttributeValue> for PublicAttributeValue {
     }
 }
 
-/// Parses the string form `<index>-<revision>-<query hash>` of `Display`.
+/// Parses the string form of `Display` with the cursor's `FromStr`, which the CLI also uses.
 impl poem_openapi::types::ParseFromParameter for OplogCursor {
     fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
-        let [index, revision, query_hash] = value.split('-').collect::<Vec<_>>()[..] else {
-            return Err("Invalid oplog cursor".into());
-        };
-        let next_oplog_index = index
-            .parse()
-            .map_err(|_| "Invalid index in the oplog cursor")?;
-        let current_component_revision = revision
-            .parse()
-            .map_err(|_| "Invalid component revision in the oplog cursor")?;
-        let is_hash = query_hash.len() == 16
-            && query_hash
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
-        if !query_hash.is_empty() && !is_hash {
-            return Err("Invalid query hash in the oplog cursor".into());
-        }
-        Ok(OplogCursor {
-            next_oplog_index,
-            current_component_revision,
-            query_hash: query_hash.to_string(),
-        })
+        value.parse::<OplogCursor>().map_err(Into::into)
     }
 }
 

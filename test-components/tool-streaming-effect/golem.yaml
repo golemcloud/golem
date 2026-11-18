@@ -19,8 +19,8 @@ componentTemplates:
             - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
 
 components:
-  golem-it:tool-streaming-rust-provider:
-    dir: ../tool-streaming/rust-provider
+  golem-it:tool-streaming-effect-rust-provider:
+    dir: rust-provider
     templates: rust, rust-test-component
   golem-it:tool-streaming-effect-provider:
     dir: provider
@@ -33,14 +33,14 @@ components:
         - golem-it:tool-streaming-effect-provider/matrix-core
         - golem-it:tool-streaming-effect-provider/matrix-resource
         - golem-it:tool-streaming-effect-provider/chunk-m-effect-streaming
-        - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
+        - golem-it:tool-streaming-effect-rust-provider/matrix-permission-issuer
 
 tools:
   matrix-core: {}
   matrix-resource: {}
   chunk-m-effect-streaming: {}
   matrix-permission-issuer:
-    component: golem-it:tool-streaming-rust-provider
+    component: golem-it:tool-streaming-effect-rust-provider
 
 agents:
   EffectToolStreamingCaller:

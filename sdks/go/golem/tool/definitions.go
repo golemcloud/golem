@@ -43,8 +43,9 @@ func typedValue(w types.TypedSchemaValue) golem.TypedValue {
 func witOf(v golem.TypedValue) types.TypedSchemaValue { return link.TypedValueWit(v) }
 
 // currentCaller returns a function that reads the caller of the running
-// invocation on its first call, and a function that ends the call.
-func currentCaller() (func() golem.Caller, func()) {
+// invocation on its first call, and a function that ends the call: with true
+// when the call returned a stream, whose producer still reads the caller.
+func currentCaller() (func() golem.Caller, func(bool)) {
 	read, end := link.Caller()
 	return read.(func() golem.Caller), end
 }

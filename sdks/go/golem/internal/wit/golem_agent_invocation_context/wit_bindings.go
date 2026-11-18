@@ -79,7 +79,7 @@ func Caller() golem_agent_common.Caller {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (80 + 18*4), 8))
 	wasm_import_caller(returnArea)
-	result := wasm_lift_1_t499(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t502(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result0 := result
 	return result0
 
@@ -94,13 +94,13 @@ func wasm_lift_1_t10(src unsafe.Pointer) golem_core_types.InvocationId {
 }
 
 //go:noinline
-func wasm_lift_1_t499(src unsafe.Pointer) golem_agent_common.Caller {
-	result := wasm_lift_1_t495(unsafe.Add(unsafe.Pointer(src), 0))
-	result0 := wasm_lift_1_t495(unsafe.Add(unsafe.Pointer(src), (40 + 8*4)))
+func wasm_lift_1_t502(src unsafe.Pointer) golem_agent_common.Caller {
+	result := wasm_lift_1_t498(unsafe.Add(unsafe.Pointer(src), 0))
+	result0 := wasm_lift_1_t498(unsafe.Add(unsafe.Pointer(src), (40 + 8*4)))
 	result2 := make([]golem_agent_common.TokenProvenance, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 17*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 17*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (80 + 16*4))))), index*(24+4*4))
-		result1 := wasm_lift_1_t497(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t500(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -136,26 +136,26 @@ func wasm_lift_1_t4(src unsafe.Pointer) golem_core_types.Uuid {
 }
 
 //go:noinline
-func wasm_lift_1_t495(src unsafe.Pointer) golem_agent_common.Principal {
+func wasm_lift_1_t498(src unsafe.Pointer) golem_agent_common.Principal {
 	var variant golem_agent_common.Principal
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t490(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t493(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalUser(result)
 
 	case 1:
-		result0 := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), 8))
+		result0 := wasm_lift_1_t495(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalAccount(result0)
 
 	case 2:
-		result1 := wasm_lift_1_t493(unsafe.Add(unsafe.Pointer(src), 8))
+		result1 := wasm_lift_1_t496(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalAgent(result1)
 
 	case 3:
-		result2 := wasm_lift_1_t494(unsafe.Add(unsafe.Pointer(src), 8))
+		result2 := wasm_lift_1_t497(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = golem_agent_common.MakePrincipalTool(result2)
 
@@ -171,7 +171,7 @@ func wasm_lift_1_t495(src unsafe.Pointer) golem_agent_common.Principal {
 }
 
 //go:noinline
-func wasm_lift_1_t497(src unsafe.Pointer) golem_agent_common.TokenProvenance {
+func wasm_lift_1_t500(src unsafe.Pointer) golem_agent_common.TokenProvenance {
 	result := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), 0))
 	var option witTypes.Option[golem_agent_common.PrincipalRef]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))) {
@@ -179,7 +179,7 @@ func wasm_lift_1_t497(src unsafe.Pointer) golem_agent_common.TokenProvenance {
 
 		option = witTypes.None[golem_agent_common.PrincipalRef]()
 	case 1:
-		result0 := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))
+		result0 := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), (16 + 1*4)))
 
 		option = witTypes.Some[golem_agent_common.PrincipalRef](result0)
 	default:
@@ -198,8 +198,8 @@ func wasm_lift_1_t8(src unsafe.Pointer) golem_core_types.AgentId {
 }
 
 //go:noinline
-func wasm_lift_1_t490(src unsafe.Pointer) golem_agent_common.UserPrincipal {
-	result := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t493(src unsafe.Pointer) golem_agent_common.UserPrincipal {
+	result := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
 	result1 := wasm_lift_1_t5(unsafe.Add(unsafe.Pointer(src), (6 * 4)))
 
@@ -207,16 +207,16 @@ func wasm_lift_1_t490(src unsafe.Pointer) golem_agent_common.UserPrincipal {
 }
 
 //go:noinline
-func wasm_lift_1_t492(src unsafe.Pointer) golem_agent_common.AccountPrincipal {
-	result := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t495(src unsafe.Pointer) golem_agent_common.AccountPrincipal {
+	result := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t11(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 
 	return golem_agent_common.AccountPrincipal{Pair: result, AccountId: result0, Authentication: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))}
 }
 
 //go:noinline
-func wasm_lift_1_t493(src unsafe.Pointer) golem_agent_common.AgentPrincipal {
-	result := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t496(src unsafe.Pointer) golem_agent_common.AgentPrincipal {
+	result := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t8(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 6*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 7*4))))
 	result2 := wasm_lift_1_t6(unsafe.Add(unsafe.Pointer(src), (16 + 8*4)))
@@ -225,8 +225,8 @@ func wasm_lift_1_t493(src unsafe.Pointer) golem_agent_common.AgentPrincipal {
 }
 
 //go:noinline
-func wasm_lift_1_t494(src unsafe.Pointer) golem_agent_common.ToolPrincipal {
-	result := wasm_lift_1_t489(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t497(src unsafe.Pointer) golem_agent_common.ToolPrincipal {
+	result := wasm_lift_1_t492(unsafe.Add(unsafe.Pointer(src), 0))
 	result0 := wasm_lift_1_t6(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 5*4))))
 
@@ -234,7 +234,7 @@ func wasm_lift_1_t494(src unsafe.Pointer) golem_agent_common.ToolPrincipal {
 }
 
 //go:noinline
-func wasm_lift_1_t489(src unsafe.Pointer) golem_agent_common.PrincipalRef {
+func wasm_lift_1_t492(src unsafe.Pointer) golem_agent_common.PrincipalRef {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 

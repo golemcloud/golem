@@ -23,6 +23,7 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
+use tokio_util::sync::CancellationToken;
 
 use terminal_size::terminal_size;
 use textwrap::WordSplitter;
@@ -515,7 +516,135 @@ impl StandardStream {
     }
 }
 
+/// The most stdout that an [`OutputCapture`] keeps for one call.
+pub const OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+
+#[derive(Default)]
+struct CapturedOutput {
+    /// The number of the call that the capture keeps output for.
+    call: u64,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    /// The call printed more than [`OUTPUT_CAPTURE_LIMIT`] to stdout.
+    overflowed: bool,
+    /// Cancelled when the call overflows.
+    on_overflow: CancellationToken,
+}
+
+impl CapturedOutput {
+    fn keep(&mut self, stream: StandardStream, bytes: &[u8]) {
+        let kept = match stream {
+            StandardStream::Stdout => &mut self.stdout,
+            StandardStream::Stderr => &mut self.stderr,
+        };
+        if kept.len() + bytes.len() <= OUTPUT_CAPTURE_LIMIT {
+            kept.extend_from_slice(bytes);
+        } else if matches!(stream, StandardStream::Stdout) && !self.overflowed {
+            self.overflowed = true;
+            self.on_overflow.cancel();
+        }
+    }
+}
+
+static OUTPUT_CAPTURE: std::sync::Mutex<Option<CapturedOutput>> = std::sync::Mutex::new(None);
+
+/// While it lives, what this module would write to stdout is kept instead, and what it writes to
+/// stderr is written and also kept. `golem mcp serve` holds one, because its stdout carries
+/// JSON-RPC: a command that it runs prints its JSON output into the capture, and the messages that
+/// the command logged are kept for the tool call's error.
+pub struct OutputCapture(());
+
+impl OutputCapture {
+    pub fn new() -> Self {
+        *OUTPUT_CAPTURE.lock().unwrap() = Some(CapturedOutput::default());
+        Self(())
+    }
+
+    /// The stdout and stderr bytes kept since the capture started or since the last call.
+    /// The call stays the same: a writer of this call still writes into the capture.
+    pub fn take(&self) -> (Vec<u8>, Vec<u8>) {
+        let mut capture = OUTPUT_CAPTURE.lock().unwrap();
+        let captured = capture.as_mut().expect("output capture is active");
+        (
+            std::mem::take(&mut captured.stdout),
+            std::mem::take(&mut captured.stderr),
+        )
+    }
+
+    /// Starts to keep the output of a new call: drops what is kept, and drops what a writer of an
+    /// earlier call writes from now on. When the call prints more than [`OUTPUT_CAPTURE_LIMIT`]
+    /// to stdout, the capture keeps no more of it and cancels `on_overflow`.
+    pub fn start_call(&self, on_overflow: CancellationToken) {
+        let mut capture = OUTPUT_CAPTURE.lock().unwrap();
+        let captured = capture.as_mut().expect("output capture is active");
+        *captured = CapturedOutput {
+            call: captured.call + 1,
+            on_overflow,
+            ..CapturedOutput::default()
+        };
+    }
+
+    /// Whether the current call printed more than [`OUTPUT_CAPTURE_LIMIT`] to stdout.
+    pub fn overflowed(&self) -> bool {
+        OUTPUT_CAPTURE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|captured| captured.overflowed)
+    }
+}
+
+/// The call that the active [`OutputCapture`] keeps output for, for a writer that can outlive
+/// the command that started it.
+#[derive(Clone, Copy)]
+pub(crate) struct StdoutCaptureTicket(Option<u64>);
+
+pub(crate) fn stdout_capture_ticket() -> StdoutCaptureTicket {
+    StdoutCaptureTicket(OUTPUT_CAPTURE.lock().unwrap().as_ref().map(|c| c.call))
+}
+
+impl Default for OutputCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for OutputCapture {
+    fn drop(&mut self) {
+        *OUTPUT_CAPTURE.lock().unwrap() = None;
+    }
+}
+
+/// Keeps bytes for stdout in the active [`OutputCapture`], for a writer that does not go through
+/// this module and that took `ticket` when it started. Returns `true` when they must not be
+/// written: they are kept, or they are dropped because the ticket's call has ended.
+pub(crate) fn capture_stdout(ticket: StdoutCaptureTicket, bytes: &[u8]) -> bool {
+    let Some(call) = ticket.0 else {
+        return capture(StandardStream::Stdout, bytes);
+    };
+    if let Some(captured) = OUTPUT_CAPTURE.lock().unwrap().as_mut()
+        && captured.call == call
+    {
+        captured.keep(StandardStream::Stdout, bytes);
+    }
+    true
+}
+
+/// Keeps the bytes in the active [`OutputCapture`]. Returns `true` when they must not be written.
+fn capture(stream: StandardStream, bytes: &[u8]) -> bool {
+    match OUTPUT_CAPTURE.lock().unwrap().as_mut() {
+        Some(captured) => {
+            captured.keep(stream, bytes);
+            matches!(stream, StandardStream::Stdout)
+        }
+        None => false,
+    }
+}
+
 fn try_write_to(stream: StandardStream, bytes: &[u8]) -> std::io::Result<()> {
+    if capture(stream, bytes) {
+        return Ok(());
+    }
     let written = match stream {
         StandardStream::Stdout => write_and_flush(&mut std::io::stdout().lock(), bytes),
         StandardStream::Stderr => write_and_flush(&mut std::io::stderr().lock(), bytes),

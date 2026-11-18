@@ -311,9 +311,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let request_key = InvocationRequestKey::Internal(idempotency_key.clone());
 
         let stack = InvocationContextStack::new(
-            self.state.invocation_context.trace_id.clone(),
-            InvocationContextSpan::external_parent(self.state.current_span_id.clone()),
-            self.state.invocation_context.trace_states.clone(),
+            self.state
+                .invocation_state()
+                .invocation_context
+                .trace_id
+                .clone(),
+            InvocationContextSpan::external_parent(
+                self.state.invocation_state().current_span_id.clone(),
+            ),
+            self.state
+                .invocation_state()
+                .invocation_context
+                .trace_states
+                .clone(),
         );
 
         let target_fingerprint = if ephemeral_logical_agent_id.is_some() {

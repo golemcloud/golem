@@ -500,9 +500,23 @@ pub fn InvocationContext::anonymous() -> InvocationContext {
 }
 
 ///|
-/// Marks the call as over: the SDK calls it when the invocation returns.
-pub fn InvocationContext::end(self : InvocationContext) -> Unit {
+/// Marks the call as over: the SDK calls it when the invocation returns. A call that returned a
+/// stream ends with `returned_stream`: its producer runs after the return, so the caller is read
+/// now, while the call still holds it, and kept for the producer.
+pub fn InvocationContext::end(
+  self : InvocationContext,
+  returned_stream? : Bool = false,
+) -> Unit {
+  if returned_stream && self.cached is None && !self.ended {
+    self.cached = Some((self.read)())
+  }
   self.ended = true
+}
+
+///|
+/// Whether an encoded value holds a stream, whose producer runs after the call that returned it.
+pub fn holds_stream(tree : @types.SchemaValueTree) -> Bool {
+  tree.value_nodes.iter().any(node => node is StreamValue(_))
 }
 
 ///|

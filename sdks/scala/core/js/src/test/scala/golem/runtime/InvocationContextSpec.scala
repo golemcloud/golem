@@ -274,6 +274,39 @@ object InvocationContextSpec extends ZIOSpecDefault {
           refused.isFailure,
           refused.failed.get.getMessage.contains("belongs to a call that has ended")
         )
+      },
+      test("a call that returned a stream reads the caller at its end, for the producer") {
+        var current = "A"
+        var reads   = 0
+        val ctx     = InvocationContext.lazily {
+          reads += 1
+          Caller(
+            userPrincipal,
+            Principal.User(PrincipalRef("https://auth.example.com", current), "{}", java.time.Instant.EPOCH)
+          )
+        }
+        ctx.end(returnedStream = true)
+        current = "B"
+        val subject = ctx.caller.immediate match {
+          case Principal.User(ref, _, _) => ref.subject
+          case other                     => other.toString
+        }
+        assertTrue(subject == "A", reads == 1)
+      },
+      test("a result holds a stream only when it has a stream node") {
+        val withStream = js.Dynamic.literal(
+          root = 0,
+          valueNodes = js.Array(js.Dynamic.literal(tag = "stream-value", `val` = js.Dynamic.literal()))
+        )
+        val plain = js.Dynamic.literal(
+          root = 0,
+          valueNodes = js.Array(js.Dynamic.literal(tag = "string-value", `val` = "x"))
+        )
+        assertTrue(
+          Guest.holdsStream(withStream),
+          !Guest.holdsStream(plain),
+          !Guest.holdsStream(js.undefined)
+        )
       }
     ),
 

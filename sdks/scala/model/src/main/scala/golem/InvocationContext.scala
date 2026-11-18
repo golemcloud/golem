@@ -295,8 +295,16 @@ final class InvocationContext private (read: () => Caller) {
     value
   }
 
-  /** Marks the call as over: the SDK calls it when the invocation returns. */
-  private[golem] def end(): Unit = ended = true
+  /**
+   * Marks the call as over: the SDK calls it when the invocation returns. A
+   * call that returned a stream ends with `returnedStream`: its producer runs
+   * after the return, so the caller is read now, while the call still holds it,
+   * and kept for the producer.
+   */
+  private[golem] def end(returnedStream: Boolean = false): Unit = {
+    if (returnedStream && value == null && !ended) value = read()
+    ended = true
+  }
 
   override def toString: String = "InvocationContext"
 }

@@ -40,8 +40,7 @@ use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{UdpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
-use super::tcp::socket_policy;
-use crate::durable_host::sockets::policy::SocketPolicy;
+use super::tcp::socket_target;
 
 #[cfg(test)]
 mod tests;
@@ -85,8 +84,10 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
             .map_err(SocketError::trap)?
         {
             ResolvedCall::Live(begun) => {
-                let target = SocketPolicy::new(&self.0.durable_ctx_mut().state.config)
-                    .target(remote_address.into());
+                let target = self
+                    .0
+                    .durable_ctx_mut()
+                    .socket_target(remote_address.into());
                 let denial = match target {
                     Ok(target) => match self
                         .0
@@ -284,9 +285,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)
             .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
         let targets = match remote_address.as_ref() {
-            Some(remote_address) => socket_policy(store)
-                .target((*remote_address).into())
-                .map(|target| vec![target]),
+            Some(remote_address) => {
+                socket_target(store, (*remote_address).into()).map(|target| vec![target])
+            }
             None => Ok(Vec::new()),
         };
         let request = HostRequestP3SocketsUdpSend {

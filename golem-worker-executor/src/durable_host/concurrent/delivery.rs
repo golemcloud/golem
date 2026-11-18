@@ -747,14 +747,19 @@ impl CompletionDelivery {
         T: 'static,
         D: HasData + ?Sized,
     {
-        self.deliver_at_accessor_terminal_with_not_delivered(store, || {})
+        self.deliver_at_accessor_terminal_with_delivered(store, Box::new(|| {}))
             .await
     }
 
-    pub(crate) async fn deliver_at_accessor_terminal_with_not_delivered<T, D>(
+    /// [`Self::deliver_at_accessor_terminal`] that runs `on_delivered` when the observer settles
+    /// the token as delivered: when the guest receives the terminal, live or at its recorded
+    /// `CompletionDelivered` marker on replay. It runs inside Wasmtime's event loop, so it must
+    /// not access the store. A completion that the guest discards, that no observer watches, or
+    /// whose observer is dropped never runs it.
+    pub(crate) async fn deliver_at_accessor_terminal_with_delivered<T, D>(
         mut self,
         store: &Accessor<T, D>,
-        on_not_delivered: impl FnOnce() + Send + 'static,
+        on_delivered: OnDelivered,
     ) -> Result<(), WorkerExecutorError>
     where
         T: 'static,
@@ -788,7 +793,7 @@ impl CompletionDelivery {
         }
         let guard = AccessorDeliveryGuard {
             delivery: Some(self),
-            on_not_delivered: Some(Box::new(on_not_delivered)),
+            on_delivered: Some(on_delivered),
         };
         if let Err(error) =
             store.register_terminal_observer(move |consumption| guard.consume(consumption))
@@ -1021,13 +1026,17 @@ impl Drop for CompletionDelivery {
 /// [`CompletionDelivery::deliver_at_accessor_terminal`]). The observer runs inside Wasmtime's
 /// event loop and must not access the store: every branch below only consumes the token, which
 /// touches Golem-owned channels and owned tasks.
-struct AccessorDeliveryGuard {
-    delivery: Option<CompletionDelivery>,
-    on_not_delivered: Option<Box<dyn FnOnce() + Send>>,
+pub(super) struct AccessorDeliveryGuard {
+    pub(super) delivery: Option<CompletionDelivery>,
+    pub(super) on_delivered: Option<OnDelivered>,
 }
 
+/// A hook that runs when the guest receives a completion; see
+/// [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`].
+pub(crate) type OnDelivered = Box<dyn FnOnce() + Send>;
+
 impl AccessorDeliveryGuard {
-    fn consume(mut self, consumption: TerminalConsumption) {
+    pub(super) fn consume(mut self, consumption: TerminalConsumption) {
         let delivery = self
             .delivery
             .take()
@@ -1035,15 +1044,17 @@ impl AccessorDeliveryGuard {
         match consumption {
             // Queue the successful delivery marker immediately before Wasmtime enters the guest
             // callback (or after wait/poll/sync lowering handed the result to the guest).
-            TerminalConsumption::Delivered => delivery.delivered(),
+            TerminalConsumption::Delivered => {
+                delivery.delivered();
+                if let Some(callback) = self.on_delivered.take() {
+                    callback();
+                }
+            }
             // The guest consumed the pending terminal without observing the persisted
             // completion (`subtask.cancel` on a returned terminal, or a cancellation).
             // Dropping the armed token spawns the owned cancellation-safe marker append and
             // hands its join to the drain queue, so invocation settlement waits for it.
             TerminalConsumption::NotDelivered => {
-                if let Some(callback) = self.on_not_delivered.take() {
-                    callback();
-                }
                 if matches!(&delivery.state, CompletionDeliveryState::ReplayDelivered(_)) {
                     delivery.suppress();
                 } else {

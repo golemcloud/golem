@@ -331,6 +331,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 completion_only: false,
             })?;
             let input = input::AttachmentInputProducer::new(consumer, accessor.getter(), ctx)?;
+            let input =
+                crate::durable_host::attribution::Attributed::new(ctx.attribution.clone(), input);
             match StreamReader::new(&mut access, input) {
                 Ok(reader) => Ok((target, reader)),
                 Err(error) => {

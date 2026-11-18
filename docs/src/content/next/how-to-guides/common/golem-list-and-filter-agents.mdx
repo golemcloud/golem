@@ -103,7 +103,14 @@ golem agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
 The cursor is an opaque value returned in the output when there are more results. Pass it back unchanged in the next call to get the next page.
 
-> **Note**: `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
+> **Note**: Without `--page`, `--scan-cursor` requires a single component to be selected (either via `--component-name` or by being in a single-component application directory).
+
+Use `--page` to read one page across all selected components, in the order of their names. A page has at most `--max-count` agents (default 50). On a server whose indexed storage is Redis, `--max-count` is a target, not a limit: Redis `SCAN` treats its count as a hint, so a page can have more agents. Do not rely on the page size; follow the `cursor`. The output has a `cursor` when there can be more agents; pass it back unchanged as `--scan-cursor` with `--page`, and stop when a page has no `cursor`. A page can end early at the server's scan budget, so it can have fewer agents, or none, and still have a cursor.
+
+```shell
+golem --format json agent list --page --max-count 10
+golem --format json agent list --page --max-count 10 --scan-cursor '<cursor-of-previous-page>'
+```
 
 ### Precise Mode
 
@@ -122,7 +129,7 @@ golem agent list --refresh           # Default 400ms interval
 golem agent list --refresh=1000      # Custom 1-second interval
 ```
 
-> **Note**: `--refresh` conflicts with `--scan-cursor` and cannot be combined with structured formats such as `--format json`, `--format yaml`, or `--format toon`.
+> **Note**: `--refresh` conflicts with `--scan-cursor` and `--page`, and cannot be combined with structured formats such as `--format json`, `--format yaml`, or `--format toon`.
 
 ## Examples
 

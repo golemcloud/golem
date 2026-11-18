@@ -66,7 +66,7 @@ func wasm_stream_lift_result_list_u8_golem_tool_streams_byte_stream_failure(src 
 
 		result0 = witTypes.Ok[[]uint8, golem_tool_streams.ByteStreamFailure](value)
 	case 1:
-		result := wasm_lift_1_t668(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t671(unsafe.Add(unsafe.Pointer(src), 4))
 
 		result0 = witTypes.Err[[]uint8, golem_tool_streams.ByteStreamFailure](result)
 	default:
@@ -94,7 +94,7 @@ func wasm_stream_lower_result_list_u8_golem_tool_streams_byte_stream_failure(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t668(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t671(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	default:
 		panic("unreachable")
@@ -468,7 +468,7 @@ func GetAllTools() []RegisteredTool {
 	result0 := make([]RegisteredTool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(16+12*4))
-		result := wasm_lift_1_t699(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t702(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -495,7 +495,7 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 		option = witTypes.None[RegisteredTool]()
 	case 1:
-		result := wasm_lift_1_t699(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t702(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		option = witTypes.Some[RegisteredTool](result)
 	default:
@@ -524,7 +524,7 @@ func (self *ToolStdinWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit,
 
 		result0 = witTypes.Ok[witTypes.Unit, golem_tool_streams.StreamWriteError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t672(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t675(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, golem_tool_streams.StreamWriteError](result)
 	default:
@@ -551,7 +551,7 @@ func (self *ToolStdinWriter) Finish() witTypes.Result[witTypes.Unit, golem_tool_
 
 		result0 = witTypes.Ok[witTypes.Unit, golem_tool_streams.StreamWriteError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t672(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t675(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, golem_tool_streams.StreamWriteError](result)
 	default:
@@ -612,7 +612,7 @@ func (self *ToolStdinWriter) Fail(reason golem_tool_streams.ByteStreamFailure) w
 
 		result2 = witTypes.Ok[witTypes.Unit, golem_tool_streams.StreamWriteError](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t672(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t675(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Unit, golem_tool_streams.StreamWriteError](result)
 	default:
@@ -633,7 +633,7 @@ func (self *ToolStdinClosed) Wait() golem_tool_streams.ByteStreamCloseCause {
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_tool_stdin_closed_wait((self).Handle(), returnArea)))
-	result := wasm_lift_1_t671(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t674(unsafe.Add(unsafe.Pointer(returnArea), 0))
 
 	return result
 
@@ -790,7 +790,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 	var result2 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result0 := wasm_lift_1_t667(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t670(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](result0)
 	case 1:
@@ -966,7 +966,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 	var result1 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t667(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t670(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](result)
 	case 1:
@@ -1014,7 +1014,7 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 		var result2 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 		case 0:
-			result0 := wasm_lift_1_t667(unsafe.Add(unsafe.Pointer(base), 4))
+			result0 := wasm_lift_1_t670(unsafe.Add(unsafe.Pointer(base), 4))
 
 			result2 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](result0)
 		case 1:
@@ -1033,20 +1033,20 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 }
 
 //go:noinline
-func wasm_lift_1_t699(src unsafe.Pointer) RegisteredTool {
+func wasm_lift_1_t702(src unsafe.Pointer) RegisteredTool {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t659(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t662(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 	result1 := wasm_lift_1_t7(unsafe.Add(unsafe.Pointer(src), (12 * 4)))
 
 	return RegisteredTool{LookupName: value0, Definition: result, ImplementedBy: result1}
 }
 
 //go:noinline
-func wasm_lift_1_t672(src unsafe.Pointer) golem_tool_streams.StreamWriteError {
+func wasm_lift_1_t675(src unsafe.Pointer) golem_tool_streams.StreamWriteError {
 	var variant golem_tool_streams.StreamWriteError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t671(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t674(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_streams.MakeStreamWriteErrorClosed(result)
 
@@ -1062,7 +1062,7 @@ func wasm_lift_1_t672(src unsafe.Pointer) golem_tool_streams.StreamWriteError {
 }
 
 //go:noinline
-func wasm_lift_1_t671(src unsafe.Pointer) golem_tool_streams.ByteStreamCloseCause {
+func wasm_lift_1_t674(src unsafe.Pointer) golem_tool_streams.ByteStreamCloseCause {
 	var variant golem_tool_streams.ByteStreamCloseCause
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1070,7 +1070,7 @@ func wasm_lift_1_t671(src unsafe.Pointer) golem_tool_streams.ByteStreamCloseCaus
 		variant = golem_tool_streams.MakeByteStreamCloseCauseFinished()
 
 	case 1:
-		result := wasm_lift_1_t668(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t671(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_streams.MakeByteStreamCloseCauseFailed(result)
 
@@ -1086,7 +1086,7 @@ func wasm_lift_1_t671(src unsafe.Pointer) golem_tool_streams.ByteStreamCloseCaus
 }
 
 //go:noinline
-func wasm_lift_1_t668(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
+func wasm_lift_1_t671(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
 	var variant golem_tool_streams.ByteStreamFailure
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1114,7 +1114,7 @@ func wasm_lift_1_t668(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
 }
 
 //go:noinline
-func wasm_lower_1_t668(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
+func wasm_lower_1_t671(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_tool_streams.ByteStreamFailureCancelled:
@@ -1196,7 +1196,7 @@ func wasm_lower_1_t81(pinner *runtime.Pinner, value golem_core_types.TypedSchema
 }
 
 //go:noinline
-func wasm_lift_1_t667(src unsafe.Pointer) golem_tool_common.InvocationResult {
+func wasm_lift_1_t670(src unsafe.Pointer) golem_tool_common.InvocationResult {
 	var option witTypes.Option[golem_core_types.TypedSchemaValue]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -1552,9 +1552,9 @@ func wasm_lower_1_t78(pinner *runtime.Pinner, value golem_core_types.SchemaValue
 }
 
 //go:noinline
-func wasm_lift_1_t659(src unsafe.Pointer) golem_tool_common.Tool {
+func wasm_lift_1_t662(src unsafe.Pointer) golem_tool_common.Tool {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t658(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
+	result := wasm_lift_1_t661(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
 	result1 := wasm_lift_1_t61(unsafe.Add(unsafe.Pointer(src), (5 * 4)))
 
 	return golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) != 0), Commands: result, Schema: result1}
@@ -2301,11 +2301,11 @@ func wasm_lower_1_t70(pinner *runtime.Pinner, value golem_core_types.UnionValueP
 }
 
 //go:noinline
-func wasm_lift_1_t658(src unsafe.Pointer) golem_tool_common.CommandTree {
+func wasm_lift_1_t661(src unsafe.Pointer) golem_tool_common.CommandTree {
 	result0 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(24+85*4))
-		result := wasm_lift_1_t656(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t659(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -2884,7 +2884,7 @@ func wasm_lower_1_t21(pinner *runtime.Pinner, value golem_core_types.Role, dst u
 }
 
 //go:noinline
-func wasm_lift_1_t656(src unsafe.Pointer) golem_tool_common.CommandNode {
+func wasm_lift_1_t659(src unsafe.Pointer) golem_tool_common.CommandNode {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
@@ -2894,8 +2894,8 @@ func wasm_lift_1_t656(src unsafe.Pointer) golem_tool_common.CommandNode {
 		result = append(result, value1)
 	}
 
-	result2 := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
-	result3 := wasm_lift_1_t641(unsafe.Add(unsafe.Pointer(src), (10 * 4)))
+	result2 := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (4 * 4)))
+	result3 := wasm_lift_1_t644(unsafe.Add(unsafe.Pointer(src), (10 * 4)))
 	result4 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (15 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (15 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (14 * 4))))), index*4)
@@ -2909,7 +2909,7 @@ func wasm_lift_1_t656(src unsafe.Pointer) golem_tool_common.CommandNode {
 
 		option = witTypes.None[golem_tool_common.CommandBody]()
 	case 1:
-		result5 := wasm_lift_1_t653(unsafe.Add(unsafe.Pointer(src), (17 * 4)))
+		result5 := wasm_lift_1_t656(unsafe.Add(unsafe.Pointer(src), (17 * 4)))
 
 		option = witTypes.Some[golem_tool_common.CommandBody](result5)
 	default:
@@ -3199,13 +3199,13 @@ func wasm_lower_1_t47(pinner *runtime.Pinner, value golem_core_types.UnionBranch
 }
 
 //go:noinline
-func wasm_lift_1_t627(src unsafe.Pointer) golem_tool_common.Doc {
+func wasm_lift_1_t630(src unsafe.Pointer) golem_tool_common.Doc {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	result2 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))), index*(4*4))
-		result := wasm_lift_1_t625(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t628(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result)
 	}
@@ -3214,11 +3214,11 @@ func wasm_lift_1_t627(src unsafe.Pointer) golem_tool_common.Doc {
 }
 
 //go:noinline
-func wasm_lift_1_t641(src unsafe.Pointer) golem_tool_common.Globals {
+func wasm_lift_1_t644(src unsafe.Pointer) golem_tool_common.Globals {
 	result0 := make([]golem_tool_common.OptionSpec, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(24+22*4))
-		result := wasm_lift_1_t637(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t640(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -3226,7 +3226,7 @@ func wasm_lift_1_t641(src unsafe.Pointer) golem_tool_common.Globals {
 	result2 := make([]golem_tool_common.FlagSpec, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(16+14*4))
-		result1 := wasm_lift_1_t638(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t641(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -3235,12 +3235,12 @@ func wasm_lift_1_t641(src unsafe.Pointer) golem_tool_common.Globals {
 }
 
 //go:noinline
-func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
-	result := wasm_lift_1_t634(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t656(src unsafe.Pointer) golem_tool_common.CommandBody {
+	result := wasm_lift_1_t637(unsafe.Add(unsafe.Pointer(src), 0))
 	result1 := make([]golem_tool_common.OptionSpec, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 19*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 19*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 18*4))))), index*(24+22*4))
-		result0 := wasm_lift_1_t637(unsafe.Add(unsafe.Pointer(base), 0))
+		result0 := wasm_lift_1_t640(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result1 = append(result1, result0)
 	}
@@ -3248,7 +3248,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 	result3 := make([]golem_tool_common.FlagSpec, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 21*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 21*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 20*4))))), index*(16+14*4))
-		result2 := wasm_lift_1_t638(unsafe.Add(unsafe.Pointer(base), 0))
+		result2 := wasm_lift_1_t641(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result3 = append(result3, result2)
 	}
@@ -3256,7 +3256,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 	result5 := make([]golem_tool_common.Constraint, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 23*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 23*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 22*4))))), index*(7*4))
-		result4 := wasm_lift_1_t623(unsafe.Add(unsafe.Pointer(base), 0))
+		result4 := wasm_lift_1_t626(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result5 = append(result5, result4)
 	}
@@ -3267,7 +3267,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 
 		option = witTypes.None[golem_tool_common.StreamSpec]()
 	case 1:
-		result6 := wasm_lift_1_t642(unsafe.Add(unsafe.Pointer(src), (16 + 25*4)))
+		result6 := wasm_lift_1_t645(unsafe.Add(unsafe.Pointer(src), (16 + 25*4)))
 
 		option = witTypes.Some[golem_tool_common.StreamSpec](result6)
 	default:
@@ -3279,7 +3279,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 
 		option8 = witTypes.None[golem_tool_common.StreamSpec]()
 	case 1:
-		result7 := wasm_lift_1_t642(unsafe.Add(unsafe.Pointer(src), (16 + 35*4)))
+		result7 := wasm_lift_1_t645(unsafe.Add(unsafe.Pointer(src), (16 + 35*4)))
 
 		option8 = witTypes.Some[golem_tool_common.StreamSpec](result7)
 	default:
@@ -3291,7 +3291,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 
 		option10 = witTypes.None[golem_tool_common.StreamSpec]()
 	case 1:
-		result9 := wasm_lift_1_t642(unsafe.Add(unsafe.Pointer(src), (16 + 45*4)))
+		result9 := wasm_lift_1_t645(unsafe.Add(unsafe.Pointer(src), (16 + 45*4)))
 
 		option10 = witTypes.Some[golem_tool_common.StreamSpec](result9)
 	default:
@@ -3303,7 +3303,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 
 		option12 = witTypes.None[golem_tool_common.ResultSpec]()
 	case 1:
-		result11 := wasm_lift_1_t645(unsafe.Add(unsafe.Pointer(src), (16 + 55*4)))
+		result11 := wasm_lift_1_t648(unsafe.Add(unsafe.Pointer(src), (16 + 55*4)))
 
 		option12 = witTypes.Some[golem_tool_common.ResultSpec](result11)
 	default:
@@ -3312,7 +3312,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 	result14 := make([]golem_tool_common.ErrorCase, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 67*4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 67*4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 66*4))))), index*(8+9*4))
-		result13 := wasm_lift_1_t647(unsafe.Add(unsafe.Pointer(base), 0))
+		result13 := wasm_lift_1_t650(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result14 = append(result14, result13)
 	}
@@ -3323,7 +3323,7 @@ func wasm_lift_1_t653(src unsafe.Pointer) golem_tool_common.CommandBody {
 
 		option16 = witTypes.None[golem_tool_common.CommandAnnotations]()
 	case 1:
-		result15 := wasm_lift_1_t606(unsafe.Add(unsafe.Pointer(src), (17 + 68*4)))
+		result15 := wasm_lift_1_t609(unsafe.Add(unsafe.Pointer(src), (17 + 68*4)))
 
 		option16 = witTypes.Some[golem_tool_common.CommandAnnotations](result15)
 	default:
@@ -3926,7 +3926,7 @@ func wasm_lower_1_t46(pinner *runtime.Pinner, value golem_core_types.Discriminat
 }
 
 //go:noinline
-func wasm_lift_1_t625(src unsafe.Pointer) golem_tool_common.Example {
+func wasm_lift_1_t628(src unsafe.Pointer) golem_tool_common.Example {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 
@@ -3934,7 +3934,7 @@ func wasm_lift_1_t625(src unsafe.Pointer) golem_tool_common.Example {
 }
 
 //go:noinline
-func wasm_lift_1_t637(src unsafe.Pointer) golem_tool_common.OptionSpec {
+func wasm_lift_1_t640(src unsafe.Pointer) golem_tool_common.OptionSpec {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	var option witTypes.Option[rune]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
@@ -3955,7 +3955,7 @@ func wasm_lift_1_t637(src unsafe.Pointer) golem_tool_common.OptionSpec {
 		result = append(result, value1)
 	}
 
-	result2 := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (8 + 4*4)))
+	result2 := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (8 + 4*4)))
 	var option4 witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 10*4)))) {
 	case 0:
@@ -3968,7 +3968,7 @@ func wasm_lift_1_t637(src unsafe.Pointer) golem_tool_common.OptionSpec {
 	default:
 		panic("unreachable")
 	}
-	result5 := wasm_lift_1_t611(unsafe.Add(unsafe.Pointer(src), (8 + 13*4)))
+	result5 := wasm_lift_1_t614(unsafe.Add(unsafe.Pointer(src), (8 + 13*4)))
 	var option7 witTypes.Option[golem_core_types.SchemaValueTree]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (24 + 14*4)))) {
 	case 0:
@@ -3998,7 +3998,7 @@ func wasm_lift_1_t637(src unsafe.Pointer) golem_tool_common.OptionSpec {
 }
 
 //go:noinline
-func wasm_lift_1_t638(src unsafe.Pointer) golem_tool_common.FlagSpec {
+func wasm_lift_1_t641(src unsafe.Pointer) golem_tool_common.FlagSpec {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	var option witTypes.Option[rune]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))) {
@@ -4019,8 +4019,8 @@ func wasm_lift_1_t638(src unsafe.Pointer) golem_tool_common.FlagSpec {
 		result = append(result, value1)
 	}
 
-	result2 := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (8 + 4*4)))
-	result3 := wasm_lift_1_t614(unsafe.Add(unsafe.Pointer(src), (8 + 10*4)))
+	result2 := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (8 + 4*4)))
+	result3 := wasm_lift_1_t617(unsafe.Add(unsafe.Pointer(src), (8 + 10*4)))
 	var option5 witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 11*4)))) {
 	case 0:
@@ -4038,11 +4038,11 @@ func wasm_lift_1_t638(src unsafe.Pointer) golem_tool_common.FlagSpec {
 }
 
 //go:noinline
-func wasm_lift_1_t634(src unsafe.Pointer) golem_tool_common.Positionals {
+func wasm_lift_1_t637(src unsafe.Pointer) golem_tool_common.Positionals {
 	result0 := make([]golem_tool_common.Positional, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(17*4))
-		result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t633(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -4053,7 +4053,7 @@ func wasm_lift_1_t634(src unsafe.Pointer) golem_tool_common.Positionals {
 
 		option = witTypes.None[golem_tool_common.TailPositional]()
 	case 1:
-		result1 := wasm_lift_1_t631(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
+		result1 := wasm_lift_1_t634(unsafe.Add(unsafe.Pointer(src), (3 * 4)))
 
 		option = witTypes.Some[golem_tool_common.TailPositional](result1)
 	default:
@@ -4064,14 +4064,14 @@ func wasm_lift_1_t634(src unsafe.Pointer) golem_tool_common.Positionals {
 }
 
 //go:noinline
-func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.Constraint {
+func wasm_lift_1_t626(src unsafe.Pointer) golem_tool_common.Constraint {
 	var variant golem_tool_common.Constraint
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
 		result0 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(6*4))
-			result := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+			result := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result0 = append(result0, result)
 		}
@@ -4082,7 +4082,7 @@ func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.Constraint {
 		result2 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(6*4))
-			result1 := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+			result1 := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result2 = append(result2, result1)
 		}
@@ -4093,7 +4093,7 @@ func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.Constraint {
 		result4 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(6*4))
-			result3 := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+			result3 := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result4 = append(result4, result3)
 		}
@@ -4104,7 +4104,7 @@ func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.Constraint {
 		result6 := make([]golem_tool_common.RefGroup, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(2*4))
-			result5 := wasm_lift_1_t618(unsafe.Add(unsafe.Pointer(base), 0))
+			result5 := wasm_lift_1_t621(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result6 = append(result6, result5)
 		}
@@ -4112,12 +4112,12 @@ func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.Constraint {
 		variant = golem_tool_common.MakeConstraintMutexGroups(result6)
 
 	case 4:
-		result7 := wasm_lift_1_t620(unsafe.Add(unsafe.Pointer(src), 4))
+		result7 := wasm_lift_1_t623(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_common.MakeConstraintImplies(result7)
 
 	case 5:
-		result8 := wasm_lift_1_t621(unsafe.Add(unsafe.Pointer(src), 4))
+		result8 := wasm_lift_1_t624(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_common.MakeConstraintForbids(result8)
 
@@ -4129,8 +4129,8 @@ func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.Constraint {
 }
 
 //go:noinline
-func wasm_lift_1_t642(src unsafe.Pointer) golem_tool_common.StreamSpec {
-	result := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t645(src unsafe.Pointer) golem_tool_common.StreamSpec {
+	result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), 0))
 	result1 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))), index*(2*4))
@@ -4143,12 +4143,12 @@ func wasm_lift_1_t642(src unsafe.Pointer) golem_tool_common.StreamSpec {
 }
 
 //go:noinline
-func wasm_lift_1_t645(src unsafe.Pointer) golem_tool_common.ResultSpec {
-	result := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), 4))
+func wasm_lift_1_t648(src unsafe.Pointer) golem_tool_common.ResultSpec {
+	result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), 4))
 	result1 := make([]golem_tool_common.Formatter, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4))))), index*(8*4))
-		result0 := wasm_lift_1_t643(unsafe.Add(unsafe.Pointer(base), 0))
+		result0 := wasm_lift_1_t646(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result1 = append(result1, result0)
 	}
@@ -4159,9 +4159,9 @@ func wasm_lift_1_t645(src unsafe.Pointer) golem_tool_common.ResultSpec {
 }
 
 //go:noinline
-func wasm_lift_1_t647(src unsafe.Pointer) golem_tool_common.ErrorCase {
+func wasm_lift_1_t650(src unsafe.Pointer) golem_tool_common.ErrorCase {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 	var option witTypes.Option[int32]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 + 8*4)))) {
 	case 0:
@@ -4178,7 +4178,7 @@ func wasm_lift_1_t647(src unsafe.Pointer) golem_tool_common.ErrorCase {
 }
 
 //go:noinline
-func wasm_lift_1_t606(src unsafe.Pointer) golem_tool_common.CommandAnnotations {
+func wasm_lift_1_t609(src unsafe.Pointer) golem_tool_common.CommandAnnotations {
 
 	return golem_tool_common.CommandAnnotations{ReadOnly: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) != 0), Destructive: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1))) != 0), Idempotent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 2))) != 0), OpenWorld: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 3))) != 0)}
 }
@@ -4628,7 +4628,7 @@ func wasm_lower_1_t45(pinner *runtime.Pinner, value golem_core_types.FieldDiscri
 }
 
 //go:noinline
-func wasm_lift_1_t611(src unsafe.Pointer) golem_tool_common.OptionShape {
+func wasm_lift_1_t614(src unsafe.Pointer) golem_tool_common.OptionShape {
 	var variant golem_tool_common.OptionShape
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -4640,12 +4640,12 @@ func wasm_lift_1_t611(src unsafe.Pointer) golem_tool_common.OptionShape {
 		variant = golem_tool_common.MakeOptionShapeOptionalScalar(*(*int32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	case 2:
-		result := wasm_lift_1_t609(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t612(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_common.MakeOptionShapeRepeatableList(result)
 
 	case 3:
-		result0 := wasm_lift_1_t610(unsafe.Add(unsafe.Pointer(src), 4))
+		result0 := wasm_lift_1_t613(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_common.MakeOptionShapeRepeatableMap(result0)
 
@@ -4657,11 +4657,11 @@ func wasm_lift_1_t611(src unsafe.Pointer) golem_tool_common.OptionShape {
 }
 
 //go:noinline
-func wasm_lift_1_t614(src unsafe.Pointer) golem_tool_common.FlagShape {
+func wasm_lift_1_t617(src unsafe.Pointer) golem_tool_common.FlagShape {
 	var variant golem_tool_common.FlagShape
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
-		result := wasm_lift_1_t612(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t615(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_common.MakeFlagShapeBoolFlag(result)
 
@@ -4688,9 +4688,9 @@ func wasm_lift_1_t614(src unsafe.Pointer) golem_tool_common.FlagShape {
 }
 
 //go:noinline
-func wasm_lift_1_t630(src unsafe.Pointer) golem_tool_common.Positional {
+func wasm_lift_1_t633(src unsafe.Pointer) golem_tool_common.Positional {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 * 4)))) {
 	case 0:
@@ -4720,9 +4720,9 @@ func wasm_lift_1_t630(src unsafe.Pointer) golem_tool_common.Positional {
 }
 
 //go:noinline
-func wasm_lift_1_t631(src unsafe.Pointer) golem_tool_common.TailPositional {
+func wasm_lift_1_t634(src unsafe.Pointer) golem_tool_common.TailPositional {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 	var option witTypes.Option[string]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 * 4)))) {
 	case 0:
@@ -4763,7 +4763,7 @@ func wasm_lift_1_t631(src unsafe.Pointer) golem_tool_common.TailPositional {
 }
 
 //go:noinline
-func wasm_lift_1_t616(src unsafe.Pointer) golem_tool_common.Ref {
+func wasm_lift_1_t619(src unsafe.Pointer) golem_tool_common.Ref {
 	var variant golem_tool_common.Ref
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -4772,7 +4772,7 @@ func wasm_lift_1_t616(src unsafe.Pointer) golem_tool_common.Ref {
 		variant = golem_tool_common.MakeRefPresent(value0)
 
 	case 1:
-		result := wasm_lift_1_t615(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t618(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_tool_common.MakeRefValueIs(result)
 
@@ -4784,11 +4784,11 @@ func wasm_lift_1_t616(src unsafe.Pointer) golem_tool_common.Ref {
 }
 
 //go:noinline
-func wasm_lift_1_t618(src unsafe.Pointer) golem_tool_common.RefGroup {
+func wasm_lift_1_t621(src unsafe.Pointer) golem_tool_common.RefGroup {
 	result0 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(6*4))
-		result := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -4797,11 +4797,11 @@ func wasm_lift_1_t618(src unsafe.Pointer) golem_tool_common.RefGroup {
 }
 
 //go:noinline
-func wasm_lift_1_t620(src unsafe.Pointer) golem_tool_common.ImpliesC {
+func wasm_lift_1_t623(src unsafe.Pointer) golem_tool_common.ImpliesC {
 	result0 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(6*4))
-		result := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -4809,7 +4809,7 @@ func wasm_lift_1_t620(src unsafe.Pointer) golem_tool_common.ImpliesC {
 	result2 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))), index*(6*4))
-		result1 := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -4818,11 +4818,11 @@ func wasm_lift_1_t620(src unsafe.Pointer) golem_tool_common.ImpliesC {
 }
 
 //go:noinline
-func wasm_lift_1_t621(src unsafe.Pointer) golem_tool_common.ForbidsC {
+func wasm_lift_1_t624(src unsafe.Pointer) golem_tool_common.ForbidsC {
 	result0 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))), index*(6*4))
-		result := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -4830,7 +4830,7 @@ func wasm_lift_1_t621(src unsafe.Pointer) golem_tool_common.ForbidsC {
 	result2 := make([]golem_tool_common.Ref, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))), index*(6*4))
-		result1 := wasm_lift_1_t616(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t619(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -4839,9 +4839,9 @@ func wasm_lift_1_t621(src unsafe.Pointer) golem_tool_common.ForbidsC {
 }
 
 //go:noinline
-func wasm_lift_1_t643(src unsafe.Pointer) golem_tool_common.Formatter {
+func wasm_lift_1_t646(src unsafe.Pointer) golem_tool_common.Formatter {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
-	result := wasm_lift_1_t627(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
+	result := wasm_lift_1_t630(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
 	return golem_tool_common.Formatter{Name: value0, Doc: result}
 }
@@ -4879,27 +4879,27 @@ func wasm_lift_1_t47(src unsafe.Pointer) golem_core_types.UnionBranch {
 }
 
 //go:noinline
-func wasm_lift_1_t609(src unsafe.Pointer) golem_tool_common.RepeatableListShape {
-	result := wasm_lift_1_t608(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t612(src unsafe.Pointer) golem_tool_common.RepeatableListShape {
+	result := wasm_lift_1_t611(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_tool_common.RepeatableListShape{Repetition: result, ItemType: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8))}
 }
 
 //go:noinline
-func wasm_lift_1_t610(src unsafe.Pointer) golem_tool_common.RepeatableMapShape {
-	result := wasm_lift_1_t608(unsafe.Add(unsafe.Pointer(src), 0))
+func wasm_lift_1_t613(src unsafe.Pointer) golem_tool_common.RepeatableMapShape {
+	result := wasm_lift_1_t611(unsafe.Add(unsafe.Pointer(src), 0))
 
 	return golem_tool_common.RepeatableMapShape{Repetition: result, MapType: *(*int32)(unsafe.Add(unsafe.Pointer(src), 8)), DuplicateKeyPolicy: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 12))))}
 }
 
 //go:noinline
-func wasm_lift_1_t612(src unsafe.Pointer) golem_tool_common.BoolFlagShape {
+func wasm_lift_1_t615(src unsafe.Pointer) golem_tool_common.BoolFlagShape {
 
 	return golem_tool_common.BoolFlagShape{Default: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) != 0), Negatable: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 1))) != 0)}
 }
 
 //go:noinline
-func wasm_lift_1_t615(src unsafe.Pointer) golem_tool_common.ValueIsRef {
+func wasm_lift_1_t618(src unsafe.Pointer) golem_tool_common.ValueIsRef {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	result := wasm_lift_1_t80(unsafe.Add(unsafe.Pointer(src), (2 * 4)))
 
@@ -4948,7 +4948,7 @@ func wasm_lift_1_t46(src unsafe.Pointer) golem_core_types.DiscriminatorRule {
 }
 
 //go:noinline
-func wasm_lift_1_t608(src unsafe.Pointer) golem_tool_common.Repetition {
+func wasm_lift_1_t611(src unsafe.Pointer) golem_tool_common.Repetition {
 	var variant golem_tool_common.Repetition
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

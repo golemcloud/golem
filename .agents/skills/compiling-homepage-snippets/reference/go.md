@@ -57,7 +57,7 @@ marked TS comment is the same comment, marked, in Go.
   `impl.Handle`, `Tool.Body[A, O]`, ...).
 - **gofmt 1.27:** the script calls `"$(go env GOROOT)/bin/gofmt"` from the
   harness directory (an older `gofmt` on PATH cannot parse generic methods).
-- **The patched Golem Go toolchain `go1.27.1-golem.4`** (github.com/golemcloud/go),
+- **The patched Golem Go toolchain `go1.27.1-golem.5`** (github.com/golemcloud/go),
   needed only to link components. check.sh installs it the way the Golem CLI
   does (`cli/golem-cli/src/app/build/go_toolchain.rs`, pins in
   `cli/golem-cli/src/versions.rs`): it downloads
@@ -77,7 +77,7 @@ marked TS comment is the same comment, marked, in Go.
   `github.com/anthropics/anthropic-sdk-go v1.23.0`, `openai-go v1.8.2` and
   others), `github.com/openai/openai-go/v3 v3.84.0`,
   `github.com/google/uuid v1.6.0`, the SDK's
-  `github.com/golemcloud/go-pkg v0.2.3-golem.1` fork and
+  `github.com/golemcloud/go-pkg v0.2.3-golem.2` fork and
   `github.com/coder/websocket`. `go.sum` is kept in the harness.
 - **sed -E** for marker stripping (`sed -E 's,[ ]+(//|#)@$,,'`), mktemp.
 - **No SDK build step:** the in-tree SDK (`sdks/go/golem`, `sdks/go/core`) is
@@ -92,7 +92,7 @@ marked TS comment is the same comment, marked, in Go.
                    openai-go/v3, google/uuid and the five bridge stubs. replace:
                      sdks/go/core, sdks/go/golem => <repo>/sdks/go/...
                      go.bytecodealliance.org/pkg =>
-                       github.com/golemcloud/go-pkg v0.2.3-golem.1
+                       github.com/golemcloud/go-pkg v0.2.3-golem.2
                        (mandatory for every Go component; the SDK's own
                        replace does not propagate)
                      golem.local/bridge/<x>-guest-client => ./bridge/<x>-...

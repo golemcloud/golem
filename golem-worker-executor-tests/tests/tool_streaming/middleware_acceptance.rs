@@ -233,7 +233,7 @@ macro_rules! setup_rate_limit_chain {
             &tool_name,
             $rate_limit_component.id,
             $rate_limit_component.revision,
-            "golem:rate-limit-middleware",
+            "golem-it:tool-streaming-rate-limit-middleware",
             &middleware_metadata.tool_middlewares,
             vec![(
                 definition.name.as_str(),
