@@ -121,7 +121,14 @@ impl ToolExecution {
     }
 
     pub(super) fn cancel_body(&self) -> bool {
-        if self.cancellable && self.operation.begin_cancel() {
+        if !self.cancellable {
+            // Reproduce the caller's transient stdin closure without selecting a new
+            // outcome or interrupting a completed historical body. Its recorded calls
+            // after that closure still have to replay before the terminal can resolve.
+            self.operation.cancel_unrecorded_stdin();
+            return false;
+        }
+        if self.operation.begin_cancel() {
             self.cancel.cancel();
             true
         } else {

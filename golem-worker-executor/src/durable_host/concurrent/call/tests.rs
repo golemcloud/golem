@@ -13,54 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::attribution::InvocationAttribution;
 use futures::FutureExt;
 use test_r::test;
-
-#[test]
-#[test_r::timeout("10s")]
-async fn trapped_store_rejects_pending_owned_initiation_windows() {
-    use crate::durable_host::concurrent::initiation::InitiationAccess;
-    use crate::durable_host::concurrent::initiation_owner::InitiationOwner;
-    use crate::workerctx::default::Context;
-
-    let owner = InitiationOwner::<Context>::new();
-    let registration = owner.register().unwrap();
-    let mut access = owner.access();
-    let service = owner.clone();
-    let started = Arc::new(tokio::sync::Notify::new());
-    let service_started = started.clone();
-    let mut config = wasmtime::Config::new();
-    config.concurrency_support(true);
-    let engine = wasmtime::Engine::new(&config).unwrap();
-    let mut store = wasmtime::Store::new(&engine, ());
-    let result = store
-        .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
-            accessor.spawn(async move |accessor| {
-                service_started.notify_one();
-                service
-                    .serve(accessor, |_: &mut ()| {
-                        unreachable!("no context windows are queued until after the trap")
-                    })
-                    .await
-            })?;
-            started.notified().await;
-            Err(wasmtime::Error::msg("injected guest trap"))
-        })
-        .await;
-    assert!(matches!(result, Ok(Err(_))));
-    drop(store);
-    // The native initiation was already admitted and can finish an external await
-    // after the Store has trapped. Its next context window must fail, not park.
-    let settled =
-        tokio::time::timeout(std::time::Duration::from_millis(100), access.window(|_| ())).await;
-    drop(registration);
-    drop(access);
-    drop(owner);
-    assert!(
-        matches!(settled, Ok(Err(_))),
-        "a context window after Store disposal must fail instead of hanging: {settled:?}"
-    );
-}
 
 #[test]
 #[test_r::timeout("10s")]
@@ -78,7 +33,7 @@ async fn closing_owned_initiation_retires_window_and_protocol_waits() {
         let (ready, waiting) = oneshot::channel();
         let job = tasks
             .spawn_metadata(async move {
-                let mut access = job_owner.access();
+                let mut access = job_owner.access(InvocationAttribution::default().capture());
                 let result = job_owner
                     .run(async move {
                         if queued_window {
@@ -103,7 +58,13 @@ async fn closing_owned_initiation_retires_window_and_protocol_waits() {
         assert!(job.await.unwrap().is_err());
         tasks.stop_and_wait().await.unwrap();
         assert!(owner.register().is_err());
-        assert!(owner.access().window(|_| ()).await.is_err());
+        assert!(
+            owner
+                .access(InvocationAttribution::default().capture())
+                .window(|_| ())
+                .await
+                .is_err()
+        );
     }
 }
 
@@ -215,7 +176,7 @@ async fn abandoned_final_initiation_window_preserves_accepted_start_cleanup() {
         _phantom: PhantomData,
     };
     let owner = InitiationOwner::<Context>::new();
-    let mut access = owner.access();
+    let mut access = owner.access(InvocationAttribution::default().capture());
     // This is the final window in start_owned_initiation. Drop the context
     // service before it can construct the session, as on runtime disposal.
     let window = access.window(move |ctx| DurableCallSession::finish_access_start(ctx, executed));

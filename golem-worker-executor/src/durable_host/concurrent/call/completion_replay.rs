@@ -120,8 +120,33 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_access_to(store, get_ctx, AccessResultDestination::Guest, false, None)
+        self.replay_access_with_delivered(store, get_ctx, Box::new(|| {}))
             .await
+    }
+
+    /// [`Self::replay_access`] that runs `on_delivered` when the guest receives the replayed
+    /// result at its recorded boundary (see
+    /// [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`]).
+    pub(crate) async fn replay_access_with_delivered<T, D, Ctx>(
+        self,
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        on_delivered: crate::durable_host::concurrent::OnDelivered,
+    ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        self.replay_access_to(
+            store,
+            get_ctx,
+            AccessResultDestination::Guest,
+            false,
+            None,
+            on_delivered,
+        )
+        .await
     }
 
     /// Replays an effectful destructor from a background task. Its End is host-internal;
@@ -145,6 +170,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessResultDestination::Host,
             false,
             Some(activity),
+            Box::new(|| {}),
         )
         .await
         .map_err(|source| TerminalCallError::new(source, context))
@@ -157,6 +183,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         destination: AccessResultDestination,
         require_completed: bool,
         drop_activity: Option<&crate::durable_host::tail_work::TailActivity>,
+        on_delivered: crate::durable_host::concurrent::OnDelivered,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -241,7 +268,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         self.cleanup_sink.clone(),
                         self.teardown_probe(),
                     )
-                    .deliver_at_accessor_terminal(store)
+                    .deliver_at_accessor_terminal_with_delivered(store, on_delivered)
                     .await?;
                 }
                 Ok(CallReplayOutcome::Replayed(response))

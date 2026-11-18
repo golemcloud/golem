@@ -167,9 +167,17 @@ where
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
             ctx.state.owned_agent_id.clone(),
-            ctx.state.invocation_context.trace_id.clone(),
-            ctx.state.invocation_context.trace_states.clone(),
-            ctx.state.current_span_id.clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_id
+                .clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_states
+                .clone(),
+            ctx.state.invocation_state().current_span_id.clone(),
         )
     });
     let span_request = serialized_request.clone();
@@ -261,9 +269,17 @@ where
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             (
                 ctx.state.owned_agent_id.clone(),
-                ctx.state.invocation_context.trace_id.clone(),
-                ctx.state.invocation_context.trace_states.clone(),
-                ctx.state.current_span_id.clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_id
+                    .clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_states
+                    .clone(),
+                ctx.state.invocation_state().current_span_id.clone(),
             )
         });
         SpanStarted {

@@ -590,7 +590,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             // owner synchronizes again.
                             synchronized_at_admission.then(|| {
                                 (
-                                    ctx.state.processed_authority_generation,
+                                    ctx.state.authority().synchronized_generation(),
                                     ctx.state.authority_wallet.clone(),
                                 )
                             }),
@@ -838,10 +838,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         capture: impl FnMut(&mut DurableWorkerCtx<Ctx>) -> T,
     ) -> wasmtime::Result<(BegunCall<Pair, P, Ctx>, Option<T>)> {
         let custom_invocation_scope =
-            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+            wasmtime::component::current_guest_task_context::<GuestTaskContext>()
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
                 .as_deref()
-                .and_then(CustomInvocationContext::current);
+                .and_then(GuestTaskContext::current);
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         let invocation_id = ctx.direct_call_invocation_id()?;
         drain_queued_dropped_call_events(ctx).await?;
@@ -874,10 +874,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         // Capture and validate the host task's immutable initiation-time context before the first
         // await. Calls already in flight retain this owner after the guest leaves the lexical scope.
         let custom_invocation_scope =
-            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+            wasmtime::component::current_guest_task_context::<GuestTaskContext>()
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
                 .as_deref()
-                .and_then(CustomInvocationContext::current);
+                .and_then(GuestTaskContext::current);
         let observational_owner = resolve_observational_owner(ctx, None, custom_invocation_scope)?;
         // A direct call holds the Store, so it reserves its invocation id in guest call order.
         let invocation_id = ctx.direct_call_invocation_id()?;

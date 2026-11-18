@@ -68,9 +68,11 @@ Use a trap to stop an invocation on an unrecoverable condition. An explicit trap
 
 The retry policy which controls the maximum number of retries and the exponential backoff is a global configuration of the Golem servers, but it can be customized for each agent.
 
+Each SDK can also run a block of code inside a _retry policy scope_. While the scope is open, its named policy overrides the agent-wide policy with the same name for the host calls of the current task. The scope changes no agent-wide policy and records no oplog entry. Scopes nest; the innermost open scope with a name wins.
+
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        The `@golemcloud/golem-ts-sdk` package exports the `withRetryPolicy` function to temporarily install a named retry policy for a block of code:
+        The `@golemcloud/golem-ts-sdk` package exports the `withRetryPolicy` function to run a block of code inside a retry policy scope. JavaScript code of one agent runs on one task, so other async work of the same invocation that runs while the scope is open also sees the policy:
 
         ```typescript
         import {withRetryPolicy, type NamedRetryPolicy} from "@golemcloud/golem-ts-sdk"
@@ -136,7 +138,7 @@ The retry policy which controls the maximum number of retries and the exponentia
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        The Effect SDK provides a typed retry-policy DSL and `Retry.withPolicy`, which installs a policy for one Effect. It restores the previous policy with the same name when its scope closes, or removes the temporary policy if none existed:
+        The Effect SDK provides a typed retry-policy DSL and `Retry.withPolicy`, which runs one Effect inside a retry policy scope. The scope closes on success, failure, or interruption. Other fibers of the same invocation that run while the scope is open also see the policy:
 
         ```typescript
         import { Duration, Effect } from "effect"
@@ -158,7 +160,7 @@ The retry policy which controls the maximum number of retries and the exponentia
         Use `Retry.setPolicy(policy)` instead when the policy should remain installed on the durable agent until it is overwritten or removed.
     </Tabs.Tab>
     <Tabs.Tab>
-        The `golem_rust` crate exports the `with_retry_policy` function to temporarily install a named retry policy for a block of code:
+        The `golem_rust` crate exports the `with_retry_policy` function to run a block of code inside a retry policy scope. The scope also covers every future the same task polls while it is open, such as joined futures and futures spawned with `spawn_local`:
 
         ```rust
         use golem_rust::bindings::golem::api::retry::{
@@ -217,7 +219,7 @@ The retry policy which controls the maximum number of retries and the exponentia
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In Scala, `golem.Guards` exposes `withRetryPolicy` to temporarily install a named retry policy for a `Future`-returning block:
+        In Scala, `golem.Guards` exposes `withRetryPolicy` to run a `Future`-returning block inside a retry policy scope:
 
         ```scala
         import golem.Guards
@@ -240,10 +242,10 @@ The retry policy which controls the maximum number of retries and the exponentia
           }
         ```
 
-        `Retry.named` creates a typed policy that matches all failures by default. The guard restores the previous policy when the returned `Future` completes.
+        `Retry.named` creates a typed policy that matches all failures by default. The scope closes when the returned `Future` completes.
     </Tabs.Tab>
     <Tabs.Tab>
-        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the high-level policy builders and `with_named_policy`:
+        Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`, use the high-level policy builders and `with_named_policy` to run a callback inside a retry policy scope. For async code, hold the guard of `use_named_policy` and drop it when the block exits:
 
         ```moonbit
         let policy = @api.NamedPolicy::named(
@@ -262,7 +264,7 @@ The retry policy which controls the maximum number of retries and the exponentia
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        The `github.com/golemcloud/golem/sdks/go/golem/retry` package provides a typed retry-policy builder and `retry.With`, which installs a named policy and returns a function that restores the previous policy with the same name, or removes the temporary policy if none existed. Use it with `defer` to scope the policy to a block of code:
+        The `github.com/golemcloud/golem/sdks/go/golem/retry` package provides a typed retry-policy builder and `retry.With`, which opens a retry policy scope and returns the function that closes it. The scope also covers the goroutines the current task runs. Use it with `defer` to scope the policy to a block of code:
 
         ```go
         import (

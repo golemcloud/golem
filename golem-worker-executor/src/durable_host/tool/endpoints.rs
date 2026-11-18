@@ -569,6 +569,8 @@ where
                 )
                 .with_producer_cancel_observer(source_cancel.clone()),
         );
+        let producer =
+            crate::durable_host::attribution::Attributed::new(ctx.attribution.clone(), producer);
         let source = StreamReader::new(&mut access, producer)?;
         let ctx = access.get();
         let memory = AttachmentMemory::for_store(

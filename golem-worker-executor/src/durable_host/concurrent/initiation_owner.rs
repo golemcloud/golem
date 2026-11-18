@@ -14,6 +14,7 @@
 
 use super::initiation::{InitiationAccess, InitiationWindow};
 use super::*;
+use crate::durable_host::attribution::CapturedAttribution;
 use futures::{
     FutureExt,
     future::{Either, poll_fn, ready},
@@ -69,8 +70,11 @@ impl<Ctx: WorkerCtx> InitiationOwner<Ctx> {
         self.changed.notify_one();
     }
 
-    pub(crate) fn access(self: &Arc<Self>) -> OwnedInitiationAccess<Ctx> {
-        OwnedInitiationAccess(self.clone())
+    pub(crate) fn access(
+        self: &Arc<Self>,
+        attribution: CapturedAttribution,
+    ) -> OwnedInitiationAccess<Ctx> {
+        OwnedInitiationAccess(self.clone(), attribution)
     }
 
     pub(crate) fn close(&self) {
@@ -126,7 +130,6 @@ impl<Ctx: WorkerCtx> InitiationOwner<Ctx> {
         T: Send + 'static,
         D: HasData + ?Sized,
     {
-        let _service = InitiationService(self.clone());
         while let Some(window) = self.next().await {
             store.with(|mut access| window(get_ctx(access.data_mut())));
         }
@@ -162,14 +165,6 @@ impl<Ctx: WorkerCtx> InitiationOwner<Ctx> {
     }
 }
 
-struct InitiationService<Ctx: WorkerCtx>(Arc<InitiationOwner<Ctx>>);
-
-impl<Ctx: WorkerCtx> Drop for InitiationService<Ctx> {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
-
 pub(crate) struct InitiationRegistration<Ctx: WorkerCtx> {
     owner: Arc<InitiationOwner<Ctx>>,
     completed: bool,
@@ -193,11 +188,14 @@ impl<Ctx: WorkerCtx> Drop for InitiationRegistration<Ctx> {
     }
 }
 
-pub(crate) struct OwnedInitiationAccess<Ctx: WorkerCtx>(Arc<InitiationOwner<Ctx>>);
+pub(crate) struct OwnedInitiationAccess<Ctx: WorkerCtx>(
+    Arc<InitiationOwner<Ctx>>,
+    CapturedAttribution,
+);
 
 impl<Ctx: WorkerCtx> Clone for OwnedInitiationAccess<Ctx> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(self.0.clone(), self.1.clone())
     }
 }
 
@@ -208,11 +206,12 @@ impl<Ctx: WorkerCtx> InitiationAccess<Ctx> for OwnedInitiationAccess<Ctx> {
         F: FnOnce(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
     {
         let (send, receive) = oneshot::channel();
+        let attribution = self.1.clone();
         if self
             .0
             .sender
             .send(Box::new(move |ctx| {
-                let _ = send.send(operation(ctx));
+                let _ = send.send(attribution.with(|| operation(ctx)));
             }))
             .is_err()
         {

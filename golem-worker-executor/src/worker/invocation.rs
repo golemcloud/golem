@@ -630,6 +630,8 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let output_monitor = store.data().durable_ctx().schema_output_drain_monitor()?;
     let output_watch = tokio_util::sync::CancellationToken::new();
     let output_watch_guard = output_watch.clone().drop_guard();
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     let future = store
         .as_context_mut()
         .run_concurrent(async move |accessor| {
@@ -638,30 +640,33 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
             {
                 runtime.certify_root(activity);
             }
-            if let Err(error) = accessor.with(|mut access| {
-                crate::durable_host::stream_outcome::supervise_schema_outputs(
-                    &mut access,
-                    output_monitor,
-                    runtime_for_call.clone(),
-                    output_watch,
-                )
-            }) {
-                return Ok(Err(WorkerExecutorError::runtime(error.to_string())));
-            }
-            tokio::select! {
-                biased;
-                result = worker.materialize_durable_streaming_result(
-                    idempotency_key,
-                    output,
-                    &graph,
-                    &root,
-                    component_revision,
-                    runtime_for_call.as_ref().map(|runtime| runtime.source()),
-                    preparation,
-                    &output_tasks,
-                ) => Ok(result),
-                interrupt_kind = interrupt => Err(interrupt_kind),
-            }
+            let materialize = async move {
+                if let Err(error) = accessor.with(|mut access| {
+                    crate::durable_host::stream_outcome::supervise_schema_outputs(
+                        &mut access,
+                        output_monitor,
+                        runtime_for_call.clone(),
+                        output_watch,
+                    )
+                }) {
+                    return Ok(Err(WorkerExecutorError::runtime(error.to_string())));
+                }
+                tokio::select! {
+                    biased;
+                    result = worker.materialize_durable_streaming_result(
+                        idempotency_key,
+                        output,
+                        &graph,
+                        &root,
+                        component_revision,
+                        runtime_for_call.as_ref().map(|runtime| runtime.source()),
+                        preparation,
+                        &output_tasks,
+                    ) => Ok(result),
+                    interrupt_kind = interrupt => Err(interrupt_kind),
+                }
+            };
+            attribution.scoped(Some(invocation_key), materialize).await
         });
     let materialized = match runtime {
         Some(runtime) => {
@@ -1021,15 +1026,16 @@ pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
     let driver = store
         .as_context_mut()
         .run_concurrent(async move |accessor| {
-            accessor.spawn(async move |accessor| {
-                service
-                    .serve(accessor, |ctx: &mut Ctx| ctx.durable_ctx_mut())
-                    .await
-            })?;
             if let (Some(runtime), Some(activity)) = (&root_runtime, accessor.runtime_activity()) {
                 runtime.certify_root(activity);
             }
-            fun(accessor).await
+            tokio::select! {
+                result = fun(accessor) => result,
+                result = service.serve(accessor, |ctx: &mut Ctx| ctx.durable_ctx_mut()) => {
+                    result?;
+                    Err(wasmtime::Error::msg("tool initiation service stopped before return"))
+                }
+            }
         });
     let result = match runtime {
         Some(runtime) => runtime.drive(driver, entity.as_ref(), policy).await,
@@ -1044,20 +1050,30 @@ pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
         let _deadline = ctx.arm_tail_work_deadline(started.clone());
         let interrupt = ctx.create_interrupt_signal();
         started.notify_one();
-        tokio::select! {
-            drained = initiations.drain(store.data_mut().durable_ctx_mut()) => {
-                drained.map_err(GuestCallSettlementError::Infrastructure)?;
-            }
-            interruption = interrupt => {
-                let ctx = store.data().durable_ctx();
-                if interruption == InterruptKind::EntityCancellation {
-                    ctx.tool_trap_disposal.store(true, std::sync::atomic::Ordering::Release);
+        let drained = tokio::select! {
+            drained = initiations.drain(store.data_mut().durable_ctx_mut()) => drained,
+            interruption = interrupt => Err(interruption.into()),
+        };
+        if let Err(error) = drained {
+            let ctx = store.data().durable_ctx();
+            if matches!(
+                &error,
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::EntityCancellation
                 }
-                ctx.begin_stream_runtime_teardown();
-                initiations.close();
-                initiations.wait_closed().await;
-                return Err(GuestCallSettlementError::Interrupted(interruption.into()));
+            ) {
+                ctx.tool_trap_disposal
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
+            ctx.begin_stream_runtime_teardown();
+            initiations.close();
+            initiations.wait_closed().await;
+            return Err(match error {
+                WorkerExecutorError::Interrupted { kind } => {
+                    GuestCallSettlementError::Interrupted(kind.into())
+                }
+                error => GuestCallSettlementError::Infrastructure(error),
+            });
         }
         initiations.close();
     }
@@ -1138,6 +1154,8 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     let fun = {
         let drain_started = drain_started.clone();
         let runtime = runtime.clone();
@@ -1146,7 +1164,9 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
             if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
                 runtime.certify_root(activity);
             }
-            let result = fun(accessor).await;
+            let result = attribution
+                .scoped(Some(invocation_key), fun(accessor))
+                .await;
             finalization.begin();
             if matches!(deadline, SettlementDeadline::RootReturned) {
                 drain_started.notify_one();
@@ -1204,6 +1224,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
     call: PreparedCall,
     display_name: &str,
 ) -> Result<InvokeResult, WorkerExecutorError> {
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     match call {
         PreparedCall::Initialize {
             agent_type, input, ..
@@ -1211,7 +1233,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest.call_initialize(accessor, agent_type, input).await
+                attribution
+                    .armed(
+                        invocation_key,
+                        guest.call_initialize(accessor, agent_type, input),
+                    )
+                    .await
             })
             .await;
             let consumed_fuel =
@@ -1260,7 +1287,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         {
                             runtime.certify_root(activity);
                         }
-                        guest.call_invoke(accessor, method_name, input).await
+                        let call = attribution.armed(
+                            invocation_key,
+                            guest.call_invoke(accessor, method_name, input),
+                        );
+                        attribution.scoped(Some(invocation_key), call).await
                     });
                 let result = match runtime {
                     Some(runtime) => {
@@ -1287,7 +1318,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 }
             } else {
                 run_guest_call_settled(store, async |accessor| {
-                    guest.call_invoke(accessor, method_name, input).await
+                    attribution
+                        .armed(
+                            invocation_key,
+                            guest.call_invoke(accessor, method_name, input),
+                        )
+                        .await
                 })
                 .await
             };
@@ -1328,9 +1364,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
-            let result =
-                run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
-                    .await;
+            let result = run_guest_call_settled(store, async |accessor| {
+                attribution
+                    .armed(invocation_key, guest.call_save(accessor))
+                    .await
+            })
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -1352,7 +1391,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest.call_load(accessor, snapshot).await
+                attribution
+                    .armed(invocation_key, guest.call_load(accessor, snapshot))
+                    .await
             })
             .await;
             let consumed_fuel =
@@ -1382,16 +1423,19 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_oplog_processor_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_process(
-                        accessor,
-                        account_info,
-                        config,
-                        component_id,
-                        agent_id,
-                        metadata,
-                        first_entry_index,
-                        entries,
+                attribution
+                    .armed(
+                        invocation_key,
+                        guest.call_process(
+                            accessor,
+                            account_info,
+                            config,
+                            component_id,
+                            agent_id,
+                            metadata,
+                            first_entry_index,
+                            entries,
+                        ),
                     )
                     .await
             })

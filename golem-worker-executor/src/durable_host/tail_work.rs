@@ -62,9 +62,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Per-worker counter of Golem-spawned store tasks that are currently
 /// active (not finished and not parked at a safe park point). See the
 /// module documentation.
+///
+/// A tracker can also count on the activity of one invocation: the invocation
+/// attributed when the tracker was obtained. Every activity created from it,
+/// including a parked task when it resumes, counts on that same invocation; a
+/// retained task is not relabelled to an invocation that later drives it. The
+/// invocation loop settles on the per-worker count only.
 #[derive(Clone, Debug, Default)]
 pub struct TailWorkTracker {
     active: Arc<AtomicUsize>,
+    invocation: Option<Arc<AtomicUsize>>,
 }
 
 impl TailWorkTracker {
@@ -72,12 +79,20 @@ impl TailWorkTracker {
         Self::default()
     }
 
+    /// This per-worker tracker, also counting on the activity of `invocation`.
+    pub(crate) fn counting_on(&self, invocation: &TailWorkTracker) -> Self {
+        Self {
+            active: self.active.clone(),
+            invocation: Some(invocation.active.clone()),
+        }
+    }
+
     /// Registers one spawned task as active, returning its RAII activity
     /// token. Create the token *before* spawning the task and move it into
     /// the task, so the task is counted from the instant it is spawned
     /// (a spawned task is not polled until the next event-loop scope).
     pub fn activity(&self) -> TailActivity {
-        TailActivity::new(self.active.clone())
+        TailActivity::new(self.clone())
     }
 
     /// Whether any spawned task is currently active. `false` means every
@@ -91,6 +106,20 @@ impl TailWorkTracker {
     pub fn active_count(&self) -> usize {
         self.active.load(Ordering::Acquire)
     }
+
+    fn add(&self) {
+        self.active.fetch_add(1, Ordering::AcqRel);
+        if let Some(invocation) = &self.invocation {
+            invocation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn sub(&self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+        if let Some(invocation) = &self.invocation {
+            invocation.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
 }
 
 /// RAII activity token owned by one spawned store task: the task counts as
@@ -99,19 +128,17 @@ impl TailWorkTracker {
 /// from the count.
 #[derive(Debug)]
 pub struct TailActivity {
-    counter: Arc<AtomicUsize>,
+    tracker: TailWorkTracker,
 }
 
 impl TailActivity {
-    fn new(counter: Arc<AtomicUsize>) -> Self {
-        counter.fetch_add(1, Ordering::AcqRel);
-        Self { counter }
+    fn new(tracker: TailWorkTracker) -> Self {
+        tracker.add();
+        Self { tracker }
     }
 
     pub fn tracker(&self) -> TailWorkTracker {
-        TailWorkTracker {
-            active: self.counter.clone(),
-        }
+        self.tracker.clone()
     }
 
     /// Awaits `fut` with this task marked inactive: use it around — and only
@@ -119,14 +146,14 @@ impl TailActivity {
     /// re-marked active before this returns, and stays balanced if the task
     /// future is dropped mid-park.
     pub async fn park<F: Future>(&self, fut: F) -> F::Output {
-        let _parked = ParkGuard::new(&self.counter);
+        let _parked = ParkGuard::new(&self.tracker);
         fut.await
     }
 }
 
 impl Drop for TailActivity {
     fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::AcqRel);
+        self.tracker.sub();
     }
 }
 
@@ -134,19 +161,19 @@ impl Drop for TailActivity {
 /// while it exists and restores it on drop, so a task dropped while parked
 /// nets out correctly against [`TailActivity`]'s own drop.
 struct ParkGuard<'a> {
-    counter: &'a Arc<AtomicUsize>,
+    tracker: &'a TailWorkTracker,
 }
 
 impl<'a> ParkGuard<'a> {
-    fn new(counter: &'a Arc<AtomicUsize>) -> Self {
-        counter.fetch_sub(1, Ordering::AcqRel);
-        Self { counter }
+    fn new(tracker: &'a TailWorkTracker) -> Self {
+        tracker.sub();
+        Self { tracker }
     }
 }
 
 impl Drop for ParkGuard<'_> {
     fn drop(&mut self) {
-        self.counter.fetch_add(1, Ordering::AcqRel);
+        self.tracker.add();
     }
 }
 
@@ -178,6 +205,33 @@ mod tests {
         assert!(tracker.has_active());
         drop(activity);
         assert!(!tracker.has_active());
+    }
+
+    #[test]
+    fn an_invocation_counts_the_activity_of_trackers_obtained_for_it() {
+        let worker = TailWorkTracker::default();
+        let first = TailWorkTracker::default();
+        let second = TailWorkTracker::default();
+
+        let of_first = worker.counting_on(&first).activity();
+        let child_of_first = of_first.tracker().activity();
+        let of_second = worker.counting_on(&second).activity();
+        assert_eq!(worker.active_count(), 3);
+        assert_eq!(first.active_count(), 2);
+        assert_eq!(second.active_count(), 1);
+
+        futures::executor::block_on(of_first.park(async {
+            assert_eq!(worker.active_count(), 2);
+            assert_eq!(first.active_count(), 1);
+            assert_eq!(second.active_count(), 1);
+        }));
+        drop(of_second);
+        assert!(!second.has_active());
+        assert_eq!(worker.active_count(), 2);
+        drop(child_of_first);
+        drop(of_first);
+        assert!(!first.has_active());
+        assert!(!worker.has_active());
     }
 
     #[test]

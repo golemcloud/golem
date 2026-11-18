@@ -16,8 +16,7 @@ use super::*;
 use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 use crate::durable_host::concurrent::{AccessorContext, DurableAccess};
 use crate::durable_host::{
-    LiveAuthorizationPermit, authority_snapshot_is_current_at, authorize_effective_surface,
-    record_permission_decisions,
+    LiveAuthorizationPermit, authorize_effective_surface, record_permission_decisions,
 };
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::sync::atomic::Ordering;
@@ -278,16 +277,15 @@ pub(crate) async fn authorize_live_permissions_at_serialized_initiation<Ctx: Wor
                 .published_authority_generation
                 .load(Ordering::Acquire);
             let now = chrono::Utc::now();
-            if authority_snapshot_is_current_at(
-                ctx.state.authority_initialized,
+            if ctx.state.authority().is_current_at(
                 ctx.state.card_interest_index.authority_is_open(),
-                ctx.state.processed_authority_generation,
                 published_generation,
-                ctx.state.next_authority_expiration,
                 now,
             ) {
-                let result =
-                    authorize_effective_surface(&ctx.state.agent_effective_surface, &owned_targets);
+                let result = authorize_effective_surface(
+                    ctx.state.authority().effective_surface(),
+                    &owned_targets,
+                );
                 if ctx.authority_snapshot_is_stable(published_generation) {
                     FastResult::Stable(result)
                 } else {
@@ -327,8 +325,10 @@ pub(crate) async fn authorize_live_permissions_at_serialized_initiation<Ctx: Wor
                     .state
                     .published_authority_generation
                     .load(Ordering::Acquire);
-                let result =
-                    authorize_effective_surface(&ctx.state.agent_effective_surface, &owned_targets);
+                let result = authorize_effective_surface(
+                    ctx.state.authority().effective_surface(),
+                    &owned_targets,
+                );
                 // A due cached deadline sent us through synchronization. Recompute it from the
                 // synchronized wallet before deciding whether the snapshot is stable.
                 ctx.refresh_authority_expiration_deadline();

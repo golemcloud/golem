@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::attribution::Attributed;
 use crate::durable_host::concurrent::DropEvent;
 use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::durable_session::{
@@ -627,6 +628,7 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     let (producer, outcome) = DurableInputProducer::new(endpoint)
                         .with_drop_cleanup(drop_event_sink, runtime_teardown)
                         .with_completion(&mut access.as_context_mut())?;
+                    let producer = Attributed::new(access.get().attribution.clone(), producer);
                     Ok((StreamReader::new(&mut access, producer)?, outcome))
                 } else {
                     let endpoint = stream

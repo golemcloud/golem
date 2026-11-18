@@ -438,7 +438,9 @@ pub(crate) fn is_tool_attachment_live_admission_rejection(error: &WorkerExecutor
 }
 
 pub(crate) fn tool_attachment_live_admission_cancelled_error() -> WorkerExecutorError {
-    WorkerExecutorError::runtime(TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED)
+    WorkerExecutorError::Interrupted {
+        kind: InterruptKind::EntityCancellation,
+    }
 }
 
 async fn activate_incomplete_entity_linear_memory<Ctx: WorkerCtx>(

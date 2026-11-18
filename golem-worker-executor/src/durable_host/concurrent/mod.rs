@@ -48,8 +48,8 @@ use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData, TerminalConsumption};
 
 use crate::durable_host::durability::{
-    ClassifiedHostError, CustomBeginLifecycle, CustomInvocationContext, CustomInvocationScope,
-    DurabilityHost, DurableCallTrapContext, DurableCallTrapError, DurableExecutionState,
+    ClassifiedHostError, CustomBeginLifecycle, CustomInvocationScope, DurabilityHost,
+    DurableCallTrapContext, DurableCallTrapError, DurableExecutionState, GuestTaskContext,
     HostFailureKind, InFunctionRetryController, InFunctionRetryHost, InternalRetryResult,
     SemanticTrapRetryOverride, TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
     semantic_trap_retry_override_error, try_trigger_host_trap_retry,
