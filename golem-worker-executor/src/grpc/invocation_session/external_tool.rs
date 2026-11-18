@@ -54,6 +54,10 @@ where
         let owned = extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
         let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
+        let env_overlay: golem_common::model::entity::EnvOverlay =
+            tool.env_overlay.clone().into_iter().collect();
+        golem_common::model::entity::validate_env_overlay(&env_overlay)
+            .map_err(WorkerExecutorError::invalid_request)?;
         if !tool.fresh_owner && OwnerKind::is_reserved_instance_name(&owned.agent_id.agent_id) {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
@@ -331,6 +335,7 @@ where
                 invocation_context: context.clone(),
                 principal: principal.clone(),
                 scope_card,
+                env_overlay,
             };
             worker.schedule_invocation(invocation, at).await?;
             response.agent_fingerprint = Some(worker.get_initial_worker_metadata().fingerprint);
@@ -403,6 +408,7 @@ where
                 context,
                 principal,
                 scope_card,
+                env_overlay,
             )
             .await?;
         if !streaming

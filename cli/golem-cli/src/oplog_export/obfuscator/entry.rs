@@ -417,7 +417,20 @@ impl Walker<'_, '_> {
             start_index,
             call_mode,
             operation,
+            env_overlay,
         } = invocation;
+        let env_overlay = env_overlay.as_ref().map(|env_overlay| {
+            record(
+                None,
+                env_overlay
+                    .iter()
+                    .map(|(key, value)| ReportField {
+                        name: Some(key.clone()),
+                        value: self.str_leaf(value, Region::Customer),
+                    })
+                    .collect(),
+            )
+        });
         let operation = operation.as_ref().map(|operation| match operation {
             PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
                 command_path,
@@ -454,6 +467,7 @@ impl Walker<'_, '_> {
             .add("startIndex", idx(start_index))
             .add("callMode", name(call_mode))
             .opt("operation", operation)
+            .opt("envOverlay", env_overlay)
             .build()
     }
 

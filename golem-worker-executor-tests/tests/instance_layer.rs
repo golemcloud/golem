@@ -1548,6 +1548,7 @@ async fn stage_entity_boundary(
             plan: EntityInvocationPlan::new(layers).unwrap(),
         },
         authority_wallet: active.primary().get_wallet_cards().await?,
+        env_overlay: Default::default(),
     };
     let index = active
         .execution()

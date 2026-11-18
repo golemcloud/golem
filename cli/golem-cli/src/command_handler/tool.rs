@@ -447,6 +447,7 @@ impl ToolCommandHandler {
                     stdin: args.stdin.is_some(),
                     stdout: args.stdout,
                     stderr: args.stderr,
+                    env_overlay: Default::default(),
                     version: INVOCATION_SESSION_VERSION,
                 }),
                 session_token: None,
@@ -677,6 +678,7 @@ impl ToolCommandHandler {
                     mode,
                     schedule_at,
                     idempotency_key: Some(key.value.clone()),
+                    env_overlay: Default::default(),
                 },
             )
             .await

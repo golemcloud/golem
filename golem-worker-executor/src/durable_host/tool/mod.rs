@@ -186,7 +186,7 @@ use golem_common::model::component::ComponentName;
 use golem_common::model::durable_stream::{DurableStreamHandle, SessionStreamRole, StreamError};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
-    InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
+    EnvOverlay, InvocationExecutionMode, NamedToolErrorSchema, ToolInputDecodeFailure,
     ToolInvocationDescriptor, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
@@ -553,6 +553,7 @@ struct NativeToolTask {
     stdout: bool,
     stderr: bool,
     principal: Principal,
+    env_overlay: EnvOverlay,
     result: oneshot::Sender<ToolInvokeResponse>,
 }
 

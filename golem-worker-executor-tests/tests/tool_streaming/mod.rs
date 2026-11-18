@@ -104,6 +104,7 @@ mod chunk_f_policy_acceptance;
 mod chunk_m_stream_deltas;
 mod dropped_waits;
 mod durable_entity_blob;
+mod env_overlay;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
 mod matrix_client_resource_acceptance;
@@ -15129,6 +15130,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 stderr: false,
                 fresh_owner: false,
                 expected_deployment_revision: None,
+                env_overlay: Default::default(),
             }),
             request_key: Some(
                 golem_common::model::InvocationRequestKey::external(
@@ -23281,6 +23283,7 @@ async fn start_external_tool_command(
                     stderr: false,
                     fresh_owner: false,
                     expected_deployment_revision: None,
+                    env_overlay: Default::default(),
                 }),
                 request_key: Some(
                     golem_common::model::InvocationRequestKey::external(

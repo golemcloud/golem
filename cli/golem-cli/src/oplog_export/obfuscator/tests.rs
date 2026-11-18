@@ -3295,6 +3295,10 @@ fn report_entry_json_shape() {
                     start_index: OplogIndex::from_u64(2),
                     call_mode: golem_common::model::oplog::PublicEntityCallMode::Synchronous,
                     operation: None,
+                    env_overlay: Some(std::collections::BTreeMap::from([(
+                        "COLUMNS".to_string(),
+                        "MARKEROVERLAY".to_string(),
+                    )])),
                 },
                 ancestors: vec![],
             },
@@ -3328,6 +3332,8 @@ fn report_entry_json_shape() {
     assert_eq!(value["attribution"]["case"], "Entity");
     assert_eq!(value["attribution"]["payload"]["kind"], "record");
     assert_no_marker(&value.to_string(), "MARKERTOOL");
+    assert_no_marker(&value.to_string(), "MARKEROVERLAY");
+    assert!(value["attribution"].to_string().contains("COLUMNS"));
 
     let invocation = with_entry(
         4,
@@ -4153,6 +4159,10 @@ fn entity_invocation() -> golem_common::model::oplog::PublicEntityInvocation {
         },
         start_index: OplogIndex::from_u64(2),
         call_mode: PublicEntityCallMode::Synchronous,
+        env_overlay: Some(std::collections::BTreeMap::from([(
+            "COLUMNS".to_string(),
+            "MARKER".to_string(),
+        )])),
         operation: Some(PublicEntityInvocationOperation::Tool(
             PublicToolInvocationOperation {
                 command_path: vec!["MARKER".into()],

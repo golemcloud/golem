@@ -16,7 +16,7 @@ use super::{
     AcceptedToolCall, Accessor, AccountEmail, AgentEntity, ApplicationName, Arc, AtomicBool,
     ClassifiedHostError, ComponentName, DurableWorkerCtx, EntityCallMode,
     EntityInvocationDescriptor, EntityInvocationDurability, EntityInvocationKeyContext,
-    EntityInvocationPlanReference, EnvironmentName, GolemSpecificWasmTrap,
+    EntityInvocationPlanReference, EnvOverlay, EnvironmentName, GolemSpecificWasmTrap,
     GuestCallSettlementError, HasSelf, HostFailureKind, HostRequestGolemToolInvocationRejected,
     ModelTypedSchemaValue, NamedToolErrorSchema, NativeToolTask, Ordering, PreparedToolCall,
     Principal, ResolvedOwnerContext, Resource, SchemaType, SerializableToolError,
@@ -717,6 +717,7 @@ pub(super) async fn dispatch_tool_attempt<U, Ctx>(
     call_mode: EntityCallMode,
     pinned_activation: Option<Arc<ToolActivationSnapshot>>,
     principal: Option<Principal>,
+    env_overlay: Option<EnvOverlay>,
     attachment_counterparty: ToolAttachmentCounterparty,
 ) -> anyhow::Result<ToolCallDispatch>
 where
@@ -807,6 +808,18 @@ where
             })
         }
         ToolCallPreparation::Ready(prepared) => {
+            // A call from an entity Store passes that Store's overlay on, so every level of a
+            // nested call sees the overlay of the invocation that started the chain. The
+            // primary Store has no entity scope and passes none.
+            let env_overlay = env_overlay.unwrap_or_else(|| {
+                accessor.with(|mut access| {
+                    access
+                        .get()
+                        .entity_invocation_scope()
+                        .map(|scope| scope.env_overlay().clone())
+                        .unwrap_or_default()
+                })
+            });
             let context = prepared.operation.context();
             let durability = EntityInvocationDurability::start_live_access(
                 accessor,
@@ -819,6 +832,7 @@ where
                 context.descriptor.clone(),
                 prepared.plan.clone(),
                 context.input.clone(),
+                env_overlay,
                 invocation_id,
             )
             .await?;
@@ -867,6 +881,7 @@ where
         call_mode,
         None,
         None,
+        None,
         ToolAttachmentCounterparty::Guest,
     )
     .await
@@ -901,6 +916,7 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
     stdout: bool,
     stderr: bool,
     principal: Principal,
+    env_overlay: EnvOverlay,
 ) -> Result<anyhow::Result<ToolInvokeResponse>, GuestCallSettlementError> {
     run_guest_call_settled(
         store,
@@ -917,6 +933,7 @@ pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
                 stdout,
                 stderr,
                 principal,
+                env_overlay,
                 result,
             };
             let captured = accessor.with(|mut access| access.get().attribution.capture());

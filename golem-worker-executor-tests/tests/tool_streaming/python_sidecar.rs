@@ -258,6 +258,7 @@ async fn exercise_python_session(
                     stderr: true,
                     fresh_owner: false,
                     expected_deployment_revision: None,
+                    env_overlay: Default::default(),
                 }),
                 request_key: Some(
                     golem_common::model::InvocationRequestKey::external(

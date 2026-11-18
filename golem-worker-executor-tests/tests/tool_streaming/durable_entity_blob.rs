@@ -115,6 +115,7 @@ async fn invoke_blob_tool(
             InvocationContextStack::fresh(),
             principal,
             None,
+            Default::default(),
         )
         .await
         .map(|output| output.result)
@@ -1372,6 +1373,7 @@ oracle_negative_case!(oracle_rejects_public_attribution_change, |snapshot| {
                 start_index: record_index(0),
                 call_mode: PublicEntityCallMode::Synchronous,
                 operation: None,
+                env_overlay: None,
             },
             ancestors: Vec::new(),
         },

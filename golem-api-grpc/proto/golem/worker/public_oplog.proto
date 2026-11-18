@@ -860,6 +860,7 @@ message PublicEntityInvocation {
   optional uint64 start_index = 2;
   PublicEntityCallMode call_mode = 3;
   PublicEntityInvocationOperation operation = 4;
+  map<string, string> env_overlay = 5;
 }
 
 message PublicEntityInvocationContext {

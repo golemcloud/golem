@@ -669,6 +669,8 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
         start_index: OplogIndex::from_u64(7),
         call_mode: PublicEntityCallMode::Synchronous,
         operation: None,
+
+        env_overlay: None,
     };
     let invocation = PublicEntityInvocation {
         entity: PublicAgentEntity {
@@ -687,6 +689,11 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
                 declares_stderr: true,
             },
         )),
+        env_overlay: Some(
+            [("LINES".to_string(), "40".to_string())]
+                .into_iter()
+                .collect(),
+        ),
     };
     let entry = PublicOplogEntryWithIndex {
         oplog_index: OplogIndex::from_u64(13),
@@ -715,6 +722,11 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
         json["attribution"]["invocation"]["operation"]["type"],
         "Tool"
     );
+    assert_eq!(
+        json["attribution"]["invocation"]["envOverlay"]["LINES"],
+        "40"
+    );
+    assert!(json["attribution"]["ancestors"][0]["envOverlay"].is_null());
 }
 
 #[test]
@@ -727,6 +739,8 @@ fn entity_attribution_public_protobuf_rejects_invalid_start_index() {
         start_index: OplogIndex::from_u64(11),
         call_mode: PublicEntityCallMode::Synchronous,
         operation: None,
+
+        env_overlay: None,
     };
     let mut proto: golem_api_grpc::proto::golem::worker::PublicEntityInvocation = invocation.into();
 

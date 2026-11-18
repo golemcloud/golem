@@ -438,6 +438,8 @@ declare_structs! {
         pub start_index: OplogIndex,
         pub call_mode: PublicEntityCallMode,
         pub operation: Option<PublicEntityInvocationOperation>,
+        /// The env overlay its starter supplied; absent when the overlay is empty.
+        pub env_overlay: Option<BTreeMap<String, String>>,
     }
 
     /// Attribution for an entry executed by an entity. Ancestors are ordered from the root entity

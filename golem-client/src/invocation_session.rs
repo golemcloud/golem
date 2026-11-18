@@ -4651,6 +4651,7 @@ mod tests {
 
     fn tool_start_request(attempt_id: uuid::Uuid) -> PublicClientMessage {
         PublicClientMessage::ToolStart {
+            env_overlay: Default::default(),
             attempt_id,
             application: "app".to_string(),
             environment: "env".to_string(),

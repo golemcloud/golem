@@ -1621,6 +1621,10 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
                     name: "filesystem".to_string(),
                 },
                 start_index: OplogIndex::from_u64(11),
+                env_overlay: Some(std::collections::BTreeMap::from([(
+                    "COLUMNS".to_string(),
+                    "132".to_string(),
+                )])),
                 call_mode: PublicEntityCallMode::Synchronous,
                 operation: Some(PublicEntityInvocationOperation::Tool(
                     PublicToolInvocationOperation {
@@ -4051,15 +4055,23 @@ fn arb_public_oplog_entry_attribution()
                         },
                     ),
             ),
+            proptest::option::of(proptest::collection::btree_map(
+                arb_small_string(),
+                arb_small_string(),
+                1..3,
+            )),
         )
-            .prop_map(|(kind, name, start_index, call_mode, operation)| {
-                PublicEntityInvocation {
-                    entity: PublicAgentEntity { kind, name },
-                    start_index: golem_common::model::OplogIndex::from_u64(start_index),
-                    call_mode,
-                    operation,
-                }
-            })
+            .prop_map(
+                |(kind, name, start_index, call_mode, operation, env_overlay)| {
+                    PublicEntityInvocation {
+                        entity: PublicAgentEntity { kind, name },
+                        start_index: golem_common::model::OplogIndex::from_u64(start_index),
+                        env_overlay,
+                        call_mode,
+                        operation,
+                    }
+                },
+            )
     };
 
     prop_oneof![

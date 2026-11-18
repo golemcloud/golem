@@ -421,6 +421,30 @@ async fn universal_pass_through(
         .await
 }
 
+/// A layer of a nested `env-overlay-probe` call. When it sees `COLUMNS`, it announces the value
+/// it sees and waits on a durable promise before it calls the next layer.
+#[universal_tool_middleware(name = "env-overlay-layer")]
+async fn env_overlay_layer(
+    tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    if tool_name == "env-overlay-probe"
+        && let Ok(columns) = std::env::var("COLUMNS")
+    {
+        wait_at_middleware_promise_checkpoint(&format!("env-overlay-layer-{columns}")).await;
+    }
+    underlying
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+        .await
+}
+
 #[universal_tool_middleware(name = "k3-rate-limit-pre-leaf-checkpoint")]
 async fn k3_rate_limit_pre_leaf_checkpoint(
     tool_name: String,

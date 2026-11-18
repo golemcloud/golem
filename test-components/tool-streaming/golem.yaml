@@ -25,6 +25,7 @@ components:
       - golem-it:tool-streaming-rust-provider/secret-policy-probe
       - golem-it:tool-streaming-rust-provider/clock-race
       - golem-it:tool-streaming-rust-provider/environment-probe
+      - golem-it:tool-streaming-rust-provider/env-overlay-probe
       - golem-it:tool-streaming-rust-provider/matrix-core
       - golem-it:tool-streaming-rust-provider/matrix-resource
       - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
@@ -43,6 +44,7 @@ tools:
   secret-policy-probe: {}
   clock-race: {}
   environment-probe: {}
+  env-overlay-probe: {}
   matrix-core:
     component: golem-it:tool-streaming-rust-provider
   matrix-resource:
@@ -70,6 +72,9 @@ agents:
   EnvironmentProbeCaller:
     tools:
       environment-probe: {}
+  EnvOverlayCaller:
+    tools:
+      env-overlay-probe: {}
   WalletRecoveryProbe:
     tools:
       wallet-mutation: {}
@@ -84,6 +89,7 @@ bridge:
       - secret-policy-probe
       - clock-race
       - environment-probe
+      - env-overlay-probe
       - matrix-core
       - matrix-resource
       - matrix-permission-issuer

@@ -65,6 +65,7 @@ use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::entity::{EnvOverlay, validate_env_overlay};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
@@ -664,6 +665,7 @@ pub struct PublicToolSessionStart {
     pub idempotency_key: String,
     pub attempt_id: uuid::Uuid,
     pub expected_deployment_revision: Option<DeploymentRevision>,
+    pub env_overlay: EnvOverlay,
 }
 
 pub struct StartedPublicAgentSession {
@@ -2778,6 +2780,7 @@ impl WorkerService {
                 expected_deployment_revision: start
                     .expected_deployment_revision
                     .map(DeploymentRevision::get),
+                env_overlay: start.env_overlay.into_iter().collect(),
             }),
         };
         let initial_request = InvocationRequest {
@@ -3285,6 +3288,12 @@ impl WorkerService {
                 "external tool input is required".to_string(),
             ));
         }
+        if lookup && !request.env_overlay.is_empty() {
+            return Err(WorkerServiceError::TypeChecker(
+                "lookup forbids an env overlay".to_string(),
+            ));
+        }
+        validate_env_overlay(&request.env_overlay).map_err(WorkerServiceError::TypeChecker)?;
         if request.schedule_at.is_some()
             && !matches!(request.mode, NativeToolInvocationMode::Schedule)
         {
@@ -3425,6 +3434,7 @@ impl WorkerService {
                 stderr: false,
                 fresh_owner,
                 expected_deployment_revision: None,
+                env_overlay: request.env_overlay.into_iter().collect(),
             }),
         };
         let mut output = self
@@ -5414,6 +5424,7 @@ mod tests {
                 mode: NativeToolInvocationMode::Await,
                 schedule_at: None,
                 idempotency_key: Some(IdempotencyKey::new("native-tool-key".to_string())),
+                env_overlay: Default::default(),
             }
         }
 

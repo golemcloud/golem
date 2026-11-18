@@ -73,6 +73,30 @@ entity `Start`.
   matching and serialized activation/cache removal prevent old cleanup from removing replacement
   interest. Accepted wallet work retains candidate interest until canonical publication takes over.
 
+### Env overlay
+
+An external tool start (`invoke-tool`, the session protocol's `toolStart`, hosted or not) may carry
+an env overlay: names and values that its starter supplies, such as the CLI's `TERM`, `COLUMNS`
+and `LINES`. The executor knows nothing about what they mean.
+
+- `AgentInvocation::ExternalTool` records it in `PendingAgentInvocation`, and it is part of the
+  caller request (`same_caller_request`): the same key with another overlay is a key conflict.
+  The resume of a session never carries it.
+- `EntityInvocationRequest.env_overlay` records it with the entity `Start`, like
+  `authority_wallet`. `from_started_request` copies it into `EntityInvocationScope` live and on
+  replay, so a body that finishes live after a restart sees the original values; the overlay is
+  never re-read from the restarted request.
+- A tool call made from an entity Store copies that Store's scope overlay into its callee's
+  request (`dispatch_tool_attempt`), so it reaches every depth, middleware included. The native
+  external-tool task passes the accepted invocation's overlay. A call from the primary Store
+  carries none: the primary Store is shared by all invocations of the owner and keeps no
+  per-invocation overlay.
+- `build_filtered_environment` applies the scope's overlay after the `env:read` filter of the
+  owner's env and the Golem variables (`AgentConfig::apply_env_overlay`). The overlay is the
+  starter's data, so it is not filtered; it never replaces `GOLEM_*`, `TMPDIR`, `TOOL_TMP` or
+  `TOOL_CONFIG`. The guest's `get-environment` records the admitted view, so completed replay
+  returns the recorded values.
+
 ### Wallet publication and historical reconstruction
 
 Live wallet writes prepare from the serialized predecessor under the card-event boundary and

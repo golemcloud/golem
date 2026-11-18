@@ -53,6 +53,7 @@ message ExternalToolInvocation {
   bool fresh_owner = 6;
   optional uint64 expected_deployment_revision = 7;
   bool stderr = 8;
+  map<string, string> env_overlay = 9;
 }
 
 message ResumeAttach {

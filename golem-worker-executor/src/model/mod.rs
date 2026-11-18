@@ -173,6 +173,28 @@ impl AgentConfig {
             worker_env.push((String::from("GOLEM_AGENT_TYPE"), agent_type.to_string()));
         }
     }
+
+    /// Applies an invocation's env overlay over its environment: an overlay value replaces the
+    /// value of the same name. Names that Golem sets keep Golem's value: every `GOLEM_*` name,
+    /// and `TMPDIR`, `TOOL_TMP` and `TOOL_CONFIG`, which a tool invocation gets for its roots.
+    pub(crate) fn apply_env_overlay(
+        worker_env: &mut Vec<(String, String)>,
+        overlay: &golem_common::model::entity::EnvOverlay,
+    ) {
+        let applied = overlay
+            .iter()
+            .filter(|(name, _)| {
+                !name.starts_with("GOLEM_")
+                    && !matches!(name.as_str(), "TMPDIR" | "TOOL_TMP" | "TOOL_CONFIG")
+            })
+            .collect::<Vec<_>>();
+        worker_env.retain(|(name, _)| !applied.iter().any(|(applied, _)| *applied == name));
+        worker_env.extend(
+            applied
+                .into_iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
+    }
 }
 
 /// Information about the available resources for the worker.
@@ -1026,6 +1048,59 @@ mod tests {
     use crate::worker::RetryDecision;
     use golem_common::model::component::ComponentId;
     use test_r::test;
+
+    #[test]
+    fn env_overlay_replaces_owner_env_but_never_golem_variables() {
+        let component_id = ComponentId::new();
+        let mut env = vec![
+            ("TERM".to_string(), "a".to_string()),
+            ("HOME".to_string(), "/home/owner".to_string()),
+            ("TMPDIR".to_string(), "/tmp/owner".to_string()),
+        ];
+        AgentConfig::enrich_env(
+            &mut env,
+            component_id,
+            "owner-agent".to_string(),
+            &None,
+            golem_common::model::component::ComponentRevision::INITIAL,
+        );
+        let overlay = [
+            ("TERM", "b"),
+            ("COLUMNS", "132"),
+            ("GOLEM_AGENT_ID", "forged"),
+            ("GOLEM_CUSTOM", "forged"),
+            ("TMPDIR", "/forged"),
+            ("TOOL_TMP", "/forged"),
+            ("TOOL_CONFIG", "/forged"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+
+        AgentConfig::apply_env_overlay(&mut env, &overlay);
+
+        let value = |name: &str| {
+            let values = env
+                .iter()
+                .filter(|(entry, _)| entry == name)
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>();
+            assert!(values.len() <= 1, "{name} appears more than once: {env:?}");
+            values.first().copied()
+        };
+        assert_eq!(value("TERM"), Some("b"));
+        assert_eq!(value("COLUMNS"), Some("132"));
+        assert_eq!(value("HOME"), Some("/home/owner"));
+        assert_eq!(value("GOLEM_AGENT_ID"), Some("owner-agent"));
+        assert_eq!(
+            value("GOLEM_COMPONENT_ID"),
+            Some(component_id.to_string().as_str())
+        );
+        assert_eq!(value("GOLEM_CUSTOM"), None);
+        assert_eq!(value("TMPDIR"), Some("/tmp/owner"));
+        assert_eq!(value("TOOL_TMP"), None);
+        assert_eq!(value("TOOL_CONFIG"), None);
+    }
 
     #[test]
     async fn loading_interrupt_wakes_existing_and_late_subscribers() {

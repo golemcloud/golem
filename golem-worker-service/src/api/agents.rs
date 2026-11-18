@@ -33,6 +33,7 @@ use poem_openapi::types::Type;
 use poem_openapi::{ApiExtractor, ApiExtractorType, ExtractParamOptions};
 use poem_openapi_derive::{Enum, Object, OpenApi, Union};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -318,6 +319,11 @@ pub struct NativeToolInvocationRequest {
     pub mode: NativeToolInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
+    /// Environment variables for the invocation and every tool call it makes. They apply over
+    /// the owner's `env` and never replace Golem's own variables. Forbidden for lookup.
+    #[oai(default)]
+    #[serde(default)]
+    pub env_overlay: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

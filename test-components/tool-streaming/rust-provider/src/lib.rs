@@ -791,6 +791,34 @@ impl EnvironmentProbe for EnvironmentProbeImpl {
     }
 }
 
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct EnvOverlayObservation {
+    pub term: Option<String>,
+    pub columns: Option<String>,
+    pub lines: Option<String>,
+    pub golem_agent_id: Option<String>,
+}
+
+/// Reports the environment variables that an env overlay sets or must not replace.
+#[tool_definition(version = "1.0.0")]
+pub trait EnvOverlayProbe {
+    async fn observe(&self) -> EnvOverlayObservation;
+}
+
+struct EnvOverlayProbeImpl;
+
+#[tool_implementation]
+impl EnvOverlayProbe for EnvOverlayProbeImpl {
+    async fn observe(&self) -> EnvOverlayObservation {
+        EnvOverlayObservation {
+            term: std::env::var("TERM").ok(),
+            columns: std::env::var("COLUMNS").ok(),
+            lines: std::env::var("LINES").ok(),
+            golem_agent_id: std::env::var("GOLEM_AGENT_ID").ok(),
+        }
+    }
+}
+
 #[tool_definition(version = "1.0.0")]
 pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;

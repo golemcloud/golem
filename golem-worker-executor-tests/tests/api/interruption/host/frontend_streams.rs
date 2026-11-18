@@ -161,6 +161,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                     stderr: false,
                     fresh_owner: false,
                     expected_deployment_revision: None,
+                    env_overlay: Default::default(),
                 }),
                 request_key: Some(request_key.into()),
                 ..Default::default()

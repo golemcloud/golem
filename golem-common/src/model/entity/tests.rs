@@ -228,6 +228,12 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
                 .unwrap(),
         },
         authority_wallet: Vec::new(),
+        env_overlay: [
+            ("TERM".to_string(), "xterm-256color".to_string()),
+            ("COLUMNS".to_string(), "132".to_string()),
+        ]
+        .into_iter()
+        .collect(),
     };
 
     let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -586,6 +592,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             .unwrap(),
         },
         authority_wallet: Vec::new(),
+        env_overlay: Default::default(),
     };
 
     let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
