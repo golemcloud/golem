@@ -1062,7 +1062,10 @@ request, or to the unspecified address with port 0 after an implicit bind, becau
 socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
 binds the native socket on the bind request's address with the recorded port and connects it again
 when the entry is connected, without sending a packet; an unspecified address with port 0 stays
-unbound until the next send binds it implicitly. When that
+unbound until the next send binds it implicitly. A rebuild on a fixed port is recorded as
+`Rebound` in the response of the call that performed it, because Linux then keeps that port on a
+disconnect; the entry takes the rebuilt port into its bind request. Receive records the endpoint
+change of its rebuild too. When that
 fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
 is not checked against grants again, each datagram still is. Send records only the target and the
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent
@@ -1074,8 +1077,10 @@ result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (
 permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
 The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
 the bind request, `stream(none)` on a connected socket resets the local address to it as P3
-`disconnect` does, and `stream` and `send` record every other change of the native local address
-(`udp_local_address_change`). A failed `stream` records `disconnected`, as P3 connect does, when
+`disconnect` does, and `stream`, `send`, `receive` and `check-send` record every other change of
+the native local address (`udp_local_address_change`), such as the port that a rebuild on port 0
+selects. P2 needs no `Rebound`: its disconnect is a live `stream(none)` that records the native
+local address it leaves, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
 it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
 again); the entry then loses its remote address, live and on replay.
 The guest's datagram streams are `DurableIncomingDatagramStream` and

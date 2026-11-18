@@ -1583,9 +1583,9 @@ fn p3_udp_socket_host_payload_pairs_roundtrip() {
         HostResponseP3SocketsUdpReceive {
             result: Ok(SerializableP3UdpDatagram {
                 data: b"incoming udp bytes".to_vec(),
-                remote_address,
+                remote_address: remote_address.clone(),
             }),
-            endpoint: None,
+            endpoint: Some(SerializableP3UdpEndpoint::Rebound(remote_address)),
         },
     );
 }
@@ -2003,6 +2003,7 @@ fn p2_udp_socket_host_payload_pairs_roundtrip() {
                 remote_address: remote.clone(),
             }]),
             lost: false,
+            local_address: Some(local.clone()),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpCheckSend>(
@@ -2010,6 +2011,7 @@ fn p2_udp_socket_host_payload_pairs_roundtrip() {
         super::HostResponseSocketsUdpCheckSend {
             result: Ok(16),
             lost: false,
+            local_address: None,
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::SocketsUdpSend>(

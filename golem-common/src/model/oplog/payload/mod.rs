@@ -807,13 +807,18 @@ oplog_payload! {
             local_address: Option<SerializableP3IpSocketAddress>,
             disconnected: bool,
         },
+        /// `local_address` is the new native local address when the call changed it: the port
+        /// that an endpoint rebuild on port 0 selected.
         SocketsUdpReceive {
             result: Result<Vec<SerializableP3UdpDatagram>, SerializableSocketError>,
             lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
         },
+        /// `local_address` is as in `SocketsUdpReceive`.
         SocketsUdpCheckSend {
             result: Result<u64, SerializableSocketError>,
             lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
         },
         /// The number of datagrams sent. `local_address` is the new native local address when
         /// the send changed it: after a disconnect released the port, the send binds a new one.

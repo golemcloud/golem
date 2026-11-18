@@ -337,6 +337,33 @@ fn stream_local_address(
     }
 }
 
+/// The new native local address after a live call, when it differs from the entry: an implicit
+/// bind, or the port that an endpoint rebuild on port 0 selected.
+fn local_address_change<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    socket: u32,
+) -> wasmtime::Result<Option<SerializableP3IpSocketAddress>> {
+    let (native, _) = native_addresses(ctx, socket);
+    Ok(SocketEntry::udp_local_address_change(
+        udp_entry(ctx, socket)?.local_address.as_ref(),
+        native,
+    ))
+}
+
+/// Applies a recorded local address change, live and on replay.
+fn apply_local_address<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    socket: u32,
+    local_address: Option<SerializableP3IpSocketAddress>,
+) -> Result<(), SocketError> {
+    if let Some(address) = local_address {
+        udp_entry(ctx, socket)
+            .map_err(SocketError::trap)?
+            .local_address = Some(address);
+    }
+    Ok(())
+}
+
 fn has_streams<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     socket: u32,
@@ -644,6 +671,7 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
                     return Ok(HostResponseSocketsUdpReceive {
                         result: Err(lost_error()),
                         lost: true,
+                        local_address: None,
                     });
                 }
                 let native = table_entry::<DurableIncomingDatagramStream, _>(ctx, rep)?
@@ -677,12 +705,14 @@ impl<Ctx: WorkerCtx> HostIncomingDatagramStream for DurableWorkerCtx<Ctx> {
                 Ok(HostResponseSocketsUdpReceive {
                     result,
                     lost: false,
+                    local_address: local_address_change(ctx, socket)?,
                 })
             },
         )
         .await
         .map_err(SocketError::trap)?;
         apply_lost(self, socket, response.lost)?;
+        apply_local_address(self, socket, response.local_address)?;
         Ok(response
             .result
             .map_err(SocketError::from)?
@@ -740,6 +770,7 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
                     return Ok(HostResponseSocketsUdpCheckSend {
                         result: Err(lost_error()),
                         lost: true,
+                        local_address: None,
                     });
                 }
                 let result = match native_check_send(ctx, rep).await? {
@@ -749,12 +780,14 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
                 Ok(HostResponseSocketsUdpCheckSend {
                     result,
                     lost: false,
+                    local_address: local_address_change(ctx, socket)?,
                 })
             },
         )
         .await
         .map_err(SocketError::trap)?;
         apply_lost(self, socket, response.lost)?;
+        apply_local_address(self, socket, response.local_address)?;
         let permit = response.result.map_err(SocketError::from)?;
         table_entry::<DurableOutgoingDatagramStream, _>(self, rep)
             .map_err(SocketError::trap)?
@@ -836,25 +869,16 @@ impl<Ctx: WorkerCtx> HostOutgoingDatagramStream for DurableWorkerCtx<Ctx> {
                     Err(error) => Err(recorded_error(error)?),
                 };
                 // A send on a socket whose disconnect released its port binds it implicitly.
-                let (native_local, _) = native_addresses(ctx, socket);
-                let local_address = SocketEntry::udp_local_address_change(
-                    udp_entry(ctx, socket)?.local_address.as_ref(),
-                    native_local,
-                );
                 Ok(HostResponseSocketsUdpSend {
                     result,
                     lost: false,
-                    local_address,
+                    local_address: local_address_change(ctx, socket)?,
                 })
             })
             .await
             .map_err(SocketError::trap)?;
         apply_lost(self, socket, response.lost)?;
-        if let Some(address) = response.local_address.clone() {
-            udp_entry(self, socket)
-                .map_err(SocketError::trap)?
-                .local_address = Some(address);
-        }
+        apply_local_address(self, socket, response.local_address.clone())?;
         response.result.map_err(SocketError::from)
     }
 
