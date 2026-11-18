@@ -469,6 +469,101 @@ async fn a_discarded_a_answer_links_nothing_live_or_on_replay(
     Ok(())
 }
 
+/// A crash after the guest received an A answer, and before its connect started, recovers with
+/// the link: the recovery replays the delivered lookup and continues live at the open promise
+/// wait, and the connect that follows matches the hostname grant through the link.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn a_crash_between_a_delivered_answer_and_the_connect_keeps_the_link(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let dns = DnsPeer::start().await?;
+    let executor = start_dns_executor(deps, &context, &authority, &dns, None, true).await?;
+    let peer = CountingPeer::start("127.0.0.1:0").await?;
+    let peer_address = peer.address.to_string();
+    let component = networking_component(
+        &executor,
+        &context,
+        host_api_tests,
+        &["db.test".to_string()],
+    )
+    .await?;
+    let agent = agent_id!("Networking", "dns-crash-before-connect");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let proceed_value = executor
+        .invoke_and_await_agent(&component, &agent, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected a promise"))?;
+    let proceed = PromiseId::from_value(&proceed_value)?;
+
+    let delivered = async || -> anyhow::Result<usize> {
+        Ok(executor
+            .get_oplog(&worker, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::CompletionDelivered(_)))
+            .count())
+    };
+    let delivered_before = delivered().await?;
+
+    let mut output = executor.make_worker_log_event_stream(&worker).await?;
+    let key = IdempotencyKey::fresh();
+    let params = || {
+        crate::raw_params(vec![
+            SchemaValue::String("db.test".to_string()),
+            proceed_value.clone(),
+            SchemaValue::String(peer_address.clone()),
+        ])
+    };
+    executor
+        .invoke_agent_with_key(&component, &agent, &key, "dns_then_connect_p3", params())
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = output.message().await? {
+            if golem_test_framework::dsl::stdout_event_matching(&event, "dns answer received: 1\n")
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+        Err(anyhow::anyhow!(
+            "guest output ended before the answer was received"
+        ))
+    })
+    .await??;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if delivered().await? > delivered_before {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+
+    executor.simulated_crash(&worker).await?;
+    executor.complete_promise(&proceed, vec![1]).await?;
+    let connected = executor
+        .invoke_and_await_agent_with_key(&component, &agent, &key, "dns_then_connect_p3", params())
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(connected, Ok("connected".to_string()));
+    assert_eq!(peer.accepted(), 1);
+    assert_eq!(
+        dns.queries(),
+        HashMap::from([(("db.test".to_string(), RecordType::A), 1)])
+    );
+    executor.check_oplog_is_queryable(&worker).await?;
+    Ok(())
+}
+
 /// An AAAA answer links its addresses to the queried name, as an A answer does, and the A answer
 /// of an alias links to the alias, not to the name the alias points to. Each record type reaches
 /// the guest with its fields, and an existing name without records of the type is `no-data`.

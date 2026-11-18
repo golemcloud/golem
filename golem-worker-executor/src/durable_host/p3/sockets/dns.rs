@@ -85,9 +85,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
                         let name = name.clone();
                         let addresses: Vec<IpAddr> =
                             addresses.0.iter().cloned().map(IpAddr::from).collect();
-                        Box::new(move || names.link(&name, addresses))
+                        Box::new(move |delivery| names.link(&name, addresses, delivery.recorded))
                     }
-                    _ => Box::new(|| {}),
+                    _ => Box::new(|_| {}),
                 }
             },
             || async {

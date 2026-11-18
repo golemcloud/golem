@@ -281,6 +281,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             is_replay: Arc::new(AtomicBool::new(false)),
         };
         let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
+        // A primary Store starts with the links of its whole history, so a connect that
+        // continues live on any path reads them. The replay horizon is a fold of this status.
+        let resolved_names = match &runtime {
+            OwnerRuntime::Agent => sockets::resolved_names::SharedResolvedNames::primary(
+                worker
+                    .get_repaired_status()
+                    .await?
+                    .resolved_names
+                    .links
+                    .clone(),
+            ),
+            OwnerRuntime::Entity(_) => sockets::resolved_names::SharedResolvedNames::entity(),
+        };
         let published_authority_generation = worker.published_authority_generation();
         let tail_work = match &runtime {
             OwnerRuntime::Agent => owner_execution.primary_tail_work_tracker(),
@@ -332,14 +345,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
             published_authority_generation,
+            resolved_names,
         )
         .await?;
         let attribution = state.attribution.clone();
         if state.is_live() {
             linear_memory.switch_to_live();
-            state
-                .resolved_names
-                .seed(&worker.get_last_known_status().await.resolved_names.links);
         }
         let weak_worker = Arc::downgrade(&worker);
         let memory_limits = linear_memory.clone();
@@ -452,6 +463,7 @@ impl PrivateDurableWorkerState {
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
         published_authority_generation: Arc<AtomicU64>,
+        resolved_names: sockets::resolved_names::SharedResolvedNames,
     ) -> Result<Self, WorkerExecutorError> {
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
         let entity_replay_wallet = match (&runtime, entity_execution_mode) {
@@ -585,9 +597,7 @@ impl PrivateDurableWorkerState {
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
-            resolved_names: sockets::resolved_names::SharedResolvedNames::new(
-                (runtime == OwnerRuntime::Agent).then(|| replay_state.clone()),
-            ),
+            resolved_names,
             dns_resolver: None,
             open_tcp_input_streams: HashSet::new(),
             open_tcp_output_streams: HashSet::new(),

@@ -3434,12 +3434,15 @@ the fold as it does for `StreamSession` records, and leaves out entity bodies, o
 and history that no replay runs (`RegionFold::unreplayed`: deleted, jumped and failed update
 attempts; a `Jump`, `Revert` or `FailedUpdate` over folded history refolds the status from the
 start). The status cache keeps the index in its own `resolved-names` field, written only when it
-changes. The primary Store links only while live; it takes the folded links once, when it becomes
-live (at construction when the replay is already live, else at the switch to live), and replayed
-connects return the decision recorded in their `Start`, so they never read the index. A
-snapshot-based update keeps the links of the history before its `PendingUpdate`, which the agent
-ran, and its target initializer's lookups link after them. A tool entity Store keeps its own index
-and links on replay too. The lookup itself is
+changes. The primary Store starts with the folded links at construction and links only the lookups
+whose link point it records itself (a live `End`, or a `CompletionDelivered` marker that it
+appends): every replayed lookup, also one that a bootstrap cursor replays, is in the folded links
+already, and linking it again would refresh its LRU position. So every path that continues live,
+also an accessor or incomplete call that resolves against history, reads the links of the whole
+history, and replayed connects return the decision recorded in their `Start`. A snapshot-based
+update keeps the links of the history before its `PendingUpdate`, which the agent ran, and its
+target initializer's lookups link after them. A tool entity Store keeps its own index, starts
+empty, and links on replay too. The lookup itself is
 checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
 a port needs a portless grant for the lookup too.
 

@@ -631,12 +631,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
 
-                        store
-                            .as_context()
-                            .data()
-                            .durable_ctx()
-                            .seed_resolved_names()
-                            .await;
                         Self::finalize_pending_snapshot_update(instance, store).await
                     }
                     UpdateDescription::Automatic { .. }

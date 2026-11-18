@@ -829,7 +829,7 @@ async fn the_delivered_hook_runs_only_when_the_guest_receives_the_terminal() {
         let hook_ran = ran.clone();
         let guard = AccessorDeliveryGuard {
             delivery: Some(token),
-            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+            on_delivered: Some(Box::new(move |_| hook_ran.store(true, Ordering::Release))),
         };
         guard.consume(consumption);
         assert_eq!(
@@ -887,7 +887,7 @@ async fn the_delivered_hook_runs_at_the_recorded_marker_on_replay() {
         let hook_ran = ran.clone();
         AccessorDeliveryGuard {
             delivery: Some(token),
-            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+            on_delivered: Some(Box::new(move |_| hook_ran.store(true, Ordering::Release))),
         }
         .consume(consumption);
         assert_eq!(
@@ -932,7 +932,7 @@ async fn the_delivered_hook_runs_without_an_observer_only_for_a_settled_delivery
                 token
                     .deliver_at_accessor_terminal_with_delivered(
                         accessor,
-                        Box::new(move || hook_ran.store(true, Ordering::Release)),
+                        Box::new(move |_| hook_ran.store(true, Ordering::Release)),
                     )
                     .await
                     .unwrap();
@@ -945,7 +945,7 @@ async fn the_delivered_hook_runs_without_an_observer_only_for_a_settled_delivery
             let mut delivery = Box::pin(
                 CompletionDelivery::replay_discarded().deliver_at_accessor_terminal_with_delivered(
                     accessor,
-                    Box::new(move || hook_ran.store(true, Ordering::Release)),
+                    Box::new(move |_| hook_ran.store(true, Ordering::Release)),
                 ),
             );
             assert!(futures::poll!(&mut delivery).is_pending());

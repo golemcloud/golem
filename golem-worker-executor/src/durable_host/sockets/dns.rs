@@ -107,9 +107,9 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
                         let names = names.clone();
                         let name = name.clone();
                         let addresses: Vec<IpAddr> = linked_addresses(records).collect();
-                        Box::new(move || names.link(&name, addresses))
+                        Box::new(move |delivery| names.link(&name, addresses, delivery.recorded))
                     }
-                    _ => Box::new(|| {}),
+                    _ => Box::new(|_| {}),
                 }
             },
             || async {

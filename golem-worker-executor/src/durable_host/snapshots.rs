@@ -710,15 +710,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// Takes the links of the Store's address lookups from the status record, which folded them
-    /// from the oplog, when the primary Store becomes live.
-    pub(in crate::durable_host) async fn seed_resolved_names(&self) {
-        let status = self.public_state.worker().get_last_known_status().await;
-        self.state.resolved_names.seed(&status.resolved_names.links);
-    }
-}
-
 impl PrivateDurableWorkerState {
     /// Whether the current oplog tip is a structurally clean boundary at which a mid-invocation
     /// status checkpoint may be taken: we are live, no host call is in flight, and snapshotting
