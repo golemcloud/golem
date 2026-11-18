@@ -87,6 +87,7 @@ mod input_observation;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub(crate) mod outgoing_caller;
 pub mod p3;
 pub(crate) mod permissions;
 pub mod quota;
@@ -396,6 +397,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     primary_invocation_start_index: Option<OplogIndex>,
     invocation_caller: Option<Caller>,
+    /// The tool that the running middleware layer wraps: the last layer of its call's plan.
+    middleware_wrapped_tool: Option<Box<golem_common::model::tool::CompiledToolBinding>>,
     invocation_id: Option<golem_common::model::OwnedInvocationId>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,

@@ -1717,11 +1717,11 @@ impl WorkerProxy for RecordingWorkerProxy {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, WorkerProxyError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -9537,6 +9537,7 @@ async fn local_schedule_rejects_recreated_cached_target(
                 scope_card: None,
             },
             Utc::now() + chrono::Duration::hours(1),
+            &target,
             &AuthCtx::System,
         )
         .await;
@@ -9636,7 +9637,11 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             assert!(
                 tokio::time::timeout(
                     Duration::from_secs(30),
-                    worker.cancel_scheduled_invocation(key, receipt, &owner),
+                    worker.cancel_scheduled_invocation(
+                        key,
+                        receipt,
+                        &callers::agent_principal(owner.clone()),
+                    ),
                 )
                 .await
                 .context("cancelling the selected invocation before Started timed out")??
@@ -9660,8 +9665,9 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 let worker = worker.clone();
                 let owner = owner.clone();
                 async move {
+                    let canceller = callers::agent_principal(owner);
                     let mut cancellation =
-                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &owner));
+                        Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
                     assert!(futures::poll!(&mut cancellation).is_pending());
                     blocked_tx.send(()).unwrap();
                     cancellation.await
@@ -9779,7 +9785,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         .await?;
     assert!(
         worker
-            .cancel_scheduled_invocation(key, receipt, &owner)
+            .cancel_scheduled_invocation(key, receipt, &callers::agent_principal(owner.clone()))
             .await?
     );
     assert_eq!(

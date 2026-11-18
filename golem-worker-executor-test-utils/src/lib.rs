@@ -9612,12 +9612,12 @@ impl Rpc for RecordingRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -9628,6 +9628,7 @@ impl Rpc for RecordingRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
         self.call_count.fetch_add(1, Ordering::Relaxed);
@@ -9638,6 +9639,7 @@ impl Rpc for RecordingRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -9795,11 +9797,11 @@ impl Rpc for FailingRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, ServiceRpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -9810,6 +9812,7 @@ impl Rpc for FailingRpc {
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
         scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
         self.inner
@@ -9819,6 +9822,7 @@ impl Rpc for FailingRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await

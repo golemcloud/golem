@@ -130,8 +130,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.entity_tool_operation.clone()
     }
 
+    /// Installs the caller of the running invocation. Removing it also removes the tool that a
+    /// running middleware layer wraps.
     pub(crate) fn set_invocation_caller(&mut self, caller: Option<Caller>) {
+        if caller.is_none() {
+            self.middleware_wrapped_tool = None;
+        }
         self.invocation_caller = caller;
+    }
+
+    /// Installs the tool that the running middleware layer wraps, whose identity the layer's own
+    /// calls carry.
+    pub(crate) fn set_middleware_wrapped_tool(
+        &mut self,
+        binding: Option<golem_common::model::tool::CompiledToolBinding>,
+    ) {
+        self.middleware_wrapped_tool = binding.map(Box::new);
     }
 
     /// Installs the ID of the running invocation, or removes it when `running` is false.
@@ -169,6 +183,62 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .self_principal(self.state.config.resolved_golem_issuer())
+    }
+
+    /// The caller that a call made now by the code of this Store gets: an agent call, a create,
+    /// a schedule, a fork or a tool call. Compute it when the call is made, never inside a task
+    /// that the call spawns, so that every retry of the call carries the same caller.
+    pub(crate) fn outgoing_caller(&self) -> Caller {
+        outgoing_caller::outgoing_caller(&self.invocation_caller(), &self.calling_code())
+    }
+
+    /// How the code of this Store appears to what it calls: the agent in its own Store, the tool
+    /// in a tool body, the wrapped tool in a middleware layer, and the shell rule for the
+    /// built-in shell.
+    fn calling_code(&self) -> outgoing_caller::CallingCode {
+        use golem_common::model::entity::{AgentEntity, EntityActivationPolicy};
+        use outgoing_caller::CallingCode;
+
+        let tool = match &self.runtime {
+            OwnerRuntime::Agent => None,
+            OwnerRuntime::Entity(AgentEntity::Tool(tool_name)) => {
+                match self
+                    .entity_invocation_scope
+                    .as_ref()
+                    .map(|scope| scope.activation().policy())
+                {
+                    Some(EntityActivationPolicy::Tool { binding, .. }) => {
+                        Some((binding.tool_name.clone(), binding.shell))
+                    }
+                    _ => Some((tool_name.clone(), false)),
+                }
+            }
+            OwnerRuntime::Entity(AgentEntity::ToolMiddleware(_)) => self
+                .middleware_wrapped_tool
+                .as_ref()
+                .map(|binding| (binding.tool_name.clone(), binding.shell)),
+        };
+        match tool {
+            None => CallingCode::Agent(self.self_principal()),
+            Some((_, true)) => {
+                let standalone = self
+                    .public_state
+                    .worker()
+                    .get_initial_worker_metadata()
+                    .owner_kind
+                    == golem_common::model::agent::OwnerKind::EphemeralExternalTool;
+                CallingCode::Shell {
+                    host: (!standalone).then(|| self.self_principal()),
+                }
+            }
+            Some((tool_name, false)) => {
+                CallingCode::Tool(golem_common::model::caller::ToolPrincipal {
+                    issuer: self.state.config.resolved_golem_issuer().to_string(),
+                    environment_id: self.state.owned_agent_id.environment_id,
+                    tool_name,
+                })
+            }
+        }
     }
 
     pub(crate) fn set_entity_cancellation(

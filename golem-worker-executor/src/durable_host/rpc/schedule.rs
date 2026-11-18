@@ -37,7 +37,6 @@ use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::DurableFunctionType;
@@ -113,12 +112,13 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
             }
 
             let schedule_id = serialized_schedule_id.into_domain();
+            let canceller = self.outgoing_caller().immediate;
             self.rpc()
                 .cancel_scheduled_invocation(
                     &recipient,
                     invocation_key,
                     schedule_id,
-                    &current_agent.agent_id(),
+                    &canceller,
                     handle.agent_auth_ctx(),
                 )
                 .await
@@ -346,7 +346,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.agent_id(),
                     &env,
                     self.clone_as_inherited_stack(&span_id),
-                    &Caller::entry(self.self_principal()),
+                    &self.outgoing_caller(),
                     config,
                     handle.agent_auth_ctx(),
                     Some(idempotency_key),
@@ -373,7 +373,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             method_name,
             input: input_value,
             invocation_context: stack,
-            caller: Caller::entry(self.self_principal()),
+            caller: self.outgoing_caller(),
             scope_card: None,
         };
         let result = self
@@ -384,6 +384,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 request_key,
                 invocation,
                 scheduled_at,
+                self.agent_id(),
                 handle.agent_auth_ctx(),
             )
             .await

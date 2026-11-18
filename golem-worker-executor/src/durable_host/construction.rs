@@ -371,6 +371,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )),
             primary_invocation_start_index: None,
             invocation_caller: None,
+            middleware_wrapped_tool: None,
             invocation_id: None,
             owner_execution,
             runtime_suspension: None,

@@ -1711,13 +1711,14 @@ impl WorkerService {
         Ok(canceled)
     }
 
-    /// Internal token control uses the recorded scheduling caller, not operator permission.
+    /// Internal token control uses the recorded scheduling caller, not operator permission: the
+    /// target cancels only when `canceller` is the immediate caller recorded for the call.
     pub async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: &golem_common::model::InvocationId,
         receipt: ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: AuthCtx,
     ) -> WorkerResult<bool> {
         if !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
@@ -1734,9 +1735,9 @@ impl WorkerService {
                 auth,
                 Some(
                     golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                        owner_agent_id: Some(owner.clone().into()),
                         schedule_id: Some(receipt.id.into()),
                         target_environment_id: Some(target.environment_id.into()),
+                        canceller: Some(canceller.clone().into()),
                     },
                 ),
             )

@@ -604,6 +604,76 @@ fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
 }
 
 #[test]
+fn durable_rpc_origin_accepts_a_tool_of_its_environment_as_the_immediate_caller() {
+    use golem_common::model::caller::{Principal, ToolPrincipal};
+    use golem_common::model::tool::ToolName;
+
+    let (mut request, metadata, invocation) = builder_fixture();
+    let parent: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
+    let origin_environment: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
+    request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+        parent: Some(parent.clone().into()),
+        ..Default::default()
+    });
+    request.origin_invocation = Some(
+        golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
+            callee_environment_id: request.environment_id,
+            callee: request.agent_id.clone(),
+            callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
+            idempotency_key: Some(uuid::Uuid::from_u128(902).into()),
+        },
+    );
+    let tool_of = |environment_id: EnvironmentId| {
+        Principal::Tool(ToolPrincipal {
+            issuer: crate::test_callers::TEST_ISSUER.to_string(),
+            environment_id,
+            tool_name: ToolName::try_from("report").unwrap(),
+        })
+    };
+    let build = |immediate: Principal| {
+        let mut request = request.clone();
+        request.caller = Some(
+            Caller {
+                original: crate::test_callers::user_principal(),
+                immediate,
+                tokens: Vec::new(),
+            }
+            .into(),
+        );
+        let (accepted, _) = tokio::sync::oneshot::channel();
+        build_durable_streaming_request(
+            &request,
+            &metadata,
+            ComponentRevision::INITIAL,
+            AgentFingerprint(uuid::Uuid::from_u128(3)),
+            invocation.clone(),
+            1,
+            accepted,
+            8,
+        )
+    };
+
+    assert!(build(crate::test_callers::agent_principal(parent.clone())).is_ok());
+    assert!(build(tool_of(origin_environment)).is_ok());
+
+    let other_agent = crate::test_callers::agent_principal(AgentId {
+        component_id: parent.component_id,
+        agent_id: "test-agent(\"other\")".to_string(),
+    });
+    for (case, immediate) in [
+        ("another agent", other_agent),
+        (
+            "a tool of another environment",
+            tool_of(EnvironmentId(uuid::Uuid::from_u128(0xe2))),
+        ),
+        ("a user", crate::test_callers::user_principal()),
+        ("anonymous", Principal::Anonymous),
+    ] {
+        assert!(build(immediate).is_err(), "{case} was accepted");
+    }
+}
+
+#[test]
 fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     use crate::worker::same_origin_stream_invocation;
     use golem_common::model::card::{

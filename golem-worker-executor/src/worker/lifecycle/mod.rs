@@ -1017,15 +1017,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             });
         }
     }
-    /// Commits cancellation only for scheduled work belonging to this incarnation and scheduling
-    /// agent. Returns false for a stale receipt, withdrawn work, or a start that already won.
+    /// Commits cancellation only for scheduled work belonging to this incarnation whose recorded
+    /// immediate caller is `canceller`: the agent or tool that scheduled it. Returns false for a
+    /// stale receipt, another canceller, withdrawn work, or a start that already won.
     /// Cancelling a never-started ephemeral target also withdraws its constructor reservation, so
     /// it cannot run initialization after its scheduled method was withdrawn.
     pub async fn cancel_scheduled_invocation(
         &self,
         idempotency_key: InvocationId,
         schedule_id: ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
     ) -> Result<bool, WorkerExecutorError> {
         let fingerprint = self.initial_worker_metadata.fingerprint;
         if ScheduleId::for_invocation(fingerprint, &idempotency_key) != schedule_id {
@@ -1062,10 +1063,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(false);
         }
         let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
-        if !matches!(
-            invocation.caller().map(|caller| &caller.immediate),
-            Some(Principal::Agent(agent)) if &agent.address == owner
-        ) {
+        if !invocation
+            .caller()
+            .is_some_and(|caller| caller.immediate.equals(canceller))
+        {
             return Ok(false);
         }
         self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
