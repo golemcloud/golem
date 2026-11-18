@@ -159,10 +159,13 @@ impl Drop for CancellationCleanup {
 
 impl Context {
     pub async fn new(
-        global_flags: GolemCliGlobalFlags,
+        mut global_flags: GolemCliGlobalFlags,
         log_output_for_help: Option<Output>,
         allow_manifest_upgrades: bool,
     ) -> anyhow::Result<Self> {
+        if let Some(path) = &mut global_flags.app_manifest_path {
+            *path = crate::fs::absolute_lexical_path(path)?;
+        }
         if matches!(
             global_flags.environment,
             Some(EnvironmentReference::Environment { .. })
@@ -536,12 +539,56 @@ impl Context {
         &self.config_dir
     }
 
+    pub async fn has_pending_application_changes(&self) -> bool {
+        self.application_load_plan
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|plan| !plan.is_empty())
+    }
+
     pub async fn apply_application_load_plan(&self) -> anyhow::Result<()> {
         let mut pending = self.application_load_plan.lock().await;
         if let Some(plan) = pending.as_ref() {
             plan.apply(self.yes)?;
             *pending = None;
         }
+        Ok(())
+    }
+
+    pub async fn reload_application(&self) -> anyhow::Result<()> {
+        let Some(config) = &self.app_context_config else {
+            return Ok(());
+        };
+        let mut state = self.app_context_state.write().await;
+        let selected = state.some_or_err()?.selected_component_names().clone();
+        let preloaded = ApplicationContext::preload_application(
+            ApplicationContextConfig::app_source_mode_from_flags(
+                config.disable_app_manifest_discovery,
+                config.app_manifest_path.as_deref(),
+            ),
+            config.dev_mode,
+            false,
+        )?;
+        let preload = preloaded.application_preload.ok_or_else(|| {
+            anyhow!("Application manifest disappeared during project preparation")
+        })?;
+        let reloaded_config = ApplicationContextConfig {
+            application_name: preload.application_name,
+            environments: preload.environments,
+            local_server: preload.local_server,
+            ..config.clone()
+        };
+        state.app_source_mode = Some(preloaded.source_mode);
+        state.app_context = None;
+        state
+            .init(&Some(reloaded_config), &self.file_download_client)
+            .await?;
+        state.some_or_err_mut()?.select_components(
+            &crate::model::app::ApplicationComponentSelectMode::Explicit(
+                selected.into_iter().collect(),
+            ),
+        )?;
         Ok(())
     }
 
@@ -1017,9 +1064,7 @@ impl ResolvedServerConfig {
 
 #[derive(Clone)]
 struct ApplicationContextConfig {
-    #[allow(unused)]
     app_manifest_path: Option<PathBuf>,
-    #[allow(unused)]
     disable_app_manifest_discovery: bool,
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, Environment>,

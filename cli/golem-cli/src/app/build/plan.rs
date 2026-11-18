@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::app::ComponentDependency;
 use crate::model::app_raw::BuildCommand;
+use crate::model::language::GuestLanguage;
 use anyhow::{bail, ensure};
 use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
@@ -27,6 +29,25 @@ pub enum BuildRequirement {
     Native { backend: NativeBuildBackend },
     ManagedGoToolchain,
     ExistingFile { path: PathBuf },
+    Preparation { preparation: CommonDependencies },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind", content = "directory")]
+pub enum CommonDependencies {
+    Npm(PathBuf),
+    Moon(PathBuf),
+    Go(PathBuf),
+}
+
+impl CommonDependencies {
+    pub fn manifest(&self) -> PathBuf {
+        match self {
+            Self::Npm(root) => root.join("package.json"),
+            Self::Moon(root) => root.join("moon.mod"),
+            Self::Go(root) => root.join("go.mod"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -122,6 +143,7 @@ impl BuildAction {
                         .filter(|path| !path.starts_with('@'))
                         .map(|path| directory.join(path)),
                 );
+                action.inputs[1..].sort();
                 NativeBuildBackend::QuickJsCrate
             }
             BuildCommand::QuickJSDTS(command) => {
@@ -171,17 +193,40 @@ impl BuildAction {
 pub enum BuildOperation {
     Command(BuildCommand),
     Prebuilt,
-    Dependencies { program: String, directory: PathBuf },
+    Dependencies(CommonDependencies),
     Metadata,
     Bridge,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum BuildValue {
+    SubjectMetadata {
+        dependency: ComponentDependency,
+    },
+    GuestBridge {
+        dependency: ComponentDependency,
+        language: GuestLanguage,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildStage {
     pub component: ComponentName,
     pub dependencies: BTreeSet<ComponentName>,
+    pub inputs: BTreeSet<BuildValue>,
     pub actions: Vec<BuildAction>,
+}
+
+/// A known candidate scope selected by a component or one of its future exports.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSelectionRule {
+    pub owner: ComponentName,
+    pub after_metadata: bool,
+    pub subject: Option<ComponentDependency>,
+    pub components: BTreeSet<ComponentName>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -201,14 +246,22 @@ impl Default for BuildPlanLimits {
     }
 }
 
-/// A bounded graph of checked stages. Metadata may add edges but cannot silently
-/// introduce an unchecked program or backend after execution has started.
+/// A bounded, immutable inventory of checked recipes and their inputs.
 #[derive(Clone, Debug)]
 pub struct BuildPlan {
     stages: BTreeMap<ComponentName, BuildStage>,
-    completed: BTreeSet<ComponentName>,
     requirements: BTreeSet<BuildRequirement>,
+    selected: BTreeSet<ComponentName>,
+    selection_rules: Vec<BuildSelectionRule>,
+    pub(super) bridges: BTreeMap<super::BridgeRequestId, BuildAction>,
+    pub(super) output_claims: Vec<super::OutputDirClaim>,
     limits: BuildPlanLimits,
+}
+
+#[derive(Default, Debug)]
+pub struct BuildProgress {
+    completed: BTreeSet<ComponentName>,
+    pub(super) executed_commands: BTreeMap<ComponentName, usize>,
 }
 
 impl BuildPlan {
@@ -226,17 +279,98 @@ impl BuildPlan {
             );
         }
         let plan = Self {
+            selected: indexed.keys().cloned().collect(),
+            selection_rules: Vec::new(),
+            bridges: BTreeMap::new(),
+            output_claims: Vec::new(),
             requirements: indexed
                 .values()
                 .flat_map(|stage| &stage.actions)
                 .flat_map(|action| action.requirements.iter().cloned())
                 .collect(),
             stages: indexed,
-            completed: BTreeSet::new(),
             limits,
         };
         plan.validate()?;
         Ok(plan)
+    }
+
+    pub fn with_selection(
+        mut self,
+        selected: BTreeSet<ComponentName>,
+        rules: Vec<BuildSelectionRule>,
+    ) -> anyhow::Result<Self> {
+        let mut edges = self
+            .stages
+            .values()
+            .map(|stage| stage.dependencies.len() + stage.inputs.len())
+            .sum::<usize>();
+        for name in &selected {
+            self.stage(name)?;
+        }
+        for rule in &rules {
+            self.stage(&rule.owner)?;
+            edges = edges
+                .checked_add(rule.components.len())
+                .ok_or_else(|| anyhow::anyhow!("Build plan edge limit exceeded"))?;
+            ensure!(edges <= self.limits.edges, "Build plan edge limit exceeded");
+            for name in &rule.components {
+                self.stage(name)?;
+            }
+        }
+        self.selected = selected;
+        self.selection_rules = rules;
+        Ok(self)
+    }
+
+    pub(super) fn with_bridges(
+        mut self,
+        bridges: BTreeMap<super::BridgeRequestId, BuildAction>,
+        claims: Vec<super::OutputDirClaim>,
+    ) -> anyhow::Result<Self> {
+        self.requirements.extend(
+            bridges
+                .values()
+                .flat_map(|action| action.requirements.iter().cloned()),
+        );
+        self.bridges = bridges;
+        self.output_claims = claims;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn explicit_components(&self) -> &BTreeSet<ComponentName> {
+        &self.selected
+    }
+
+    pub fn selected_components(
+        &self,
+        metadata: &BTreeMap<
+            ComponentName,
+            golem_common::model::agent::extraction::ExtractedComponentMetadata,
+        >,
+    ) -> BTreeSet<ComponentName> {
+        let mut selected = self.selected.clone();
+        loop {
+            let previous = selected.len();
+            for rule in &self.selection_rules {
+                if selected.contains(&rule.owner)
+                    && (!rule.after_metadata || metadata.contains_key(&rule.owner))
+                    && rule
+                        .subject
+                        .as_ref()
+                        .is_none_or(|subject| metadata_contains(metadata, subject))
+                {
+                    selected.extend(rule.components.iter().cloned());
+                }
+            }
+            for name in selected.clone() {
+                selected.extend(self.stages[&name].dependencies.iter().cloned());
+            }
+            if selected.len() == previous {
+                return selected;
+            }
+        }
     }
 
     pub fn stages(&self) -> impl Iterator<Item = &BuildStage> {
@@ -247,65 +381,67 @@ impl BuildPlan {
         &self.requirements
     }
 
+    pub fn selection_rules(&self) -> &[BuildSelectionRule] {
+        &self.selection_rules
+    }
+
     pub fn stage(&self, component: &ComponentName) -> anyhow::Result<&BuildStage> {
         self.stages
             .get(component)
             .ok_or_else(|| anyhow::anyhow!("Unchecked build stage '{component}'"))
     }
 
-    pub fn ready(&self) -> Vec<ComponentName> {
+    pub fn metadata_values(
+        &self,
+        metadata: &BTreeMap<
+            ComponentName,
+            golem_common::model::agent::extraction::ExtractedComponentMetadata,
+        >,
+    ) -> BTreeSet<BuildValue> {
+        self.stages()
+            .flat_map(|stage| &stage.inputs)
+            .filter(|value| {
+                let BuildValue::SubjectMetadata { dependency } = value else {
+                    return false;
+                };
+                metadata_contains(metadata, dependency)
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn ready(
+        &self,
+        progress: &BuildProgress,
+        values: &BTreeSet<BuildValue>,
+    ) -> Vec<ComponentName> {
         self.stages
             .values()
             .filter(|stage| {
-                !self.completed.contains(&stage.component)
-                    && stage.dependencies.is_subset(&self.completed)
+                !progress.completed.contains(&stage.component)
+                    && stage.dependencies.is_subset(&progress.completed)
+                    && stage.inputs.is_subset(values)
             })
             .map(|stage| stage.component.clone())
             .collect()
     }
 
-    pub fn complete(&mut self, component: &ComponentName) -> anyhow::Result<()> {
+    pub fn complete(
+        &self,
+        progress: &mut BuildProgress,
+        component: &ComponentName,
+        values: &BTreeSet<BuildValue>,
+    ) -> anyhow::Result<()> {
         let stage = self.stage(component)?;
         ensure!(
-            stage.dependencies.is_subset(&self.completed),
+            stage.dependencies.is_subset(&progress.completed) && stage.inputs.is_subset(values),
             "Build stage '{component}' has incomplete dependencies"
         );
         ensure!(
-            !self.completed.contains(component),
+            !progress.completed.contains(component),
             "Build stage '{component}' already completed"
         );
-        self.completed.insert(component.clone());
-        Ok(())
-    }
-
-    /// The candidate replaces only pending stages. Validate the entire graph
-    /// before publishing it, including edges to stages already executed.
-    pub fn discover(&mut self, stages: Vec<BuildStage>) -> anyhow::Result<()> {
-        ensure!(
-            stages.len() <= self.limits.components,
-            "Build plan component limit exceeded"
-        );
-        let mut candidate = self.clone();
-        for stage in stages {
-            for requirement in stage.actions.iter().flat_map(|action| &action.requirements) {
-                ensure!(
-                    self.requirements.contains(requirement),
-                    "Metadata introduced unchecked build requirement {requirement:?} for '{}'; check the complete pipeline before building",
-                    stage.component
-                );
-            }
-            if self.completed.contains(&stage.component) {
-                ensure!(
-                    self.stage(&stage.component)?.dependencies == stage.dependencies,
-                    "Metadata changed dependencies of completed build stage '{}'",
-                    stage.component
-                );
-            } else {
-                candidate.stages.insert(stage.component.clone(), stage);
-            }
-        }
-        candidate.validate()?;
-        *self = candidate;
+        progress.completed.insert(component.clone());
         Ok(())
     }
 
@@ -314,7 +450,11 @@ impl BuildPlan {
             self.stages.len() <= self.limits.components,
             "Build plan component limit exceeded"
         );
-        let mut actions = 0usize;
+        let mut actions = self.bridges.len();
+        ensure!(
+            actions <= self.limits.actions,
+            "Build plan action limit exceeded"
+        );
         let mut edges = 0usize;
         let mut dependents = BTreeMap::<&ComponentName, Vec<&ComponentName>>::new();
         let mut remaining = BTreeMap::new();
@@ -323,7 +463,7 @@ impl BuildPlan {
                 .checked_add(stage.actions.len())
                 .ok_or_else(|| anyhow::anyhow!("Build plan action limit exceeded"))?;
             edges = edges
-                .checked_add(stage.dependencies.len())
+                .checked_add(stage.dependencies.len() + stage.inputs.len())
                 .ok_or_else(|| anyhow::anyhow!("Build plan edge limit exceeded"))?;
             ensure!(
                 actions <= self.limits.actions,
@@ -374,6 +514,33 @@ impl BuildPlan {
     }
 }
 
+fn metadata_contains(
+    metadata: &BTreeMap<
+        ComponentName,
+        golem_common::model::agent::extraction::ExtractedComponentMetadata,
+    >,
+    dependency: &ComponentDependency,
+) -> bool {
+    let Some(component) = dependency
+        .component_name()
+        .and_then(|name| metadata.get(name))
+    else {
+        return false;
+    };
+    match dependency {
+        ComponentDependency::Agent {
+            agent_type_name, ..
+        } => component
+            .agent_types
+            .iter()
+            .any(|agent| &agent.type_name == agent_type_name),
+        ComponentDependency::Tool { tool_name, .. } => component
+            .tools
+            .iter()
+            .any(|tool| tool.name() == Some(tool_name.as_str())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +557,36 @@ mod tests {
         assert_eq!(serde_json::to_value(action).unwrap(), fixture);
     }
 
+    #[test]
+    fn native_action_inputs_do_not_depend_on_module_map_order() {
+        for reverse in [false, true] {
+            let mut js_modules = std::collections::HashMap::from([("slot".into(), "@slot".into())]);
+            let mut entries = (0..16).collect::<Vec<_>>();
+            if reverse {
+                entries.reverse();
+            }
+            for index in entries {
+                js_modules.insert(format!("module-{index:02}"), format!("{index:02}.js"));
+            }
+            let action = BuildAction::command(
+                std::path::Path::new("/work"),
+                &BuildCommand::QuickJSCrate(crate::model::app_raw::GenerateQuickJSCrate {
+                    generate_quickjs_crate: "output".into(),
+                    wit: "wit".into(),
+                    js_modules,
+                    world: None,
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                action.inputs,
+                std::iter::once(PathBuf::from("/work/wit"))
+                    .chain((0..16).map(|index| PathBuf::from(format!("/work/{index:02}.js"))))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
     fn stage(name: &str, dependencies: &[&str]) -> BuildStage {
         BuildStage {
             component: ComponentName(name.into()),
@@ -397,6 +594,7 @@ mod tests {
                 .iter()
                 .map(|name| ComponentName((*name).into()))
                 .collect(),
+            inputs: BTreeSet::new(),
             actions: Vec::new(),
         }
     }
@@ -409,8 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn asymmetric_stages_wait_for_all_dependencies_and_reject_late_cycles() {
-        let mut plan = BuildPlan::new(
+    fn asymmetric_stages_wait_for_all_dependencies_with_independent_progress() {
+        let plan = BuildPlan::new(
             vec![
                 stage("a-consumer", &["z-provider", "m-other"]),
                 stage("z-provider", &[]),
@@ -419,70 +617,46 @@ mod tests {
             BuildPlanLimits::default(),
         )
         .unwrap();
-        assert_eq!(plan.ready(), names(&["m-other", "z-provider"]));
-        assert!(plan.complete(&ComponentName("a-consumer".into())).is_err());
-        plan.complete(&ComponentName("z-provider".into())).unwrap();
-        assert_eq!(plan.ready(), names(&["m-other"]));
-        plan.discover(vec![stage("m-other", &["z-provider"])])
+        let mut progress = BuildProgress::default();
+        let values = BTreeSet::new();
+        assert_eq!(
+            plan.ready(&progress, &values),
+            names(&["m-other", "z-provider"])
+        );
+        assert!(
+            plan.complete(&mut progress, &ComponentName("a-consumer".into()), &values)
+                .is_err()
+        );
+        plan.complete(&mut progress, &ComponentName("z-provider".into()), &values)
             .unwrap();
-        assert_eq!(plan.ready(), names(&["m-other"]));
+        assert_eq!(plan.ready(&progress, &values), names(&["m-other"]));
         assert!(
-            plan.discover(vec![stage("m-other", &["a-consumer"])])
+            plan.complete(&mut progress, &ComponentName("z-provider".into()), &values)
                 .is_err()
         );
-        // A rejected discovery leaves the executable frontier unchanged.
-        assert_eq!(plan.ready(), names(&["m-other"]));
-        plan.complete(&ComponentName("m-other".into())).unwrap();
-        assert_eq!(plan.ready(), names(&["a-consumer"]));
-        assert!(
-            plan.discover(vec![stage("z-provider", &["a-consumer"])])
-                .is_err()
-        );
-        plan.complete(&ComponentName("a-consumer".into())).unwrap();
-        assert!(plan.ready().is_empty());
-    }
-
-    #[test]
-    fn late_metadata_edges_reorder_pending_stages_without_new_requirements() {
-        let mut plan = BuildPlan::new(
-            vec![stage("a", &[]), stage("b", &[]), stage("z", &[])],
-            BuildPlanLimits::default(),
-        )
-        .unwrap();
-        plan.complete(&ComponentName("b".into())).unwrap();
-        plan.discover(vec![stage("a", &["z"])]).unwrap();
-        assert_eq!(plan.ready(), names(&["z"]));
-        let mut unsupported = stage("late", &[]);
-        unsupported.actions.push(BuildAction {
-            inputs: vec![],
-            outputs: vec![],
-            effects: BTreeSet::from([BuildEffect::HostProcess]),
-            requirements: BTreeSet::from([BuildRequirement::HostProgram {
-                program: "missing".into(),
-                directory: "/work".into(),
-            }]),
-            operation: BuildOperation::Metadata,
-        });
-        assert!(
-            plan.discover(vec![unsupported])
-                .unwrap_err()
-                .to_string()
-                .contains("unchecked")
+        assert_eq!(plan.ready(&progress, &values), names(&["m-other"]));
+        plan.complete(&mut progress, &ComponentName("m-other".into()), &values)
+            .unwrap();
+        assert_eq!(plan.ready(&progress, &values), names(&["a-consumer"]));
+        plan.complete(&mut progress, &ComponentName("a-consumer".into()), &values)
+            .unwrap();
+        assert!(plan.ready(&progress, &values).is_empty());
+        assert_eq!(
+            plan.ready(&BuildProgress::default(), &values),
+            names(&["m-other", "z-provider"])
         );
         assert!(plan.stage(&ComponentName("late".into())).is_err());
-        plan.complete(&ComponentName("z".into())).unwrap();
-        assert_eq!(plan.ready(), names(&["a"]));
     }
 
     #[test]
-    fn graph_limits_are_inclusive_and_apply_to_discovery() {
+    fn graph_limits_are_inclusive() {
         let stages = vec![stage("a", &["b", "c"]), stage("b", &["c"]), stage("c", &[])];
         let limits = BuildPlanLimits {
             components: 3,
             actions: 0,
             edges: 3,
         };
-        let mut plan = BuildPlan::new(stages.clone(), limits).unwrap();
+        let plan = BuildPlan::new(stages.clone(), limits).unwrap();
         assert!(
             BuildPlan::new(
                 stages.clone(),
@@ -494,8 +668,10 @@ mod tests {
             .is_err()
         );
         assert!(BuildPlan::new(stages.clone(), BuildPlanLimits { edges: 2, ..limits }).is_err());
-        assert!(plan.discover(vec![stage("d", &[])]).is_err());
-        assert_eq!(plan.ready(), names(&["c"]));
+        assert_eq!(
+            plan.ready(&BuildProgress::default(), &BTreeSet::new()),
+            names(&["c"])
+        );
         let mut with_action = stages;
         with_action[0].actions.push(BuildAction {
             inputs: vec![],
@@ -516,5 +692,129 @@ mod tests {
         assert!(
             BuildPlan::new(vec![stage("a", &["missing"])], BuildPlanLimits::default()).is_err()
         );
+    }
+
+    #[test]
+    fn future_results_select_only_checked_candidates_without_changing_the_inventory() {
+        use golem_common::model::agent::extraction::ExtractedComponentMetadata;
+
+        let roots = names(&["z-owner"]).into_iter().collect();
+        let rule = BuildSelectionRule {
+            owner: ComponentName("z-owner".into()),
+            after_metadata: true,
+            subject: None,
+            components: names(&["a-candidate"]).into_iter().collect(),
+        };
+        let stages = vec![
+            stage("a-candidate", &["b-provider"]),
+            stage("b-provider", &[]),
+            stage("z-owner", &[]),
+        ];
+        assert!(
+            BuildPlan::new(
+                stages.clone(),
+                BuildPlanLimits {
+                    components: 3,
+                    actions: 0,
+                    edges: 1,
+                }
+            )
+            .unwrap()
+            .with_selection(
+                names(&["z-owner"]).into_iter().collect(),
+                vec![rule.clone()]
+            )
+            .is_err()
+        );
+        let plan = BuildPlan::new(
+            stages.clone(),
+            BuildPlanLimits {
+                components: 3,
+                actions: 0,
+                edges: 2,
+            },
+        )
+        .unwrap()
+        .with_selection(roots, vec![rule.clone()])
+        .unwrap();
+        assert_eq!(
+            plan.selected_components(&BTreeMap::new()),
+            names(&["z-owner"]).into_iter().collect()
+        );
+        let metadata = BTreeMap::from([(
+            ComponentName("z-owner".into()),
+            ExtractedComponentMetadata {
+                agent_types: vec![],
+                tools: vec![],
+                tool_middlewares: vec![],
+            },
+        )]);
+        assert_eq!(
+            plan.selected_components(&metadata),
+            names(&["a-candidate", "b-provider", "z-owner"])
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            plan.stages()
+                .map(|stage| stage.component.clone())
+                .collect::<Vec<_>>(),
+            names(&["a-candidate", "b-provider", "z-owner"])
+        );
+        let reversed = BuildPlan::new(
+            stages.into_iter().rev().collect(),
+            BuildPlanLimits::default(),
+        )
+        .unwrap()
+        .with_selection(
+            names(&["z-owner"]).into_iter().collect(),
+            vec![rule.clone()],
+        )
+        .unwrap();
+        assert_eq!(
+            reversed.selected_components(&metadata),
+            plan.selected_components(&metadata)
+        );
+        assert_eq!(
+            reversed.ready(&BuildProgress::default(), &BTreeSet::new()),
+            plan.ready(&BuildProgress::default(), &BTreeSet::new())
+        );
+        assert!(
+            BuildPlan::new(vec![stage("z-owner", &[])], BuildPlanLimits::default())
+                .unwrap()
+                .with_selection(names(&["z-owner"]).into_iter().collect(), vec![rule])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn completed_producer_does_not_fabricate_a_required_bridge_result() {
+        let bridge = BuildValue::GuestBridge {
+            dependency: ComponentDependency::Agent {
+                component_name: ComponentName("z-provider".into()),
+                agent_type_name: golem_common::model::agent::AgentTypeName("SpecificAgent".into()),
+            },
+            language: GuestLanguage::Rust,
+        };
+        let mut consumer = stage("a-consumer", &["z-provider"]);
+        consumer.inputs.insert(bridge.clone());
+        let plan = BuildPlan::new(
+            vec![consumer, stage("z-provider", &[])],
+            BuildPlanLimits::default(),
+        )
+        .unwrap();
+        let mut progress = BuildProgress::default();
+        let values = BTreeSet::new();
+        plan.complete(&mut progress, &ComponentName("z-provider".into()), &values)
+            .unwrap();
+        assert!(plan.ready(&progress, &values).is_empty());
+        assert!(
+            plan.complete(&mut progress, &ComponentName("a-consumer".into()), &values)
+                .is_err()
+        );
+        let values = BTreeSet::from([bridge]);
+        assert_eq!(plan.ready(&progress, &values), names(&["a-consumer"]));
+        plan.complete(&mut progress, &ComponentName("a-consumer".into()), &values)
+            .unwrap();
     }
 }

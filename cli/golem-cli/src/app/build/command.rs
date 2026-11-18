@@ -14,6 +14,7 @@
 
 use crate::app::build::go_inputs;
 use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
+use crate::app::build::plan::CommonDependencies;
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
     GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonSyncDepsMarkerHash,
@@ -42,13 +43,21 @@ pub async fn execute_build_command(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
     command: &app_raw::BuildCommand,
+    preparations: &[CommonDependencies],
 ) -> anyhow::Result<()> {
     let component = ctx.application().component(component_name);
     let base_build_dir = component.component_dir().to_path_buf();
     let go_component = component.guest_language() == Some(GuestLanguage::Go);
     match command {
         app_raw::BuildCommand::External(external_command) => {
-            execute_external_command(ctx, &base_build_dir, external_command, go_component).await
+            execute_external_command(
+                ctx,
+                &base_build_dir,
+                external_command,
+                go_component,
+                Some(preparations),
+            )
+            .await
         }
         app_raw::BuildCommand::QuickJSCrate(command) => {
             execute_quickjs_create(ctx, &base_build_dir, command)
@@ -180,7 +189,9 @@ pub async fn execute_custom_command(
         let _indent = LogIndent::new();
 
         for step in &command.value {
-            if let Err(error) = execute_external_command(ctx, &command.source, step, false).await {
+            if let Err(error) =
+                execute_external_command(ctx, &command.source, step, false, None).await
+            {
                 return Err(CustomCommandError::CommandError { error });
             }
         }
@@ -201,9 +212,14 @@ pub async fn execute_custom_command(
 
             for step in custom_command {
                 let go_component = component.guest_language() == Some(GuestLanguage::Go);
-                if let Err(error) =
-                    execute_external_command(ctx, component.component_dir(), step, go_component)
-                        .await
+                if let Err(error) = execute_external_command(
+                    ctx,
+                    component.component_dir(),
+                    step,
+                    go_component,
+                    None,
+                )
+                .await
                 {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -318,11 +334,12 @@ fn execute_quickjs_d_ts(
 /// Runs one external command. `go_component` says whether it belongs to a Go
 /// component: only then is `go` the managed toolchain and the component's
 /// `go.mod` tidied first; anywhere else `go` is whatever is on `PATH`.
-pub async fn execute_external_command(
+async fn execute_external_command(
     ctx: &BuildContext<'_>,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
     go_component: bool,
+    preparations: Option<&[CommonDependencies]>,
 ) -> anyhow::Result<()> {
     let app_root_dir = ctx.application().app_root_dir();
 
@@ -403,13 +420,19 @@ pub async fn execute_external_command(
                     return Err(anyhow!("Empty command!"));
                 }
 
-                ensure_common_deps_for_tool(
-                    ctx,
-                    command_tokens[0].as_str(),
-                    &build_dir,
-                    go_component,
-                )
-                .await?;
+                let preparation = common_dependencies_for_tool(
+                    ctx, command_tokens[0].as_str(), &build_dir, go_component,
+                )?;
+                if let Some(preparation) = preparation {
+                    if let Some(checked) = preparations {
+                        anyhow::ensure!(checked.contains(&preparation),
+                            "Build command requires unchecked dependency preparation {preparation:?}");
+                    }
+                    super::inspect::check_requirement(&super::plan::BuildRequirement::Preparation {
+                        preparation: preparation.clone(),
+                    })?;
+                    ensure_common_dependencies(ctx, &preparation).await?;
+                }
 
                 // In a Go component `go` is the managed toolchain, not whatever is on PATH.
                 let go_toolchain = if go_component
@@ -469,39 +492,42 @@ fn external_command_display_name(command: &str) -> &str {
         .unwrap_or(command)
 }
 
-pub(super) enum CommonDependencies {
-    Npm(std::path::PathBuf),
-    Moon(std::path::PathBuf),
-    Go(std::path::PathBuf),
-}
-
-pub(super) fn common_dependencies_for_tool(
+pub(super) fn possible_common_dependencies_for_tool(
     ctx: &BuildContext<'_>,
     tool: &str,
     build_dir: &Path,
     go_component: bool,
-) -> anyhow::Result<Option<CommonDependencies>> {
+) -> anyhow::Result<Vec<CommonDependencies>> {
     let normalized = normalized_program_name(tool);
     Ok(match normalized.as_str() {
-        "node" | "npx" => {
-            let root = ctx.application().app_root_dir();
-            root.join("package.json")
-                .exists()
-                .then(|| CommonDependencies::Npm(root.to_path_buf()))
-        }
+        "node" | "npx" => vec![CommonDependencies::Npm(
+            ctx.application().app_root_dir().to_path_buf(),
+        )],
         "moon" | "moonx" => {
             let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
             let build_dir = fs::absolute_lexical_path(build_dir)?;
             build_dir
                 .ancestors()
                 .take_while(|dir| dir.starts_with(&app_root_dir))
-                .find(|dir| dir.join("moon.mod").exists())
                 .map(|root| CommonDependencies::Moon(root.to_path_buf()))
+                .collect()
         }
-        "go" => (go_component && build_dir.join("go.mod").exists())
-            .then(|| CommonDependencies::Go(build_dir.to_path_buf())),
-        _ => None,
+        "go" if go_component => vec![CommonDependencies::Go(build_dir.to_path_buf())],
+        _ => Vec::new(),
     })
+}
+
+fn common_dependencies_for_tool(
+    ctx: &BuildContext<'_>,
+    tool: &str,
+    build_dir: &Path,
+    go_component: bool,
+) -> anyhow::Result<Option<CommonDependencies>> {
+    Ok(
+        possible_common_dependencies_for_tool(ctx, tool, build_dir, go_component)?
+            .into_iter()
+            .find(|preparation| preparation.manifest().exists()),
+    )
 }
 
 pub async fn ensure_common_deps_for_tool(
@@ -511,31 +537,40 @@ pub async fn ensure_common_deps_for_tool(
     go_component: bool,
 ) -> anyhow::Result<()> {
     match common_dependencies_for_tool(ctx, tool, build_dir, go_component)? {
-        Some(CommonDependencies::Npm(root)) => {
+        Some(preparation) => ensure_common_dependencies(ctx, &preparation).await,
+        None => Ok(()),
+    }
+}
+
+async fn ensure_common_dependencies(
+    ctx: &BuildContext<'_>,
+    preparation: &CommonDependencies,
+) -> anyhow::Result<()> {
+    match preparation {
+        CommonDependencies::Npm(root) => {
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once("node", || async {
-                    ensure_npm_dependencies(ctx, &root).await
+                    ensure_npm_dependencies(ctx, root).await
                 })
                 .await
         }
-        Some(CommonDependencies::Moon(root)) => {
+        CommonDependencies::Moon(root) => {
             let ensure_key = format!("moon:{}", root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_moon_dependencies(ctx, &root).await
+                    ensure_moon_dependencies(ctx, root).await
                 })
                 .await
         }
-        Some(CommonDependencies::Go(root)) => {
+        CommonDependencies::Go(root) => {
             let toolchain = ensure_go_toolchain(ctx.application_config()).await?;
             let ensure_key = format!("go:{}", root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_go_dependencies(ctx, &root, &toolchain).await
+                    ensure_go_dependencies(ctx, root, &toolchain).await
                 })
                 .await
         }
-        None => Ok(()),
     }
 }
 

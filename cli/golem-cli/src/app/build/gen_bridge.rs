@@ -209,7 +209,8 @@ pub(crate) async fn plan_explicit_manifest_guest_bridge_generation_for_component
     })
 }
 
-pub(crate) async fn plan_dependency_guest_bridge_generation_for_components_lenient(
+#[cfg(test)]
+async fn plan_dependency_guest_bridge_generation_for_components_lenient(
     ctx: &BuildContext<'_>,
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
@@ -913,7 +914,6 @@ async fn collect_dependency_guest_bridge_targets(
     source_component_names: &[ComponentName],
     selection_scope_component_names: &[ComponentName],
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
-    let mut targets = Vec::new();
     let mut extracted = BTreeMap::new();
 
     for component_name in source_component_names {
@@ -924,7 +924,27 @@ async fn collect_dependency_guest_bridge_targets(
             );
         }
     }
-    for (component_name, metadata) in &extracted {
+    let available_sources = extracted.keys().cloned().collect::<Vec<_>>();
+    extracted.extend(ctx.extracted_metadata.lock().unwrap().clone());
+    resolve_dependency_guest_bridge_inputs(
+        ctx,
+        &available_sources,
+        selection_scope_component_names,
+        &extracted,
+    )
+}
+
+pub(super) fn resolve_dependency_guest_bridge_inputs(
+    ctx: &BuildContext<'_>,
+    source_component_names: &[ComponentName],
+    selection_scope_component_names: &[ComponentName],
+    extracted: &BTreeMap<ComponentName, ExtractedComponentMetadata>,
+) -> anyhow::Result<Vec<BridgeSdkTarget>> {
+    let mut targets = Vec::new();
+    for component_name in source_component_names {
+        let Some(metadata) = extracted.get(component_name) else {
+            continue;
+        };
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
         collect_dependency_agent_bridge_targets(
             ctx,
@@ -1073,8 +1093,7 @@ async fn collect_dependency_guest_bridge_targets(
         }
     }
 
-    extracted.extend(ctx.extracted_metadata.lock().unwrap().clone());
-    present_guest_tool_targets(ctx, targets, &extracted)
+    present_guest_tool_targets(ctx, targets, extracted)
 }
 
 fn present_guest_tool_targets(

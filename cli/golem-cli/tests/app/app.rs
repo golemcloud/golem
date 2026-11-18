@@ -3274,6 +3274,13 @@ async fn dependency_guest_bridge_gen_bridge_step_includes_selected_dependencies(
         ctx.cwd_path_join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client/Cargo.toml")
             .exists()
     );
+    assert!(!ctx.cwd_path_join("consumer/consumer-final.wasm").exists());
+    std::fs::remove_file(&producer_final_wasm).unwrap();
+    let outputs = ctx
+        .cli([cmd::BUILD, "app:consumer", flag::STEP, "gen-bridge"])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("Build requires existing file"));
 }
 
 #[test]
@@ -7377,13 +7384,16 @@ async fn build_check(_tracing: &Tracing) {
     cargo_toml["dependencies"]["golem-rust"] = value("999.0.0");
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
-    // Phase 2: intentionally break versions/settings and verify build check can auto-fix them.
+    // Check reports repairs without applying them, including with --yes.
+    let paths = [&package_json_path, &tsconfig_path, &cargo_toml_path];
+    let before = paths.map(|path| fs::read_to_string(path).unwrap());
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(
         outputs.stdout_contains("Planned required changes for dependencies and configurations")
     );
-    assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
+    assert!(!outputs.stdout_contains("Applying dependency and configuration updates"));
+    assert_eq!(paths.map(|path| fs::read_to_string(path).unwrap()), before);
 
     fs::write_str(
         &package_json_path,
@@ -7412,16 +7422,18 @@ async fn build_check(_tracing: &Tracing) {
         .unwrap();
     fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
 
-    // Phase 3: remove other dependencies and verify check restores everything needed.
+    // Missing dependencies also remain unchanged during check.
+    let before = paths.map(|path| fs::read_to_string(path).unwrap());
     let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
     assert!(outputs.success_or_dump());
     assert!(
         outputs.stdout_contains("Planned required changes for dependencies and configurations")
     );
-    assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
+    assert!(!outputs.stdout_contains("Applying dependency and configuration updates"));
+    assert_eq!(paths.map(|path| fs::read_to_string(path).unwrap()), before);
 
-    // Phase 4: full build should succeed after all auto-applied fixes.
-    let outputs = ctx.cli([cmd::BUILD]).await;
+    // An authorized build applies repairs and reloads them before executing.
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
 }
 

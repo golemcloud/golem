@@ -10,11 +10,13 @@ or permission from the executable name in this fixture.
 
 ## Standalone inspection and execution
 
-`build --step check` loads proposed manifest conversions and common templates in
-memory. It resolves the declared host programs and reports dependency repairs.
-It does not apply conversions, generate common files, install dependencies or
-create the Claude skills symlink, even with `--yes`. A repeated check has the
-same no-write contract.
+`build --step check` inspects loading and dependency repairs without applying
+them. It resolves declared host requirements, but does not convert manifests,
+generate common files, install dependencies or create the Claude skills symlink,
+even with `--yes`. Repeated checks preserve stale task markers too. If repairs
+remain, check reports that it did not construct an executable plan. Otherwise it
+describes the same immutable inventory that execution consumes. Check does not
+run recipes or extract future component metadata.
 
 A build checks its declared requirements before it applies the load plan or
 enters grant preparation. Manifest conversions still show a diff and require
@@ -22,18 +24,41 @@ confirmation; `--yes` confirms them. The CLI checks the original manifest bytes
 again after confirmation, before its first conversion write. This is not a
 transaction and it does not roll back later build failures.
 
-The plan reuses dependency preparation and the existing component scheduler.
-Pending stages are revalidated before the next component executes. A missing
-program or unclassifiable command fails preflight rather than starting earlier
-commands. A bridge-only build checks its supplied artifact without requiring an
-unused compiler pipeline. Managed Go inspection requires an installed toolchain
-and does not bootstrap one as a side effect of checking it.
+After confirmation, a build applies project repairs and reloads persisted files
+before constructing its executable plan. No unapplied conversion or dependency
+patch is an input to execution. An authorized repair remains persisted if a
+later recipe fails.
+
+The inventory contains the selected recipes in their original order, conditional
+shared dependency preparations, metadata extraction, bridge collections and known
+candidate scopes. Typed inputs refer to future metadata and guest bridges, not
+to additional work discovered during execution. Progress and results are separate
+from the plan. The serial runner chooses ready components in stable name order.
+It retains completed commands and bridge results across grant continuations.
+
+Middleware lookup may wait for a pending candidate, use one known matching
+provider, or reject a known ambiguity or incompatible version. Final validation
+checks the complete scope for late duplicates and presentation differences. An
+unseeded dependency chain is blocked, not a completed search with no match. A
+bridge with a middleware chain waits for every required middleware input.
+
+A missing program or unclassifiable command fails requirement inspection before
+project repair or recipe execution. A bridge-only build checks its supplied
+artifact without requiring an unused compiler pipeline. Managed Go inspection
+requires an installed toolchain and does not bootstrap one during check.
+
+`middleware-bootstrap/` supplies a small real Rust component for cold CLI tests.
+Its variants export tools, middleware names and aliases. The tests start without
+metadata or generated bridges and exercise both asymmetric bootstrap orders,
+late duplicates, blocked chains, completed missing searches and explicit scopes.
+Separate host recipes exercise shared preparations, command order, failed
+producers and deterministic plans despite reversed manifest insertion order.
 
 Native metadata extraction and preinitialization are identified as actions that
 execute user components. This host fixture does not qualify fuel, memory or
-time limits for those native backends, nor does it qualify complete bridge-action
-coverage. Tool execution and its bounded shared-engine capability remain separate
-integration work.
+time limits for those native backends. Host action classification is not Tool
+admission or a complete compiler/supplier inventory. Tool execution and its
+bounded shared-engine capability remain separate integration work.
 
 ## Concrete 1.6 conversion input
 

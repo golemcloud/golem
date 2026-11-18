@@ -1,0 +1,22 @@
+[package]
+name = "middleware-bootstrap"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[features]
+provider = []
+x = []
+y = []
+alias-x = []
+
+[dependencies]
+golem-rust = { path = "__GOLEM_RUST_PATH__", features = ["export_golem_agentic"] }

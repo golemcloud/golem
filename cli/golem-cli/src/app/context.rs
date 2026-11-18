@@ -334,6 +334,10 @@ pub struct ApplicationLoadPlan {
 }
 
 impl ApplicationLoadPlan {
+    pub fn is_empty(&self) -> bool {
+        self.upgrades.is_empty() && self.commons.is_empty()
+    }
+
     pub fn apply(&self, yes: bool) -> anyhow::Result<()> {
         ApplicationContext::apply_manifest_upgrades(&self.upgrades, yes)?;
         for (template, name, app_dir, target_dir) in &self.commons {
@@ -762,16 +766,22 @@ impl ApplicationContext {
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         environment_tools: Option<&ResolvedEnvironmentTools>,
-        plan: crate::app::build::plan::BuildPlan,
+        plan: &crate::app::build::plan::BuildPlan,
+        execution: &mut crate::app::build::BuildExecution,
     ) -> anyhow::Result<()> {
         let ctx =
             BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
                 .with_tool_middleware_grants(resolved_tool_middleware_grants);
         match environment_tools {
             Some(environment_tools) => {
-                build_app(&ctx.with_environment_tools(environment_tools), plan).await
+                build_app(
+                    &ctx.with_environment_tools(environment_tools),
+                    plan,
+                    execution,
+                )
+                .await
             }
-            None => build_app(&ctx, plan).await,
+            None => build_app(&ctx, plan, execution).await,
         }
     }
 

@@ -3792,27 +3792,18 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let checked_plan = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            crate::app::build::preflight_build(&BuildContext::new(app_ctx, build_config)).await?
+        let Some(checked_plan) = self.prepare_build_project(build_config).await? else {
+            return Ok(());
         };
         if !build_config.should_run_step(AppBuildStep::Build)
             && !build_config.should_run_step(AppBuildStep::GenBridge)
         {
-            if build_config.should_run_step(AppBuildStep::Check) {
-                let app_ctx = self.ctx.app_context_lock().await;
-                self.plan_and_apply_dependency_fixes(
-                    &BuildContext::new(app_ctx.some_or_err()?, build_config),
-                    false,
-                )?;
-            }
             return Ok(());
         }
-        self.ctx.apply_application_load_plan().await?;
         let mut demanded_tools = BTreeSet::new();
         let mut demanded_middlewares = BTreeSet::new();
         let mut environment_tool_names = BTreeSet::new();
+        let mut execution = crate::app::build::BuildExecution::default();
         loop {
             let resolved_tool_grants = if !demanded_tools.is_empty() {
                 log_action(
@@ -3887,7 +3878,8 @@ impl AppCommandHandler {
                     &resolved_tool_grants,
                     &resolved_middleware_grants,
                     Some(&environment_tool_names),
-                    checked_plan.clone(),
+                    &checked_plan,
+                    &mut execution,
                 )
                 .await;
             match result {
@@ -3925,20 +3917,78 @@ impl AppCommandHandler {
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        let checked_plan = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let app_ctx = app_ctx.some_or_err()?;
-            crate::app::build::preflight_build(&BuildContext::new(app_ctx, build_config)).await?
+        let Some(checked_plan) = self.prepare_build_project(build_config).await? else {
+            return Ok(());
         };
-        self.ctx.apply_application_load_plan().await?;
+        if !build_config.should_run_step(AppBuildStep::Build)
+            && !build_config.should_run_step(AppBuildStep::GenBridge)
+        {
+            return Ok(());
+        }
         self.build_selected(
             build_config,
             resolved_tool_grants,
             resolved_tool_middleware_grants,
             None,
-            checked_plan,
+            &checked_plan,
+            &mut crate::app::build::BuildExecution::default(),
         )
         .await
+    }
+
+    async fn prepare_build_project(
+        &self,
+        build_config: &BuildConfig,
+    ) -> anyhow::Result<Option<crate::app::build::plan::BuildPlan>> {
+        {
+            let app_ctx = self.ctx.app_context_lock().await;
+            crate::app::build::inspect_build_requirements(&BuildContext::new(
+                app_ctx.some_or_err()?,
+                build_config,
+            ))
+            .await?;
+        }
+        let execute = build_config.should_run_step(AppBuildStep::Build)
+            || build_config.should_run_step(AppBuildStep::GenBridge);
+        if !execute {
+            let pending_dependency_changes = if build_config.should_run_step(AppBuildStep::Check) {
+                let app_ctx = self.ctx.app_context_lock().await;
+                self.plan_and_apply_dependency_fixes(
+                    &BuildContext::new(app_ctx.some_or_err()?, build_config),
+                    false,
+                )?
+            } else {
+                false
+            };
+            if pending_dependency_changes || self.ctx.has_pending_application_changes().await {
+                logln(
+                    "Project preparation is required and was not applied by check; no executable build plan was constructed. Run build and confirm the project changes before planning execution.",
+                );
+                return Ok(None);
+            }
+            let app_ctx = self.ctx.app_context_lock().await;
+            return crate::app::build::preflight_build(&BuildContext::new(
+                app_ctx.some_or_err()?,
+                build_config,
+            ))
+            .await
+            .map(Some);
+        }
+
+        self.ctx.apply_application_load_plan().await?;
+        self.ctx.reload_application().await?;
+        if build_config.should_run_step(AppBuildStep::Check) {
+            let app_ctx = self.ctx.app_context_lock().await;
+            self.plan_and_apply_dependency_fixes(
+                &BuildContext::new(app_ctx.some_or_err()?, build_config),
+                true,
+            )?;
+        }
+        self.ctx.reload_application().await?;
+        let app_ctx = self.ctx.app_context_lock().await;
+        crate::app::build::preflight_build(&BuildContext::new(app_ctx.some_or_err()?, build_config))
+            .await
+            .map(Some)
     }
 
     async fn build_selected(
@@ -3947,18 +3997,14 @@ impl AppCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         environment_tool_names: Option<&BTreeSet<String>>,
-        checked_plan: crate::app::build::plan::BuildPlan,
+        checked_plan: &crate::app::build::plan::BuildPlan,
+        execution: &mut crate::app::build::BuildExecution,
     ) -> anyhow::Result<()> {
         let environment_tools = self
             .resolve_build_environment_tools(build_config, environment_tool_names)
             .await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-
-        // Apply confirmed repairs only after declared requirements pass preflight.
-        if build_config.should_run_step(AppBuildStep::Check) {
-            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config), true)?;
-        }
 
         app_ctx
             .build(
@@ -3967,6 +4013,7 @@ impl AppCommandHandler {
                 resolved_tool_middleware_grants,
                 environment_tools.as_ref(),
                 checked_plan,
+                execution,
             )
             .await
     }
@@ -4081,7 +4128,7 @@ impl AppCommandHandler {
         &self,
         build_ctx: &BuildContext<'_>,
         apply: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let claude_skills_ctx =
             resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
         let plan = plan_dependency_fixes(build_ctx, &claude_skills_ctx)?;
@@ -4099,7 +4146,7 @@ impl AppCommandHandler {
                     &claude_skills_ctx,
                 )?;
             }
-            return Ok(());
+            return Ok(false);
         }
 
         {
@@ -4132,7 +4179,7 @@ impl AppCommandHandler {
 
         if !apply {
             logln("Dependency and configuration changes were not applied by check.");
-            return Ok(());
+            return Ok(true);
         }
 
         if !self
@@ -4162,7 +4209,7 @@ impl AppCommandHandler {
             &claude_skills_ctx,
         )?;
 
-        Ok(())
+        Ok(false)
     }
 
     pub async fn clean(

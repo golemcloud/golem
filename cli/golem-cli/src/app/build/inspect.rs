@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::command::{CommonDependencies, common_dependencies_for_tool};
+use super::command::possible_common_dependencies_for_tool;
 use super::plan::{
     BuildAction, BuildEffect, BuildOperation, BuildPlan, BuildPlanLimits, BuildRequirement,
-    BuildStage,
+    BuildSelectionRule, BuildStage, BuildValue, CommonDependencies,
 };
 use crate::app::context::BuildContext;
 use crate::log::{log_action, logln};
@@ -24,43 +24,157 @@ use anyhow::{Context, ensure};
 use golem_common::model::component::ComponentName;
 use std::collections::{BTreeMap, BTreeSet};
 
+fn inspect_selection(
+    ctx: &BuildContext<'_>,
+    with_dependencies: bool,
+) -> anyhow::Result<(BTreeSet<ComponentName>, Vec<BuildSelectionRule>)> {
+    let selected = ctx.application_context().selected_component_names().clone();
+    let mut components = selected.clone();
+    let mut rules = Vec::new();
+    if with_dependencies {
+        rules = super::manifest_middleware_selection_rules(ctx)?;
+        components.extend(
+            rules
+                .iter()
+                .flat_map(|rule| rule.components.iter().cloned()),
+        );
+        let owners = super::build_owner_components(ctx);
+        let mut inspected = BTreeSet::new();
+        loop {
+            ensure!(
+                components.len() <= BuildPlanLimits::default().components,
+                "Build plan component limit exceeded"
+            );
+            let pending = components
+                .difference(&inspected)
+                .cloned()
+                .collect::<Vec<_>>();
+            if pending.is_empty() {
+                break;
+            }
+            for name in pending {
+                ensure!(
+                    ctx.application()
+                        .component_names()
+                        .any(|candidate| candidate == &name),
+                    "Unknown build component '{name}'"
+                );
+                components.extend(
+                    super::component_guest_bridge_requirements(ctx, &name)
+                        .iter()
+                        .filter_map(|dependency| dependency.component_name().cloned()),
+                );
+                let candidates = super::component_environment_tool_middleware_requirements(
+                    ctx,
+                    &name,
+                    &BTreeMap::new(),
+                )?;
+                if !candidates.is_empty() {
+                    rules.push(BuildSelectionRule {
+                        owner: name.clone(),
+                        after_metadata: false,
+                        subject: None,
+                        components: candidates,
+                    });
+                }
+                if owners.contains(&name) {
+                    rules.extend(super::owner_middleware_selection_rules(ctx, &name)?);
+                }
+                components.extend(
+                    rules
+                        .iter()
+                        .flat_map(|rule| rule.components.iter().cloned()),
+                );
+                inspected.insert(name);
+            }
+        }
+    }
+    Ok((components, rules))
+}
+
+pub(super) fn inspect_preparation_stages(
+    ctx: &BuildContext<'_>,
+    with_dependencies: bool,
+) -> anyhow::Result<Vec<BuildStage>> {
+    let (components, _) = inspect_selection(ctx, with_dependencies)?;
+    inspect_stages(ctx, components.iter(), with_dependencies)
+}
+
 pub(super) fn inspect_build(
     ctx: &BuildContext<'_>,
     with_dependencies: bool,
 ) -> anyhow::Result<BuildPlan> {
-    let mut components = ctx.application_context().selected_component_names().clone();
-    if with_dependencies {
-        super::expand_build_component_dependencies(
-            ctx,
-            &mut components,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-        )?;
-        // Component metadata can select a local middleware provider later. Check
-        // its declared candidates now, before either project or grant writes.
-        if super::needs_dependency_guest_bridges(
-            ctx,
-            &components.iter().cloned().collect::<Vec<_>>(),
-        ) {
-            for declaration in ctx.application().tool_middleware_declarations().values() {
-                if declaration.value.release.is_none() {
-                    if let Some(name) = &declaration.value.component {
-                        components.insert(name.clone());
-                    } else {
-                        components.extend(ctx.application().component_names().cloned());
-                    }
-                }
-            }
-        }
-        super::expand_build_component_dependencies(
-            ctx,
-            &mut components,
-            &BTreeSet::new(),
-            &BTreeMap::new(),
-        )?;
-    }
+    let selected = ctx.application_context().selected_component_names().clone();
+    let (components, rules) = inspect_selection(ctx, with_dependencies)?;
     let stages = inspect_stages(ctx, components.iter(), with_dependencies)?;
-    BuildPlan::new(stages, BuildPlanLimits::default())
+    let mut bridges = BTreeMap::new();
+    let explicit = selected.iter().cloned().collect::<Vec<_>>();
+    let claims = if ctx.should_run_step(AppBuildStep::GenBridge) {
+        let mut requests = super::bridge_requests(ctx, &explicit);
+        if super::needs_dependency_guest_bridges(ctx, &explicit) {
+            requests.push(super::BridgeRequestId::DependencyGuest);
+        }
+        let claims = super::bridge_output_dir_claims(ctx, &explicit);
+        for request in requests {
+            bridges.insert(
+                request,
+                BuildAction {
+                    inputs: stages
+                        .iter()
+                        .flat_map(|stage| &stage.actions)
+                        .filter(|action| matches!(action.operation, BuildOperation::Metadata))
+                        .flat_map(|action| action.outputs.iter().cloned())
+                        .collect(),
+                    outputs: if request == super::BridgeRequestId::DependencyGuest {
+                        stages
+                            .iter()
+                            .flat_map(|stage| &stage.inputs)
+                            .filter_map(|input| match input {
+                                BuildValue::GuestBridge {
+                                    dependency,
+                                    language,
+                                } => Some(match dependency {
+                                    crate::model::app::ComponentDependency::Agent {
+                                        agent_type_name,
+                                        ..
+                                    } => ctx
+                                        .application()
+                                        .dependency_bridge_sdk_dir(agent_type_name, *language),
+                                    crate::model::app::ComponentDependency::Tool {
+                                        tool_name,
+                                        ..
+                                    } => ctx.application().dependency_tool_bridge_sdk_dir(
+                                        tool_name.as_str(),
+                                        *language,
+                                    ),
+                                }),
+                                _ => None,
+                            })
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect()
+                    } else {
+                        claims
+                            .iter()
+                            .filter(|claim| claim.request_id == request)
+                            .map(|claim| claim.base_dir.clone())
+                            .collect()
+                    },
+                    requirements: BTreeSet::from([BuildRequirement::Native {
+                        backend: super::plan::NativeBuildBackend::BridgeGeneration,
+                    }]),
+                    effects: BTreeSet::from([BuildEffect::ReadFiles, BuildEffect::WriteFiles]),
+                    operation: BuildOperation::Bridge,
+                },
+            );
+        }
+        claims
+    } else {
+        Vec::new()
+    };
+    BuildPlan::new(stages, BuildPlanLimits::default())?
+        .with_selection(selected, rules)?
+        .with_bridges(bridges, claims)
 }
 
 pub(super) fn inspect_stages<'a>(
@@ -69,6 +183,12 @@ pub(super) fn inspect_stages<'a>(
     with_dependencies: bool,
 ) -> anyhow::Result<Vec<BuildStage>> {
     let limits = BuildPlanLimits::default();
+    let components = components.collect::<Vec<_>>();
+    let metadata_sources = components
+        .iter()
+        .flat_map(|name| super::component_guest_bridge_requirements(ctx, name))
+        .filter_map(|dependency| dependency.component_name().cloned())
+        .collect::<BTreeSet<_>>();
     let mut stages = Vec::new();
     let mut actions = 0;
     let mut edges = 0;
@@ -77,9 +197,13 @@ pub(super) fn inspect_stages<'a>(
             stages.len() < limits.components,
             "Build plan component limit exceeded"
         );
-        let stage = inspect_stage(ctx, name, with_dependencies)?;
+        let requires_artifact = ctx.should_run_step(AppBuildStep::Build)
+            || ctx.should_run_step(AppBuildStep::Check)
+            || metadata_sources.contains(name)
+            || !super::bridge_requests(ctx, std::slice::from_ref(name)).is_empty();
+        let stage = inspect_stage(ctx, name, with_dependencies, requires_artifact)?;
         actions += stage.actions.len();
-        edges += stage.dependencies.len();
+        edges += stage.dependencies.len() + stage.inputs.len();
         ensure!(
             actions <= limits.actions,
             "Build plan action limit exceeded"
@@ -94,6 +218,7 @@ fn inspect_stage(
     ctx: &BuildContext<'_>,
     component_name: &ComponentName,
     with_dependencies: bool,
+    requires_artifact: bool,
 ) -> anyhow::Result<BuildStage> {
     let component = ctx.application().component(component_name);
     let mut actions = Vec::new();
@@ -117,55 +242,37 @@ fn inspect_stage(
                     .requirements
                     .insert(BuildRequirement::ManagedGoToolchain);
             }
-            let preparation = common_dependencies_for_tool(ctx, program, directory, go_component)?;
-            let Some(preparation) = preparation else {
-                continue;
-            };
-            let (program, directory, inputs, outputs, managed_go) = match preparation {
-                CommonDependencies::Npm(root) => (
-                    "npm",
-                    root,
-                    vec!["package.json", "package-lock.json"],
-                    vec!["node_modules", "package-lock.json"],
-                    false,
-                ),
-                CommonDependencies::Moon(root) => (
-                    "moon",
-                    root,
-                    vec!["moon.mod", "moon.work"],
-                    vec![".mooncakes"],
-                    false,
-                ),
-                CommonDependencies::Go(root) => (
-                    "go",
-                    root,
-                    vec!["go.mod", "go.sum"],
-                    vec!["go.mod", "go.sum"],
-                    true,
-                ),
-            };
-            actions.push(BuildAction {
-                inputs: inputs.iter().map(|path| directory.join(path)).collect(),
-                outputs: outputs.iter().map(|path| directory.join(path)).collect(),
-                requirements: BTreeSet::from([if managed_go {
-                    BuildRequirement::ManagedGoToolchain
-                } else {
-                    BuildRequirement::HostProgram {
-                        program: program.into(),
-                        directory: directory.clone(),
+            for preparation in
+                possible_common_dependencies_for_tool(ctx, program, directory, go_component)?
+            {
+                let (directory, inputs, outputs) = match &preparation {
+                    CommonDependencies::Npm(root) => (
+                        root,
+                        vec!["package.json", "package-lock.json"],
+                        vec!["node_modules", "package-lock.json"],
+                    ),
+                    CommonDependencies::Moon(root) => {
+                        (root, vec!["moon.mod", "moon.work"], vec![".mooncakes"])
                     }
-                }]),
-                effects: BTreeSet::from([
-                    BuildEffect::ReadFiles,
-                    BuildEffect::WriteFiles,
-                    BuildEffect::FetchDependencies,
-                    BuildEffect::HostProcess,
-                ]),
-                operation: BuildOperation::Dependencies {
-                    program: program.into(),
-                    directory,
-                },
-            });
+                    CommonDependencies::Go(root) => {
+                        (root, vec!["go.mod", "go.sum"], vec!["go.mod", "go.sum"])
+                    }
+                };
+                actions.push(BuildAction {
+                    inputs: inputs.iter().map(|path| directory.join(path)).collect(),
+                    outputs: outputs.iter().map(|path| directory.join(path)).collect(),
+                    requirements: BTreeSet::from([BuildRequirement::Preparation {
+                        preparation: preparation.clone(),
+                    }]),
+                    effects: BTreeSet::from([
+                        BuildEffect::ReadFiles,
+                        BuildEffect::WriteFiles,
+                        BuildEffect::FetchDependencies,
+                        BuildEffect::HostProcess,
+                    ]),
+                    operation: BuildOperation::Dependencies(preparation),
+                });
+            }
         }
         actions.push(action);
         ensure!(
@@ -173,7 +280,7 @@ fn inspect_stage(
             "Build plan action limit exceeded"
         );
     }
-    if !inspect_commands || component.build_commands().is_empty() {
+    if requires_artifact && (!inspect_commands || component.build_commands().is_empty()) {
         let wasm = component.wasm();
         actions.push(BuildAction {
             inputs: vec![wasm.clone()],
@@ -194,9 +301,34 @@ fn inspect_stage(
     let mut stage = BuildStage {
         component: component_name.clone(),
         dependencies,
+        inputs: if ctx.should_run_step(AppBuildStep::GenBridge)
+            && super::needs_dependency_guest_bridges(
+                ctx,
+                &ctx.application_context()
+                    .selected_component_names()
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ) {
+            super::component_guest_bridge_requirements(ctx, component_name)
+                .into_iter()
+                .filter_map(|dependency| match component.guest_language() {
+                    Some(language) => Some(BuildValue::GuestBridge {
+                        dependency,
+                        language,
+                    }),
+                    None if dependency.component_name().is_some() => {
+                        Some(BuildValue::SubjectMetadata { dependency })
+                    }
+                    None => None,
+                })
+                .collect()
+        } else {
+            BTreeSet::new()
+        },
         actions,
     };
-    if with_dependencies {
+    if with_dependencies && (requires_artifact || component.wasm().exists()) {
         let wasm = component.wasm();
         stage.actions.push(BuildAction::metadata(
             wasm.clone(),
@@ -210,38 +342,60 @@ fn inspect_stage(
 /// the shared program resolver, not reinterpret these host observations.
 pub(super) fn check_host_requirements(plan: &BuildPlan) -> anyhow::Result<()> {
     for requirement in plan.requirements() {
-        if let BuildRequirement::ExistingFile { path } = requirement {
-            ensure!(
-                path.is_file(),
-                "Build requires existing file {}; supply the artifact or declare its build commands",
-                path.display()
-            );
+        check_requirement(requirement)?;
+    }
+    Ok(())
+}
+
+pub(super) fn check_requirement(requirement: &BuildRequirement) -> anyhow::Result<()> {
+    if let BuildRequirement::Preparation { preparation } = requirement {
+        if !preparation.manifest().exists() {
+            return Ok(());
         }
-        if matches!(requirement, BuildRequirement::ManagedGoToolchain) {
-            super::go_toolchain::installed_go_toolchain()?;
-        }
-        if let BuildRequirement::HostProgram { program, directory } = requirement {
-            let resolved = crate::process::resolve_command_for_execution(program, Some(directory))
+        let requirement = match preparation {
+            CommonDependencies::Npm(directory) => BuildRequirement::HostProgram {
+                program: "npm".into(),
+                directory: directory.clone(),
+            },
+            CommonDependencies::Moon(directory) => BuildRequirement::HostProgram {
+                program: "moon".into(),
+                directory: directory.clone(),
+            },
+            CommonDependencies::Go(_) => BuildRequirement::ManagedGoToolchain,
+        };
+        return check_requirement(&requirement);
+    }
+    if let BuildRequirement::ExistingFile { path } = requirement {
+        ensure!(
+            path.is_file(),
+            "Build requires existing file {}; supply the artifact or declare its build commands",
+            path.display()
+        );
+    }
+    if matches!(requirement, BuildRequirement::ManagedGoToolchain) {
+        super::go_toolchain::installed_go_toolchain()?;
+    }
+    if let BuildRequirement::HostProgram { program, directory } = requirement {
+        let resolved = crate::process::resolve_command_for_execution(program, Some(directory))
                 .with_context(|| format!("Build requires program '{program}' in {}; install it or repair the build command", directory.display()))?;
-            let path = if resolved.program.is_absolute() {
-                resolved.program
-            } else {
-                directory.join(resolved.program)
-            };
+        let path = if resolved.program.is_absolute() {
+            resolved.program
+        } else {
+            directory.join(resolved.program)
+        };
+        ensure!(
+            path.is_file(),
+            "Build requires program '{program}', but {} is not a file; install it or repair the build command",
+            path.display()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
             ensure!(
-                path.is_file(),
-                "Build requires program '{program}', but {} is not a file; install it or repair the build command",
+                std::fs::metadata(&path)?.permissions().mode() & 0o111 != 0,
+                "Build program {} is not executable",
                 path.display()
             );
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                ensure!(
-                    std::fs::metadata(&path)?.permissions().mode() & 0o111 != 0,
-                    "Build program {} is not executable",
-                    path.display()
-                );
-            }
         }
     }
     Ok(())
@@ -261,11 +415,30 @@ pub(super) fn log_build_plan(plan: &BuildPlan) {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+        for input in &stage.inputs {
+            logln(format!("    awaits {input:?}"));
+        }
         for action in &stage.actions {
+            logln(format!(
+                "    inputs: {:?}; outputs: {:?}; effects: {:?}",
+                action.inputs, action.outputs, action.effects
+            ));
             for requirement in &action.requirements {
                 logln(format!("    requires {requirement:?}"));
             }
         }
+    }
+    for rule in plan.selection_rules() {
+        logln(format!(
+            "  candidate scope: {} after metadata={}; subject={:?}; candidates={:?}",
+            rule.owner, rule.after_metadata, rule.subject, rule.components
+        ));
+    }
+    for (request, action) in &plan.bridges {
+        logln(format!(
+            "  bridge {request:?}: inputs={:?}; output scopes={:?}; effects={:?}",
+            action.inputs, action.outputs, action.effects
+        ));
     }
     logln(
         "Preflight checks declared requirements, not whether arbitrary user build code will succeed.",

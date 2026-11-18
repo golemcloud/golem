@@ -19,6 +19,9 @@ use test_r::test;
 
 fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
+    if !root.exists() {
+        return files;
+    }
     for entry in walkdir::WalkDir::new(root).follow_links(false) {
         let entry = entry.unwrap();
         let relative = entry.path().strip_prefix(root).unwrap().to_path_buf();
@@ -63,7 +66,7 @@ fn build_check_does_not_upgrade_manifests_even_with_yes() {
         let output = command.args(["build", "--step", "check"]).output().unwrap();
         assert!(
             output.status.success(),
-            "check loads the proposed conversion without applying it: {}",
+            "check inspects preparation without applying it: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(
@@ -73,6 +76,16 @@ fn build_check_does_not_upgrade_manifests_even_with_yes() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!String::from_utf8_lossy(&output.stderr).contains("Applying"));
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            text.contains("no executable build plan was constructed"),
+            "{text}"
+        );
+        assert!(!text.contains("checked host build stages"), "{text}");
 
         let build = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
             .current_dir(project.path())
@@ -94,6 +107,55 @@ fn build_check_does_not_upgrade_manifests_even_with_yes() {
             b"unchanged artifact"
         );
     }
+}
+
+#[test]
+fn authorized_preparation_is_persisted_before_a_failing_build_recipe() {
+    let project = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("golem.yaml"),
+        "manifestVersion: 1.6.0\napp: preparation-boundary\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    componentWasm: component.wasm\n    outputWasm: obsolete.wasm\n    build:\n      - command: node inspect-prepared.cjs\n").unwrap();
+    std::fs::write(
+        project.path().join("inspect-prepared.cjs"),
+        r#"
+const fs = require('node:fs');
+const manifest = fs.readFileSync('golem.yaml', 'utf8');
+if (!manifest.includes('manifestVersion: 2.0.0') || manifest.includes('outputWasm')) {
+    throw new Error('recipe received unprepared project files');
+}
+fs.writeFileSync('observed.yaml', manifest);
+throw new Error('expected failure after preparation');
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+        .current_dir(project.path())
+        .arg("--config-dir")
+        .arg(config.path())
+        .args(["--yes", "build", "--step", "build"])
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!output.status.success(), "{text}");
+    assert!(
+        text.contains("expected failure after preparation"),
+        "{text}"
+    );
+    let persisted = std::fs::read(project.path().join("golem.yaml")).unwrap();
+    assert_eq!(
+        std::fs::read(project.path().join("observed.yaml")).unwrap(),
+        persisted
+    );
+    assert!(
+        String::from_utf8(persisted)
+            .unwrap()
+            .contains("manifestVersion: 2.0.0")
+    );
+    assert!(!project.path().join("component.wasm").exists());
 }
 
 #[test]
@@ -325,7 +387,7 @@ fn template_checks_inspect_repairs_without_creating_generated_manifests() {
 }
 
 #[test]
-fn bridge_only_build_checks_the_artifact_not_unused_build_programs() {
+fn bridge_only_build_without_requests_ignores_unused_programs_and_artifacts() {
     let project = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("golem.yaml"),
@@ -352,11 +414,8 @@ fn bridge_only_build_checks_the_artifact_not_unused_build_programs() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(output.status.success(), present, "{text}");
-        if !present {
-            assert!(text.contains("Build requires existing file"), "{text}");
-            assert_eq!(snapshot(project.path()), before, "{text}");
-        }
+        assert!(output.status.success(), "{text}");
+        assert_eq!(snapshot(project.path()), before, "{text}");
     }
 }
 
@@ -418,4 +477,344 @@ async fn host_build_preserves_component_exports_and_start_result() {
             .unwrap();
         assert_eq!(run.call_async(&mut store, ()).await.unwrap(), (42,));
     }
+}
+
+#[test]
+fn serial_recipes_share_preparation_and_ignore_manifest_insertion_order() {
+    let mut plans = Vec::new();
+    for (reverse, fail) in [(false, false), (true, false), (false, true)] {
+        let project = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let mut components = String::new();
+        for name in if reverse { ["b", "a"] } else { ["a", "b"] } {
+            std::fs::create_dir(project.path().join(name)).unwrap();
+            components.push_str(&format!(
+                "  app:{name}:\n    dir: {name}\n    componentWasm: component.wasm\n    build:\n      - command: node record.cjs {name} first\n        dir: ..\n      - command: node record.cjs {name} second\n        dir: ..\n"
+            ));
+        }
+        std::fs::write(project.path().join("golem.yaml"), format!(
+            "manifestVersion: 2.0.0\napp: serial-recipes\nenvironments:\n  local:\n    server: local\ncomponents:\n{components}"
+        )).unwrap();
+        std::fs::write(project.path().join("package.json"),
+            r#"{"name":"serial-recipes","version":"0.0.0","private":true,"scripts":{"postinstall":"node record.cjs prepare","record":"node record.cjs"}}"#
+        ).unwrap();
+        std::fs::write(
+            project.path().join(".npmrc"),
+            "audit=false\nfund=false\noffline=true\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path().join("record.cjs"),
+            r#"
+const fs = require('node:fs');
+const [name, step] = process.argv.slice(2);
+fs.appendFileSync('trace', step ? `${name}:${step}\n` : `${name}\n`);
+if (name === 'prepare') fs.mkdirSync('node_modules', {recursive: true});
+if (name === 'a' && fs.existsSync('fail')) throw new Error('expected producer failure');
+if (step === 'second') fs.copyFileSync('seed.wasm', `${name}/component.wasm`);
+"#,
+        )
+        .unwrap();
+        let seed = wat::parse_str(include_str!(
+            "../../../test-components/size-analysis/retention.wat"
+        ))
+        .unwrap();
+        std::fs::write(project.path().join("seed.wasm"), &seed).unwrap();
+        if fail {
+            std::fs::write(project.path().join("fail"), "").unwrap();
+        }
+        let before = snapshot(project.path());
+        let check = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+            .current_dir(project.path())
+            .arg("--config-dir")
+            .arg(config.path())
+            .args(["--yes", "build", "--step", "check"])
+            .output()
+            .unwrap();
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        assert_eq!(snapshot(project.path()), before);
+        let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+            .current_dir(project.path())
+            .arg("--config-dir")
+            .arg(config.path())
+            .args(["--yes", "build", "--step", "build"])
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.status.success(), !fail, "{text}");
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("trace")).unwrap(),
+            if fail {
+                "prepare\na:first\n"
+            } else {
+                "prepare\na:first\na:second\nb:first\nb:second\n"
+            },
+            "{text}"
+        );
+        if fail {
+            assert!(text.contains("expected producer failure"), "{text}");
+            assert!(!project.path().join("a/component.wasm").exists());
+            assert!(!project.path().join("b/component.wasm").exists());
+        } else {
+            for name in ["a", "b"] {
+                assert_eq!(
+                    std::fs::read(project.path().join(format!("{name}/component.wasm"))).unwrap(),
+                    seed
+                );
+            }
+            let start = text.find("checked host build stages").unwrap();
+            let end = text[start..]
+                .find("Preflight checks declared requirements")
+                .unwrap()
+                + start;
+            plans.push(text[start..end].replace(project.path().to_str().unwrap(), "<project>"));
+        }
+    }
+    assert_eq!(plans[0], plans[1]);
+}
+
+#[test]
+fn cold_middleware_bootstrap_uses_real_discovery_and_rejects_late_duplicates() {
+    let seeds = tempfile::tempdir().unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test-data/build-plan/middleware-bootstrap");
+    let sdk = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../sdks/rust/golem-rust")
+        .canonicalize()
+        .unwrap();
+    std::fs::create_dir(seeds.path().join("src")).unwrap();
+    std::fs::copy(fixture.join("src/lib.rs"), seeds.path().join("src/lib.rs")).unwrap();
+    let manifest = std::fs::read_to_string(fixture.join("Cargo.toml")).unwrap();
+    std::fs::write(
+        seeds.path().join("Cargo.toml"),
+        manifest.replace("__GOLEM_RUST_PATH__", sdk.to_str().unwrap()),
+    )
+    .unwrap();
+    for (name, features) in [
+        ("r-x", "provider,x"),
+        ("r-y", "provider,y"),
+        ("r", "provider"),
+        ("x", "x"),
+        ("y", "y"),
+        ("alias-x", "alias-x"),
+        ("empty", ""),
+    ] {
+        let output = Command::new("cargo")
+            .current_dir(seeds.path())
+            .args(["build", "--target", "wasm32-wasip2", "--features", features])
+            .env("CARGO_BUILD_JOBS", "2")
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_TARGET_DIR", seeds.path().join("target"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "seed {name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::copy(
+            seeds
+                .path()
+                .join("target/wasm32-wasip2/debug/middleware_bootstrap.wasm"),
+            seeds.path().join(format!("{name}.wasm")),
+        )
+        .unwrap();
+    }
+
+    let mut generated_apis = Vec::new();
+    for (r, p, q, scope, expected, trace) in [
+        ("r-x", "empty", "y", None, "ok", "r\nq\np\n"),
+        ("r-y", "x", "empty", None, "ok", "r\np\nq\n"),
+        (
+            "r-x",
+            "x",
+            "y",
+            None,
+            "defined by multiple components",
+            "r\nq\np\n",
+        ),
+        (
+            "r-x",
+            "alias-x",
+            "y",
+            None,
+            "defined by multiple components",
+            "r\nq\np\n",
+        ),
+        (
+            "r",
+            "x",
+            "y",
+            None,
+            "unresolved build dependency cycle",
+            "r\n",
+        ),
+        (
+            "r",
+            "empty",
+            "empty",
+            Some("app:r"),
+            "was not discovered",
+            "r\n",
+        ),
+        (
+            "r-x",
+            "empty",
+            "y",
+            Some("app:r"),
+            "was not discovered",
+            "r\n",
+        ),
+        (
+            "failed-r",
+            "empty",
+            "y",
+            None,
+            "expected producer failure",
+            "r\n",
+        ),
+    ] {
+        let project = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("inputs")).unwrap();
+        for (name, seed) in [("r", r), ("p", p), ("q", q)] {
+            std::fs::create_dir(project.path().join(name)).unwrap();
+            let seed = if seed == "failed-r" { "r-x" } else { seed };
+            std::fs::copy(
+                seeds.path().join(format!("{seed}.wasm")),
+                project.path().join(format!("inputs/{name}.wasm")),
+            )
+            .unwrap();
+        }
+        if r == "failed-r" {
+            std::fs::write(project.path().join("fail"), "").unwrap();
+            std::fs::copy(
+                project.path().join("inputs/r.wasm"),
+                project.path().join("r/component.wasm"),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            project.path().join("build.cjs"),
+            r#"
+const fs = require('node:fs');
+const [name, dependency] = process.argv.slice(2);
+if (dependency) {
+    const root = `../golem-temp/bridge-sdk/rust/internal/${dependency}-tool-guest-client`;
+    if (!fs.existsSync(`${root}/Cargo.toml`)) throw new Error(`bridge not ready for ${name}`);
+}
+fs.appendFileSync('../trace', `${name}\n`);
+if (name === 'r' && fs.existsSync('../fail')) throw new Error('expected producer failure');
+fs.copyFileSync(`../inputs/${name}.wasm`, 'component.wasm');
+"#,
+        )
+        .unwrap();
+        let declaration = scope
+            .map(|scope| serde_json::json!({"component": scope}))
+            .unwrap_or_else(|| serde_json::json!({}));
+        let mut manifest = serde_json::json!({
+            "manifestVersion": "2.0.0", "app": "cold-bootstrap",
+            "environments": {"local": {"server": "local", "tools": {
+                "tool-x": {"filesystemAccess": "allowed", "middleware": [{"name": "layer-x", "filesystemAccess": "allowed"}]},
+                "tool-y": {"filesystemAccess": "allowed", "middleware": [{"name": "layer-y", "filesystemAccess": "allowed"}]}
+            }}},
+            "components": {},
+            "tools": {"tool-x": {}, "tool-y": {}, "middleware": {"layer-x": declaration, "layer-y": declaration}}
+        });
+        for (name, dependency) in [("r", None), ("p", Some("tool-y")), ("q", Some("tool-x"))] {
+            let mut component = serde_json::json!({
+                "dir": name, "templates": "rust", "buildMergeMode": "replace", "componentWasm": "component.wasm",
+                "build": [{"command": format!("node ../build.cjs {name} {}", dependency.unwrap_or_default())}]
+            });
+            if let Some(dependency) = dependency {
+                component["dependencies"] =
+                    serde_json::json!({"tools": [format!("app:r/{dependency}")]});
+            }
+            manifest["components"][format!("app:{name}")] = component;
+        }
+        std::fs::write(
+            project.path().join("golem.yaml"),
+            serde_yaml::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !project
+                .path()
+                .join("golem-temp/extracted-component-metadata")
+                .exists()
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_golem-cli"))
+            .current_dir(project.path())
+            .arg("--config-dir")
+            .arg(config.path())
+            .args(["--yes", "build", "--step", "build", "--step", "gen-bridge"])
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.success(),
+            expected == "ok",
+            "{r}/{p}/{q} {scope:?}: {text}\nDiscovered metadata: {:?}",
+            snapshot(
+                &project
+                    .path()
+                    .join("golem-temp/extracted-component-metadata")
+            )
+            .into_iter()
+            .filter(|(path, _)| path
+                .extension()
+                .is_some_and(|extension| extension == "json"))
+            .map(|(path, bytes)| (path, String::from_utf8_lossy(&bytes).into_owned()))
+            .collect::<Vec<_>>()
+        );
+        if expected != "ok" {
+            assert!(text.contains(expected), "{r}/{p}/{q} {scope:?}: {text}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(project.path().join("trace")).unwrap(),
+            trace,
+            "{text}"
+        );
+        for name in trace.lines() {
+            assert_eq!(
+                std::fs::read(project.path().join(format!("{name}/component.wasm"))).unwrap(),
+                std::fs::read(project.path().join(format!("inputs/{name}.wasm"))).unwrap()
+            );
+        }
+        if r == "failed-r" {
+            assert!(!project.path().join("p/component.wasm").exists());
+            assert!(!project.path().join("q/component.wasm").exists());
+            assert!(!project.path().join("golem-temp/bridge-sdk").exists());
+            assert!(
+                !project
+                    .path()
+                    .join("golem-temp/extracted-component-metadata")
+                    .exists()
+            );
+        }
+        if expected == "ok" {
+            generated_apis.push(["tool-x", "tool-y"].map(|name| {
+                std::fs::read(project.path().join(format!(
+                    "golem-temp/bridge-sdk/rust/internal/{name}-tool-guest-client/src/lib.rs"
+                )))
+                .unwrap()
+            }));
+        }
+    }
+    assert_eq!(
+        generated_apis[0], generated_apis[1],
+        "transparent middleware placement must not change the generated APIs"
+    );
 }
