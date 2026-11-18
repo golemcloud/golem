@@ -195,3 +195,53 @@ fn entity_replay_growing_continuation_writes_only_changed_keys() {
         next
     );
 }
+
+#[test]
+fn resolved_names_persist_in_their_own_field_written_only_when_they_change() {
+    let status = AgentStatusRecord::default();
+    let mut core = status.clone();
+    let parts = split_status(&mut core);
+    let (sets, _) = compute_status_field_writes(None, &[], &core, &parts).unwrap();
+    let mut fields: HashMap<String, bytes::Bytes> =
+        sets.into_iter().map(|(k, v)| (k, v.into())).collect();
+
+    let mut next = status.clone();
+    next.resolved_names
+        .links
+        .insert("a.test", ["10.0.0.1".parse().unwrap()]);
+    next.resolved_names
+        .links
+        .insert("b.test", ["10.0.0.1".parse().unwrap()]);
+    let mut core = next.clone();
+    let parts = split_status(&mut core);
+    assert_eq!(core, status_core(&next));
+    let (sets, deletes) = compute_status_field_writes(Some(&status), &[], &core, &parts).unwrap();
+    assert!(deletes.is_empty());
+    assert_eq!(
+        sets.iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<HashSet<_>>(),
+        HashSet::from([STATUS_CORE_FIELD, STATUS_RESOLVED_NAMES_FIELD])
+    );
+    fields.extend(sets.into_iter().map(|(k, v)| (k, v.into())));
+    let reassembled = reassemble_cached_status(fields.clone()).unwrap();
+    assert_eq!(reassembled, next);
+    assert_eq!(
+        reassembled
+            .resolved_names
+            .links
+            .hostnames("10.0.0.1".parse().unwrap()),
+        vec!["b.test", "a.test"]
+    );
+
+    // An unchanged index is not written again.
+    let (sets, _) = compute_status_field_writes(Some(&next), &[], &core, &parts).unwrap();
+    assert!(
+        sets.iter()
+            .all(|(name, _)| name != STATUS_RESOLVED_NAMES_FIELD)
+    );
+
+    // A cached status without the field is a cache miss, so the status is folded again.
+    fields.remove(STATUS_RESOLVED_NAMES_FIELD);
+    assert!(reassemble_cached_status(fields).is_none());
+}

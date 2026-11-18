@@ -160,6 +160,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let role = pending.role();
         let outcome = pending.finish_at(boundary).await?;
         if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+            self.seed_resolved_names().await;
             self.process_pending_replay_events().await?;
         }
         Ok(outcome)

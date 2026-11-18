@@ -337,6 +337,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let attribution = state.attribution.clone();
         if state.is_live() {
             linear_memory.switch_to_live();
+            state
+                .resolved_names
+                .seed(&worker.get_last_known_status().await.resolved_names.links);
         }
         let weak_worker = Arc::downgrade(&worker);
         let memory_limits = linear_memory.clone();
@@ -582,7 +585,9 @@ impl PrivateDurableWorkerState {
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
             tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
-            resolved_names: Default::default(),
+            resolved_names: sockets::resolved_names::SharedResolvedNames::new(
+                (runtime == OwnerRuntime::Agent).then(|| replay_state.clone()),
+            ),
             dns_resolver: None,
             open_tcp_input_streams: HashSet::new(),
             open_tcp_output_streams: HashSet::new(),

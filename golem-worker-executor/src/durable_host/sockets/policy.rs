@@ -23,10 +23,11 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::resolve_current_observational_owner;
 use crate::durable_host::durability::GuestTaskContext;
-use crate::durable_host::sockets::resolved_names::{ResolvedNames, SharedResolvedNames};
+use crate::durable_host::sockets::resolved_names::SharedResolvedNames;
 use crate::services::golem_config::GolemConfig;
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::address_class::{AddressClass, embedded_ipv4};
+use golem_common::model::agent::ResolvedNames;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::network_target::socket_target;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -139,9 +140,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         addresses: impl IntoIterator<Item = IpAddr>,
     ) -> Result<(), WorkerExecutorError> {
         if self.lookup_links(custom_invocation)? {
-            self.state
-                .resolved_names
-                .with(|names| names.insert(name, addresses));
+            self.state.resolved_names.link(name, addresses);
         }
         Ok(())
     }

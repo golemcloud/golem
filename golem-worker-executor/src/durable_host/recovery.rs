@@ -632,11 +632,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         }
 
                         store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .rebuild_resolved_names(hydrated.reference.oplog_index)
-                            .await?;
+                            .as_context()
+                            .data()
+                            .durable_ctx()
+                            .seed_resolved_names()
+                            .await;
                         Self::finalize_pending_snapshot_update(instance, store).await
                     }
                     UpdateDescription::Automatic { .. }
