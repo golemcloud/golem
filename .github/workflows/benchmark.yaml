@@ -17,6 +17,10 @@ on:
         description: Run the build-free unpublished diagnostic instead of normal benchmark jobs
         type: boolean
         default: false
+      trace_diagnostic:
+        description: Run only the bounded traced/untraced diagnostic (requires publish=false)
+        type: boolean
+        default: false
       deadline:
         description: Immutable UTC epoch deadline for the short diagnostic
         type: string
@@ -31,7 +35,7 @@ env:
 
 jobs:
   short-validation:
-    if: github.event_name == 'workflow_dispatch' && inputs.short_validation
+    if: github.event_name == 'workflow_dispatch' && (inputs.short_validation || inputs.trace_diagnostic)
     permissions:
       contents: read
       actions: read
@@ -39,9 +43,11 @@ jobs:
     with:
       deadline: ${{ inputs.deadline }}
       cohort: ${{ inputs.cohort }}
+      trace_diagnostic: ${{ inputs.trace_diagnostic }}
+      publish: ${{ inputs.publish }}
 
   build-benchmarks:
-    if: ${{ !inputs.short_validation }}
+    if: ${{ !inputs.short_validation && !inputs.trace_diagnostic }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     outputs:
       timestamp: ${{ steps.bundle.outputs.timestamp }}

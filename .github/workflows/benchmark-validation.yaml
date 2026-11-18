@@ -10,12 +10,20 @@ on:
         description: Unique diagnostic cohort, never a production run
         required: true
         type: string
+      trace_diagnostic:
+        description: Two counterbalanced traced/untraced invocations instead of five short invocations
+        default: false
+        type: boolean
+      publish:
+        description: Must be false for diagnostics
+        default: false
+        type: boolean
 permissions:
   contents: read
   actions: read
 jobs:
   short-study:
-    timeout-minutes: 40
+    timeout-minutes: ${{ inputs.trace_diagnostic && 20 || 40 }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     strategy:
       fail-fast: true
@@ -25,13 +33,19 @@ jobs:
       STUDY_DEADLINE: ${{ inputs.deadline }}
       STUDY_COHORT: ${{ inputs.cohort }}
       STUDY_HOST: ${{ matrix.host }}
+      TRACE_DIAGNOSTIC: ${{ inputs.trace_diagnostic }}
+      PUBLISH: ${{ inputs.publish }}
     steps:
       - name: Check the shared deadline
         run: |
+          [[ "$PUBLISH" == false ]]
           [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
           [[ "$STUDY_DEADLINE" =~ ^[0-9]+$ ]]
           now=$(date +%s)
           (( STUDY_DEADLINE > now + 120 && STUDY_DEADLINE <= now + 3600 ))
+          if [[ "$TRACE_DIAGNOSTIC" == true ]]; then
+            (( STUDY_DEADLINE <= now + 1800 ))
+          fi
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
@@ -49,18 +63,22 @@ jobs:
           auto-start: false
       - name: Install suite parser
         run: python3 -m pip install PyYAML==6.0.2
-      - name: Run five short invocations without rebuilding
+      - name: Run the finite diagnostic without rebuilding
         run: |
+          options=()
+          if [[ "$TRACE_DIAGNOSTIC" == true ]]; then
+            options+=(--trace-diagnostic --last 2)
+          fi
           python3 .github/scripts/run-benchmark-validation.py \
             --archive "$RUNNER_TEMP/bundle/benchmark-bundle.tar.gz" \
             --output "$RUNNER_TEMP/short-results" \
             --deadline "$STUDY_DEADLINE" --cohort "$STUDY_COHORT" \
-            --runner github-actions-blacksmith-32vcpu --host "$STUDY_HOST"
+            --runner github-actions-blacksmith-32vcpu --host "$STUDY_HOST" "${options[@]}"
       - name: Preserve all available diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: short-study-${{ matrix.host }}-attempt${{ github.run_attempt }}
+          name: ${{ inputs.trace_diagnostic && 'trace' || 'short' }}-study-${{ matrix.host }}-attempt${{ github.run_attempt }}
           path: ${{ runner.temp }}/short-results
           if-no-files-found: warn
           retention-days: 30

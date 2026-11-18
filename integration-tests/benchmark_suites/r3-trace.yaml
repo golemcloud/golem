@@ -1,0 +1,14 @@
+name: R3 trace diagnostic
+benchmarks:
+  - name: latency-small
+    version: 1
+    iterations: 3
+    clusterSize: [1]
+    size: [100]
+    length: [2]
+  - name: streaming-rpc-history
+    version: 1
+    iterations: 3
+    clusterSize: [1]
+    size: [32]
+    length: [512]
