@@ -709,6 +709,11 @@ jobs:
         if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
         uses: sbt/setup-sbt@v1
 
+      # The S3 Scala sbt and Mill scenario (app::scala_sbt_mill) runs in the deploy shard.
+      - name: Setup Mill
+        if: matrix.group.shard == 'deploy'
+        uses: ./.github/actions/setup-mill
+
       # Warm the coursier cache for the bridge shard's Scala deps.
       - name: Cache scala dependencies
         if: matrix.group.shard != 'core' && matrix.group.shard != 'bridge_gen_rust' && matrix.group.shard != 'agents_guest_bridge'
@@ -1230,6 +1235,12 @@ jobs:
       - name: Compile sbt plugin
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
+
+      - uses: ./.github/actions/setup-mill
+
+      - name: Test sbt and Mill golemBuildComponent
+        working-directory: sdks/scala
+        run: ./scripts/test-build-plugins.sh
 
       # Published for the it-cli shards to restore. Must run after the guest role runtimes are built,
       # since the sbt plugin jar embeds them.

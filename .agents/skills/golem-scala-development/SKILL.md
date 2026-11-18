@@ -37,7 +37,10 @@ sbt "++3.8.2; modelJVM/test; modelJS/test"
 sbt "++3.8.2; macros/test; codegen/test"
 sbt "++2.12.21!; codegen/test; sbtPlugin/test"
 sbt "++3.8.2; testAgents/fastLinkJS"
+./scripts/test-build-plugins.sh
 ```
+
+`scripts/test-build-plugins.sh` runs `golemBuildComponent` of both plugins on the fixtures in `test-build-plugins/`: the bundle must be the `fullLinkJS` module, sbt and Mill must ship the same bytes, and a `js.dynamicImport` split must fail and name every module. Run it after changing either plugin; it needs Mill and the guest WASMs. The CLI integration scenario `app::scala_sbt_mill` (S3) builds, deploys and invokes one SDK app with both build tools.
 
 `sbt golemTestAll` covers Scala 3 model/core/macros tests and links `testAgents`; it deliberately excludes codegen, Scala 2.12, sbt-plugin, and integration tests. Add those checks explicitly when affected. Use scoped `scalafmtCheckAll`; run `scalafmtAll` only to fix formatting.
 

@@ -63,17 +63,25 @@ object GolemPlugin extends AutoPlugin {
   private def sameSha256(file: File, expectedSha: Array[Byte]): Boolean =
     file.exists() && file.length() > 0 && java.util.Arrays.equals(sha256(IO.readBytes(file)), expectedSha)
 
-  private def linkedJsFile(report: Report, outDir: File): File =
-    report.publicModules.headOption
-      .map(module => outDir / module.jsFileName)
-      .getOrElse(sys.error("[golem] No public Scala.js modules were linked."))
-
-  private def ensureLinkedJsExists(jsFile: File): Unit =
-    if (!jsFile.exists()) {
-      sys.error(
-        s"[golem] Scala.js linker output not found at ${jsFile.getAbsolutePath}; try running 'clean' then build again."
-      )
+  /**
+   * Returns the only module in the linker output. A Golem component loads one
+   * JavaScript module, so a split output (for example from `js.dynamicImport`)
+   * fails the build instead of shipping without its other modules.
+   */
+  private def singleLinkedJsFile(report: Report, outDir: File): File = {
+    val sourceMaps = report.publicModules.flatMap(_.sourceMapName).toSet
+    val files      = Option(outDir.list()).toList.flatten.filterNot(sourceMaps.contains).sorted
+    report.publicModules.map(_.jsFileName).toList match {
+      case Nil                               => sys.error("[golem] No public Scala.js modules were linked.")
+      case List(main) if files == List(main) => outDir / main
+      case _                                 =>
+        sys.error(
+          s"[golem] The Scala.js linker output contains files (${files.mkString(", ")}), but a Golem " +
+            "component needs a single module. Remove js.dynamicImport, give every module initializer the same " +
+            "module ID, and keep ModuleSplitStyle.FewestModules."
+        )
     }
+  }
 
   private def embeddedGuestWasmBytes(
     artifact: GuestArtifact,
@@ -249,8 +257,7 @@ object GolemPlugin extends AutoPlugin {
             val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
             val outDir =
               (Compile / ScalaJSPlugin.autoImport.fullLinkJS / ScalaJSPlugin.autoImport.scalaJSLinkerOutputDirectory).value
-            val jsFile = linkedJsFile(report, outDir)
-            ensureLinkedJsExists(jsFile)
+            val jsFile = singleLinkedJsFile(report, outDir)
             IO.createDirectory(out.getParentFile)
             IO.copyFile(jsFile, out, preserveLastModified = true)
             log.info(s"[golem] Wrote Scala.js bundle to ${out.getAbsolutePath}")

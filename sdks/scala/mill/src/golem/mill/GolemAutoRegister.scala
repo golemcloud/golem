@@ -35,7 +35,7 @@ import golem.codegen.pipeline.CodegenPipeline
  * Features (matching sbt GolemPlugin):
  *  - Auto-registration source generation (scans `@agentImplementation` classes)
  *  - `golemPrepare` — writes `agent_guest.wasm` and `scala-js-template.yaml` to `.generated/`
- *  - `golemBuildComponent` — builds the Scala.js bundle for golem-cli to consume
+ *  - `golemBuildComponent` — builds the `fullLinkJS` Scala.js bundle for golem-cli to consume
  *  - `moduleInitializers` — auto-configured for the generated `RegisterAgents` entrypoint
  *
  * External usage (example):
@@ -98,6 +98,26 @@ trait GolemAutoRegister extends ScalaJSConfigModule {
     }
   }
 
+  /**
+   * Returns the file name of the only module in the linker output. A Golem component loads one
+   * JavaScript module, so a split output (for example from `js.dynamicImport`) fails the build
+   * instead of shipping without its other modules.
+   */
+  private def singleLinkedModule(report: mill.scalajslib.api.Report): String = {
+    val sourceMaps = report.publicModules.flatMap(_.sourceMapName).toSet
+    val files = os.list(report.dest.path).map(_.last).filterNot(sourceMaps.contains).sorted
+    report.publicModules.map(_.jsFileName).toList match {
+      case Nil                                => throw new RuntimeException("[golem] No public Scala.js modules were linked.")
+      case List(main) if files == Seq(main) => main
+      case _                                  =>
+        throw new RuntimeException(
+          s"[golem] The Scala.js linker output contains files (${files.mkString(", ")}), but a Golem " +
+            "component needs a single module. Remove js.dynamicImport, give every module initializer the same " +
+            "module ID, and keep ModuleSplitStyle.FewestModules."
+        )
+    }
+  }
+
   // ─── Settings ───────────────────────────────────────────────────────────────
 
   /** Base package whose `@agentImplementation` classes should be auto-registered. */
@@ -144,23 +164,18 @@ trait GolemAutoRegister extends ScalaJSConfigModule {
   }
 
   /**
-   * Builds the Scala.js bundle and writes it to the provided output path for golem-cli.
+   * Builds the `fullLinkJS` Scala.js bundle and writes it to the provided output path for golem-cli.
    *
-   * Called by golem-cli during `golem build` via the command in `scala-js-template.yaml`:
+   * Called by golem-cli during `golem build` via a build command in the app manifest:
    * {{{
-   *   mill <module>.golemBuildComponent <component-name> <output-path>
+   *   mill <module>.golemBuildComponent --component <component-name> --outPath <output-path>
    * }}}
    */
   def golemBuildComponent(component: String, outPath: String): Command[PathRef] = Task.Command {
     golemPrepare()
     Task.log.info(s"[golem] Building Scala.js bundle for $component ...")
-    val report = fastLinkJS()
-    val jsName =
-      report.publicModules.headOption
-        .map(_.jsFileName)
-        .getOrElse(throw new RuntimeException("[golem] No public Scala.js modules were linked."))
-
-    val jsFile = report.dest.path / jsName
+    val report = fullLinkJS()
+    val jsFile = report.dest.path / singleLinkedModule(report)
     // outPath is typically absolute (from golem-cli's $COMP_DIR expansion), but handle relative too
     val out =
       if (outPath.startsWith("/")) os.Path(outPath)
