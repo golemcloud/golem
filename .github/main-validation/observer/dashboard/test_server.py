@@ -350,6 +350,27 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(self.publish(pending)[0], 200)
         self.assertNotIn(906, [run["run_id"] for run in json.loads(self.request("GET", "/data.json")[1])["runs"]])
 
+    def test_no_selection_wakeups_are_counted_without_hiding_unknown_failures(self):
+        cases = [
+            (False, "no-selection", "schedule", "skipped"),
+            (False, "incomplete", "schedule", "success"),
+            (None, "no-selection", "schedule", "success"),
+            (False, "no-selection", "workflow_dispatch", "skipped"),
+            (False, "no-selection", "schedule", "cancelled"),
+            (None, "incomplete", "schedule", "failure"),
+            (True, "green", "schedule", "success"),
+        ]
+        for index, (selected, classification, event, conclusion) in enumerate(cases):
+            run = copy.deepcopy(self.run)
+            run.update(run_id=901 + index, selected=selected, classification=classification,
+                       event=event, conclusion=conclusion)
+            self.assertEqual(self.publish(run)[0], 200)
+        for store in (self.store, Store(self.directory.name)):
+            snapshot = json.loads(store.snapshot())
+            self.assertEqual(snapshot["skipped_wakeups"], 3)
+            self.assertEqual([run["run_id"] for run in snapshot["runs"]], [907, 906])
+        self.assertEqual(len(json.loads(self.store.path.read_text())["runs"]), len(cases))
+
     def test_heartbeat_does_not_fabricate_a_run(self):
         status, _ = self.request("POST", "/api/heartbeat", {}, authorized=True)
         self.assertEqual(status, 200)

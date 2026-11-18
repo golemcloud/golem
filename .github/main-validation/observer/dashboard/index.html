@@ -120,6 +120,12 @@
     }
     function renderHistory() {
       if (!state.data) return;
+      const skipped = state.data.skipped_wakeups;
+      let summary = $('skipped-wakeups');
+      if (!summary) { summary = el('p','small subtle'); summary.id = 'skipped-wakeups'; $('run-list').before(summary); summary.style.padding = '0 20px'; }
+      summary.hidden = !(Number.isInteger(skipped) && skipped > 0);
+      summary.textContent = summary.hidden ? '' : `${skipped.toLocaleString()} scheduler wake-up${skipped === 1 ? '' : 's'} skipped · no validation selected`;
+      summary.title = 'Count within retained history. Reasons can include disabled scheduling or an already validated main commit. No tests ran for these wake-ups.';
       const query = $('search').value.trim().toLowerCase(), context = $('context').value;
       const finished = state.data.runs.filter(r=>!active(r));
       const runs = finished.filter(r=>(!context || (context === '__unknown' ? !r.context : r.context === context)) && [r.run_id,r.attempt,r.branch,r.workflow_sha,r.source,r.context,r.event,r.conclusion,r.classification].map(str).join(' ').toLowerCase().includes(query));

@@ -161,10 +161,18 @@ class Store:
 
     def snapshot(self):
         with self.lock:
-            runs = [{key: value for key, value in run.items() if not key.startswith("_")}
-                    for run in self.data["runs"]
-                    if run["status"] in ("in_progress", "completed") and run["conclusion"] != "cancelled"]
-            return json.dumps({**self.data, "runs": runs}).encode()
+            runs = []
+            skipped = 0
+            for run in self.data["runs"]:
+                if run["status"] == "completed" and (
+                    run.get("selected") is False or run.get("classification") == "no-selection"
+                ):
+                    if run.get("event") == "schedule" and run["conclusion"] != "cancelled":
+                        skipped += 1
+                    continue
+                if run["status"] in ("in_progress", "completed") and run["conclusion"] != "cancelled":
+                    runs.append({key: value for key, value in run.items() if not key.startswith("_")})
+            return json.dumps({**self.data, "runs": runs, "skipped_wakeups": skipped}).encode()
 
     def update(self, run=None, progress=False):
         with self.lock:
