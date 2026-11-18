@@ -2875,7 +2875,7 @@ async fn result_drains_buffered_nested_streams_without_a_guest_driver() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -13892,7 +13892,7 @@ async fn completed_input_reconstruction_reuses_only_matching_registrations() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         owner.fingerprint,
         None,
     )
