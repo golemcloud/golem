@@ -331,7 +331,6 @@ where
                 invocation_id,
                 ..Default::default()
             },
-            DemandDeliveryMode::Deferred,
             HostRequestNoInput {},
         )
         .await

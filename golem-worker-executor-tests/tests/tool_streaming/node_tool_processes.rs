@@ -328,6 +328,16 @@ await new Promise((resolve, reject) => {{
         8,
         "the send parent and its chunks complete"
     );
+    for (chunk, _) in &chunks {
+        assert!(
+            oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::CompletionDelivered(delivered) if delivered.start_index == *chunk
+            )),
+            "the guest delivery of send-chunk {chunk} is recorded, so replay releases it at the \
+             same point relative to the body's other calls"
+        );
+    }
     let rendered = format!("{send_entries:?}");
     assert!(
         !rendered.contains("4b1d"),

@@ -20,10 +20,9 @@ use std::task::{Context, Poll};
 use crate::durable_host::authorization::targets::tcp_target;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, Cancellable, CompletionDelivery, DeferredCallReplayOutcome, DemandDelivery,
-    DemandDeliveryMode, DurableCallSession, DurableDemandItem, DurableDemandStream,
-    InvocationIdSource, NotCancellable, ScopeReplayRecovery, access_invocation_id, closed_demand,
-    deliver_demand, demand_channel, reserve_invocation_id_before_await,
-    resolve_current_observational_owner,
+    DurableCallSession, DurableDemandItem, DurableDemandStream, InvocationIdSource, NotCancellable,
+    ScopeReplayRecovery, access_invocation_id, closed_demand, deliver_demand, demand_channel,
+    reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
     CustomInvocationContext, DurabilityHost, DurableCallTrapContext,
@@ -1283,7 +1282,6 @@ where
             scope_replay_recovery: ScopeReplayRecovery::reexecute_when(async { Ok(()) }),
             ..Default::default()
         },
-        DemandDeliveryMode::Markerless,
         HostRequestNoInput {},
     )
     .await
@@ -1417,16 +1415,9 @@ where
         };
         match deliver_demand(&activity, reply, reply_value, delivery).await {
             Ok(DemandDelivery::Delivered) => {}
-            Ok(DemandDelivery::Abandoned) => {
-                let trap_context = stream.trap_context();
-                return fail_tcp_stream_task(
-                    result_tx,
-                    wasmtime::Error::from_anyhow(stream.trap(anyhow::Error::msg(
-                        "tcp send recorded a chunk whose result could not reach the guest stream",
-                    ))),
-                    Some(trap_context),
-                );
-            }
+            // The guest dropped its writer before the result reached it. The discard is
+            // recorded, and the send ends as if the writer had closed.
+            Ok(DemandDelivery::Abandoned) => break,
             Err(error) => {
                 let trap_context = stream.trap_context();
                 return fail_tcp_stream_task(
@@ -1622,7 +1613,6 @@ where
             scope_replay_recovery: ScopeReplayRecovery::reexecute_when(async { Ok(()) }),
             ..Default::default()
         },
-        DemandDeliveryMode::Markerless,
         HostRequestNoInput {},
     )
     .await
@@ -1832,9 +1822,8 @@ where
             }
         };
 
-        // Delivery is the same after a live write and a replayed child. TCP's oplog protocol uses
-        // markerless child terminals, so a data item that cannot cross this boundary fails loud
-        // instead of changing the recorded stream shape.
+        // Delivery is the same after a live read and a replayed child: each child's guest
+        // delivery is recorded, and replay releases it at that recorded boundary.
         match produced {
             ProducedTcpChunk::Data(bytes) => {
                 let result = match deliver_demand(
@@ -1855,16 +1844,10 @@ where
                         );
                     }
                 };
+                // The guest dropped its reader before the chunk reached it. The discard is
+                // recorded, and the receive ends as if the reader had been dropped while idle.
                 if matches!(result, DemandDelivery::Abandoned) {
-                    let trap_context = stream.trap_context();
-                    return fail_tcp_stream_task(
-                        result_tx,
-                        wasmtime::Error::from_anyhow(stream.trap(anyhow::Error::msg(
-                            "tcp receive persisted a chunk that could not be delivered to the \
-                             guest stream",
-                        ))),
-                        Some(trap_context),
-                    );
+                    break;
                 }
             }
             ProducedTcpChunk::Terminal => {

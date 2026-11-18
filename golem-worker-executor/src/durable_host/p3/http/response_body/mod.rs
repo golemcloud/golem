@@ -21,9 +21,9 @@ use super::serialization::{deserialize_error_code, serialize_error_code};
 use super::serialization::{deserialize_headers, serialize_headers};
 use super::*;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CompletionDelivery, DemandDelivery, DemandDeliveryMode, DurableDemandItem,
-    DurableDemandStream, InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery,
-    demand_channel, import_invocation_id,
+    AccessClaimOptions, CompletionDelivery, DemandDelivery, DurableDemandItem, DurableDemandStream,
+    InvocationIdSource, ScopeReplayDecision, ScopeReplayRecovery, demand_channel,
+    import_invocation_id,
 };
 use crate::durable_host::durability::CustomInvocationContext;
 use crate::durable_host::durability::{
