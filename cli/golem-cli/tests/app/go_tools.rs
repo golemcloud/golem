@@ -159,10 +159,10 @@ async fn test_go_tools_e2e() {
         outputs.stdout_text()
     };
 
-    // The tool sees the caller the calling agent's invocation runs on
-    // behalf of: the CLI's user, not the agent itself.
+    // The tool sees the calling agent as its immediate caller; the CLI's
+    // user stays the original caller.
     let own = run("VcsSelfCaller").await;
-    assert!(own.contains("ok:.|self|anonymous|account:1"), "{own}");
+    assert!(own.contains("ok:.|self|anonymous|agent:1"), "{own}");
 
     let generated = run("VcsUser").await;
     assert!(
