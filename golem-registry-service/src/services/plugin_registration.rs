@@ -349,10 +349,9 @@ impl PluginRegistrationService {
         // processor plugin.
         let component = self
             .component_service
-            .get_component_revision(
+            .get_source_component_revision(
                 definition.component_id,
                 definition.component_revision,
-                false,
                 auth,
             )
             .await

@@ -40,21 +40,47 @@ impl From<AttributeValue> for PublicAttributeValue {
     }
 }
 
+/// Parses the string form of `Display` with the cursor's `FromStr`, which the CLI also uses.
 impl poem_openapi::types::ParseFromParameter for OplogCursor {
     fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
-        let parts: Vec<&str> = value.split('-').collect();
-        if parts.len() != 2 {
-            return Err("Invalid oplog cursor".into());
+        value.parse::<OplogCursor>().map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OplogCursor;
+    use poem_openapi::types::ParseFromParameter;
+    use test_r::test;
+
+    #[test]
+    fn an_oplog_cursor_round_trips_through_its_string_form() {
+        for query in [None, Some(""), Some("G1002 AND NOT pending")] {
+            let cursor = OplogCursor {
+                next_oplog_index: 120,
+                current_component_revision: 3,
+                query_hash: OplogCursor::query_hash(query),
+            };
+            let parsed = OplogCursor::parse_from_parameter(&cursor.to_string()).unwrap();
+            assert_eq!(parsed, cursor);
         }
-        let next_oplog_index = parts[0]
-            .parse()
-            .map_err(|_| "Invalid index in the oplog cursor")?;
-        let current_component_revision = parts[1]
-            .parse()
-            .map_err(|_| "Invalid component revision in the oplog cursor")?;
-        Ok(OplogCursor {
-            next_oplog_index,
-            current_component_revision,
-        })
+        // The hash stays the same across processes and releases: it is SHA-256, cut to 8 bytes.
+        assert_eq!(OplogCursor::query_hash(Some("")), "e3b0c44298fc1c14");
+        assert_eq!(OplogCursor::query_hash(None), "");
+    }
+
+    #[test]
+    fn an_oplog_cursor_without_a_valid_query_hash_is_invalid() {
+        for invalid in [
+            "120-3",
+            "120-3-e3b0",
+            "120-3-E3B0C44298FC1C14",
+            "120-3-e3b0c44298fc1c14-1",
+        ] {
+            assert!(
+                OplogCursor::parse_from_parameter(invalid).is_err(),
+                "{invalid} must be refused"
+            );
+        }
     }
 }

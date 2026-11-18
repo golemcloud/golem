@@ -18,7 +18,7 @@ use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::UnreadableOplog;
-use crate::services::oplog::{Oplog, OplogService};
+use crate::services::oplog::{Oplog, OplogService, ScanPage};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
 use crate::worker::status::{
@@ -391,6 +391,24 @@ fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_
         assert_eq!(
             status.pending_durable_stream_cancellations,
             HashMap::from([((expected.source.clone(), expected.epoch), vec![expected])]),
+        );
+    }
+}
+
+#[test]
+fn memory_reconciliation_replaces_the_baseline_before_subsequent_growth() {
+    for reconciled in [24, 97] {
+        let entries = BTreeMap::from([
+            (OplogIndex::from_u64(2), OplogEntry::grow_memory(13)),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::memory_size_reconciled(reconciled),
+            ),
+            (OplogIndex::from_u64(4), OplogEntry::grow_memory(9)),
+        ]);
+        assert_eq!(
+            calculate_total_linear_memory_size(64, &DeletedRegions::new(), &entries),
+            reconciled + 9
         );
     }
 }
@@ -5735,7 +5753,7 @@ impl OplogService for TestCase {
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
-    ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+    ) -> Result<ScanPage, WorkerExecutorError> {
         unreachable!()
     }
 

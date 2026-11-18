@@ -1256,6 +1256,7 @@ impl AppCommandHandler {
                 &tool_grant_plan.resolved_grants,
                 &tool_middleware_grant_plan.resolved,
                 config.full_diff,
+                config.stage,
             )
             .await
             .map_err(DeployError::PrepareError)?
@@ -1382,6 +1383,7 @@ impl AppCommandHandler {
         resolved_tool_grants: &ResolvedToolGrants,
         resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         full_diff: bool,
+        stage_only: bool,
     ) -> anyhow::Result<Option<(DeployDiff, DeploymentVersion)>> {
         log_action("Preparing", "deployment");
         let _indent = LogIndent::new();
@@ -1550,6 +1552,12 @@ impl AppCommandHandler {
 
         if deploy_diff.tool_publication_plan.has_conflicts() {
             bail!("Tool publication plan contains conflicts");
+        }
+
+        // A run that only stages does not deploy, so the server does not check its version.
+        if !stage_only && deploy_diff.has_apply_work() {
+            self.reject_existing_deployment_version(&deploy_diff.environment, &deployment_version)
+                .await?;
         }
 
         Ok(Some((deploy_diff, deployment_version)))
@@ -3363,6 +3371,49 @@ impl AppCommandHandler {
 
         let version = compute_version(&resolved, &app_root).await?;
         Ok(DeploymentVersion(version))
+    }
+
+    /// Rejects a deployment version that the environment already has, when the environment has
+    /// `versionCheck`. The server makes the same check when it deploys the staged changes, but
+    /// the deployment changes the staging area before that. This check rejects the version
+    /// before the staging area changes.
+    async fn reject_existing_deployment_version(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        deployment_version: &DeploymentVersion,
+    ) -> anyhow::Result<()> {
+        // The deployment applies the version check of the manifest to the environment before it
+        // changes the staging area.
+        let version_check = match self.ctx.manifest_environment_deployment_options() {
+            Some(options) => options.version_check(),
+            None => environment.server_environment.version_check,
+        };
+        if !version_check {
+            return Ok(());
+        }
+
+        let deployments = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .list_deployments(&environment.environment_id.0, Some(&deployment_version.0))
+            .await
+            .map_service_error()?
+            .values;
+
+        if deployments
+            .iter()
+            .any(|deployment| &deployment.version == deployment_version)
+        {
+            bail!(
+                "Deployment version {} already exists in the environment {}, and the environment requires a new version for each deployment (versionCheck). Change the version to deploy these changes.",
+                deployment_version.0,
+                environment.environment_name.0
+            );
+        }
+
+        Ok(())
     }
 
     async fn apply_staged_changes_to_environment(

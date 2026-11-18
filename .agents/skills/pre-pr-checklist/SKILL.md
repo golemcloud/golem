@@ -1,11 +1,11 @@
 ---
 name: pre-pr-checklist
-description: "Final checks before submitting a pull request. Use when preparing to create a PR, to ensure formatting, linting, and the correct tests have been run."
+description: "Selects affected local checks before opening or merging a pull request. Use to verify formatting, linting, builds and targeted tests without defaulting to full suites."
 ---
 
 # Pre-PR Checklist
 
-Validate the smallest dependency and behavior scope that fully covers the change. Local checks should find likely failures quickly; repository-wide CI remains the broad safety net.
+Validate the smallest dependency and behavior scope that fully covers the change. Follow the repository's local verification policy before opening or merging a PR: main PRs run no tests, and `Main validation` checks the latest main commit after merge. Maintenance branches retain full CI.
 
 ## 1. Classify the Change
 
@@ -14,8 +14,8 @@ Inspect all files in the PR, including generated files. A change can belong to m
 | Scope | Minimum local verification |
 |---|---|
 | Root Rust crate(s) | Package-scoped format check, clippy, check/build, and affected tests |
-| Shared Rust API, proc macro, or shared type | Verify the producer and directly affected consumers; use the full workspace only when the affected closure is broad or unclear |
-| `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`; do not check the root workspace unless it is also affected |
+| Shared Rust API, proc macro, or shared type | Verify the producer and directly affected consumers; identify uncovered contracts before choosing broader checks |
+| `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`, except the standalone Go generator uses `--manifest-path dev-tools/go-bindgen/Cargo.toml`; do not check the root workspace unless it is also affected |
 | Rust SDK (`sdks/rust/`) | Use that SDK's Cargo workspace checks; do not run root `cargo make fix` or `cargo make build` |
 | TypeScript SDK (`sdks/ts/`) | Check affected packages; rebuild the agent template only when its runtime/WIT inputs changed |
 | Scala SDK (`sdks/scala/`) | Check affected sbt projects and Scala versions |
@@ -68,7 +68,7 @@ Start with the smallest test that exercises the changed behavior:
 cargo test -p <crate> -- <test_name> --report-time
 ```
 
-Then broaden only as warranted:
+Broaden only for a specific affected contract that narrower checks cannot cover, or an explicit user request. The absence of PR tests does not justify full suites:
 
 | Impact | Broader command when needed |
 |---|---|
@@ -119,7 +119,7 @@ git add <specific-files> # Stage only relevant files
 3. [ ] Affected packages build or type-check
 4. [ ] Modified and behaviorally affected tests pass
 5. [ ] Required artifacts are regenerated and their drift checks pass
-6. [ ] Broader checks were run when the dependency or behavior impact is broad or unclear
+6. [ ] Each broader check covers an identified affected contract that narrower checks cannot cover
 7. [ ] Only relevant files are included in the PR
 
-In the completion report, name the checks run and any broader checks intentionally left to CI.
+In the completion report, name the checks run, their outcomes and remaining coverage limits. Distinguish local verification from post-merge Main validation; do not imply PR tests will cover omitted checks.

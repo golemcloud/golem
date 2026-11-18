@@ -819,11 +819,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .max(1);
         while first <= status.oplog_idx {
             let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(chunk_size);
-            let entries = self
-                .deps
-                .oplog_service()
-                .read_exact(&self.owned_agent_id, self.agent_mode(), first, count)
-                .await?;
+            let entries = self.oplog.read_exact(first, count).await?;
             if entries.is_empty() {
                 break;
             }

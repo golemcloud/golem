@@ -44,10 +44,11 @@ pub mod build_tool {
 // The Go toolchain the CLI builds Go components with.
 //
 // Go components need a Go runtime patched with `runtime.wasiOnIdle` (async
-// components deadlock without it) and `runtime.wasiIdleTimer` (Go timers fire
+// components deadlock without it) and `runtime.wasiIdleWait` (Go timers fire
 // while a component waits on the host, with the async runtime fork below) and,
 // for durable replay, without the goroutine scheduling-latency sampler, whose
-// clock reads depend on execution history. Golem maintains that toolchain as a fork of Go and releases the
+// clock reads depend on execution history, and with goroutine-local host
+// context and runtime domains, which `durability.Run` needs. Golem maintains that toolchain as a fork of Go and releases the
 // bootstrap trees componentize-go expects; the CLI installs the pinned release
 // into componentize-go's own toolchain directory and puts it on PATH for every
 // Go command, so builds never depend on which Go the developer has installed.
@@ -57,7 +58,7 @@ pub mod build_tool {
 // downloaded archive against these hashes before it unpacks it.
 pub mod go_toolchain {
     pub const REPO: &str = "golemcloud/go";
-    pub const TAG: &str = "go1.27.1-golem.4";
+    pub const TAG: &str = "go1.27.1-golem.5";
 
     /// The bootstrap archive the release publishes for each platform, as Go's
     /// os and arch, with its sha256 (the release's `.sha256` assets).
@@ -65,27 +66,27 @@ pub mod go_toolchain {
         (
             "linux",
             "amd64",
-            "ce4606c4e2999d0325ec503a4e0d4ebd7c9ce64a5c56c5e486a2f599bc7fdd25",
+            "ef6e1bad389bb4b357bc4a35d8951a221d63bf979cca47373f65607d6474e4f1",
         ),
         (
             "linux",
             "arm64",
-            "d858db87053150ed80693445dbdf2c092c8eb53c132c3ea285e393b781a1bdbc",
+            "9bba6130fdbf91deb1c334d476648ea29f1f177b881526ded37b95b3ce6f91c5",
         ),
         (
             "darwin",
             "amd64",
-            "6209b04a7a1ce12aa1e0c2f777dfc0632fc48357adfeb57983874da6092544ce",
+            "6f7d2b2bce658a404cb30dbfdeaebadf81b0dc7fc77ddc38d5a481906848c56a",
         ),
         (
             "darwin",
             "arm64",
-            "a4b59a191a216d584d03d3b32cfb2aaf1f00e26976f0a0230611282e2b3c0d9c",
+            "99a92a074a835bc55a0e39c6eaf1d1d4d4a2b36aff4d8b54c3b6e4a55092c400",
         ),
         (
             "windows",
             "amd64",
-            "8aef86fdd0b5073307bedf3752b8551b89f932f84f6721f5baa14c9525eed093",
+            "be55a9ec8c0c7d0f16a5f20b0f4833b1f74516aae6c876788b933f65aef013d4",
         ),
     ];
 }
@@ -103,7 +104,7 @@ pub mod go_dep {
     // component replaces the upstream module with it, since a `replace` in the
     // SDK's own go.mod does not reach the components that depend on it.
     pub const GO_PKG_MODULE: &str = "go.bytecodealliance.org/pkg";
-    pub const GO_PKG_FORK: &str = "github.com/golemcloud/go-pkg v0.2.3-golem.1";
+    pub const GO_PKG_FORK: &str = "github.com/golemcloud/go-pkg v0.2.3-golem.2";
 }
 
 pub mod effect_dep {

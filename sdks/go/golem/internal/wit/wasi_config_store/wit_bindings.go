@@ -94,7 +94,7 @@ func Get(key string) witTypes.Result[witTypes.Option[string], Error] {
 	utf8 := unsafe.Pointer(unsafe.StringData(key))
 	pinner.Pin(utf8)
 	wasm_import_get(uintptr(utf8), uint32(len(key)), returnArea)
-	var result witTypes.Result[witTypes.Option[string], Error]
+	var result0 witTypes.Result[witTypes.Option[string], Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option witTypes.Option[string]
@@ -110,30 +110,16 @@ func Get(key string) witTypes.Result[witTypes.Option[string], Error] {
 			panic("unreachable")
 		}
 
-		result = witTypes.Ok[witTypes.Option[string], Error](option)
+		result0 = witTypes.Ok[witTypes.Option[string], Error](option)
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result := wasm_lift_1_t1221(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorUpstream(value0)
-
-		case 1:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorIo(value1)
-
-		default:
-			panic("unreachable")
-		}
-
-		result = witTypes.Err[witTypes.Option[string], Error](variant)
+		result0 = witTypes.Err[witTypes.Option[string], Error](result)
 	default:
 		panic("unreachable")
 	}
-	result2 := result
-	return result2
+	result1 := result0
+	return result1
 
 }
 
@@ -146,7 +132,7 @@ func GetAll() witTypes.Result[[]witTypes.Tuple2[string, string], Error] {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (4 * 4), 4))
 	wasm_import_get_all(returnArea)
-	var result3 witTypes.Result[[]witTypes.Tuple2[string, string], Error]
+	var result2 witTypes.Result[[]witTypes.Tuple2[string, string], Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		result := make([]witTypes.Tuple2[string, string], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
@@ -158,29 +144,36 @@ func GetAll() witTypes.Result[[]witTypes.Tuple2[string, string], Error] {
 			result = append(result, witTypes.Tuple2[string, string]{F0: value, F1: value0})
 		}
 
-		result3 = witTypes.Ok[[]witTypes.Tuple2[string, string], Error](result)
+		result2 = witTypes.Ok[[]witTypes.Tuple2[string, string], Error](result)
 	case 1:
-		var variant Error
-		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
-		case 0:
-			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+		result1 := wasm_lift_1_t1221(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
-			variant = MakeErrorUpstream(value1)
-
-		case 1:
-			value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant = MakeErrorIo(value2)
-
-		default:
-			panic("unreachable")
-		}
-
-		result3 = witTypes.Err[[]witTypes.Tuple2[string, string], Error](variant)
+		result2 = witTypes.Err[[]witTypes.Tuple2[string, string], Error](result1)
 	default:
 		panic("unreachable")
 	}
-	result4 := result3
-	return result4
+	result3 := result2
+	return result3
 
+}
+
+//go:noinline
+func wasm_lift_1_t1221(src unsafe.Pointer) Error {
+	var variant Error
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
+	case 0:
+		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorUpstream(value0)
+
+	case 1:
+		value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))
+
+		variant = MakeErrorIo(value1)
+
+	default:
+		panic("unreachable")
+	}
+
+	return variant
 }

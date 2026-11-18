@@ -346,6 +346,7 @@ fn configured_account_at_mode(
             memory_bytes,
             mode,
             false,
+            false,
             entry.clone(),
             Arc::new(Mutex::new(MemoryGrant::inert(0))),
             now,
@@ -356,11 +357,13 @@ fn configured_account_at_mode(
             memory_bytes,
             mode,
             false,
+            false,
             entry.clone(),
             Arc::new(Mutex::new(MemoryGrant::inert(0))),
             false,
         )
     };
+    memory.grow(memory_bytes, now.instant);
     (
         ResourceUsageAccount::new(mode, memory.clone(), entry.clone()),
         memory,

@@ -15,6 +15,8 @@
 pub mod instance_network;
 pub mod ip_name_lookup;
 pub mod network;
+pub mod policy;
+pub mod resolved_names;
 pub mod tcp;
 pub mod tcp_create_socket;
 pub mod udp;
@@ -34,7 +36,6 @@ pub(crate) type SocketEntries = HashMap<u32, SocketEntry>;
 pub(crate) enum SocketPhase {
     Created,
     Bound,
-    Listening,
     Connecting,
     Connected,
     Lost,

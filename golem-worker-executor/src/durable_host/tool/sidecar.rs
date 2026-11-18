@@ -28,6 +28,7 @@ use super::{
     streams, tool_guest_exports, tool_middleware_guest_exports, validate_declared_tool_error,
     validate_declared_tool_result,
 };
+use crate::durable_host::attribution::Attributed;
 use crate::durable_host::stream_outcome::supervise_schema_outputs;
 use crate::worker::invocation::{SettlementDeadline, run_guest_call_settled_at};
 use futures::FutureExt;
@@ -154,6 +155,7 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         let activity = ctx.tail_work_tracker().activity();
         let revision = ctx.component_metadata().revision;
         let output_tasks = ctx.schema_output_spawner()?;
+        let captured = ctx.attribution.capture();
         let task = streams::MaterializeResponse {
             streams: result_streams.clone().with_runtime_source(
                 ctx.runtime_suspension
@@ -166,7 +168,7 @@ pub(super) async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
             activity,
             output_tasks,
         };
-        access.spawn(async move |access| task.run(access).await)
+        access.spawn(async move |access| captured.run(task.run(access)).await)
     })?;
     completion
         .await
@@ -254,6 +256,8 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         |ctx: &mut Ctx| ctx.durable_ctx_mut(),
                         store.data().durable_ctx(),
                     )?;
+                    let input =
+                        Attributed::new(store.data().durable_ctx().attribution.clone(), input);
                     Ok(StreamReader::new(store.as_context_mut(), input)?)
                 }
                 ToolBodyStdin::Attachment(stdin) => Ok(StreamReader::new(
@@ -263,10 +267,11 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 ToolBodyStdin::Durable(endpoint) => {
                     let runtime_teardown =
                         store.data().durable_ctx().stream_runtime_teardown_probe();
-                    Ok(StreamReader::new(
-                        store.as_context_mut(),
+                    let input = Attributed::new(
+                        store.data().durable_ctx().attribution.clone(),
                         DurableToolStdinProducer::new(*endpoint, runtime_teardown),
-                    )?)
+                    );
+                    Ok(StreamReader::new(store.as_context_mut(), input)?)
                 }
             }
         })
@@ -303,6 +308,8 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     } else {
         SettlementDeadline::RootReturned
     };
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     let mut result = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
             let indices =
@@ -330,14 +337,17 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     let result = replay_disposal_termination(
                         replay,
                         replay_operation,
-                        guest.call_invoke(
-                            accessor,
-                            tool_name,
-                            command_path,
-                            input,
-                            stdin,
-                            stdout,
-                            stderr,
+                        attribution.armed(
+                            invocation_key,
+                            guest.call_invoke(
+                                accessor,
+                                tool_name,
+                                command_path,
+                                input,
+                                stdin,
+                                stdout,
+                                stderr,
+                            ),
                         ),
                     )
                     .await?;
@@ -405,18 +415,21 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     let result = replay_disposal_termination(
                         replay,
                         replay_operation,
-                        guest.call_invoke_tool_middleware(
-                            accessor,
-                            middleware_name,
-                            tool_name,
-                            metadata,
-                            parameters,
-                            command_path,
-                            input,
-                            stdin,
-                            stdout,
-                            stderr,
-                            wrapped,
+                        attribution.armed(
+                            invocation_key,
+                            guest.call_invoke_tool_middleware(
+                                accessor,
+                                middleware_name,
+                                tool_name,
+                                metadata,
+                                parameters,
+                                command_path,
+                                input,
+                                stdin,
+                                stdout,
+                                stderr,
+                                wrapped,
+                            ),
                         ),
                     )
                     .await;
@@ -545,15 +558,22 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let mut parent_end =
         durability::native_finalization_failures(store.data().durable_ctx(), errors).await;
     if matches!(&result, Ok(Ok(_))) && finish.is_ok() && parent_end.is_ok() {
+        let attribution = store.data().durable_ctx().attribution.clone();
+        let invocation_key = store.data().durable_ctx().invocation_key();
         parent_end = store
             .as_context_mut()
             .run_concurrent(async move |accessor| {
-                durability::finish_producer_disposals(
-                    &mut crate::durable_host::concurrent::AccessorContext::new(accessor, |ctx| {
-                        ctx.durable_ctx_mut()
-                    }),
-                )
-                .await
+                attribution
+                    .scoped(
+                        Some(invocation_key),
+                        durability::finish_producer_disposals(
+                            &mut crate::durable_host::concurrent::AccessorContext::new(
+                                accessor,
+                                |ctx| ctx.durable_ctx_mut(),
+                            ),
+                        ),
+                    )
+                    .await
             })
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
@@ -601,6 +621,11 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         Ok(Err(error))
         | Err(GuestCallSettlementError::Interrupted(error))
         | Err(GuestCallSettlementError::Trap(error)) => {
+            let error = store
+                .data()
+                .durable_ctx()
+                .linear_memory_tracker()
+                .annotate_gc_heap_error(error);
             let error: anyhow::Error = error.into();
             if durability::is_entity_cancellation(&error) {
                 operation.claim_local_cancellation_interruption();
