@@ -3752,18 +3752,22 @@ fn validate_ordinary_agent_type(agent_type: &AgentTypeSchema) -> anyhow::Result<
 mod tests {
     use super::{
         AgentListMode, AgentUpdateMode, apply_list_mode_filter, is_selected_update_attempt,
-        parse_agent_id_address, parse_method_argument_schema_value,
+        parse_agent_id_address, parse_agent_key, parse_method_argument_schema_value,
         parse_method_parameters_with_error_table, pending_update_progress, render_revert_command,
         split_agent_id, validate_ordinary_agent_type,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::environment::EnvironmentReference;
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
-    use golem_common::model::application::ApplicationName;
-    use golem_common::model::component::ComponentRevision;
-    use golem_common::model::environment::EnvironmentName;
-    use golem_common::model::OplogIndex;
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::component::{
+        ComponentDto, ComponentId, ComponentName, ComponentRevision,
+    };
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::model::{AgentFilter, FilterComparator, OplogIndex, StringFilterComparator};
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema,
@@ -3771,7 +3775,9 @@ mod tests {
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
     use golem_schema::Empty;
+    use itertools::Itertools;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
     use test_r::test;
 
     #[test]
@@ -4067,6 +4073,132 @@ mod tests {
         assert_eq!(parse_agent_id_address("Counter(\"[x]\")"), None);
         assert_eq!(parse_agent_id_address("Counter[not-a-uuid]"), None);
         assert_eq!(parse_agent_id_address(&format!("[{id}]")), None);
+    }
+
+    #[test]
+    fn environment_application_and_account_prefixes_split_off_key_and_id_addresses() {
+        let id = golem_common::model::AgentId::from_parts(7, 42);
+        let typed_id = format!("Counter[{id}]");
+        let bare_id = id.to_string();
+        let key = r#"Counter("a/b")"#;
+        for (address, agent) in [
+            (typed_id.as_str(), Some((Some("Counter".to_string()), id))),
+            (bare_id.as_str(), Some((None, id))),
+            (key, None),
+        ] {
+            for prefix in [
+                vec![],
+                vec!["env"],
+                vec!["app", "env"],
+                vec!["me@example.com", "app", "env"],
+            ] {
+                let text = prefix.iter().copied().chain([address]).join("/");
+                let segments = split_agent_id(&text);
+                let expected_segments = prefix.iter().copied().chain([address]).collect::<Vec<_>>();
+                assert_eq!(segments, expected_segments, "{text}");
+                assert_eq!(
+                    parse_agent_id_address(segments.last().unwrap()),
+                    agent,
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    fn counter_component() -> ComponentDto {
+        let mut agent_type = test_agent_type_schema(AgentMode::Durable);
+        agent_type.type_name = AgentTypeName("CounterAgent".to_string());
+        agent_type.source_language = "rust".to_string();
+        agent_type.constructor.input_schema = InputSchema::Parameters(vec![
+            NamedField::user_supplied("name", SchemaType::string()),
+            NamedField::user_supplied("count", SchemaType::u32()),
+        ]);
+        ComponentDto {
+            id: ComponentId(uuid::Uuid::nil()),
+            revision: ComponentRevision::new(0).unwrap(),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            component_name: ComponentName("counter:main".to_string()),
+            hash: Default::default(),
+            wasm_hash: Default::default(),
+            application_id: ApplicationId(uuid::Uuid::nil()),
+            account_id: AccountId(uuid::Uuid::nil()),
+            component_size: 0,
+            created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+            metadata: ComponentMetadata::from_parts(
+                Default::default(),
+                vec![],
+                vec![agent_type],
+                BTreeMap::new(),
+            )
+            .into(),
+        }
+    }
+
+    #[test]
+    fn key_addresses_name_an_agent_type_of_the_component_with_its_constructor_parameters() {
+        let component = counter_component();
+
+        let key = parse_agent_key(r#"CounterAgent("c1", 7)"#, &component).unwrap();
+        assert_eq!(key.agent_type, AgentTypeName("CounterAgent".to_string()));
+        assert_eq!(
+            key.parameters.value(),
+            &SchemaValue::Record {
+                fields: vec![SchemaValue::String("c1".to_string()), SchemaValue::U32(7)],
+            }
+        );
+        assert_eq!(key.to_string(), r#"CounterAgent("c1",7)"#);
+        assert_eq!(parse_agent_key(&key.to_string(), &component), Some(key));
+
+        for not_a_key in [
+            r#"OtherAgent("c1", 7)"#,
+            r#"CounterAgent("c1")"#,
+            r#"CounterAgent("c1", 7)x"#,
+            r#"CounterAgent("c1", "not a number")"#,
+            "CounterAgent[00000007-0000-8000-8000-00000000002a]",
+            "00000007-0000-8000-8000-00000000002a",
+        ] {
+            assert!(
+                parse_agent_key(not_a_key, &component).is_none(),
+                "{not_a_key} must not parse as a key"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_list_filters_compare_the_key_and_the_id() {
+        let id = golem_common::model::AgentId::from_parts(7, 42);
+        let filters = apply_list_mode_filter(
+            vec![
+                r#"key == CounterAgent("c1")"#.to_string(),
+                format!("id == {id}"),
+            ],
+            AgentListMode::Durable,
+        );
+        assert_eq!(
+            AgentFilter::from(filters).unwrap(),
+            AgentFilter::new_and(vec![
+                AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
+                AgentFilter::new_key(
+                    StringFilterComparator::Equal,
+                    r#"CounterAgent("c1")"#.to_string()
+                ),
+                AgentFilter::new_id(FilterComparator::Equal, id),
+            ])
+        );
+        assert_eq!(
+            AgentFilter::from(vec![r#"key startswith "CounterAgent(""#.to_string()]).unwrap(),
+            AgentFilter::new_key(
+                StringFilterComparator::StartsWith,
+                "CounterAgent(".to_string()
+            )
+        );
+
+        for invalid in ["id == not-a-uuid", r#"name == CounterAgent("c1")"#] {
+            assert!(
+                AgentFilter::from(vec![invalid.to_string()]).is_err(),
+                "{invalid} must be rejected"
+            );
+        }
     }
 
     #[test]

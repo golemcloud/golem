@@ -31,7 +31,7 @@ const routes = Layer.mergeAll(
   }), { headers: { "content-length": "99" } })),
   Routes.add("POST", "/early", HttpServerResponse.text("early", { status: 202 })),
   Routes.add("GET", "/counter", Effect.gen(function* () {
-    const counter = yield* Counter.client.get({ name: "http" });
+    const counter = yield* Counter.client.upsert({ name: "http" });
     return HttpServerResponse.text(String(yield* counter.increment({})));
   })),
   Routes.add("GET", "/before-head", Effect.die(new Error("before-head failure"))),

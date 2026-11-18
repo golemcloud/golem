@@ -30,7 +30,7 @@ var Ask = Relay.Method[RelayIn, string]("ask")
 func describe(p golem.Principal) string {
 	switch p := p.(type) {
 	case golem.AgentPrincipal:
-		return "agent:" + p.AgentID.AgentID
+		return "agent:" + p.AgentID.String()
 	case golem.GolemUserPrincipal:
 		return "golem-user"
 	case golem.OidcPrincipal:
@@ -54,6 +54,6 @@ func init() {
 
 	relay := Relay.Implement(func(RelayID) *relayState { return &relayState{} })
 	relay.Handle(Ask, func(_ *golem.Context[relayState], in RelayIn) string {
-		return Whoami.MustCall(Ledger.Get(LedgerID{Name: in.Ledger}), WhoamiIn{})
+		return Whoami.MustCall(Ledger.Upsert(LedgerID{Name: in.Ledger}), WhoamiIn{})
 	})
 }

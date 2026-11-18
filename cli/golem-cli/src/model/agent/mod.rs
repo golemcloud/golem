@@ -1189,6 +1189,46 @@ mod tests {
     }
 
     #[test]
+    fn agent_list_cursor_round_trips_the_scan_cursors_of_several_agent_types() {
+        let counter = AgentTypeName("CounterAgent".to_string());
+        let chat = AgentTypeName("ChatAgent".to_string());
+        let done = AgentTypeName("DoneAgent".to_string());
+        let mut cursor = AgentListCursor::default();
+        assert!(cursor.is_empty());
+        cursor.insert(&counter, ScanCursor::new("0/17".to_string()));
+        cursor.insert(&chat, ScanCursor::new("3/2".to_string()));
+        assert!(!cursor.is_empty());
+
+        let encoded = cursor.encode();
+        assert!(
+            encoded
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            "{encoded} must be URL-safe"
+        );
+        let decoded = AgentListCursor::decode(&encoded).unwrap();
+
+        assert_eq!(decoded, cursor);
+        assert_eq!(
+            decoded.agent_types().collect::<Vec<_>>(),
+            vec!["ChatAgent", "CounterAgent"]
+        );
+        assert_eq!(
+            decoded.resume_at(&counter),
+            Some(ScanCursor::new("0/17".to_string()))
+        );
+        assert_eq!(
+            decoded.resume_at(&chat),
+            Some(ScanCursor::new("3/2".to_string()))
+        );
+        assert_eq!(decoded.resume_at(&done), None);
+        assert_eq!(
+            AgentListCursor::decode(&format!(" {encoded}\n")).unwrap(),
+            cursor
+        );
+    }
+
+    #[test]
     fn agent_list_cursor_rejects_text_that_is_not_a_cursor() {
         assert!(AgentListCursor::decode("0/17").is_err());
         assert!(AgentListCursor::decode("bm90IGpzb24").is_err());

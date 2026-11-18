@@ -224,7 +224,7 @@ final class ScalaStreamingCallerImpl(private val name: String) extends ScalaStre
   import StreamingFixture._
 
   override def run(): Future[String] = {
-    val target = ScalaStreamingTargetClient.get(name)
+    val target = ScalaStreamingTargetClient.upsert(name)
 
     for {
       inputOnly       <- target.consume(streamOf(List(1, 2, 3)))
@@ -265,8 +265,8 @@ final class ScalaStreamingCallerImpl(private val name: String) extends ScalaStre
   }
 
   override def callProducerError(): Future[List[Int]] =
-    ScalaStreamingTargetClient.get(name).produceError().flatMap(collect)
+    ScalaStreamingTargetClient.upsert(name).produceError().flatMap(collect)
 
   override def callStreamFree(): Future[Int] =
-    ScalaStreamingTargetClient.get(name).incrementScalar()
+    ScalaStreamingTargetClient.upsert(name).incrementScalar()
 }

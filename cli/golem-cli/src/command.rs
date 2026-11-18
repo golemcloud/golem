@@ -3280,6 +3280,7 @@ mod test {
         AccountLimitsSubcommand, AccountSubcommand, AccountUsageSubcommand,
     };
     use crate::command::shared_args::PostDeployArgs;
+    use crate::command::worker::AgentSubcommand;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
         help_target_to_subcommand_names, parse_agent_stream_ping_interval,
@@ -4271,5 +4272,177 @@ mod test {
         assert!(cli_args.redeploy_agents(&env_args));
         assert!(!cli_args.delete_agents(&env_args));
         assert!(!cli_args.allow_incompatible_changes(&env_args));
+    }
+
+    fn agent_subcommand<'a>(args: impl IntoIterator<Item = &'a str>) -> AgentSubcommand {
+        let command = GolemCliCommand::try_parse_from(["golem", "agent"].into_iter().chain(args))
+            .unwrap_or_else(|error| panic!("{error}"));
+        let GolemCliSubcommand::Agent { subcommand } = command.subcommand else {
+            panic!("expected an agent command");
+        };
+        subcommand
+    }
+
+    #[test]
+    fn agent_create_parses_keyed_idempotency_key_env_and_config() {
+        let AgentSubcommand::Create {
+            agent_id,
+            keyed,
+            idempotency_key,
+            env,
+            config,
+        } = agent_subcommand([
+            "create",
+            r#"CounterAgent("c1")"#,
+            "--keyed",
+            "-i",
+            "create-1",
+            "-e",
+            "FOO=bar",
+            "--env",
+            "EQ=a=b",
+            "-c",
+            "limits.max=10",
+            "--config",
+            r#"name="x""#,
+        ])
+        else {
+            panic!("expected agent create");
+        };
+        assert_eq!(agent_id.agent_id.0, r#"CounterAgent("c1")"#);
+        assert!(keyed);
+        assert_eq!(idempotency_key.unwrap().value, "create-1");
+        assert_eq!(
+            env,
+            vec![
+                ("FOO".to_string(), "bar".to_string()),
+                ("EQ".to_string(), "a=b".to_string())
+            ]
+        );
+        assert_eq!(
+            config
+                .iter()
+                .map(|entry| (entry.path.join("."), entry.value.0.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("limits.max".to_string(), serde_json::json!(10)),
+                ("name".to_string(), serde_json::json!("x")),
+            ]
+        );
+
+        let AgentSubcommand::Create {
+            keyed,
+            idempotency_key,
+            env,
+            config,
+            ..
+        } = agent_subcommand(["create", r#"CounterAgent("c1")"#])
+        else {
+            panic!("expected agent create");
+        };
+        assert!(!keyed);
+        assert!(idempotency_key.is_none());
+        assert!(env.is_empty());
+        assert!(config.is_empty());
+
+        let AgentSubcommand::Create {
+            idempotency_key, ..
+        } = agent_subcommand(["create", r#"CounterAgent("c1")"#, "--idempotency-key", "k"])
+        else {
+            panic!("expected agent create");
+        };
+        assert_eq!(idempotency_key.unwrap().value, "k");
+
+        for invalid in [
+            vec!["create"],
+            vec!["create", r#"CounterAgent("c1")"#, "-e", "NO_EQUALS"],
+            vec!["create", r#"CounterAgent("c1")"#, "-c", "path=not json"],
+            vec!["new", r#"CounterAgent("c1")"#],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(
+                    ["golem", "agent"].into_iter().chain(invalid.clone())
+                )
+                .is_err(),
+                "{invalid:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_upsert_takes_only_an_address() {
+        let AgentSubcommand::Upsert { agent_id } =
+            agent_subcommand(["upsert", r#"CounterAgent("c1")"#])
+        else {
+            panic!("expected agent upsert");
+        };
+        assert_eq!(agent_id.agent_id.0, r#"CounterAgent("c1")"#);
+
+        for invalid in [
+            vec!["upsert"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "--keyed"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "-e", "FOO=bar"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "-c", "a=1"],
+            vec!["upsert", r#"CounterAgent("c1")"#, "-i", "k"],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(
+                    ["golem", "agent"].into_iter().chain(invalid.clone())
+                )
+                .is_err(),
+                "{invalid:?} must not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_invoke_parses_the_expected_fingerprint() {
+        let fingerprint = "0f8e2c3a-41d5-4b7e-9c2a-6d1e5f4a3b2c";
+        let AgentSubcommand::Invoke {
+            agent_id,
+            function_name,
+            expected_fingerprint,
+            ..
+        } = agent_subcommand([
+            "invoke",
+            "CounterAgent[00000007-0000-8000-8000-00000000002a]",
+            "increment",
+            "--expected-fingerprint",
+            fingerprint,
+        ])
+        else {
+            panic!("expected agent invoke");
+        };
+        assert_eq!(
+            agent_id.agent_id.0,
+            "CounterAgent[00000007-0000-8000-8000-00000000002a]"
+        );
+        assert_eq!(function_name, "increment");
+        assert_eq!(
+            expected_fingerprint,
+            Some(uuid::Uuid::parse_str(fingerprint).unwrap())
+        );
+
+        let AgentSubcommand::Invoke {
+            expected_fingerprint,
+            ..
+        } = agent_subcommand(["invoke", r#"CounterAgent("c1")"#, "increment"])
+        else {
+            panic!("expected agent invoke");
+        };
+        assert_eq!(expected_fingerprint, None);
+
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "agent",
+                "invoke",
+                r#"CounterAgent("c1")"#,
+                "increment",
+                "--expected-fingerprint",
+                "not-a-uuid",
+            ])
+            .is_err()
+        );
     }
 }
