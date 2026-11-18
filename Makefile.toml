@@ -68,7 +68,7 @@ WORKER_TEST_THREAD_OPTS = ""
 CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
 CI = "true"
-# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
+# CARGO_LOG="cargo::compiler::fingerprint=trace"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -871,7 +871,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_postgres" -- --nocapture --test-threads=2 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group3]
@@ -917,7 +917,7 @@ script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
-# CI runs the sequential sharding suite as two jobs (see the `it` matrix in ci.yaml): the
+# Main validation runs the sequential sharding suite as two tasks: the
 # coordinated scenarios and everything else. Together they cover exactly `integration-tests-group6`.
 [tasks.integration-tests-group6-coordinated]
 description = "Runs integration tests (group 6/11 - sharding, coordinated scenarios only)"
@@ -1016,7 +1016,7 @@ description = "Runs all CLI integration tests with the dev-release golem binary"
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
-# it-cli CI shards, split by test-r tags (see the it-cli matrix in ci.yaml and the `tag_suite!`
+# CLI integration shards, split by test-r tags (see Main validation's CLI tasks and the `tag_suite!`
 # and `#[tag]` declarations under cli/golem-cli/tests). Shards that are a subset of a module-level
 # tag use `--skip` on the more specific tag so every test is in exactly one shard.
 [tasks.cli-integration-tests-agents]
