@@ -8171,6 +8171,7 @@ async fn p2_and_p3_environment_replay_uses_the_recorded_filtered_result(
     .await
 }
 
+mod dns_records;
 mod moonbit;
 mod socket_policy;
 

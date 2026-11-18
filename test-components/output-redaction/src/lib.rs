@@ -601,11 +601,13 @@ mod tests {
         Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "fixture".to_string(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: vec![],
                     body: Some(CommandBody {

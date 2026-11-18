@@ -193,7 +193,7 @@ pub mod bindings {
             pub use crate::schema::tool::wit::wire as common;
         }
 
-        pub use crate::raw_bindings::golem::{rdbms, websocket};
+        pub use crate::raw_bindings::golem::{network, rdbms, websocket};
     }
 }
 

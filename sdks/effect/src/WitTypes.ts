@@ -361,7 +361,17 @@ export interface DiscriminatedUnionBranch<S extends Schema.Top = Schema.Top> {
   readonly discriminator: DiscriminatorRule
 }
 
-const native = <A>(guard: (u: unknown) => u is A, node: WitSchemaNode) =>
+declare const wireKind: unique symbol
+
+/** Phantom wire kind retained by Golem schema helpers. @since 1.6.0 @category models */
+export interface WitSchemaKind<Kind extends string> {
+  readonly [wireKind]?: Kind
+}
+
+const native = <A, const Node extends WitSchemaNode>(
+  guard: (u: unknown) => u is A,
+  node: Node,
+): Schema.declare<A> & WitSchemaKind<Node["tag"]> =>
   Schema.declare(guard).pipe(Schema.annotate({ [witSchemaNodeAnnotationKey]: node }))
 
 /** Attach schema-model metadata to any Effect Schema. @since 1.6.0 @category annotations */
@@ -371,7 +381,7 @@ export const metadata =
     self.pipe(Schema.annotate({ [witMetadataAnnotationKey]: value })) as S
 
 /** Rich text schema. @since 1.6.0 @category schemas */
-export const Text = (restrictions: TextRestrictions = {}) =>
+export const Text = (restrictions: TextRestrictions = {}): Schema.String & WitSchemaKind<"text"> =>
   Schema.String.pipe(
     Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "text", restrictions } }),
   )
@@ -381,7 +391,7 @@ export const Binary = (restrictions: BinaryRestrictions = {}) =>
   native((u): u is Uint8Array => u instanceof Uint8Array, { tag: "binary", restrictions })
 
 /** Filesystem path schema. @since 1.6.0 @category schemas */
-export const Path = (spec: Partial<PathSpec> = {}) =>
+export const Path = (spec: Partial<PathSpec> = {}): Schema.String & WitSchemaKind<"path"> =>
   Schema.String.pipe(
     Schema.annotate({
       [witSchemaNodeAnnotationKey]: {
@@ -392,7 +402,7 @@ export const Path = (spec: Partial<PathSpec> = {}) =>
   )
 
 /** URL schema. @since 1.6.0 @category schemas */
-export const Url = (restrictions: UrlRestrictions = {}) =>
+export const Url = (restrictions: UrlRestrictions = {}): Schema.String & WitSchemaKind<"url"> =>
   Schema.String.pipe(
     Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "url", restrictions } }),
   )
@@ -462,7 +472,14 @@ export const PolymorphicPermissionCard = native(
 )
 
 /** Agent stream capability schema. @since 1.6.0 @category schemas */
-export const AgentStream = <S extends Schema.Top>(element: S) =>
+export const AgentStream = <S extends Schema.Top>(
+  element: S,
+): Schema.declareConstructor<
+  Stream.Stream<S["Type"], StreamError>,
+  Stream.Stream<S["Type"], StreamError>,
+  readonly [S]
+> &
+  WitSchemaKind<"stream"> =>
   Schema.declareConstructor<Stream.Stream<S["Type"], StreamError>>()(
     [element],
     () => (u, ast) =>
@@ -474,7 +491,10 @@ export const AgentStream = <S extends Schema.Top>(element: S) =>
   )
 
 /** Fixed-length list schema. @since 1.6.0 @category schemas */
-export const FixedList = <S extends Schema.Top>(element: S, length: number) =>
+export const FixedList = <S extends Schema.Top>(
+  element: S,
+  length: number,
+): Schema.$Array<S> & WitSchemaKind<"fixed-list"> =>
   Schema.Array(element).pipe(
     Schema.check(
       Schema.makeFilter((a) => a.length === length || `Expected exactly ${length} items`),
@@ -487,7 +507,10 @@ export const QuotaToken = (options: { readonly resourceName?: string } = {}) =>
   quotaTokenSchema(options)
 
 /** Native schema-model map backed by a JavaScript Map. @since 1.6.0 @category schemas */
-export const Map = <K extends Schema.Top, V extends Schema.Top>(key: K, value: V) =>
+export const Map = <K extends Schema.Top, V extends Schema.Top>(
+  key: K,
+  value: V,
+): Schema.$ReadonlyMap<K, V> & WitSchemaKind<"map"> =>
   Schema.ReadonlyMap(key, value).pipe(
     Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "map" } }),
   )
@@ -501,7 +524,8 @@ export const Flags = <const Names extends readonly [string, ...string[]]>(names:
   ) as Schema.Codec<
     { readonly [K in keyof Names]: boolean },
     { readonly [K in keyof Names]: boolean }
-  >
+  > &
+    WitSchemaKind<"flags">
 
 /**
  * A closed union selected by explicit schema-model discriminator rules.
@@ -523,9 +547,13 @@ export const DiscriminatedUnion = <
     Branches[number]["schema"]["Encoded"],
     Branches[number]["schema"]["DecodingServices"],
     Branches[number]["schema"]["EncodingServices"]
-  >
+  > &
+    WitSchemaKind<"discriminated-union">
 
-const typedArraySchema = <T>(kind: WitTypedArrayKind, ctor: new (...args: any[]) => T) =>
+const typedArraySchema = <T>(
+  kind: WitTypedArrayKind,
+  ctor: new (...args: any[]) => T,
+): Schema.declare<T> & WitSchemaKind<"list"> =>
   Schema.declare((u): u is T => u instanceof ctor).pipe(
     Schema.annotate({ [witTypedArrayAnnotationKey]: kind }),
   )

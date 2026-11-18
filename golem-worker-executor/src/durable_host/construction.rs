@@ -346,6 +346,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }));
         let store_alive_guard = StoreAliveGuard::new(&runtime);
+        let tool_frontends = (runtime != OwnerRuntime::Agent)
+            .then(|| Arc::new(stream_transport::ToolFrontendScope::default()));
 
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
@@ -366,6 +368,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             producer_disposal_tasks: Some(crate::worker::tasks::NativeReconstructionTasks::new(
                 &worker.tasks,
             )?),
+            tool_frontends,
+            host_initiations: None,
             schema_producers: stream_outcome::ProducerOutcomeScope::new(worker.tasks.clone()),
             schema_output_tasks: Mutex::new(Some(
                 crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks)?,
@@ -579,6 +583,7 @@ impl PrivateDurableWorkerState {
             file_stream_pollables: HashSet::new(),
             tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
             resolved_names: Default::default(),
+            dns_resolver: None,
             open_tcp_input_streams: HashSet::new(),
             open_tcp_output_streams: HashSet::new(),
             p2_timer_deadlines: HashMap::new(),

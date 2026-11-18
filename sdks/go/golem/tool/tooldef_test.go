@@ -15,14 +15,18 @@
 package tool
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
+	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -280,6 +284,117 @@ func optionNames(os []toolCommon.OptionSpec) []string {
 
 func flagNames(fs []toolCommon.FlagSpec) []string {
 	return names(fs, func(f toolCommon.FlagSpec) string { return f.Long })
+}
+
+func TestHTTPReportDescriptorMatchesSharedFixture(t *testing.T) {
+	type Report struct{}
+	type ID struct{ ID string }
+	r, d := newToolRegistry(), newDefinitions()
+	report := defineToolInto[Report](r, d, "report", Spec{HTTP: &golem.Mount{Path: "/reports"}}, true)
+	report.Command[golem.Unit, golem.Unit]("generate", func(_ *golem.Unit, s *CommandSpec) { s.HTTP(golem.POST("/generate")) })
+	report.Command[ID, golem.Unit]("status", func(a *ID, s *CommandSpec) { s.Positional(&a.ID); s.HTTP(golem.GET("/status/{id}")) })
+	admin := report.Group("admin", golem.HTTP(golem.Prefix("/admin")))
+	admin.Command[ID, golem.Unit]("purge", func(a *ID, s *CommandSpec) { s.Positional(&a.ID); s.HTTP(golem.DELETE("/purge/{id}")) })
+	wire, ok := d.buildTool(report.entry)
+	if !ok {
+		t.Fatal(engine.AllErrors(d.Errs))
+	}
+	path := func(segments []coreHTTP.PathSegment) string {
+		parts := make([]string, len(segments))
+		for i, segment := range segments {
+			switch segment.Tag() {
+			case coreHTTP.PathSegmentLiteral:
+				parts[i] = segment.Literal()
+			case coreHTTP.PathSegmentPathVariable:
+				parts[i] = "{" + segment.PathVariable().VariableName + "}"
+			case coreHTTP.PathSegmentRemainingPathVariable:
+				parts[i] = "{+" + segment.RemainingPathVariable().VariableName + "}"
+			}
+		}
+		return "/" + strings.Join(parts, "/")
+	}
+	commands := []map[string]any{}
+	var walk func(int32, string)
+	walk = func(index int32, parent string) {
+		node := wire.Commands.Nodes[index]
+		name := node.Name
+		if parent != "" {
+			name = parent + "." + name
+		}
+		declaration := node.Http.Some()
+		if declaration.Tag() == toolCommon.CommandHttpPrefix {
+			commands = append(commands, map[string]any{"command": name, "prefix": path(declaration.Prefix().PathSuffix)})
+		} else {
+			endpoint := declaration.Endpoint()
+			method := map[uint8]string{coreHTTP.HttpMethodPost: "POST", coreHTTP.HttpMethodGet: "GET", coreHTTP.HttpMethodDelete: "DELETE"}[endpoint.HttpMethod.Tag()]
+			commands = append(commands, map[string]any{"command": name, "method": method, "suffix": path(endpoint.PathSuffix)})
+		}
+		for _, child := range node.Subcommands {
+			walk(child, name)
+		}
+	}
+	for _, child := range wire.Commands.Nodes[0].Subcommands {
+		walk(child, "")
+	}
+	got := map[string]any{"mount": path(wire.HttpMount.Some().PathPrefix), "commands": commands}
+	data, err := os.ReadFile("../../../../test-data/tool-http-report.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected any
+	if err := json.Unmarshal(data, &expected); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual any
+	if err := json.Unmarshal(encoded, &actual); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("HTTP report: %s; want %s", encoded, data)
+	}
+}
+
+func TestHTTPOptionsSurviveAuthoringToWire(t *testing.T) {
+	type Options struct{}
+	type Args struct{ Format, Token string }
+	r, d := newToolRegistry(), newDefinitions()
+	tool := defineToolInto[Options](r, d, "options", Spec{HTTP: &golem.Mount{Path: "/options"}}, true)
+	tool.Command[Args, golem.Unit]("run", func(a *Args, s *CommandSpec) {
+		s.Positional(&a.Format)
+		s.Positional(&a.Token)
+		s.HTTP(golem.POST("/run?format={format}", golem.Header("X-Token", "token"),
+			golem.RouteID("custom"), golem.ResponseHeaders(golem.FileResponseHeader{Name: "X-Result", Value: "ready"}),
+			golem.WithRouteMode(golem.RouteDurableStreams), golem.DurableStreams(golem.StreamRoute{
+				Slots: []golem.StreamSlot{
+					{Input: "stdin", Name: "upload", ContentType: "text/plain"},
+					{Output: "stdout", Name: "download", ContentType: "text/csv"},
+				}, MaxReadersPerStream: 7, MaxAppendsPerSecond: 11,
+			})))
+	})
+	wire, ok := d.buildTool(tool.entry)
+	if !ok {
+		t.Fatal(engine.AllErrors(d.Errs))
+	}
+	ep := wire.Commands.Nodes[1].Http.Some().Endpoint()
+	if ep.RouteId.Some() != "custom" || ep.Mode.Some() != coreHTTP.HttpRouteModeDurableStreams {
+		t.Fatalf("endpoint identity/mode: %+v", ep)
+	}
+	if !reflect.DeepEqual(ep.QueryVars, []coreHTTP.QueryVariable{{QueryParamName: "format", VariableName: "format"}}) ||
+		!reflect.DeepEqual(ep.HeaderVars, []coreHTTP.HeaderVariable{{HeaderName: "X-Token", VariableName: "token"}}) ||
+		!reflect.DeepEqual(ep.ResponseHeaders, []coreHTTP.FileResponseHeader{{Name: "X-Result", Value: "ready"}}) {
+		t.Fatalf("endpoint bindings/headers: %+v", ep)
+	}
+	streams := ep.DurableStreams.Some()
+	if len(streams.Slots) != 2 || streams.Slots[0].Source.Input() != "stdin" || streams.Slots[1].Source.Output() != "stdout" ||
+		streams.Slots[0].Name.Some() != "upload" || streams.Slots[1].Name.Some() != "download" ||
+		streams.Slots[0].ContentType.Some() != "text/plain" || streams.Slots[1].ContentType.Some() != "text/csv" ||
+		streams.Load.Some().MaxConcurrentReadersPerStream.Some() != 7 || streams.Load.Some().MaxAppendRequestsPerSecondPerStream.Some() != 11 {
+		t.Fatalf("Durable Streams options: %+v", streams)
+	}
 }
 
 func TestToolMetadataDescribesTheCommandTree(t *testing.T) {

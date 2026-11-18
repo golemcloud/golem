@@ -424,6 +424,7 @@ dependencies = [
  "bytes",
  "chrono",
  "golem-schema-derive",
+ "http",
  "serde",
  "serde_json",
  "thiserror",

@@ -451,6 +451,26 @@ fn file_response_headers_validate_names_values_duplicates_and_ownership() {
             name: "Pragma".into(),
             value: "no-cache".into(),
         }],
+        vec![FileResponseHeader {
+            name: "GoLeM-InVoCaTiOn-Id".into(),
+            value: "id".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Golem-Environment-Id".into(),
+            value: "id".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Golem-Token".into(),
+            value: "token".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Set-Cookie".into(),
+            value: "session=value".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "ACCESS-CONTROL-custom".into(),
+            value: "value".into(),
+        }],
         vec![
             FileResponseHeader {
                 name: "X-Policy".into(),

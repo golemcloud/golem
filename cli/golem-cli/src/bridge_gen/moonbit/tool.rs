@@ -1033,6 +1033,7 @@ mod tests {
             name: name.to_string(),
             aliases: vec![],
             doc: doc(name),
+            http: None,
             globals: Globals::default(),
             subcommands: vec![],
             body: None,
@@ -1182,6 +1183,7 @@ mod tests {
         Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![
                     root,
@@ -1292,6 +1294,7 @@ mod tests {
         let tool = Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1321,6 +1324,7 @@ mod tests {
         let tool = Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1352,6 +1356,7 @@ mod tests {
         let tool = Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![
@@ -1407,6 +1412,7 @@ mod tests {
         let tool = Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: vec![

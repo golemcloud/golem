@@ -1492,10 +1492,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         drop(instance_guard);
 
-        let mut wallet = receiver.await.unwrap()?;
-        let revoked_cards = self
-            .get_last_known_status()
+        // A stop answers or keeps a queued read. Its reply is dropped only when the invocation
+        // loop is dropped at executor shutdown, or unwinds from a panic, whose error a retry then
+        // gets. The caller retries the read on the agent's next owner.
+        let mut wallet = receiver
             .await
+            .map_err(|_| WorkerExecutorError::ShardingNotReady)??;
+        // The guard is dropped, so a deletion can stop the state actor before this read. A stopped
+        // actor that no deletion of this worker and no lost shard explains is retried in the same
+        // way: the executor is shutting down, or a deletion through a newer worker of the same
+        // oplog stopped it, and the retry then finds the agent missing.
+        let status = match self.try_get_last_known_status().await {
+            Err(WorkerExecutorError::Runtime { .. }) => Err(WorkerExecutorError::ShardingNotReady),
+            status => status,
+        }?;
+        let revoked_cards = status
             .pending_card_events
             .iter()
             .filter_map(|pending_event| match &pending_event.event {

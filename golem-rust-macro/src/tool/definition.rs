@@ -41,7 +41,14 @@ use syn::{
     TraitItem, Type,
 };
 
-const HELPER_ATTRS: [&str; 5] = ["arg", "command", "constraint", "result", "example"];
+const HELPER_ATTRS: [&str; 6] = [
+    "arg",
+    "command",
+    "constraint",
+    "result",
+    "example",
+    "endpoint",
+];
 
 pub fn tool_definition_impl(
     attrs: TokenStream,
@@ -87,6 +94,7 @@ pub fn tool_definition_impl(
     };
     ir.requires_filesystem = options.requires_filesystem;
     ir.aliases = options.aliases;
+    ir.mount = options.mount;
 
     // Metadata synthesis: the hidden free descriptor function that builds the
     // runtime `ExtendedToolType`. It is emitted as a module-level free function
@@ -931,6 +939,7 @@ pub(crate) fn build_tool_definition_ir(
         trait_ident: item_trait.ident.clone(),
         version,
         requires_filesystem: false,
+        mount: None,
         aliases: Vec::new(),
         doc: parse_doc_full(&item_trait.attrs)?,
         commands,
@@ -943,11 +952,20 @@ fn build_command_ir(method: &syn::TraitItemFn) -> Result<CommandIr, Error> {
     let mut args = Vec::new();
     let mut constraints = Vec::new();
     let mut result = None;
+    let mut http = None;
 
     for attr in &method.attrs {
         let path = attr.path();
         if path.is_ident("command") {
             parse_command_into(attr, &mut command_attr, &mut command_seen)?;
+        } else if path.is_ident("endpoint") {
+            if http.replace(attr.clone()).is_some() {
+                return Err(Error::new_spanned(
+                    attr,
+                    "a command may have at most one HTTP declaration",
+                ));
+            }
+            crate::tool::http::command_http_tokens(Some(attr), &method.sig.ident.to_string())?;
         } else if path.is_ident("arg") {
             args.push(parse_arg(attr)?);
         } else if path.is_ident("constraint") {
@@ -972,6 +990,7 @@ fn build_command_ir(method: &syn::TraitItemFn) -> Result<CommandIr, Error> {
         aliases: command_attr.aliases,
         name_override: command_attr.name_override,
         annotations: command_attr.annotations,
+        http,
         subtree: command_attr.subtree,
         is_async: method.sig.asyncness.is_some(),
         params,
@@ -1119,6 +1138,7 @@ pub(crate) fn strip_helper_attrs(item_trait: &mut ItemTrait) {
 pub(crate) struct ToolDefinitionOptions {
     pub version: Option<String>,
     pub requires_filesystem: bool,
+    pub mount: Option<String>,
     pub aliases: Vec<String>,
 }
 
@@ -1151,10 +1171,10 @@ pub(crate) fn parse_tool_definition_options(
                 ));
             }
         };
-        if key != "version" && key != "requires_filesystem" && key != "aliases" {
+        if key != "version" && key != "requires_filesystem" && key != "aliases" && key != "mount" {
             return Err(Error::new(
                 key.span(),
-                "the only supported #[tool_definition] arguments are `version`, `requires_filesystem`, and `aliases`",
+                "the only supported #[tool_definition] arguments are `version`, `requires_filesystem`, `aliases`, and `mount`",
             ));
         }
         seen.insert(&key)?;
@@ -1173,6 +1193,9 @@ pub(crate) fn parse_tool_definition_options(
                 }),
             ) => options.requires_filesystem = value.value,
             ("aliases", value) => options.aliases = expr_str_array(value, "aliases")?,
+            ("mount", value) => {
+                options.mount = Some(crate::tool::helpers::expr_str(value, "mount")?)
+            }
             ("requires_filesystem", other) => {
                 return Err(Error::new(
                     other.span(),

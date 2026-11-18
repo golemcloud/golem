@@ -4372,6 +4372,10 @@ async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_noni
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = || TestExecutorOverrides {
         environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(|config| {
+            config.limits.live_stream_event_broadcast_capacity =
+                std::num::NonZeroUsize::new(1).unwrap();
+        })),
         ..Default::default()
     };
     let executor = start_with_overrides(deps, &context, overrides()).await?;
@@ -9911,6 +9915,7 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
     );
     let mut completion =
         executor.gate_next_live_entity_body_completion(&cancelled_worker, "capable-streaming");
+    let mut output = executor.capture_output(&cancelled_worker).await?;
     let invoke = executor.invoke_and_await_agent(
         &caller_component,
         &cancelled_agent,
@@ -9936,7 +9941,6 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
                 _ => None,
             })
             .expect("capable tool entity Start");
-        let cleanup = executor.probe_entity_settlement_access(&cancelled_worker, entity_start);
         executor
             .complete_promise(
                 &executor
@@ -9945,9 +9949,20 @@ async fn capable_streams_enforce_completion_limits_without_leaks(
                 Vec::new(),
             )
             .await?;
+        let dropped = async {
+            while let Some(event) = output.recv().await {
+                if matches!(event.event,
+                    Some(golem_api_grpc::proto::golem::worker::log_event::Event::Stdout(log))
+                        if log.message.contains("exhaustion-write-dropped"))
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+            anyhow::bail!("the guest log stream ended before the write was dropped")
+        };
         tokio::select! {
-            result = cleanup => {
-                result?;
+            result = tokio::time::timeout(Duration::from_secs(10), dropped) => {
+                result??;
                 release.send(()).expect("dropped write retains its End receipt");
             }
             _ = completion.entered() => {
@@ -14718,6 +14733,9 @@ async fn typescript_generated_client_streams_live(
     );
 
     let agent_id = agent_id!("TsToolStreamingCaller", "ts-live");
+    let worker = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
     let evidence: TsStreamEvidence = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -14729,6 +14747,51 @@ async fn typescript_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(evidence.output, b"ts-marker:typescript-live");
     assert_eq!(evidence.bytes_read, 15);
+
+    for await_timer in [false, true] {
+        let evidence: TsStreamEvidence = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id,
+                "timerExportBoundary",
+                data_value!(await_timer),
+            )
+            .await?
+            .into_typed()?;
+        assert_eq!(evidence.output, b"ts-before-return:");
+        assert_eq!(evidence.bytes_read, 0);
+        let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+        let promises = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::api::create_promise" =>
+                {
+                    Some((entry.oplog_index, start.parent_start_index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            promises.len(),
+            usize::from(await_timer) + 1,
+            "the JavaScript binding drains referenced timers before export publication"
+        );
+        let (promise, parent) = promises.last().unwrap();
+        let parent = parent.expect("the timer belongs to its tool entity");
+        assert!(oplog.iter().any(|entry| entry.oplog_index == parent
+            && matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::entity::invoke")));
+        let promise_end = oplog
+            .iter()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == *promise))
+            .expect("the timer creates its promise successfully");
+        let entity_end = oplog
+            .iter()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == parent))
+            .expect("the tool returns successfully");
+        assert!(promise_end.oplog_index < entity_end.oplog_index);
+    }
 
     let failure: String = executor
         .invoke_and_await_agent(

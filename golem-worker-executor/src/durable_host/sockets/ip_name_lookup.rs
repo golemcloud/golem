@@ -18,9 +18,7 @@ use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
-use crate::durable_host::durability::{
-    CustomInvocationContext, HostFailureKind, InternalRetryResult,
-};
+use crate::durable_host::durability::{GuestTaskContext, HostFailureKind, InternalRetryResult};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
@@ -72,7 +70,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
         let custom_invocation =
-            wasmtime::component::current_guest_task_context::<CustomInvocationContext>()
+            wasmtime::component::current_guest_task_context::<GuestTaskContext>()
                 .map_err(SocketError::trap)?;
         // `ReadRemote` with a one-shot/loop in-function retry. The eager `Start` captures the
         // request name; on replay a committed `Start` without its `End` is re-executable (read), so

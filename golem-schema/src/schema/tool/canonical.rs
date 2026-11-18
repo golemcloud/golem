@@ -777,6 +777,7 @@ mod tests {
             name: name.to_string(),
             aliases: Vec::new(),
             doc: Doc::default(),
+            http: None,
             globals: Globals::default(),
             subcommands: Vec::new(),
             body: None,
@@ -907,6 +908,7 @@ mod tests {
         Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![root, replace],
             },
@@ -1043,6 +1045,7 @@ mod tests {
         let tool = Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph::empty(),
         };
@@ -1070,6 +1073,7 @@ mod tests {
         let tool = Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![root] },
             schema: SchemaGraph {
                 defs: Vec::new(),
