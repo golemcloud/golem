@@ -61,7 +61,7 @@ use wasmtime::component::{
 };
 use wasmtime_wasi::p3::bindings::sockets::types;
 use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
-use wasmtime_wasi::sockets::{TcpSocket, WasiSockets, WasiSocketsView};
+use wasmtime_wasi::sockets::{TcpSendStream, TcpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
 
@@ -487,6 +487,16 @@ enum TcpSendReply {
 struct TcpSendDemand {
     bytes: Bytes,
     reply: oneshot::Sender<TcpSendReply>,
+    /// Resolves when the guest cancels the write or drops its writer. A live write that has
+    /// not taken a byte by then stops and is recorded as accepting none.
+    cancel: oneshot::Receiver<()>,
+}
+
+/// A guest write whose `send-chunk` child the durable task is recording.
+struct PendingTcpSendWrite {
+    reply: oneshot::Receiver<TcpSendReply>,
+    /// Taken when the guest cancels the write.
+    cancel: Option<oneshot::Sender<()>>,
 }
 
 /// Consumer of the guest's outgoing byte stream.
@@ -495,10 +505,12 @@ struct TcpSendDemand {
 /// to the spawned [`TcpSocketSendTask`], which records it as one `send-chunk` child and, only
 /// when the send started live in this Store, writes it to the native socket. The write stays
 /// pending until the task replies, so the guest observes exactly the recorded byte count, live
-/// and on replay. Dropping the consumer (the guest closing its writer) ends the demand stream.
+/// and on replay. A guest cancel asks the task to stop the native write; the write still
+/// completes only with its recorded count, and reports `Cancelled` when that count is zero.
+/// Dropping the consumer (the guest closing its writer) ends the demand stream.
 struct DurableTcpSendConsumer {
     demand_tx: mpsc::Sender<TcpSendDemand>,
-    pending: Option<oneshot::Receiver<TcpSendReply>>,
+    pending: Option<PendingTcpSendWrite>,
     finished: bool,
 }
 
@@ -527,15 +539,28 @@ impl<D> StreamConsumer<D> for DurableTcpSendConsumer {
         }
         let mut src = src.as_direct(store);
         loop {
-            if let Some(rx) = self.pending.as_mut() {
-                // A write in flight is being recorded as a child: wait for its reply even when
-                // the guest cancels, so the recorded count always reaches the guest.
-                let reply = match Pin::new(rx).poll(cx) {
+            if let Some(pending) = self.pending.as_mut() {
+                // A write in flight is being recorded as a child. A cancel stops its native
+                // write, but the guest still waits for the recorded count.
+                if finish && let Some(cancel) = pending.cancel.take() {
+                    let _ = cancel.send(());
+                }
+                let reply = match Pin::new(&mut pending.reply).poll(cx) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(reply) => reply,
                 };
+                let cancelled = pending.cancel.is_none();
                 self.pending = None;
                 return match reply {
+                    Ok(TcpSendReply::Accepted(0)) if cancelled => {
+                        Poll::Ready(Ok(StreamResult::Cancelled))
+                    }
+                    Ok(TcpSendReply::Accepted(0)) => {
+                        self.finished = true;
+                        Poll::Ready(Err(wasmtime::Error::msg(
+                            "tcp send recorded no accepted bytes for a write the guest did not cancel",
+                        )))
+                    }
                     Ok(TcpSendReply::Accepted(count)) => {
                         let count = count as usize;
                         if count > src.remaining().len() {
@@ -582,10 +607,15 @@ impl<D> StreamConsumer<D> for DurableTcpSendConsumer {
                 return Poll::Ready(Ok(StreamResult::Cancelled));
             }
             let bytes = Bytes::copy_from_slice(&bytes[..bytes.len().min(TCP_SEND_CHUNK_LIMIT)]);
-            let (reply, rx) = oneshot::channel();
+            let (reply, reply_rx) = oneshot::channel();
+            let (cancel_tx, cancel) = oneshot::channel();
             if self
                 .demand_tx
-                .try_send(TcpSendDemand { bytes, reply })
+                .try_send(TcpSendDemand {
+                    bytes,
+                    reply,
+                    cancel,
+                })
                 .is_err()
             {
                 // The consumer keeps at most one demand in flight, so the channel is never full;
@@ -593,56 +623,10 @@ impl<D> StreamConsumer<D> for DurableTcpSendConsumer {
                 self.finished = true;
                 return Poll::Ready(Ok(StreamResult::Dropped));
             }
-            self.pending = Some(rx);
-        }
-    }
-}
-
-/// One chunk for the native sink, and the signal that the native sink has taken all of it.
-type TcpSendFeedItem = (Bytes, oneshot::Sender<()>);
-
-/// Host producer of the stream that the native socket's send consumes.
-///
-/// The runtime hands a whole chunk to the native consumer and calls `poll_produce` again only
-/// after the consumer has taken all of it, so that next call acknowledges the previous chunk.
-/// If the native write fails, the transfer ends and the acknowledgement is dropped instead.
-struct TcpSendFeedProducer {
-    chunks: mpsc::Receiver<TcpSendFeedItem>,
-    written: Option<oneshot::Sender<()>>,
-}
-
-impl TcpSendFeedProducer {
-    fn new(chunks: mpsc::Receiver<TcpSendFeedItem>) -> Self {
-        Self {
-            chunks,
-            written: None,
-        }
-    }
-}
-
-impl<D> StreamProducer<D> for TcpSendFeedProducer {
-    type Item = u8;
-    type Buffer = Bytes;
-
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        _store: StoreContextMut<'a, D>,
-        mut dst: Destination<'a, Self::Item, Self::Buffer>,
-        finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
-        if let Some(written) = self.written.take() {
-            let _ = written.send(());
-        }
-        match self.chunks.poll_recv(cx) {
-            Poll::Ready(Some((bytes, written))) => {
-                self.written = Some(written);
-                dst.set_buffer(bytes);
-                Poll::Ready(Ok(StreamResult::Completed))
-            }
-            Poll::Ready(None) => Poll::Ready(Ok(StreamResult::Dropped)),
-            Poll::Pending if finish => Poll::Ready(Ok(StreamResult::Cancelled)),
-            Poll::Pending => Poll::Pending,
+            self.pending = Some(PendingTcpSendWrite {
+                reply: reply_rx,
+                cancel: Some(cancel_tx),
+            });
         }
     }
 }
@@ -1189,52 +1173,45 @@ where
     }
 }
 
-/// The native socket's send stream, owned by a send that started live in this Store.
-struct TcpSendSink {
-    chunks: mpsc::Sender<TcpSendFeedItem>,
-    result: oneshot::Receiver<Result<(), types::ErrorCode>>,
-}
+/// The native socket's send stream, owned by a send that started live in this Store. An
+/// `Err` keeps the error of a native stream that could not be taken; every write reports it.
+struct TcpSendSink(Result<TcpSendStream, types::ErrorCode>);
 
 impl TcpSendSink {
-    /// Takes the native send stream of `socket`, fed by an empty host stream. The native
-    /// stream owns the connection from then on, so the guest may drop the socket. No byte
-    /// reaches the socket until the send task hands its first chunk to the feed.
-    async fn take<Ctx, U>(
+    /// Takes the native send stream of `socket`. The native stream owns the connection from
+    /// then on, so the guest may drop the socket. No byte reaches the socket until the send
+    /// task writes its first chunk.
+    fn take<Ctx, U>(
         accessor: &Accessor<U, DurableP3<Ctx>>,
-        socket: Resource<TcpSocket>,
+        socket: &Resource<TcpSocket>,
     ) -> wasmtime::Result<Self>
     where
         Ctx: WorkerCtx,
         U: Send + 'static,
     {
-        let sockets = accessor.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-        let (chunks, chunk_rx) = mpsc::channel::<TcpSendFeedItem>(1);
-        let (result_tx, result) = oneshot::channel();
-        let feed = accessor
-            .with(|mut store| StreamReader::new(&mut store, TcpSendFeedProducer::new(chunk_rx)))?;
-        let native_result =
-            <WasiSockets as types::HostTcpSocketWithStore<U>>::send(&sockets, socket, feed).await?;
         accessor.with(|mut store| {
-            native_result.pipe(&mut store, TcpSocketResultConsumer::new(result_tx))
-        })?;
-        Ok(Self { chunks, result })
+            let view = wasi_sockets_view::<Ctx, U>(store.data_mut());
+            let socket = view.table.get_mut(socket)?;
+            Ok(Self(socket.take_send_stream().map_err(Into::into)))
+        })
     }
 
-    /// The native outcome of a failed write. A sink that closed without an error still lost
-    /// the bytes it did not take.
-    async fn failure(self) -> types::ErrorCode {
-        match self.result.await {
-            Ok(Err(code)) => code,
-            Ok(Ok(())) | Err(_) => types::ErrorCode::ConnectionBroken,
+    /// Writes a prefix of `bytes` and returns its length. A write that is still pending has
+    /// written nothing, so dropping this future cancels it without a partial effect.
+    async fn write(&mut self, bytes: &[u8]) -> Result<u64, types::ErrorCode> {
+        match &mut self.0 {
+            Ok(stream) => std::future::poll_fn(|cx| stream.poll_write(cx, bytes))
+                .await
+                .map(|count| count as u64)
+                .map_err(Into::into),
+            Err(code) => Err(code.clone()),
         }
     }
 
-    /// Closes the native send stream (a write shutdown) and returns its final result.
-    async fn close(self) -> Result<(), types::ErrorCode> {
-        drop(self.chunks);
-        self.result
-            .await
-            .unwrap_or(Err(types::ErrorCode::ConnectionBroken))
+    /// Drops the native send stream, which shuts the write side down, and returns the result
+    /// of the send.
+    fn close(self) -> Result<(), types::ErrorCode> {
+        self.0.map(drop)
     }
 }
 
@@ -1306,7 +1283,11 @@ where
         let Some(demand) = stream.next_demand(&activity).await else {
             break;
         };
-        let TcpSendDemand { bytes, reply } = demand;
+        let TcpSendDemand {
+            bytes,
+            reply,
+            mut cancel,
+        } = demand;
 
         let item = match stream
             .next(
@@ -1340,27 +1321,17 @@ where
                 let result = match sink.take() {
                     // No native sink: the connection did not survive into this Store.
                     None => Err(types::ErrorCode::ConnectionBroken),
-                    Some(live) => {
-                        let len = bytes.len() as u64;
-                        let (written_tx, written_rx) = oneshot::channel();
+                    Some(mut live) => {
                         let interrupt = accessor.with(|mut access| {
                             durable_worker_ctx::<Ctx, U>(access.data_mut())
                                 .create_interrupt_signal()
                         });
-                        let chunks = live.chunks.clone();
-                        let write = async move {
-                            chunks.send((bytes, written_tx)).await.is_ok()
-                                && written_rx.await.is_ok()
-                        };
-                        tokio::select! {
-                            written = write => {
-                                if written {
-                                    sink = Some(live);
-                                    Ok(len)
-                                } else {
-                                    Err(live.failure().await)
-                                }
-                            }
+                        let written = tokio::select! {
+                            biased;
+                            written = live.write(&bytes) => written,
+                            // The guest cancelled the write, or dropped its writer, before the
+                            // socket took a byte: the write accepts none.
+                            _ = &mut cancel => Ok(0),
                             kind = interrupt => {
                                 // Leave both Starts incomplete; recovery completes them with
                                 // connection loss and never writes the chunk again.
@@ -1368,7 +1339,12 @@ where
                                 stream.abandon_for_trap();
                                 return Err(wasmtime::Error::from_anyhow(kind.into()));
                             }
+                        };
+                        // A failed native stream is not used again.
+                        if written.is_ok() {
+                            sink = Some(live);
                         }
+                        written
                     }
                 };
                 let delivery = match stream
@@ -1427,7 +1403,7 @@ where
 
     // The guest closed its writer, or a write failed: shut the native send stream down.
     if let Some(live) = sink.take() {
-        terminal = live.close().await;
+        terminal = live.close();
     }
 
     let parent_trap_context = stream.trap_context();
@@ -2249,7 +2225,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 let live = accessor
                     .with(|mut store| durable_worker_ctx::<Ctx, U>(store.data_mut()).is_live());
                 let sink = if live {
-                    Some(TcpSendSink::take::<Ctx, U>(accessor, socket).await?)
+                    Some(TcpSendSink::take::<Ctx, U>(accessor, &socket)?)
                 } else {
                     None
                 };

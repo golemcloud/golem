@@ -1365,6 +1365,105 @@ async fn p3_tcp_send_survives_dropping_the_socket(
     session.finish().await
 }
 
+/// A peer that does not read holds back the send, so a guest write stays pending. The guest
+/// cancels it: the native write stops without a partial effect, its `send-chunk` child records
+/// no accepted bytes, and the cancel completes instead of waiting for the peer. The peer later
+/// reads exactly the accepted bytes, and the send replays after a restart without reconnecting.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_cancels_a_write_the_peer_holds_back(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let listener = tokio::net::TcpSocket::new_v4()?;
+    listener.set_recv_buffer_size(4096)?;
+    listener.bind("127.0.0.1:0".parse()?)?;
+    let listener = listener.listen(1)?;
+    let port = listener.local_addr()?.port();
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-held-back",
+    )
+    .await?;
+    let connect =
+        session.call::<Result<(), String>>("p3_tcp_connect", data_value!("a".to_string(), port));
+    let ((mut peer, _), connected) = tokio::try_join!(
+        async { Ok::<_, anyhow::Error>(listener.accept().await?) },
+        connect
+    )?;
+    assert_eq!(connected, Ok(()));
+
+    let sent: Result<(u64, String, Result<(), String>), String> = tokio::time::timeout(
+        Duration::from_secs(60),
+        session.call(
+            "p3_tcp_send_until_held_back",
+            data_value!("a".to_string(), 65536u32, 500u64),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the cancelled write waited for the peer"))??;
+    let (accepted, ending, result) = sent.map_err(anyhow::Error::msg)?;
+    assert_eq!(ending, "cancelled");
+    assert_eq!(result, Ok(()));
+    assert!(accepted > 0, "the peer's buffers take the first writes");
+
+    let mut received = Vec::new();
+    tokio::time::timeout(Duration::from_secs(30), peer.read_to_end(&mut received)).await??;
+    assert_eq!(
+        received.len() as u64,
+        accepted,
+        "the peer gets exactly the accepted bytes"
+    );
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let chunks = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "sockets::types::tcp-socket::send-chunk")
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert!(
+        chunks.len() >= 2,
+        "the accepted writes and the cancelled one are recorded"
+    );
+    for start in &chunks {
+        assert!(
+            oplog.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == *start)),
+            "the send-chunk child at {start} has a terminal"
+        );
+    }
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the cancelled write failed"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .is_err(),
+        "replay does not reconnect"
+    );
+    session.finish().await
+}
+
 /// The guest drops a P3 TCP socket right after it opens the receive stream, before the receive
 /// task runs. The stream owns the connection, so it still delivers the peer's bytes, and the
 /// completed receive replays without the dropped socket.

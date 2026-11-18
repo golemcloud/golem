@@ -190,6 +190,16 @@ pub trait SocketSession {
         pause_ms: u64,
         second: Vec<u8>,
     ) -> Result<(), String>;
+    /// Opens the send stream of the P3 TCP socket in `slot` and writes `chunk` bytes at a time
+    /// until a write does not complete within `wait_ms`, then cancels that write and closes the
+    /// stream. Returns the bytes the host accepted, how the cancelled write ended, and the
+    /// result of the send.
+    async fn p3_tcp_send_until_held_back(
+        &self,
+        slot: String,
+        chunk: u32,
+        wait_ms: u64,
+    ) -> Result<(u64, String, Result<(), String>), String>;
     /// Opens the send stream of the P3 TCP socket in `slot`, drops the socket before the first
     /// write, then sends `data` on the stream, closes it and returns its result.
     async fn p3_tcp_send_after_dropping_socket(
@@ -452,6 +462,62 @@ impl SocketSession for SocketSessionImpl {
         };
         self.insert(slot, value);
         result
+    }
+
+    async fn p3_tcp_send_until_held_back(
+        &self,
+        slot: String,
+        chunk: u32,
+        wait_ms: u64,
+    ) -> Result<(u64, String, Result<(), String>), String> {
+        use std::future::{Future, poll_fn};
+        use std::pin::pin;
+        use std::task::Poll;
+
+        let value = self
+            .slots
+            .borrow_mut()
+            .remove(&slot)
+            .ok_or_else(|| format!("slot {slot} is empty"))?;
+        let Slot::P3Tcp { socket, .. } = &value else {
+            self.insert(slot.clone(), value);
+            return Err(format!("slot {slot} holds no P3 TCP socket"));
+        };
+        let (mut writer, reader) = p3::wit_stream::new::<u8>();
+        let result = socket.send(reader);
+        let mut accepted = 0u64;
+        let ending = loop {
+            let mut write = pin!(writer.write(vec![b'x'; chunk as usize]));
+            let mut timer = pin!(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                wait_ms * 1_000_000
+            ));
+            let written = poll_fn(|cx| {
+                if let Poll::Ready((result, _)) = write.as_mut().poll(cx) {
+                    return Poll::Ready(Some(result));
+                }
+                timer.as_mut().poll(cx).map(|_| None)
+            })
+            .await;
+            match written {
+                Some(p3::StreamResult::Complete(count)) => accepted += count as u64,
+                Some(other) => break format!("write ended with {other:?}"),
+                None => {
+                    let (result, _) = write.as_mut().cancel();
+                    break match result {
+                        p3::StreamResult::Complete(count) => {
+                            accepted += count as u64;
+                            format!("cancel lost the race: {count} bytes")
+                        }
+                        p3::StreamResult::Cancelled => "cancelled".to_string(),
+                        p3::StreamResult::Dropped => "dropped".to_string(),
+                    };
+                }
+            }
+        };
+        drop(writer);
+        let sent = result.await.map_err(error);
+        self.insert(slot, value);
+        Ok((accepted, ending, sent))
     }
 
     async fn p3_tcp_send_after_dropping_socket(
