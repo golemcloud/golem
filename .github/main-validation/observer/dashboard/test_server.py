@@ -2,6 +2,7 @@
 
 import copy
 import contextlib
+import gzip
 import http.client
 import io
 import json
@@ -353,6 +354,14 @@ class DashboardTest(unittest.TestCase):
         self.run["raw_logs"] = "not public"
         self.run["environment"] = {"SECRET": "not public"}
         self.run["url"] = "javascript:alert(1)"
+        self.run["evidence"] = {"tasks": [{"id": "cli--core", "exit_code": 101,
+            "log": "logs/cli--core.log.gz", "artifact": "linux", "log_state": "available",
+            "first_error": {"line": 7, "message": "<script>not executable</script>", "raw_logs": "private"},
+            "log_failures": ["integration::a"],
+            "reports": [{"file": "ctrf-a.json", "state": "empty", "tests": 0}], "raw_logs": "private"}],
+            "versions": [{"value": "golem v2", "line": 5, "log": "logs/build.log", "raw_logs": "private"}],
+            "limits": ["No complete test report"], "environment": {"SECRET": "private"}}
+        self.run["analysis"]["published_at"] = "2026-11-17T09:12:00Z"
         self.assertEqual(self.publish(self.run)[0], 200)
         self.assertEqual(self.publish(self.run)[0], 200)
         saved = json.loads(Store(self.directory.name).snapshot())
@@ -365,6 +374,12 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(record["analysis"]["suspects"][0]["sha"], "b" * 40)
         self.assertEqual(record["analysis"]["suspects"][0]["subject"], "Fix worker <replay> & delivery")
         self.assertEqual(record["changes"], self.run["changes"])
+        self.assertEqual(record["analysis"]["published_at"], "2026-11-17T09:12:00Z")
+        self.assertEqual(record["evidence"]["tasks"][0]["reports"][0]["state"], "empty")
+        self.assertEqual(record["evidence"]["tasks"][0]["first_error"]["message"], "<script>not executable</script>")
+        self.assertEqual(record["evidence"]["tasks"][0]["exit_code"], 101)
+        self.assertEqual(record["evidence"]["versions"][0]["value"], "golem v2")
+        self.assertNotIn("private", json.dumps(record["evidence"]))
 
     def test_reruns_have_distinct_records_and_old_activity_cannot_replace_completion(self):
         self.assertEqual(self.publish(self.run)[0], 200)
@@ -449,6 +464,63 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(summary["totals"]["tests"], 1)
         self.assertEqual([test["name"] for test in summary["failed"]], ["actual_failure"])
         self.assertEqual([report["file"] for report in summary["unreadable"]], ["ctrf-a-bad.json", "ctrf-b-partial.json"])
+
+    def test_task_evidence_preserves_log_failures_when_retry_leaves_empty_report(self):
+        directory = Path(self.directory.name)
+        (directory / "logs").mkdir()
+        tasks = [{"id": "cli--core", "lane": "cli", "name": "core", "status": "failed",
+                  "exit_code": 101, "log": "logs/core.log.gz"},
+                 {"id": "prepare--build-cli-test-bins", "lane": "prepare", "name": "build-cli-test-bins",
+                  "status": "passed", "exit_code": 0, "log": "logs/build.log"}]
+        (directory / "progress.json").write_text(json.dumps({"tasks": tasks}))
+        with gzip.open(directory / "logs/core.log.gz", "wt") as log:
+            log.write("Logging to /runner/reports/ctrf-empty.json\n"
+                      "error: missing discover-agent-types\n"
+                      "[1/2] Finished test: integration::alpha [FAILED]\n"
+                      "[2/2] Finished test: integration::beta [FAILED]\n"
+                      "test result: FAILED; 0 passed; 2 failed\n"
+                      "thread panicked at tracing.rs:1:1:\nfailed to set global default subscriber\n")
+        (directory / "logs/build.log").write_text("golem v2-current\ngolem-cli v2-current\n")
+        (directory / "ctrf-empty.json").write_text(json.dumps({"results": {"tests": []}}))
+        helper = str(Path(__file__).resolve().parents[1] / "task-evidence.py")
+        for state in ("empty", "missing", "unreadable", "invalid-tests", "reported"):
+            report = directory / "ctrf-empty.json"
+            if state == "missing":
+                report.unlink()
+            elif state == "unreadable":
+                report.write_text("invalid json")
+            elif state == "invalid-tests":
+                report.write_text(json.dumps({"results": {"tests": [
+                    {"name": "must_not_count", "status": "passed"}, {"status": "failed", "extra": 17}]}}))
+            elif state == "reported":
+                report.write_text(json.dumps({"results": {"tests": [{"name": "integration::alpha", "status": "passed"}]}}))
+            output = io.StringIO()
+            with self.subTest(state=state), patch.object(sys, "argv", [helper, str(directory)]), contextlib.redirect_stdout(output):
+                runpy.run_path(helper, run_name="__main__")
+                evidence = json.loads(output.getvalue())
+                self.assertEqual(len(evidence["tasks"]), 1)
+                task = evidence["tasks"][0]
+                self.assertEqual(task["reports"][0]["state"], "unreadable" if state == "invalid-tests" else state)
+                self.assertEqual(task["log_failures"], ["integration::alpha", "integration::beta"])
+                self.assertEqual(task["first_error"], {"line": 2, "message": "error: missing discover-agent-types"})
+                self.assertIn("failed to set global default subscriber", task["after_summary_error"]["message"])
+                self.assertEqual([v["value"] for v in evidence["versions"]], ["golem v2-current", "golem-cli v2-current"])
+
+    def test_task_evidence_reports_missing_logs_and_refuses_paths_outside_artifact(self):
+        directory = Path(self.directory.name)
+        artifact = directory / "linux"
+        (artifact / "progress").mkdir(parents=True)
+        (directory / "private.log").write_text("error: must not read")
+        helper = str(Path(__file__).resolve().parents[1] / "task-evidence.py")
+        for path in ("logs/missing.log", "../private.log"):
+            (artifact / "progress/core.json").write_text(json.dumps({"id": "cli--core", "name": "core",
+                "status": "failed", "exit_code": 1, "log": path}))
+            output = io.StringIO()
+            with self.subTest(path=path), patch.object(sys, "argv", [helper, str(directory)]), contextlib.redirect_stdout(output):
+                runpy.run_path(helper, run_name="__main__")
+                task = json.loads(output.getvalue())["tasks"][0]
+                self.assertEqual(task["log_state"], "unavailable")
+                self.assertIsNone(task["first_error"])
 
     def test_dashboard_shows_only_running_and_non_cancelled_completed_attempts(self):
         states = [("in_progress", ""), ("completed", "success"), ("completed", "failure"),
