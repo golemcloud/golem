@@ -318,6 +318,8 @@ message ProcessOplogEntriesInvocationParameters {
 
 message ManualUpdateInvocationParameters {
   uint64 target_revision = 1;
+  // Who requested the update. Required.
+  golem.component.PublicCaller requester = 2;
 }
 
 message PublicAgentInvocationResult {
@@ -643,6 +645,9 @@ message PendingUpdateParameters {
   uint64 target_revision = 2;
   UpdateDescription update_description = 3;
   uint64 update_attempt_index = 4;
+  // Who requested the update. Required. It is never the caller of the update's snapshot save
+  // or load.
+  golem.component.PublicCaller requester = 5;
 }
 
 message SuccessfulUpdateParameters {

@@ -563,6 +563,7 @@ mod successful_update_proto_tests {
                     snapshot_bootstrap,
                 },
                 update_attempt_index: Some(OplogIndex::from_u64(2)),
+                requester: Box::new(crate::model::caller::Caller::anonymous()),
             };
 
             let proto: RawOplogEntry = original.clone().try_into().unwrap();

@@ -46,6 +46,9 @@ pub enum AgentInvocationKind {
 pub enum AgentInvocation {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update. It is not a caller: the update's snapshot save runs as the
+        /// agent itself, never as the requester.
+        requester: Caller,
     },
     AgentInitialization {
         idempotency_key: InvocationId,
@@ -99,6 +102,8 @@ pub enum AgentInvocation {
 pub enum AgentInvocationPayload {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update.
+        requester: Caller,
     },
     AgentInitialization {
         input: SchemaValue,
@@ -477,9 +482,13 @@ impl AgentInvocation {
         invocation_context: InvocationContextStack,
     ) -> Self {
         match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => {
-                Self::ManualUpdate { target_revision }
-            }
+            AgentInvocationPayload::ManualUpdate {
+                target_revision,
+                requester,
+            } => Self::ManualUpdate {
+                target_revision,
+                requester,
+            },
             AgentInvocationPayload::AgentInitialization { input, caller } => {
                 Self::AgentInitialization {
                     idempotency_key,
@@ -554,9 +563,15 @@ impl AgentInvocation {
 
     pub fn into_parts(self) -> (InvocationId, AgentInvocationPayload, InvocationContextStack) {
         match self {
-            Self::ManualUpdate { target_revision } => (
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
                 InvocationId(Uuid::new_v4()),
-                AgentInvocationPayload::ManualUpdate { target_revision },
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                },
                 InvocationContextStack::fresh(),
             ),
             Self::AgentInitialization {

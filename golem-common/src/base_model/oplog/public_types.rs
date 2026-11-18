@@ -153,7 +153,7 @@ fn redact_typed_value(value: &mut TypedSchemaValue) {
 }
 
 impl PublicAgentInvocation {
-    /// The caller of the invocation. A manual update has none.
+    /// The caller of the invocation. A manual update has none: it has a requester instead.
     pub fn caller(&self) -> Option<&PublicCaller> {
         match self {
             Self::AgentInitialization(params) => Some(&params.caller),
@@ -806,6 +806,8 @@ pub struct ProcessOplogEntriesParameters {
 #[serde(rename_all = "camelCase")]
 pub struct ManualUpdateParameters {
     pub target_revision: ComponentRevision,
+    /// Who asked for the update. It is not the caller of the update's snapshot save.
+    pub requester: PublicCaller,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
