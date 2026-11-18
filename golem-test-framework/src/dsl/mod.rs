@@ -524,6 +524,14 @@ pub trait TestDsl {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    /// Reads the oplog like [`TestDsl::get_oplog`], and asks for the verified claims of the users
+    /// among the callers.
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &AgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
     async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64>;
 
     async fn search_oplog(

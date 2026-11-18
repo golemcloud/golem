@@ -1,5 +1,6 @@
 use golem_rust::bindings::golem::api::oplog::{
-    AgentInvocation, OplogEntry, OplogIndex, PublicOplogEntry, enrich_oplog_entries,
+    AgentInvocation, OplogEntry, OplogIndex, PublicCaller, PublicOplogEntry, PublicPrincipal,
+    enrich_oplog_entries,
 };
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
 use golem_rust::schema::wit::wire::{AgentId, ComponentId};
@@ -34,6 +35,48 @@ struct BatchCallback {
 struct InvocationRecord {
     oplog_index: u64,
     fn_name: String,
+    /// The principal that started the chain, when the start was in this batch
+    original_caller: Option<CallerRoleRecord>,
+    /// The principal that made the call, when the start was in this batch
+    immediate_caller: Option<CallerRoleRecord>,
+}
+
+/// One role of an invocation's caller, as `enrich-oplog-entries` shows it.
+#[derive(Clone, serde::Serialize)]
+struct CallerRoleRecord {
+    /// "user", "account", "agent", "tool" or "anonymous"
+    kind: String,
+    /// The subject of the principal's pair; none for an anonymous principal
+    subject: Option<String>,
+}
+
+impl CallerRoleRecord {
+    fn new(principal: &PublicPrincipal) -> Self {
+        let (kind, pair) = match principal {
+            PublicPrincipal::User(user) => ("user", Some(&user.pair)),
+            PublicPrincipal::Account(account) => ("account", Some(&account.pair)),
+            PublicPrincipal::Agent(agent) => ("agent", Some(&agent.pair)),
+            PublicPrincipal::Tool(tool) => ("tool", Some(&tool.pair)),
+            PublicPrincipal::Anonymous => ("anonymous", None),
+        };
+        Self {
+            kind: kind.to_string(),
+            subject: pair.map(|pair| pair.subject.clone()),
+        }
+    }
+}
+
+/// An invocation whose start this processor saw, until its end.
+struct StartedInvocation {
+    fn_name: String,
+    caller: Option<(CallerRoleRecord, CallerRoleRecord)>,
+}
+
+fn caller_roles(caller: &PublicCaller) -> Option<(CallerRoleRecord, CallerRoleRecord)> {
+    Some((
+        CallerRoleRecord::new(&caller.original),
+        CallerRoleRecord::new(&caller.immediate),
+    ))
 }
 
 /// Evidence of an enriched durable host-call entry, taken from the enriched
@@ -54,7 +97,7 @@ struct DurableEntryRecord {
 }
 
 thread_local! {
-    static CURRENT_INVOCATIONS: RefCell<HashMap<String, String>> =
+    static CURRENT_INVOCATIONS: RefCell<HashMap<String, StartedInvocation>> =
         RefCell::new(HashMap::new());
 }
 
@@ -132,26 +175,47 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                 _ => {}
             }
             if let PublicOplogEntry::AgentInvocationStarted(params) = entry {
-                let function_name = match &params.invocation {
-                    AgentInvocation::AgentInitialization(_) => "agent-initialization".to_string(),
-                    AgentInvocation::AgentMethodInvocation(method_params) => {
-                        method_params.method_name.clone()
-                    }
-                    AgentInvocation::ExternalTool(_) => "external-tool".to_string(),
-                    AgentInvocation::SaveSnapshot => "save-snapshot".to_string(),
-                    AgentInvocation::LoadSnapshot(_) => "load-snapshot".to_string(),
-                    AgentInvocation::ProcessOplogEntries(_) => "process-oplog-entries".to_string(),
-                    AgentInvocation::ManualUpdate(_) => "manual-update".to_string(),
+                let (function_name, caller) = match &params.invocation {
+                    AgentInvocation::AgentInitialization(init_params) => (
+                        "agent-initialization".to_string(),
+                        caller_roles(&init_params.caller),
+                    ),
+                    AgentInvocation::AgentMethodInvocation(method_params) => (
+                        method_params.method_name.clone(),
+                        caller_roles(&method_params.caller),
+                    ),
+                    AgentInvocation::ExternalTool(tool_params) => (
+                        "external-tool".to_string(),
+                        caller_roles(&tool_params.caller),
+                    ),
+                    AgentInvocation::SaveSnapshot(snapshot_params) => (
+                        "save-snapshot".to_string(),
+                        caller_roles(&snapshot_params.caller),
+                    ),
+                    AgentInvocation::LoadSnapshot(snapshot_params) => (
+                        "load-snapshot".to_string(),
+                        caller_roles(&snapshot_params.caller),
+                    ),
+                    AgentInvocation::ProcessOplogEntries(process_params) => (
+                        "process-oplog-entries".to_string(),
+                        caller_roles(&process_params.caller),
+                    ),
+                    AgentInvocation::ManualUpdate(_) => ("manual-update".to_string(), None),
                 };
                 CURRENT_INVOCATIONS.with(|ci| {
-                    ci.borrow_mut()
-                        .insert(format!("{worker_id:?}"), function_name);
+                    ci.borrow_mut().insert(
+                        format!("{worker_id:?}"),
+                        StartedInvocation {
+                            fn_name: function_name,
+                            caller,
+                        },
+                    );
                 });
             } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
-                let function_name = if let Some(function_name) =
+                let started = if let Some(started) =
                     CURRENT_INVOCATIONS.with(|ci| ci.borrow_mut().remove(&format!("{worker_id:?}")))
                 {
-                    function_name
+                    started
                 } else {
                     // AgentInvocationStarted was in a previous batch sent to a
                     // different plugin worker (e.g. shard reassignment / locality
@@ -160,12 +224,21 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                     println!(
                         "AgentInvocationFinished without corresponding AgentInvocationStarted"
                     );
-                    "unknown".to_string()
+                    StartedInvocation {
+                        fn_name: "unknown".to_string(),
+                        caller: None,
+                    }
+                };
+                let (original_caller, immediate_caller) = match started.caller {
+                    Some((original, immediate)) => (Some(original), Some(immediate)),
+                    None => (None, None),
                 };
 
                 invocations.push(InvocationRecord {
                     oplog_index: *oplog_index,
-                    fn_name: function_name,
+                    fn_name: started.fn_name,
+                    original_caller,
+                    immediate_caller,
                 });
             }
         }
