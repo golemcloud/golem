@@ -2036,7 +2036,12 @@ impl WorkerService {
         let operation = start
             .external_tool
             .as_ref()
-            .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+            .map(|tool| {
+                golem_common::model::InvocationOperation::tool_operation(
+                    &tool.tool_name,
+                    &tool.command_path,
+                )
+            })
             .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
         let seed = if observation_only {
             raw_key
@@ -5137,7 +5142,12 @@ mod tests {
                 let operation = start
                     .external_tool
                     .as_ref()
-                    .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+                    .map(|tool| {
+                        golem_common::model::InvocationOperation::tool_operation(
+                            &tool.tool_name,
+                            &tool.command_path,
+                        )
+                    })
                     .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
                 prepared
                     .finalize(agent_id.clone(), self.fingerprint, &operation)

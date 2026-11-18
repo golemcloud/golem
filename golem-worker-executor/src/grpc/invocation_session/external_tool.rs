@@ -53,7 +53,10 @@ where
         let tool = request.external_tool.as_ref().expect("native tool request");
         let owned = extract_owned_agent_id(request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
-        let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
+        let operation = golem_common::model::InvocationOperation::tool_operation(
+            &tool.tool_name,
+            &tool.command_path,
+        );
         if !tool.fresh_owner && OwnerKind::is_reserved_instance_name(&owned.agent_id.agent_id) {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",

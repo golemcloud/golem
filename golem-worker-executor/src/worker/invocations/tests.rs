@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{InvocationState, merge_invocations};
+use super::{
+    InvocationFilter, InvocationKind, InvocationListEntry, InvocationState, merge_invocations,
+    page_invocations,
+};
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, InvocationEnd, InvocationId, InvocationOperation,
     InvocationRequestRef, InvocationResultPosition, OplogIndex, PendingInvocationRef,
@@ -256,4 +259,211 @@ fn a_withdrawn_duplicate_of_an_older_cancellation_keeps_that_cancellation() {
     super::keep_latest(&mut results, cancelled, duplicate_withdrawal);
 
     assert_eq!(results.get(&cancelled), Some(&original));
+}
+
+fn listed(
+    key_value: u128,
+    last_change: u64,
+    state: InvocationState,
+    operation: Option<InvocationOperation>,
+) -> InvocationListEntry {
+    InvocationListEntry {
+        key: key(key_value),
+        operation,
+        state,
+        accepted_at: Some(Timestamp::from(1)),
+        changed_at: Timestamp::from(last_change * 10),
+        last_change: index(last_change),
+    }
+}
+
+fn keys(entries: &[InvocationListEntry]) -> Vec<u128> {
+    entries.iter().map(|entry| entry.key.0.as_u128()).collect()
+}
+
+/// Pages through `entries` with `page_size`, re-reading `entries_at(page)` before each page as a
+/// caller does between requests.
+fn all_pages(
+    entries_at: impl Fn(usize) -> Vec<InvocationListEntry>,
+    filter: &InvocationFilter,
+    page_size: usize,
+) -> Vec<Vec<u128>> {
+    let mut pages = Vec::new();
+    let mut after = None;
+    loop {
+        let (page, next) = page_invocations(entries_at(pages.len()), filter, after, page_size);
+        pages.push(keys(&page));
+        match next {
+            Some(next) => after = Some(next),
+            None => return pages,
+        }
+    }
+}
+
+#[test]
+fn pages_of_two_over_five_invocations_list_each_once_in_order() {
+    // The list order: the latest change first, the ID breaking ties.
+    let entries = vec![
+        listed(5, 9, InvocationState::Completed, method("a")),
+        listed(4, 7, InvocationState::Completed, method("a")),
+        listed(3, 7, InvocationState::Completed, method("a")),
+        listed(2, 4, InvocationState::Completed, method("a")),
+        listed(1, 2, InvocationState::Completed, method("a")),
+    ];
+
+    assert_eq!(
+        all_pages(|_| entries.clone(), &InvocationFilter::default(), 2),
+        vec![vec![5, 4], vec![3, 2], vec![1]]
+    );
+}
+
+#[test]
+fn an_invocation_that_changes_between_pages_is_listed_at_most_once() {
+    let before = vec![
+        listed(5, 9, InvocationState::Completed, method("a")),
+        listed(4, 7, InvocationState::Pending, method("a")),
+        listed(3, 6, InvocationState::Pending, method("a")),
+        listed(2, 4, InvocationState::Completed, method("a")),
+        listed(1, 2, InvocationState::Completed, method("a")),
+    ];
+    // After the first page, 3 starts running and 1 completes again: both move before the cursor.
+    let after = vec![
+        listed(1, 12, InvocationState::Completed, method("a")),
+        listed(3, 11, InvocationState::Running, method("a")),
+        listed(5, 9, InvocationState::Completed, method("a")),
+        listed(4, 7, InvocationState::Pending, method("a")),
+        listed(2, 4, InvocationState::Completed, method("a")),
+    ];
+
+    let pages = all_pages(
+        |page| {
+            if page == 0 {
+                before.clone()
+            } else {
+                after.clone()
+            }
+        },
+        &InvocationFilter::default(),
+        2,
+    );
+    assert_eq!(pages, vec![vec![5, 4], vec![2]]);
+}
+
+#[test]
+fn a_full_last_page_still_says_whether_more_follow() {
+    let entries = vec![
+        listed(2, 4, InvocationState::Completed, method("a")),
+        listed(1, 2, InvocationState::Completed, method("a")),
+    ];
+
+    let (page, next) = page_invocations(entries, &InvocationFilter::default(), None, 2);
+    assert_eq!(keys(&page), vec![2, 1]);
+    assert_eq!(next, None);
+}
+
+#[test]
+fn every_filter_and_their_intersection() {
+    let tool = Some(InvocationOperation::tool(&"t", &["run".to_string()]));
+    let entries = vec![
+        listed(6, 60, InvocationState::Failed, method("b")),
+        listed(5, 50, InvocationState::Completed, tool.clone()),
+        listed(4, 40, InvocationState::Cancelled, method("a")),
+        listed(3, 30, InvocationState::Completed, method("a")),
+        listed(
+            2,
+            20,
+            InvocationState::Completed,
+            Some(InvocationOperation::Constructor),
+        ),
+        listed(1, 10, InvocationState::Pending, None),
+    ];
+    let page =
+        |filter: InvocationFilter| keys(&page_invocations(entries.clone(), &filter, None, 100).0);
+
+    assert_eq!(
+        page(InvocationFilter {
+            operation: Some("a".to_string()),
+            ..Default::default()
+        }),
+        vec![4, 3]
+    );
+    assert_eq!(
+        page(InvocationFilter {
+            operation: Some("tool:t/run".to_string()),
+            ..Default::default()
+        }),
+        vec![5]
+    );
+    assert_eq!(
+        page(InvocationFilter {
+            states: vec![InvocationState::Completed, InvocationState::Failed],
+            ..Default::default()
+        }),
+        vec![6, 5, 3, 2]
+    );
+    assert_eq!(
+        page(InvocationFilter {
+            kind: Some(InvocationKind::Constructor),
+            ..Default::default()
+        }),
+        vec![2]
+    );
+    assert_eq!(
+        page(InvocationFilter {
+            kind: Some(InvocationKind::Tool),
+            ..Default::default()
+        }),
+        vec![5]
+    );
+    // `since` and `until` are inclusive bounds on the change time.
+    assert_eq!(
+        page(InvocationFilter {
+            since: Some(Timestamp::from(300)),
+            until: Some(Timestamp::from(500)),
+            ..Default::default()
+        }),
+        vec![5, 4, 3]
+    );
+    assert_eq!(
+        page(InvocationFilter {
+            operation: Some("a".to_string()),
+            states: vec![InvocationState::Completed],
+            kind: Some(InvocationKind::Method),
+            since: Some(Timestamp::from(300)),
+            until: None,
+        }),
+        vec![3]
+    );
+}
+
+#[test]
+fn a_filtered_page_continues_after_the_last_match() {
+    let entries = vec![
+        listed(5, 9, InvocationState::Completed, method("a")),
+        listed(4, 7, InvocationState::Completed, method("b")),
+        listed(3, 6, InvocationState::Completed, method("a")),
+        listed(2, 4, InvocationState::Completed, method("b")),
+        listed(1, 2, InvocationState::Completed, method("a")),
+    ];
+    let filter = InvocationFilter {
+        operation: Some("a".to_string()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        all_pages(|_| entries.clone(), &filter, 1),
+        vec![vec![5], vec![3], vec![1]]
+    );
+}
+
+#[test]
+fn a_page_size_of_zero_gives_the_default_page() {
+    let entries: Vec<InvocationListEntry> = (1..=150)
+        .rev()
+        .map(|value| listed(value, value as u64, InvocationState::Completed, method("a")))
+        .collect();
+
+    let (page, next) = page_invocations(entries, &InvocationFilter::default(), None, 0);
+    assert_eq!(page.len(), 100);
+    assert!(next.is_some());
 }

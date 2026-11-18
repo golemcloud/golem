@@ -247,8 +247,13 @@ pub enum InvocationOperation {
 
 impl InvocationOperation {
     /// The operation of a tool invocation of `command_path` on `tool_name`.
-    pub fn tool(tool_name: &str, command_path: &[String]) -> Self {
-        Self::Tool(format!("tool:{tool_name}/{}", command_path.join("/")))
+    pub fn tool(tool_name: &impl std::fmt::Display, command_path: &[String]) -> Self {
+        Self::Tool(Self::tool_operation(tool_name, command_path))
+    }
+
+    /// The operation string that keyed invocation IDs of a tool invocation are derived from.
+    pub fn tool_operation(tool_name: &impl std::fmt::Display, command_path: &[String]) -> String {
+        format!("tool:{tool_name}/{}", command_path.join("/"))
     }
 
     /// The operation that keyed invocation IDs are derived from: the method name or the tool

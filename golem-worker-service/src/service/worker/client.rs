@@ -3764,6 +3764,21 @@ mod rejection_mapping_tests {
             CancelInvocationResponse
         );
         unimplemented_unary!(
+            get_invocation,
+            golem_api_grpc::proto::golem::workerexecutor::v1::GetInvocationRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::GetInvocationResponse
+        );
+        unimplemented_unary!(
+            list_invocations,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsResponse
+        );
+        unimplemented_unary!(
+            lookup_invocations,
+            golem_api_grpc::proto::golem::workerexecutor::v1::LookupInvocationsRequest,
+            golem_api_grpc::proto::golem::workerexecutor::v1::LookupInvocationsResponse
+        );
+        unimplemented_unary!(
             control_durable_stream_attachment,
             DurableStreamAttachmentControlRequest,
             DurableStreamAttachmentControlResponse

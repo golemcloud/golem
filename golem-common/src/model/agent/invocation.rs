@@ -152,10 +152,7 @@ impl AgentInvocationPayload {
                 tool_name,
                 command_path,
                 ..
-            } => Some(InvocationOperation::tool(
-                &tool_name.to_string(),
-                command_path,
-            )),
+            } => Some(InvocationOperation::tool(tool_name, command_path)),
             Self::LoadSnapshot { .. } | Self::SaveSnapshot | Self::ProcessOplogEntries { .. } => {
                 Some(InvocationOperation::Internal)
             }

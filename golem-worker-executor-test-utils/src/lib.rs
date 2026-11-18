@@ -726,7 +726,10 @@ impl TestWorkerExecutor {
             .finalize(
                 agent_id.clone(),
                 expected_fingerprint,
-                &format!("tool:{tool_name}/{}", command_path.join("/")),
+                &golem_common::model::InvocationOperation::tool_operation(
+                    &tool_name,
+                    &command_path,
+                ),
             )
             .id();
         worker
