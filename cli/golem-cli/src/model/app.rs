@@ -21,15 +21,11 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
-use crate::model::cascade::error::StoreGetValueError;
-use crate::model::cascade::layer::Layer;
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::{OptionalProperty, OptionalPropertyTraceElem};
 use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
-use crate::model::cascade::store::Store;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
@@ -40,6 +36,10 @@ use crate::model::tool_deployment::{
 };
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
+use golem_common::cascade::error::StoreGetValueError;
+use golem_common::cascade::layer::Layer;
+use golem_common::cascade::property::Property;
+use golem_common::cascade::store::Store;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
@@ -4334,15 +4334,15 @@ mod app_builder {
         PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
-    use crate::model::cascade::error::StoreGetValueError;
-    use crate::model::cascade::property::Property;
-    use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
+    use golem_common::cascade::error::StoreGetValueError;
+    use golem_common::cascade::property::Property;
+    use golem_common::cascade::store::Store;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -6566,8 +6566,8 @@ mod test {
         includes_from_yaml_file,
     };
     use crate::model::app_raw;
-    use crate::model::cascade::property::Property;
     use crate::model::language::GuestLanguage;
+    use golem_common::cascade::property::Property;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;

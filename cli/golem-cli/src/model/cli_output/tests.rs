@@ -1378,7 +1378,7 @@ fn typed_schema_string(value: &str) -> golem_common::schema::TypedSchemaValue {
 }
 
 fn sample_component_layer_properties() -> crate::model::app::ComponentLayerProperties {
-    use crate::model::cascade::property::Property;
+    use golem_common::cascade::property::Property;
 
     let layer = crate::model::app::ComponentLayerId::ComponentCommon(
         golem_common::model::component::ComponentName("component".to_string()),
@@ -5631,7 +5631,7 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
         ),
     )
         .prop_map(|(left, right)| {
-            use crate::model::cascade::property::Property;
+            use golem_common::cascade::property::Property;
 
             let (
                 layer_id,
