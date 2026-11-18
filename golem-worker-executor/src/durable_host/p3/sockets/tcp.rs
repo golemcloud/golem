@@ -25,8 +25,8 @@ use crate::durable_host::concurrent::{
     reserve_invocation_id_before_await, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
-    CustomInvocationContext, DurabilityHost, DurableCallTrapContext,
-    find_durable_call_trap_context, mark_durable_call_trap_context,
+    DurabilityHost, DurableCallTrapContext, GuestTaskContext, find_durable_call_trap_context,
+    mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
@@ -1987,7 +1987,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                             result_tx,
                             activity,
                         );
-                        store.spawn(async move |store| task.run(store).await)?;
+                        let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .attribution
+                            .capture();
+                        store.spawn(async move |store| captured.run(task.run(store)).await)?;
                         FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
                     })
                 } else {
@@ -2000,7 +2003,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                             .activity();
                         let task =
                             TcpSocketSendTask::<Ctx>::replay(call, input_rx, result_tx, activity);
-                        store.spawn(async move |store| task.run(store).await)?;
+                        let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                            .attribution
+                            .capture();
+                        store.spawn(async move |store| captured.run(task.run(store)).await)?;
                         FutureReader::new(&mut store, wait_tcp_task_result(result_rx))
                     })
                 }?;
@@ -2016,7 +2022,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
         socket: Resource<TcpSocket>,
     ) -> wasmtime::Result<(StreamReader<u8>, FutureReader<Result<(), types::ErrorCode>>)> {
         let invocation_id = access_invocation_id(accessor, durable_worker_ctx::<Ctx, U>)?;
-        let custom_invocation_context = accessor.guest_task_context::<CustomInvocationContext>()?;
+        let custom_invocation_context = accessor.guest_task_context::<GuestTaskContext>()?;
         let observational_owner = accessor.with(|mut access| {
             resolve_current_observational_owner(
                 durable_worker_ctx::<Ctx, U>(access.data_mut()),
@@ -2075,7 +2081,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                         invocation_id,
                         activity,
                     );
-                    store.spawn(async move |store| task.run(store).await)?;
+                    let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+                        .attribution
+                        .capture();
+                    store.spawn(async move |store| captured.run(task.run(store)).await)?;
                     Ok((stream, future))
                 })?;
                 wasmtime::error::Ok(handles)

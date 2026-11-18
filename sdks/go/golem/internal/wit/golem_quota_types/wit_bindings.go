@@ -136,7 +136,7 @@ func Reserve(token *golem_core_types.QuotaToken, amount uint64) witTypes.Result[
 
 		result0 = witTypes.Ok[*Reservation, FailedReservation](ReservationFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))))
 	case 1:
-		result := wasm_lift_1_t909(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result := wasm_lift_1_t912(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result0 = witTypes.Err[*Reservation, FailedReservation](result)
 	default:
@@ -167,7 +167,7 @@ func Merge(token *golem_core_types.QuotaToken, other *golem_core_types.QuotaToke
 }
 
 //go:noinline
-func wasm_lift_1_t909(src unsafe.Pointer) FailedReservation {
+func wasm_lift_1_t912(src unsafe.Pointer) FailedReservation {
 	var option witTypes.Option[uint64]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
