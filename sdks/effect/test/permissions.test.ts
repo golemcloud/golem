@@ -51,6 +51,7 @@ import { schemaValueMatches } from "../src/internal/reflection/schemaValidation.
 import { t, v } from "../src/internal/schema-model/model.js"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
+import { hostInvocationMetadata } from "./invocation-metadata.js"
 
 interface FakeCard {
   readonly serial: number
@@ -873,7 +874,7 @@ const rpcLayer = (
   calls: Array<RecordedCall>,
   options: { readonly throwOnAwait?: boolean } = {},
 ) => {
-  const metadata: AgentHost.InvocationMetadata = { agentId: "reader", idempotencyKey: "key" }
+  const metadata: AgentHost.InvocationMetadata = hostInvocationMetadata("reader")
   const cardsOf = (input: CoreTypes.SchemaValueTree) =>
     input.valueNodes.flatMap((node) => (node.tag === "permission-card-handle" ? [node.val] : []))
   const connection: RpcConnection = {
@@ -903,7 +904,13 @@ const rpcLayer = (
     drop: () => {},
   }
   return Layer.mergeAll(
-    Layer.succeed(RpcClient, RpcClient.of({ connect: () => Effect.succeed(connection) })),
+    Layer.succeed(
+      RpcClient,
+      RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
+        connect: () => Effect.succeed(connection),
+      }),
+    ),
     Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({

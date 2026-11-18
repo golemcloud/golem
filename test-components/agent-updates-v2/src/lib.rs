@@ -3,7 +3,6 @@ use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description};
 
-#[path = "../../agent-updates-v1/src/wallet_replay.rs"]
 mod wallet_replay;
 
 #[derive(ConfigSchema)]

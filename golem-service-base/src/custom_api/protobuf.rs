@@ -18,13 +18,13 @@ use super::{
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    AgentFilesystemBehaviour, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
-    CompiledSchema, ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
+    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
     DurableStreamRepresentation, DurableStreamRouteLoadPolicy, DurableStreamRoutePolicy,
-    DurableStreamSlot, DurableStreamSlotDirection, HttpRouterBehaviour, MethodParameter,
-    OriginPattern, PhantomSelection, QueryOrHeaderType, RouteMatch, RouterFileIndexEntry,
-    RouterMethod, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    DurableStreamSlot, DurableStreamSlotDirection, MethodParameter, MountAgent, MountAgentMethod,
+    MountBehaviour, MountFileSource, MountTarget, OriginPattern, PhantomSelection,
+    QueryOrHeaderType, RouteMatch, RouterFileIndexEntry, RouterMethod, SecuritySchemeRouteSecurity,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
@@ -334,63 +334,135 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     scheme,
                 }))
             }
-            Kind::HttpRouter(value) => Ok(RouteBehaviour::HttpRouter(HttpRouterBehaviour {
-                component_id: value
-                    .component_id
-                    .ok_or("Missing component_id")?
-                    .try_into()?,
-                component_revision: value.component_revision.try_into()?,
-                agent_type: AgentTypeName(value.agent_type),
-                constructor_input: value
-                    .constructor_input
-                    .ok_or("Missing constructor_input")?
-                    .try_into()?,
+            Kind::Mount(value) => Ok(RouteBehaviour::Mount(MountBehaviour {
                 handler: value.handler.map(TryInto::try_into).transpose()?,
-                openapi_provider_method: value
-                    .openapi_provider_method
-                    .map(TryInto::try_into)
-                    .transpose()?,
-                static_bindings: value
-                    .static_bindings
+                openapi_provider: value.openapi_provider.map(TryInto::try_into).transpose()?,
+                files: value.files.ok_or("Missing mount files")?.try_into()?,
+                file_bindings: value
+                    .file_bindings
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
-                file_index: decode_file_index(value.file_index)?,
                 file_response_headers: value
                     .file_response_headers
                     .into_iter()
                     .map(Into::into)
                     .collect(),
             })),
-            Kind::AgentFilesystem(value) => {
-                Ok(RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
-                    component_id: value
-                        .component_id
-                        .ok_or("Missing component_id")?
-                        .try_into()?,
-                    component_revision: value.component_revision.try_into()?,
-                    agent_type: AgentTypeName(value.agent_type),
-                    constructor_input: value
-                        .constructor_input
-                        .ok_or("Missing constructor_input")?
-                        .try_into()?,
-                    constructor_parameters: value
-                        .constructor_parameters
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::MountAgent> for MountAgent {
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::MountAgent,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
+            component_revision: value.component_revision.try_into()?,
+            agent_type: AgentTypeName(value.agent_type),
+            constructor_input: value
+                .constructor_input
+                .ok_or("Missing constructor_input")?
+                .try_into()?,
+            constructor_parameters: value
+                .constructor_parameters
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<MountAgent> for proto::golem::customapi::route_behaviour::MountAgent {
+    fn from(value: MountAgent) -> Self {
+        Self {
+            component_id: Some(value.component_id.into()),
+            component_revision: value.component_revision.into(),
+            agent_type: value.agent_type.0,
+            constructor_input: Some(value.constructor_input.into()),
+            constructor_parameters: value
+                .constructor_parameters
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::MountTarget> for MountTarget {
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::MountTarget,
+    ) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_behaviour::mount_target::Kind;
+        match value.kind.ok_or("Missing MountTarget.kind")? {
+            Kind::AgentMethod(value) => Ok(Self::AgentMethod(MountAgentMethod {
+                agent: value.agent.ok_or("Missing target agent")?.try_into()?,
+                method: value.method.ok_or("Missing target method")?.try_into()?,
+            })),
+        }
+    }
+}
+
+impl From<MountTarget> for proto::golem::customapi::route_behaviour::MountTarget {
+    fn from(value: MountTarget) -> Self {
+        use proto::golem::customapi::route_behaviour::{MountAgentMethod, mount_target::Kind};
+        let MountTarget::AgentMethod(value) = value;
+        Self {
+            kind: Some(Kind::AgentMethod(MountAgentMethod {
+                agent: Some(value.agent.into()),
+                method: Some(value.method.into()),
+            })),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::MountFileSource> for MountFileSource {
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::MountFileSource,
+    ) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_behaviour::mount_file_source::Kind;
+        match value.kind.ok_or("Missing MountFileSource.kind")? {
+            Kind::Router(value) => Ok(Self::Router {
+                agent: value.agent.ok_or("Missing file source agent")?.try_into()?,
+                file_index: decode_file_index(value.file_index)?,
+            }),
+            Kind::Live(value) => Ok(Self::Live {
+                agent: value.try_into()?,
+            }),
+        }
+    }
+}
+
+impl From<MountFileSource> for proto::golem::customapi::route_behaviour::MountFileSource {
+    fn from(value: MountFileSource) -> Self {
+        use proto::golem::customapi::route_behaviour::{RouterFiles, mount_file_source::Kind};
+        Self {
+            kind: Some(match value {
+                MountFileSource::Router { agent, file_index } => Kind::Router(RouterFiles {
+                    agent: Some(agent.into()),
+                    file_index: file_index
                         .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<_, _>>()?,
-                    filesystem_bindings: value
-                        .filesystem_bindings
-                        .into_iter()
-                        .map(TryInto::try_into)
-                        .collect::<Result<_, _>>()?,
-                    file_response_headers: value
-                        .file_response_headers
-                        .into_iter()
-                        .map(Into::into)
+                        .map(|entry| {
+                            proto::golem::customapi::route_behaviour::RouterFileIndexEntry {
+                                path: entry.path,
+                                blob_key: entry.blob_key.0.as_blake3_hash().as_bytes().to_vec(),
+                                size: entry.size,
+                            }
+                        })
                         .collect(),
-                }))
-            }
+                }),
+                MountFileSource::Live { agent } => Kind::Live(agent.into()),
+            }),
         }
     }
 }
@@ -594,23 +666,11 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     )),
                 }
             }
-            RouteBehaviour::HttpRouter(value) => Self { kind: Some(Kind::HttpRouter(
-                proto::golem::customapi::route_behaviour::HttpRouter {
-                    component_id: Some(value.component_id.into()), component_revision: value.component_revision.into(),
-                    agent_type: value.agent_type.0, constructor_input: Some(value.constructor_input.into()),
-                    handler: value.handler.map(Into::into), openapi_provider_method: value.openapi_provider_method.map(Into::into),
-                    static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
-                    file_index: value.file_index.into_iter().map(|entry| proto::golem::customapi::route_behaviour::RouterFileIndexEntry {
-                        path: entry.path, blob_key: entry.blob_key.0.as_blake3_hash().as_bytes().to_vec(), size: entry.size
-                    }).collect(),
-                    file_response_headers: value.file_response_headers.into_iter().map(Into::into).collect(),
-                })) },
-            RouteBehaviour::AgentFilesystem(value) => Self { kind: Some(Kind::AgentFilesystem(
-                proto::golem::customapi::route_behaviour::AgentFilesystem {
-                    component_id: Some(value.component_id.into()), component_revision: value.component_revision.into(),
-                    agent_type: value.agent_type.0, constructor_input: Some(value.constructor_input.into()),
-                    constructor_parameters: value.constructor_parameters.into_iter().map(Into::into).collect(),
-                    filesystem_bindings: value.filesystem_bindings.into_iter().map(Into::into).collect(),
+            RouteBehaviour::Mount(value) => Self { kind: Some(Kind::Mount(
+                proto::golem::customapi::route_behaviour::Mount {
+                    handler: value.handler.map(Into::into), openapi_provider: value.openapi_provider.map(Into::into),
+                    files: Some(value.files.into()),
+                    file_bindings: value.file_bindings.into_iter().map(Into::into).collect(),
                     file_response_headers: value.file_response_headers.into_iter().map(Into::into).collect(),
                 })) },
         }
@@ -626,6 +686,7 @@ impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy>
         value: proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy,
     ) -> Result<Self, Self::Error> {
         Ok(Self {
+            family_id: value.family_id,
             slots: value
                 .slots
                 .into_iter()
@@ -644,6 +705,7 @@ impl From<DurableStreamRoutePolicy>
 {
     fn from(value: DurableStreamRoutePolicy) -> Self {
         Self {
+            family_id: value.family_id,
             slots: value.slots.into_iter().map(Into::into).collect(),
             allow_external_writes: value.allow_external_writes,
             allow_stream_delete: value.allow_stream_delete,
@@ -1274,11 +1336,10 @@ impl From<CorsOptions> for golem_api_grpc::proto::golem::customapi::CorsOptions 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::agent::{
-        AgentFileContentHash, FileMapping, FileResponseHeader, HttpMethod,
-    };
+    use golem_common::model::agent::{AgentFileContentHash, HttpMethod};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
+    use golem_schema::http::{FileMapping, FileResponseHeader};
     use test_r::test;
 
     #[test]
@@ -1364,7 +1425,7 @@ mod tests {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
             revision: SecuritySchemeRevision::new(7).unwrap(),
             name: SecuritySchemeName("frontend-login".into()),
-            provider_type: Provider::Google(golem_common::model::Empty {}),
+            provider_type: Provider::Google(golem_schema::Empty {}),
             client_id: ClientId::new("client".into()),
             client_secret: ClientSecret::new("secret".into()),
             redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
@@ -1398,32 +1459,41 @@ mod tests {
     }
 
     fn router() -> RouteBehaviour {
-        RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+        let agent = MountAgent {
             component_id: ComponentId(uuid::Uuid::from_u128(17)),
             component_revision: ComponentRevision::try_from(23u64).unwrap(),
             agent_type: AgentTypeName("site".into()),
             constructor_input: input(),
+            constructor_parameters: vec![],
+        };
+        RouteBehaviour::Mount(MountBehaviour {
             handler: None,
-            openapi_provider_method: Some(RouterMethod {
-                method_name: "schema".into(),
-                input: input(),
-                output: CompiledOutputSchema {
-                    graph: SchemaGraph::anonymous(SchemaType::string()),
-                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+            openapi_provider: Some(MountTarget::AgentMethod(MountAgentMethod {
+                agent: agent.clone(),
+                method: RouterMethod {
+                    method_name: "schema".into(),
+                    input: input(),
+                    output: CompiledOutputSchema {
+                        graph: SchemaGraph::anonymous(SchemaType::string()),
+                        output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                    },
                 },
-            }),
-            static_bindings: FileMapping::compile_list([
+            })),
+            file_bindings: FileMapping::compile_list([
                 ("/favicon", "/assets/icon"),
                 ("/*", "/assets/$1"),
             ])
             .unwrap(),
-            file_index: vec![RouterFileIndexEntry {
-                path: "/assets/%2e$icon".into(),
-                blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
-                    blake3::hash(b"blob"),
-                )),
-                size: 4_294_967_301,
-            }],
+            files: MountFileSource::Router {
+                agent,
+                file_index: vec![RouterFileIndexEntry {
+                    path: "/assets/%2e$icon".into(),
+                    blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
+                        blake3::hash(b"blob"),
+                    )),
+                    size: 4_294_967_301,
+                }],
+            },
             file_response_headers: vec![
                 FileResponseHeader {
                     name: "content-security-policy".into(),
@@ -1441,7 +1511,8 @@ mod tests {
         let mut path = vec![PathSegment::Literal {
             value: "site".into(),
         }];
-        if matches!(behavior, RouteBehaviour::AgentFilesystem(_)) {
+        if matches!(&behavior, RouteBehaviour::Mount(mount) if matches!(mount.files, MountFileSource::Live { .. }))
+        {
             path.push(PathSegment::Variable {
                 display_name: "id".into(),
             });
@@ -1464,13 +1535,19 @@ mod tests {
     fn mounted_file_headers_are_validated_on_compiled_route_ingress() {
         for live in [false, true] {
             let behavior = if live {
-                RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
-                    component_id: ComponentId(uuid::Uuid::from_u128(42)),
-                    component_revision: ComponentRevision::try_from(31u64).unwrap(),
-                    agent_type: AgentTypeName("files".into()),
-                    constructor_input: input(),
-                    constructor_parameters: vec![],
-                    filesystem_bindings: FileMapping::compile_list([("/*", "/public/$1")]).unwrap(),
+                RouteBehaviour::Mount(MountBehaviour {
+                    handler: None,
+                    openapi_provider: None,
+                    files: MountFileSource::Live {
+                        agent: MountAgent {
+                            component_id: ComponentId(uuid::Uuid::from_u128(42)),
+                            component_revision: ComponentRevision::try_from(31u64).unwrap(),
+                            agent_type: AgentTypeName("files".into()),
+                            constructor_input: input(),
+                            constructor_parameters: vec![],
+                        },
+                    },
+                    file_bindings: FileMapping::compile_list([("/*", "/public/$1")]).unwrap(),
                     file_response_headers: vec![],
                 })
             } else {
@@ -1495,23 +1572,17 @@ mod tests {
                 let headers = headers
                     .into_iter()
                     .map(
-                        |(name, value)| proto::golem::component::FileResponseHeader {
+                        |(name, value)| golem_schema::proto::golem::http::FileResponseHeader {
                             name: name.into(),
                             value: value.into(),
                         },
                     )
                     .collect();
                 match candidate.behavior.as_mut().unwrap().kind.as_mut().unwrap() {
-                    proto::golem::customapi::route_behaviour::Kind::HttpRouter(router) => {
-                        router.file_response_headers = headers;
+                    proto::golem::customapi::route_behaviour::Kind::Mount(mount) => {
+                        mount.file_response_headers = headers;
                         if !has_bindings {
-                            router.static_bindings.clear();
-                        }
-                    }
-                    proto::golem::customapi::route_behaviour::Kind::AgentFilesystem(filesystem) => {
-                        filesystem.file_response_headers = headers;
-                        if !has_bindings {
-                            filesystem.filesystem_bindings.clear();
+                            mount.file_bindings.clear();
                         }
                     }
                     _ => unreachable!(),
@@ -1536,16 +1607,22 @@ mod tests {
 
     #[test]
     fn mounted_dispatch_binary_and_protobuf_roundtrip() {
-        let filesystem = RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
-            component_id: ComponentId(uuid::Uuid::from_u128(42)),
-            component_revision: ComponentRevision::try_from(31u64).unwrap(),
-            agent_type: AgentTypeName("files".into()),
-            constructor_input: input(),
-            constructor_parameters: vec![ConstructorParameter::Path {
-                path_segment_index: 0u32.into(),
-                parameter_type: PathSegmentType::U64,
-            }],
-            filesystem_bindings: FileMapping::compile_list([
+        let filesystem = RouteBehaviour::Mount(MountBehaviour {
+            handler: None,
+            openapi_provider: None,
+            files: MountFileSource::Live {
+                agent: MountAgent {
+                    component_id: ComponentId(uuid::Uuid::from_u128(42)),
+                    component_revision: ComponentRevision::try_from(31u64).unwrap(),
+                    agent_type: AgentTypeName("files".into()),
+                    constructor_input: input(),
+                    constructor_parameters: vec![ConstructorParameter::Path {
+                        path_segment_index: 0u32.into(),
+                        parameter_type: PathSegmentType::U64,
+                    }],
+                },
+            },
+            file_bindings: FileMapping::compile_list([
                 ("/*", "/public/$1"),
                 ("/fallback", "/fallback"),
             ])
@@ -1566,7 +1643,11 @@ mod tests {
             .route_match
             .validate(&filesystem_route.path, &filesystem_route.behavior)
             .unwrap();
-        let RouteBehaviour::AgentFilesystem(filesystem) = &mut filesystem_route.behavior else {
+        let RouteBehaviour::Mount(MountBehaviour {
+            files: MountFileSource::Live { agent: filesystem },
+            ..
+        }) = &mut filesystem_route.behavior
+        else {
             unreachable!()
         };
         filesystem
@@ -1581,7 +1662,11 @@ mod tests {
                 .validate(&filesystem_route.path, &filesystem_route.behavior)
                 .is_err()
         );
-        let RouteBehaviour::AgentFilesystem(filesystem) = &mut filesystem_route.behavior else {
+        let RouteBehaviour::Mount(MountBehaviour {
+            files: MountFileSource::Live { agent: filesystem },
+            ..
+        }) = &mut filesystem_route.behavior
+        else {
             unreachable!()
         };
         filesystem.constructor_parameters = vec![ConstructorParameter::Path {
@@ -1594,7 +1679,11 @@ mod tests {
                 .validate(&filesystem_route.path, &filesystem_route.behavior)
                 .is_err()
         );
-        let RouteBehaviour::AgentFilesystem(filesystem) = &mut filesystem_route.behavior else {
+        let RouteBehaviour::Mount(MountBehaviour {
+            files: MountFileSource::Live { agent: filesystem },
+            ..
+        }) = &mut filesystem_route.behavior
+        else {
             unreachable!()
         };
         filesystem.constructor_parameters = vec![ConstructorParameter::Path {
@@ -1619,9 +1708,11 @@ mod tests {
         for route_match in [
             RouteMatch::MountPrefix,
             RouteMatch::Method {
-                method: HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
-                    value: "ANY".into(),
-                }),
+                method: HttpMethod::Method(golem_schema::http::HttpMethod::Custom(
+                    golem_schema::http::CustomHttpMethod {
+                        value: "ANY".into(),
+                    },
+                )),
                 trailing_slash: true,
             },
         ] {
@@ -1636,7 +1727,8 @@ mod tests {
     #[test]
     fn mounted_dispatch_rejects_invalid_pairings_and_index() {
         let mut invalid = route(router());
-        invalid.route_match = HttpMethod::Get(golem_common::model::Empty {}).into();
+        invalid.route_match =
+            HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())).into();
         let encoded: proto::golem::customapi::CompiledRoute = invalid.into();
         assert!(CompiledRoute::try_from(encoded).is_err());
         let encoded: proto::golem::customapi::CompiledRoute =
@@ -1651,10 +1743,14 @@ mod tests {
             "/", "/assets/", "relative", "/a//b", "/a/../b", "/a\\b", "/a\u{7f}",
         ] {
             let mut invalid = router();
-            let RouteBehaviour::HttpRouter(router) = &mut invalid else {
+            let RouteBehaviour::Mount(MountBehaviour {
+                files: MountFileSource::Router { file_index, .. },
+                ..
+            }) = &mut invalid
+            else {
                 unreachable!()
             };
-            router.file_index[0].path = path.into();
+            file_index[0].path = path.into();
             // Same validation protects binary reload and protobuf ingress.
             let bytes = desert_rust::serialize_to_byte_vec(&invalid).unwrap();
             let decoded: RouteBehaviour = desert_rust::deserialize(&bytes).unwrap();
@@ -1669,24 +1765,36 @@ mod tests {
         let valid: proto::golem::customapi::CompiledRoute = route(router()).into();
         for duplicate_mapping in [true, false] {
             let mut invalid = valid.clone();
-            let Some(proto::golem::customapi::route_behaviour::Kind::HttpRouter(router)) =
+            let Some(proto::golem::customapi::route_behaviour::Kind::Mount(mount)) =
                 invalid.behavior.as_mut().unwrap().kind.as_mut()
             else {
                 unreachable!()
             };
             if duplicate_mapping {
-                router
-                    .static_bindings
-                    .push(router.static_bindings[0].clone());
+                mount.file_bindings.push(mount.file_bindings[0].clone());
             } else {
+                let Some(
+                    proto::golem::customapi::route_behaviour::mount_file_source::Kind::Router(
+                        router,
+                    ),
+                ) = mount.files.as_mut().unwrap().kind.as_mut()
+                else {
+                    unreachable!()
+                };
                 router.file_index.push(router.file_index[0].clone());
             }
             assert!(CompiledRoute::try_from(invalid).is_err());
         }
         for length in [31, 33] {
             let mut invalid = valid.clone();
-            let Some(proto::golem::customapi::route_behaviour::Kind::HttpRouter(router)) =
+            let Some(proto::golem::customapi::route_behaviour::Kind::Mount(mount)) =
                 invalid.behavior.as_mut().unwrap().kind.as_mut()
+            else {
+                unreachable!()
+            };
+            let Some(proto::golem::customapi::route_behaviour::mount_file_source::Kind::Router(
+                router,
+            )) = mount.files.as_mut().unwrap().kind.as_mut()
             else {
                 unreachable!()
             };
@@ -1694,7 +1802,7 @@ mod tests {
             assert!(CompiledRoute::try_from(invalid).is_err());
         }
         let any: proto::golem::customapi::RouteMatch =
-            RouteMatch::from(HttpMethod::Any(golem_common::model::Empty {})).into();
+            RouteMatch::from(HttpMethod::Any(golem_schema::Empty {})).into();
         assert!(RouteMatch::try_from(any).is_err());
 
         for segment in [
@@ -1712,7 +1820,7 @@ mod tests {
             );
         }
         let trailing = RouteMatch::Method {
-            method: HttpMethod::Get(golem_common::model::Empty {}),
+            method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())),
             trailing_slash: true,
         };
         assert!(
@@ -1731,10 +1839,14 @@ mod tests {
     #[test]
     fn mounted_dispatch_rejects_constructor_schema_root_mismatch() {
         let mut invalid = router();
-        let RouteBehaviour::HttpRouter(router) = &mut invalid else {
+        let RouteBehaviour::Mount(MountBehaviour {
+            files: MountFileSource::Router { agent, .. },
+            ..
+        }) = &mut invalid
+        else {
             unreachable!()
         };
-        router.constructor_input.graph = SchemaGraph::anonymous(SchemaType::string());
+        agent.constructor_input.graph = SchemaGraph::anonymous(SchemaType::string());
 
         let encoded: proto::golem::customapi::CompiledRoute = route(invalid).into();
         assert!(
@@ -1747,10 +1859,11 @@ mod tests {
     fn mounted_dispatch_rejects_method_schema_root_mismatch() {
         for corrupt_input in [true, false] {
             let mut invalid = router();
-            let RouteBehaviour::HttpRouter(router) = &mut invalid else {
+            let RouteBehaviour::Mount(mount) = &mut invalid else {
                 unreachable!()
             };
-            let method = router.openapi_provider_method.as_mut().unwrap();
+            let MountTarget::AgentMethod(target) = mount.openapi_provider.as_mut().unwrap();
+            let method = &mut target.method;
             if corrupt_input {
                 method.input.graph = SchemaGraph::anonymous(SchemaType::string());
             } else {

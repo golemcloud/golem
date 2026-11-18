@@ -35,31 +35,29 @@ use super::{
 };
 use crate::base_model::OplogIndex;
 use crate::base_model::durable_stream::{
-    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
-    StreamSessionRecord,
+    StreamItemsRecord, StreamRegisteredRecord, StreamSessionRecord, StreamTerminalRecord,
 };
-use crate::model::Empty;
 use crate::model::card::CardId;
 use crate::model::oplog::payload::OplogPayload;
 use crate::model::oplog::payload::host_functions::{
     HostFunctionName, host_request_from_typed_schema_value,
 };
 use crate::model::oplog::public_oplog_entry::{
-    ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
-    BeginRemoteTransactionParams, CancelPendingInvocationParams, CancelledParams,
-    CardDerivedParams, CardEventQueuedParams, CardExpiredParams, CardInstallFailedParams,
-    CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams, CardTransferConfirmedParams,
-    CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
-    CompletionDeliveredParams, CompletionDiscardedParams, CreateParams, CreateResourceParams,
-    DeactivatePluginParams, DropResourceParams, EndParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams, InterruptedParams, JumpParams,
-    LogParams, OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
-    SnapshotParams, SpanClosedParams, StartParams, StreamCancelParams, StreamEndParams,
-    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, SuccessfulUpdateParams,
-    SuspendParams,
+    ActivatePluginParams, AgentInvocationFailedParams, AgentInvocationFinishedParams,
+    AgentInvocationStartedParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
+    CancelledParams, CardDerivedParams, CardEventQueuedParams, CardExpiredParams,
+    CardInstallFailedParams, CardInstalledParams, CardRevokedCascadeParams, CardRevokedParams,
+    CardTransferConfirmedParams, CardTransferStartedParams, CardTransferredParams,
+    CommittedRemoteTransactionParams, CompletionDeliveredParams, CompletionDiscardedParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams, EndParams,
+    ErrorParams, ExitedParams, FailedUpdateParams, GrowMemoryParams, HostStreamFrameParams,
+    InterruptedParams, JumpParams, LogParams, OplogProcessorCheckpointParams,
+    PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
+    PreRollbackRemoteTransactionParams, RecoverySucceededParams, RemoveRetryPolicyParams,
+    RestartParams, ResumedParams, RevertParams, RolledBackRemoteTransactionParams,
+    SetRetryPolicyParams, SnapshotConfirmedParams, SnapshotParams, SpanClosedParams, StartParams,
+    StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StreamTerminalParams,
+    SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::raw_types::{
     CreateProjectionParameters, DurableStreamEventSummary, OplogEnrichmentEntry,
@@ -76,6 +74,7 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
+use golem_schema::Empty;
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
     type Error = String;
@@ -219,6 +218,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .timestamp
                         .ok_or("Missing timestamp field")?
                         .into(),
+                    invocation_id: agent_invocation_finished
+                        .invocation_id
+                        .ok_or("Missing invocation_id field")?
+                        .into(),
                     result: agent_invocation_finished
                         .result
                         .ok_or("Missing result field")?
@@ -228,12 +231,21 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     component_revision: agent_invocation_finished.component_revision.try_into()?,
                 }),
             ),
+            oplog_entry::Entry::AgentInvocationFailed(p) => Ok(
+                PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
+                    timestamp: p.timestamp.ok_or("Missing timestamp")?.into(),
+                    invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
+                    error: p.error,
+                    start_index: OplogIndex::from_u64(p.start_index),
+                }),
+            ),
             oplog_entry::Entry::Suspend(suspend) => Ok(PublicOplogEntry::Suspend(SuspendParams {
                 timestamp: suspend.timestamp.ok_or("Missing timestamp field")?.into(),
             })),
             oplog_entry::Entry::Error(error) => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp: error.timestamp.ok_or("Missing timestamp field")?.into(),
                 kind: oplog_error_kind_from_proto(error.kind)?,
+                invocation_id: error.invocation_id.map(Into::into),
                 error: error.error,
                 retry_from: OplogIndex::from_u64(error.retry_from),
                 retry_policy_state: error
@@ -326,6 +338,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                             })
                         })
                         .transpose()?,
+                    bootstrap: successful_update.bootstrap.map(OplogRegion::from),
                 }))
             }
             oplog_entry::Entry::FailedUpdate(failed_update) => {
@@ -366,6 +379,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .into(),
                     delta: grow_memory.delta,
                 }))
+            }
+            oplog_entry::Entry::MemorySizeReconciled(p) => {
+                Ok(PublicOplogEntry::MemorySizeReconciled(
+                    crate::model::oplog::public_oplog_entry::MemorySizeReconciledParams {
+                        timestamp: p.timestamp.ok_or("Missing timestamp field")?.into(),
+                        bytes: p.bytes,
+                    },
+                ))
             }
             oplog_entry::Entry::CreateResource(create_resource) => {
                 Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
@@ -430,9 +451,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
             oplog_entry::Entry::CancelInvocation(cancel) => Ok(
                 PublicOplogEntry::CancelPendingInvocation(CancelPendingInvocationParams {
                     timestamp: cancel.timestamp.ok_or("Missing timestamp field")?.into(),
-                    idempotency_key: cancel
-                        .idempotency_key
-                        .ok_or("Missing idempotency_key field")?
+                    invocation_id: cancel
+                        .invocation_id
+                        .ok_or("Missing invocation_id field")?
                         .into(),
                 }),
             ),
@@ -517,6 +538,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
                     data,
                     filesystem_snapshot: snapshot.filesystem_snapshot,
+                    bootstrap: snapshot.bootstrap.map(OplogRegion::from),
                 }))
             }
             oplog_entry::Entry::SnapshotConfirmed(value) => Ok(
@@ -540,6 +562,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
                     timestamp: value.timestamp.ok_or("Missing timestamp field")?.into(),
                     plugin: value.plugin.ok_or("Missing plugin field")?.try_into()?,
+                    source_component_revision: value.source_component_revision.try_into()?,
                     target_agent_id: value
                         .target_agent_id
                         .ok_or("Missing target_agent_id field")?
@@ -750,14 +773,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     record: params.record.ok_or("Missing record field")?.try_into()?,
                 }))
             }
-            oplog_entry::Entry::StreamEnd(params) => {
-                Ok(PublicOplogEntry::StreamEnd(StreamEndParams {
-                    timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
-                    record: params.record.ok_or("Missing record field")?.try_into()?,
-                }))
-            }
-            oplog_entry::Entry::StreamCancel(params) => {
-                Ok(PublicOplogEntry::StreamCancel(StreamCancelParams {
+            oplog_entry::Entry::StreamTerminal(params) => {
+                Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
                     timestamp: params.timestamp.ok_or("Missing timestamp field")?.into(),
                     record: params.record.ok_or("Missing record field")?.try_into()?,
                 }))
@@ -887,6 +904,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::AgentInvocationFinished(
                         golem_api_grpc::proto::golem::worker::AgentInvocationFinishedParameters {
                             timestamp: Some(agent_invocation_finished.timestamp.into()),
+                            invocation_id: Some(agent_invocation_finished.invocation_id.into()),
                             result: Some(agent_invocation_finished.result.try_into()?),
                             consumed_fuel: agent_invocation_finished.consumed_fuel,
                             component_revision: agent_invocation_finished.component_revision.get(),
@@ -895,6 +913,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
+            PublicOplogEntry::AgentInvocationFailed(p) => golem_api_grpc::proto::golem::worker::OplogEntry {
+                entry: Some(oplog_entry::Entry::AgentInvocationFailed(
+                    golem_api_grpc::proto::golem::worker::AgentInvocationFailedParameters {
+                        timestamp: Some(p.timestamp.into()),
+                        invocation_id: Some(p.invocation_id.into()),
+                        error: p.error,
+                        start_index: p.start_index.into(),
+                    },
+                )),
+            },
             PublicOplogEntry::Suspend(suspend) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::Suspend(
@@ -909,6 +937,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     golem_api_grpc::proto::golem::worker::ErrorParameters {
                         timestamp: Some(error.timestamp.into()),
                         kind: oplog_error_kind_to_proto(error.kind) as i32,
+                        invocation_id: error.invocation_id.map(Into::into),
                         error: error.error,
                         retry_from: error.retry_from.0,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
@@ -994,6 +1023,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                         snapshot_index: details.snapshot_index.into(),
                                     }
                                 }),
+                            bootstrap: successful_update.bootstrap.map(Into::into),
                         },
                     )),
                 }
@@ -1028,6 +1058,16 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::GrowMemoryParameters {
                             timestamp: Some(grow_memory.timestamp.into()),
                             delta: grow_memory.delta,
+                        },
+                    )),
+                }
+            }
+            PublicOplogEntry::MemorySizeReconciled(p) => {
+                golem_api_grpc::proto::golem::worker::OplogEntry {
+                    entry: Some(oplog_entry::Entry::MemorySizeReconciled(
+                        golem_api_grpc::proto::golem::worker::MemorySizeReconciledParameters {
+                            timestamp: Some(p.timestamp.into()),
+                            bytes: p.bytes,
                         },
                     )),
                 }
@@ -1121,7 +1161,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     entry: Some(oplog_entry::Entry::CancelInvocation(
                         golem_api_grpc::proto::golem::worker::CancelInvocationParameters {
                             timestamp: Some(cancel.timestamp.into()),
-                            idempotency_key: Some(cancel.idempotency_key.into()),
+                            invocation_id: Some(cancel.invocation_id.into()),
                         },
                     )),
                 }
@@ -1235,6 +1275,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             timestamp: Some(snapshot.timestamp.into()),
                             data: Some(data),
                             filesystem_snapshot: snapshot.filesystem_snapshot,
+                            bootstrap: snapshot.bootstrap.map(Into::into),
                         },
                     )),
                 }
@@ -1270,6 +1311,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::OplogProcessorCheckpointParameters {
                             timestamp: Some(params.timestamp.into()),
                             plugin: Some(params.plugin.into()),
+                            source_component_revision: params.source_component_revision.into(),
                             target_agent_id: Some(params.target_agent_id.into()),
                             confirmed_up_to: params.confirmed_up_to.into(),
                             sending_up_to: params.sending_up_to.into(),
@@ -1481,19 +1523,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                     )),
                 }
             }
-            PublicOplogEntry::StreamEnd(params) => {
+            PublicOplogEntry::StreamTerminal(params) => {
                 golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StreamEnd(
-                        golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
-                            timestamp: Some(params.timestamp.into()),
-                            record: Some(params.record.try_into()?),
-                        },
-                    )),
-                }
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                golem_api_grpc::proto::golem::worker::OplogEntry {
-                    entry: Some(oplog_entry::Entry::StreamCancel(
+                    entry: Some(oplog_entry::Entry::StreamTerminal(
                         golem_api_grpc::proto::golem::worker::DurableStreamRecordParameters {
                             timestamp: Some(params.timestamp.into()),
                             record: Some(params.record.try_into()?),
@@ -1798,9 +1830,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicyState> for PublicR
             State::Counter(n) => Ok(PublicRetryPolicyState::Counter(
                 crate::model::oplog::PublicRetryPolicyStateCounter { count: n },
             )),
-            State::Terminal(_) => Ok(PublicRetryPolicyState::Terminal(
-                crate::base_model::Empty {},
-            )),
+            State::Terminal(_) => Ok(PublicRetryPolicyState::Terminal(golem_schema::Empty {})),
             State::Wrapper(w) => {
                 let inner = w.inner.ok_or("Missing inner in Wrapper")?;
                 Ok(PublicRetryPolicyState::Wrapper(
@@ -1969,12 +1999,20 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 let raw_result = public_agent_invocation_result_to_raw(finished.result)?;
                 Ok(OplogEntry::AgentInvocationFinished {
                     timestamp: finished.timestamp,
+                    invocation_id: finished.invocation_id,
                     result: OplogPayload::Inline(Box::new(raw_result)),
                     method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
                     component_revision: finished.component_revision,
                 })
             }
+            PublicOplogEntry::AgentInvocationFailed(p) => Ok(OplogEntry::AgentInvocationFailed {
+                timestamp: p.timestamp,
+                entity_parent_start_index: None,
+                invocation_id: p.invocation_id,
+                error: AgentError::Unknown(p.error),
+                start_index: p.start_index,
+            }),
             PublicOplogEntry::Suspend(p) => Ok(OplogEntry::Suspend {
                 timestamp: p.timestamp,
             }),
@@ -1982,6 +2020,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 timestamp: error.timestamp,
                 entity_parent_start_index: None,
                 kind: error.kind,
+                invocation_id: error.invocation_id,
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
@@ -2026,6 +2065,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                             snapshot_index: details.snapshot_index,
                         }
                     }),
+                    bootstrap: p.bootstrap,
                 })
             }
             PublicOplogEntry::FailedUpdate(p) => Ok(OplogEntry::FailedUpdate {
@@ -2046,6 +2086,10 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,
                 delta: p.delta,
+            }),
+            PublicOplogEntry::MemorySizeReconciled(p) => Ok(OplogEntry::MemorySizeReconciled {
+                timestamp: p.timestamp,
+                bytes: p.bytes,
             }),
             PublicOplogEntry::CreateResource(p) => Ok(OplogEntry::CreateResource {
                 timestamp: p.timestamp,
@@ -2094,7 +2138,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
             PublicOplogEntry::CancelPendingInvocation(p) => {
                 Ok(OplogEntry::CancelPendingInvocation {
                     timestamp: p.timestamp,
-                    idempotency_key: p.idempotency_key,
+                    invocation_id: p.invocation_id,
                 })
             }
             PublicOplogEntry::BeginRemoteTransaction(_) => {
@@ -2181,6 +2225,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .filesystem_snapshot
                         .map(|name| name.parse())
                         .transpose()?,
+                    bootstrap: p.bootstrap,
                 })
             }
             PublicOplogEntry::SnapshotConfirmed(p) => Ok(OplogEntry::SnapshotConfirmed {
@@ -2197,10 +2242,12 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 Ok(OplogEntry::OplogProcessorCheckpoint {
                     timestamp: p.timestamp,
                     plugin_grant_id: p.plugin.environment_plugin_grant_id,
+                    source_component_revision: p.source_component_revision,
                     target_agent_id: p.target_agent_id,
                     confirmed_up_to: p.confirmed_up_to,
                     sending_up_to: p.sending_up_to,
                     last_batch_start: p.last_batch_start,
+                    delivery: None,
                 })
             }
             PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {
@@ -2307,26 +2354,15 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     record: OplogPayload::Inline(Box::new(record)),
                 })
             }
-            PublicOplogEntry::StreamEnd(p) => {
+            PublicOplogEntry::StreamTerminal(p) => {
                 use crate::schema::FromSchema as _;
-                let record = StreamEndRecord::from_value(p.record.value())
+                let record = StreamTerminalRecord::from_value(p.record.value())
                     .map_err(|error| error.to_string())?;
-                Ok(OplogEntry::StreamEnd {
+                Ok(OplogEntry::StreamTerminal {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    summary: Some(DurableStreamEventSummary::end(&record)),
+                    summary: Some(DurableStreamEventSummary::terminal(&record)),
                     record: OplogPayload::Inline(Box::new(record)),
-                })
-            }
-            PublicOplogEntry::StreamCancel(p) => {
-                use crate::schema::FromSchema as _;
-                Ok(OplogEntry::StreamCancel {
-                    timestamp: p.timestamp,
-                    entity_parent_start_index: None,
-                    summary: Some(DurableStreamEventSummary::Cancelled),
-                    record: OplogPayload::Inline(Box::new(StreamCancelRecord::from_value(
-                        p.record.value(),
-                    ).map_err(|error| error.to_string())?)),
                 })
             }
             PublicOplogEntry::StreamSession(p) => {

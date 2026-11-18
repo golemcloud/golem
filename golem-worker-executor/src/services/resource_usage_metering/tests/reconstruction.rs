@@ -30,15 +30,19 @@ fn replay_memory(
     bytes: u64,
     clock: &TestClock,
 ) -> LinearMemoryTracker {
-    LinearMemoryTracker::new_at(
+    let memory = LinearMemoryTracker::new_at(
         bytes,
         bytes,
         AgentMode::Durable,
         true,
+        true,
         entry.clone(),
         Arc::new(Mutex::new(MemoryGrant::inert(bytes))),
         clock.time(),
-    )
+    );
+    memory.grow(bytes, clock.now());
+    assert_eq!(memory.current_bytes(), bytes);
+    memory
 }
 
 #[test]
@@ -195,15 +199,7 @@ async fn reconstruction_window_keeps_permit_without_memory_or_filesystem_charge(
                 .unwrap(),
         );
         let entry = Arc::new(AtomicResourceEntry::new(0, usize::MAX, 0, 0, 1));
-        let memory = LinearMemoryTracker::new_at(
-            GIB,
-            GIB,
-            AgentMode::Durable,
-            true,
-            entry.clone(),
-            Arc::new(Mutex::new(MemoryGrant::inert(GIB))),
-            clock.time(),
-        );
+        let memory = replay_memory(&entry, GIB, &clock);
         let first = ObservationGate::ready(authoritative(100));
         let final_read = ObservationGate::ready(authoritative(100));
         let reader = ScriptedUsageReader::new(vec![first, final_read]);
@@ -272,10 +268,12 @@ fn replay_memory_tracking_still_enforces_the_per_agent_limit() {
         GIB,
         AgentMode::Durable,
         true,
+        true,
         entry,
         Arc::new(Mutex::new(MemoryGrant::inert(GIB))),
         now,
     );
+    memory.grow(GIB, now.instant);
     let stopped = Arc::new(AtomicBool::new(false));
     let observed = stopped.clone();
     memory.set_limit_exceeded_callback(Arc::new(move || observed.store(true, Ordering::Release)));

@@ -26,6 +26,34 @@ use crate::model::oplog::{
 };
 
 #[cfg(test)]
+mod memory_reconciliation_tests {
+    use super::*;
+    use crate::model::Timestamp;
+    use crate::model::oplog::public_oplog_entry::MemorySizeReconciledParams;
+    use golem_api_grpc::proto::golem::worker::{
+        OplogEntry as ProtoPublicOplogEntry, RawOplogEntry,
+    };
+    use test_r::test;
+
+    #[test]
+    fn absolute_memory_reconciliation_roundtrips_in_raw_and_public_oplogs() {
+        for bytes in [0, 9_007_199_254_741_009, u64::MAX] {
+            let timestamp = Timestamp::now_utc().rounded();
+            let raw = OplogEntry::MemorySizeReconciled { timestamp, bytes };
+            assert!(raw.is_hint());
+            let proto: RawOplogEntry = raw.clone().try_into().unwrap();
+            assert_eq!(OplogEntry::try_from(proto).unwrap(), raw);
+            let public = PublicOplogEntry::MemorySizeReconciled(MemorySizeReconciledParams {
+                timestamp,
+                bytes,
+            });
+            let proto: ProtoPublicOplogEntry = public.clone().try_into().unwrap();
+            assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        }
+    }
+}
+
+#[cfg(test)]
 mod tool_attachment_control_tests {
     use test_r::test;
 
@@ -214,7 +242,7 @@ mod observational_start_proto_tests {
 
     #[test]
     fn span_lifecycle_raw_protobuf_roundtrips() {
-        use std::collections::HashMap;
+        use std::collections::BTreeMap;
 
         use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
         use crate::model::oplog::raw_types::{
@@ -235,7 +263,7 @@ mod observational_start_proto_tests {
                 trace_states: vec!["link=other-trace".into()],
             }],
             started_at: Timestamp::now_utc(),
-            attributes: AttributeMap(HashMap::from([(
+            attributes: AttributeMap(BTreeMap::from([(
                 "name".into(),
                 AttributeValue::String("rpc".into()),
             )])),
@@ -265,7 +293,7 @@ mod observational_start_proto_tests {
             }),
             span_attributes: Some(SpanAttributes {
                 span_id: span_id.clone(),
-                attributes: AttributeMap(HashMap::from([(
+                attributes: AttributeMap(BTreeMap::from([(
                     "result".into(),
                     AttributeValue::String("error".into()),
                 )])),
@@ -290,8 +318,24 @@ mod observational_start_proto_tests {
         }
     }
 
+    fn attributes(keys: &[&str]) -> Vec<PublicAttribute> {
+        keys.iter()
+            .map(|key| PublicAttribute {
+                key: key.to_string(),
+                value: PublicAttributeValue::String(StringAttributeValue {
+                    value: format!("{key}-value"),
+                }),
+            })
+            .collect()
+    }
+
+    /// Sends a message over the gRPC wire format, as the executor does to the worker service.
+    fn over_the_wire<M: prost::Message + Default>(message: M) -> M {
+        M::decode(message.encode_to_vec().as_slice()).unwrap()
+    }
+
     #[test]
-    fn span_lifecycle_public_protobuf_roundtrips() {
+    fn span_lifecycle_public_protobuf_roundtrips_with_attributes_sorted_by_key() {
         use crate::model::invocation_context::{SpanId, TraceId};
 
         let span_id = SpanId::generate();
@@ -306,12 +350,9 @@ mod observational_start_proto_tests {
                 trace_states: vec!["link=other-trace".into()],
             }],
             started_at: Timestamp::now_utc().rounded(),
-            attributes: vec![PublicAttribute {
-                key: "name".into(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "rpc".into(),
-                }),
-            }],
+            attributes: attributes(&[
+                "name", "target", "agent", "zone", "method", "budget", "kind", "client",
+            ]),
             kind: PublicSpanKind::Client,
         };
         let finished = PublicSpanFinished {
@@ -319,30 +360,92 @@ mod observational_start_proto_tests {
             finished_at: Timestamp::now_utc().rounded(),
             outcome: PublicSpanOutcome::Denied,
         };
-        let attributes = PublicSpanAttributes {
+        let updated = PublicSpanAttributes {
             span_id,
-            attributes: vec![PublicAttribute {
-                key: "result".into(),
-                value: PublicAttributeValue::String(StringAttributeValue {
-                    value: "denied".into(),
-                }),
-            }],
+            attributes: attributes(&[
+                "result", "bytes", "status", "error", "retries", "latency", "cache", "outcome",
+            ]),
+        };
+
+        let expected_started = PublicSpanStarted {
+            attributes: attributes(&[
+                "agent", "budget", "client", "kind", "method", "name", "target", "zone",
+            ]),
+            ..started.clone()
+        };
+        let expected_updated = PublicSpanAttributes {
+            attributes: attributes(&[
+                "bytes", "cache", "error", "latency", "outcome", "result", "retries", "status",
+            ]),
+            ..updated.clone()
         };
 
         assert_eq!(
-            public_span_started_from_proto(public_span_started_to_proto(started.clone())).unwrap(),
-            started
+            public_span_started_from_proto(over_the_wire(public_span_started_to_proto(started)))
+                .unwrap(),
+            expected_started
         );
         assert_eq!(
-            public_span_finished_from_proto(public_span_finished_to_proto(finished.clone()))
-                .unwrap(),
+            public_span_finished_from_proto(over_the_wire(public_span_finished_to_proto(
+                finished.clone()
+            )))
+            .unwrap(),
             finished
         );
         assert_eq!(
-            public_span_attributes_from_proto(public_span_attributes_to_proto(attributes.clone()))
-                .unwrap(),
-            attributes
+            public_span_attributes_from_proto(over_the_wire(public_span_attributes_to_proto(
+                updated
+            )))
+            .unwrap(),
+            expected_updated
         );
+    }
+
+    #[test]
+    fn invocation_context_attributes_are_sorted_by_key_in_the_public_oplog_entry() {
+        use nonempty_collections::NEVec;
+
+        use super::super::spans::{decode_public_span_data, encode_public_span_data};
+        use crate::model::invocation_context::{AttributeValue, InvocationContextSpan};
+        use crate::model::oplog::payload::types::encode_span_data;
+        use crate::model::oplog::{PublicSpanData, SpanData};
+
+        fn keys(spans: &[Vec<PublicSpanData>]) -> Vec<String> {
+            match &spans[0][0] {
+                PublicSpanData::LocalSpan(span) => {
+                    span.attributes.iter().map(|a| a.key.clone()).collect()
+                }
+                PublicSpanData::ExternalSpan(_) => panic!("expected a local span"),
+            }
+        }
+
+        let span = InvocationContextSpan::local()
+            .with_attributes(
+                [
+                    "kiwi", "apple", "plum", "fig", "banana", "mango", "date", "cherry",
+                ]
+                .into_iter()
+                .map(|key| (key.to_string(), AttributeValue::String(key.to_string())))
+                .collect(),
+            )
+            .build();
+        let expected = [
+            "apple", "banana", "cherry", "date", "fig", "kiwi", "mango", "plum",
+        ];
+
+        // The executor converts the stored span to the public oplog entry.
+        let public = encode_span_data(&SpanData::from_chain(&NEVec::new(span)));
+        assert_eq!(keys(&public), expected);
+
+        // The worker service receives the public oplog entry from the executor over gRPC.
+        let public = encode_public_span_data(
+            decode_public_span_data(&public, 0)
+                .into_iter()
+                .map(over_the_wire)
+                .collect(),
+        )
+        .unwrap();
+        assert_eq!(keys(&public), expected);
     }
 }
 
@@ -358,6 +461,7 @@ mod successful_update_proto_tests {
         FailedSnapshotAssistedUpdateDetails, FilesystemSnapshotName, OplogEntry,
         SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription,
     };
+    use crate::model::regions::OplogRegion;
     use crate::model::{OplogIndex, Timestamp};
 
     #[test]
@@ -373,6 +477,10 @@ mod successful_update_proto_tests {
                 source_component_revision: ComponentRevision::new(1).unwrap(),
                 source_revision_start_index: OplogIndex::INITIAL,
                 snapshot_index: OplogIndex::from_u64(3),
+            }),
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(11),
+                end: OplogIndex::from_u64(17),
             }),
         };
 
@@ -430,28 +538,38 @@ mod successful_update_proto_tests {
     }
 
     #[test]
-    fn raw_snapshot_assisted_pending_update_preserves_the_filesystem_snapshot() {
-        [None, Some(FilesystemSnapshotName::periodic())]
-            .into_iter()
-            .for_each(|filesystem_snapshot| {
-                let original = OplogEntry::PendingUpdate {
-                    timestamp: Timestamp::now_utc(),
-                    description: UpdateDescription::SnapshotAssistedAutomatic {
-                        target_revision: ComponentRevision::new(2).unwrap(),
-                        source_component_revision: ComponentRevision::new(1).unwrap(),
-                        source_revision_start_index: OplogIndex::INITIAL,
-                        snapshot_index: OplogIndex::from_u64(3),
-                        snapshot_revision: ComponentRevision::new(1).unwrap(),
-                        filesystem_snapshot,
-                    },
-                    update_attempt_index: Some(OplogIndex::from_u64(2)),
-                };
+    fn raw_snapshot_assisted_pending_update_preserves_the_filesystem_snapshot_and_bootstrap() {
+        [
+            (None, None),
+            (
+                Some(FilesystemSnapshotName::periodic()),
+                Some(OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(7),
+                }),
+            ),
+        ]
+        .into_iter()
+        .for_each(|(filesystem_snapshot, snapshot_bootstrap)| {
+            let original = OplogEntry::PendingUpdate {
+                timestamp: Timestamp::now_utc(),
+                description: UpdateDescription::SnapshotAssistedAutomatic {
+                    target_revision: ComponentRevision::new(2).unwrap(),
+                    source_component_revision: ComponentRevision::new(1).unwrap(),
+                    source_revision_start_index: OplogIndex::INITIAL,
+                    snapshot_index: OplogIndex::from_u64(3),
+                    snapshot_revision: ComponentRevision::new(1).unwrap(),
+                    filesystem_snapshot,
+                    snapshot_bootstrap,
+                },
+                update_attempt_index: Some(OplogIndex::from_u64(2)),
+            };
 
-                let proto: RawOplogEntry = original.clone().try_into().unwrap();
-                let roundtrip: OplogEntry = proto.try_into().unwrap();
+            let proto: RawOplogEntry = original.clone().try_into().unwrap();
+            let roundtrip: OplogEntry = proto.try_into().unwrap();
 
-                assert_eq!(roundtrip, original);
-            });
+            assert_eq!(roundtrip, original);
+        });
     }
 }
 

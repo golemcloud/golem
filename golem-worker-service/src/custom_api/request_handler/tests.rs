@@ -11,7 +11,6 @@ use crate::custom_api::oidc::model::{
 use crate::custom_api::oidc::session_store::{SessionStore, SessionStoreError};
 use crate::mcp::InvocationHarness;
 use async_trait::async_trait;
-use golem_common::base_model::Empty;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName, HttpMethod};
@@ -21,11 +20,13 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::{
     AgentConstructorSchema, InputSchema, OutputSchema, SchemaGraph, SchemaType,
 };
+use golem_schema::Empty;
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledRoute,
     CompiledRoutes, CompiledSchema, CorsOptions, DurableStreamRepresentation,
-    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, OriginPattern,
-    PathSegment, RequestBodySchema, RouteBehaviour, RouteSecurity, SessionFromHeaderRouteSecurity,
+    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, MountAgentMethod,
+    MountTarget, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteSecurity,
+    SessionFromHeaderRouteSecurity,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -613,6 +614,7 @@ fn durable_stream_routes() -> CompiledRoutes {
         route_mode: AgentRouteMode::DurableStreams,
         base_path_variables: 0,
         durable_streams: Some(DurableStreamRoutePolicy {
+            family_id: 1,
             slots: vec![
                 DurableStreamSlot {
                     canonical_name: "$result".into(),
@@ -666,7 +668,8 @@ fn durable_stream_routes() -> CompiledRoutes {
     let cors = CorsOptions {
         allowed_patterns: vec![OriginPattern("https://client.example".to_string())],
     };
-    let route_family = |prefix: &str, route_id_offset: i32, behaviour: CallAgentBehaviour| {
+    let route_family = |prefix: &str, route_id_offset: i32, mut behaviour: CallAgentBehaviour| {
+        behaviour.durable_streams.as_mut().unwrap().family_id = route_id_offset + 1;
         let session_path = vec![
             PathSegment::Literal {
                 value: prefix.into(),
@@ -725,7 +728,7 @@ fn durable_stream_routes() -> CompiledRoutes {
         vec![
             route(
                 route_id_offset + 1,
-                HttpMethod::Post(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default())),
                 vec![PathSegment::Literal {
                     value: prefix.into(),
                 }],
@@ -738,42 +741,49 @@ fn durable_stream_routes() -> CompiledRoutes {
             ),
             route(
                 route_id_offset + 2,
-                HttpMethod::Get(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())),
                 slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 3,
-                HttpMethod::Post(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default())),
                 slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 4,
-                HttpMethod::Delete(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Delete(Default::default())),
                 slot_path,
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 5,
-                HttpMethod::Delete(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Delete(Default::default())),
                 session_path,
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 6,
-                HttpMethod::Get(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default())),
                 fork_slot_path.clone(),
                 RequestBodySchema::Unused,
                 behaviour.clone(),
             ),
             route(
                 route_id_offset + 7,
-                HttpMethod::Put(Empty {}),
+                HttpMethod::Method(golem_schema::http::HttpMethod::Put(Default::default())),
+                fork_slot_path.clone(),
+                RequestBodySchema::Unused,
+                behaviour.clone(),
+            ),
+            route(
+                route_id_offset + 8,
+                HttpMethod::Method(golem_schema::http::HttpMethod::Delete(Default::default())),
                 fork_slot_path,
                 RequestBodySchema::Unused,
                 behaviour,
@@ -1039,6 +1049,16 @@ async fn durable_stream_operation_policy_is_isolated_per_route_family() {
     let control = controls[0].export_control.as_ref().unwrap();
     assert_eq!(control.session, session);
     assert_eq!(control.slot.as_deref(), Some("$result"));
+    let (environment, revision, route): (String, String, String) =
+        serde_json::from_str(&control.route_scope).unwrap();
+    let expected_environment: EnvironmentId = controls[0]
+        .producer_environment_id
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(environment, expected_environment.to_string());
+    assert_eq!(revision, DeploymentRevision::INITIAL.to_string());
+    assert_eq!(route, "11");
 
     let response = handler.handle_request(request("stream")).await.unwrap();
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
@@ -1118,8 +1138,8 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
-    let named_fork = |root: &str, name: &str| {
-        let hash = blake3::hash(format!("{root}\0{name}").as_bytes());
+    let named_fork = |root: &str, scope: &str, name: &str| {
+        let hash = blake3::hash(&serde_json::to_vec(&(root, scope, name)).unwrap());
         let mut bytes: [u8; 16] = hash.as_bytes()[..16].try_into().unwrap();
         bytes[6] = (bytes[6] & 15) | 64;
         bytes[8] = (bytes[8] & 63) | 128;
@@ -1250,14 +1270,14 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 assert_eq!(
                     forks[0].source_agent_id.as_ref().unwrap().name,
                     if nested {
-                        named_fork(&root_id, &source_fork)
+                        named_fork(&root_id, &forks[0].route_scope, &source_fork)
                     } else {
                         root_id.clone()
                     }
                 );
                 assert_eq!(
                     forks[0].target_agent_id.as_ref().unwrap().name,
-                    named_fork(&root_id, &target_fork)
+                    named_fork(&root_id, &forks[0].route_scope, &target_fork)
                 );
                 assert_eq!(forks[0].source_path, source);
             }
@@ -1452,12 +1472,32 @@ async fn durable_stream_successful_fork_preserves_partial_utf8_byte_prefix() {
         response.into_body().into_bytes().await.unwrap().as_ref(),
         [0xe2, 0x82]
     );
+
+    let response = handler
+        .handle_request(
+            Request::builder()
+                .method(http::Method::DELETE)
+                .uri(format!("http://ds.example{fork_path}").parse().unwrap())
+                .header(http::header::HOST, "ds.example")
+                .header("x-golem-session", "{}")
+                .finish(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let controls = harness.recorded_durable_stream_controls();
+    assert_eq!(controls.len(), 1);
+    assert_eq!(controls[0].producer_agent_id, forks[0].target_agent_id);
+    let control = controls[0].export_control.as_ref().unwrap();
+    assert_eq!(control.route_scope, forks[0].route_scope);
+    assert_eq!(control.session, session);
+    assert_eq!(control.slot.as_deref(), Some("input"));
 }
 
 #[test]
 async fn immutable_file_corpus_through_request_handler() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::model::agent::FileMapping;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouterFileIndexEntry;
     use golem_service_base::replayable_stream::ReplayableStream;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -1493,15 +1533,18 @@ async fn immutable_file_corpus_through_request_handler() {
         )));
         let mut route = test_route(1, "/", None, "router");
         route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.static_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+        router.file_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+        let MountFileSource::Router { agent, file_index } = &mut router.files else {
+            unreachable!()
+        };
         let mut provisions = vec![];
         if input["body_hex"].is_string() {
             provisions.push((decode(&input["body_hex"]), true));
         } else if let Some(revisions) = input["revisions"].as_object() {
-            router.component_revision =
+            agent.component_revision =
                 ComponentRevision::try_from(input["selected_revision"].as_u64().unwrap()).unwrap();
             for (revision, file) in revisions {
                 provisions.push((
@@ -1533,7 +1576,7 @@ async fn immutable_file_corpus_through_request_handler() {
                 .await
                 .unwrap();
             if indexed {
-                router.file_index.push(RouterFileIndexEntry {
+                file_index.push(RouterFileIndexEntry {
                     path: input["path"].as_str().unwrap().into(),
                     blob_key: key,
                     size,
@@ -1596,7 +1639,7 @@ async fn immutable_file_corpus_through_request_handler() {
 async fn immutable_files_over_http1_and_http2_do_not_cache_contents() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
-    use golem_common::model::agent::FileMapping;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouterFileIndexEntry;
     use golem_service_base::replayable_stream::ReplayableStream;
     use golem_service_base::storage::blob::{
@@ -1620,11 +1663,14 @@ async fn immutable_files_over_http1_and_http2_do_not_cache_contents() {
             .unwrap();
         let mut route = test_route(1, "/", None, "router");
         route.cors.allowed_patterns = vec![OriginPattern("https://client.example".into())];
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.static_bindings = FileMapping::compile_list([("/asset", "/private/a.txt")]).unwrap();
-        router.file_index.push(RouterFileIndexEntry {
+        router.file_bindings = FileMapping::compile_list([("/asset", "/private/a.txt")]).unwrap();
+        let MountFileSource::Router { file_index, .. } = &mut router.files else {
+            unreachable!()
+        };
+        file_index.push(RouterFileIndexEntry {
             path: "/private/a.txt".into(),
             blob_key: key,
             size: 7,
@@ -1728,20 +1774,23 @@ impl HttpApiDefinitionsLookup for MovingOpenApiLookup {
         use crate::custom_api::route_resolver::tests::test_route;
         let moved = self.0.load(std::sync::atomic::Ordering::SeqCst);
         let mut router = test_route(1, "/router", None, "router");
-        let RouteBehaviour::HttpRouter(behavior) = &mut router.behavior else {
+        let RouteBehaviour::Mount(behavior) = &mut router.behavior else {
             unreachable!()
         };
-        behavior.openapi_provider_method = Some(golem_service_base::custom_api::RouterMethod {
-            method_name: "describe".into(),
-            input: CompiledInputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                input_schema: InputSchema::Parameters(vec![]),
+        behavior.openapi_provider = Some(MountTarget::AgentMethod(MountAgentMethod {
+            agent: behavior.files.agent().clone(),
+            method: golem_service_base::custom_api::RouterMethod {
+                method_name: "describe".into(),
+                input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                output: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                },
             },
-            output: CompiledOutputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::string()),
-                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
-            },
-        });
+        }));
         Ok(CompiledRoutes {
             account_id: AccountId(uuid::Uuid::nil()),
             account_email: AccountEmail::new("test@golem"),
@@ -1882,8 +1931,8 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
     use crate::custom_api::openapi::test_support::{controlled, provider_routes};
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
     use futures::{FutureExt, StreamExt};
-    use golem_common::model::agent::FileMapping;
     use golem_common::model::filesystem::FileReadHead;
+    use golem_schema::http::FileMapping;
     use golem_service_base::custom_api::RouterFileIndexEntry;
     use golem_service_base::model::FileReadResponse;
     use golem_service_base::replayable_stream::ReplayableStream;
@@ -1912,20 +1961,23 @@ async fn ordinary_traffic_lazy_openapi_corpus() {
         .await
         .unwrap();
     let mut routes = provider_routes(1);
-    let RouteBehaviour::HttpRouter(router) = &mut routes[1].behavior else {
+    let RouteBehaviour::Mount(router) = &mut routes[1].behavior else {
         unreachable!()
     };
-    router.static_bindings = FileMapping::compile_list([("/static", "/asset")]).unwrap();
-    router.file_index.push(RouterFileIndexEntry {
+    router.file_bindings = FileMapping::compile_list([("/static", "/asset")]).unwrap();
+    let MountFileSource::Router { file_index, .. } = &mut router.files else {
+        unreachable!()
+    };
+    file_index.push(RouterFileIndexEntry {
         path: "/asset".into(),
         blob_key: key,
         size: 11,
     });
     let mut live = test_route(2, "/live", None, "filesystem");
-    let RouteBehaviour::AgentFilesystem(filesystem) = &mut live.behavior else {
+    let RouteBehaviour::Mount(filesystem) = &mut live.behavior else {
         unreachable!()
     };
-    filesystem.filesystem_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
+    filesystem.file_bindings = FileMapping::compile_list([("/*", "/$1")]).unwrap();
     routes.push(live);
     let harness = invocation_harness();
     harness.file_reads.responses.lock().unwrap().push_back(

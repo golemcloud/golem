@@ -68,15 +68,30 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
         let receipt = receipt.or_else(|| {
             matches!(event, ReplayEvent::ReplayFinished).then(|| owner.latest_replay_receipt())
         });
+        // A snapshot-based update is finalized by loading its snapshot, not by a replay.
         let pending_update = if matches!(event, ReplayEvent::ReplayFinished) {
-            ctx.state
+            let mut pending_update = ctx
+                .state
                 .pending_update
                 .try_lock()
-                .map_err(|_| WorkerExecutorError::runtime("pending replay update is locked"))?
-                .take()
+                .map_err(|_| WorkerExecutorError::runtime("pending replay update is locked"))?;
+            pending_update.take_if(|update| {
+                !matches!(update.description, UpdateDescription::SnapshotBased { .. })
+            })
         } else {
             None
         };
+        // A snapshot-assisted update names in its outcome the bootstrap block that its target
+        // replayed: the block of its selected record.
+        let bootstrap = pending_update
+            .as_ref()
+            .filter(|update| {
+                matches!(
+                    update.description,
+                    UpdateDescription::SnapshotAssistedAutomatic { .. }
+                )
+            })
+            .and_then(|_| ctx.state.bootstrap_range.clone());
         let local_predecessor = ctx.state.replay_applications.back().cloned();
         let predecessor = order.tail.upgrade();
         let initial_installed_revision = ctx.state.component_metadata.revision;
@@ -151,11 +166,6 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                 let target_revision = match (&event, &pending_update) {
                     (ReplayEvent::UpdateReplayed { new_revision }, _) => Some(*new_revision),
                     (ReplayEvent::ReplayFinished, Some(update)) => {
-                        if matches!(update.description, UpdateDescription::SnapshotBased { .. }) {
-                            return Err(WorkerExecutorError::runtime(
-                                "replay finalization requires an automatic update",
-                            ));
-                        }
                         Some(*update.description.target_revision())
                     }
                     _ => None,
@@ -260,6 +270,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                                 crate::worker::start_outcome::success_details_of(
                                     &pending.reference,
                                 ),
+                                bootstrap,
                                 captured_owner.clone(),
                                 futures::future::ready(Ok(boundary.clone())).boxed(),
                             )
@@ -409,8 +420,9 @@ pub(super) fn apply<Ctx: WorkerCtx>(
     if ctx.current_invocation_scope_card() == prepared.scope
         && let Some(roots) = &prepared.live_scope_roots
     {
-        ctx.state.invocation_scope_root_cards = roots.clone();
-        ctx.state.authority_initialized = false;
+        let authority = ctx.state.authority_mut();
+        authority.replace_scope_root_cards(roots.clone());
+        authority.invalidate();
     }
     ctx.rederive_agent_effective_surface_from_wallet();
     ctx.state.replay_applications.pop_front();
@@ -449,16 +461,19 @@ mod context {
                 .card_service
                 .check_cards(interested_card_ids)
                 .await?;
-            self.state.invocation_scope_root_cards = live_scope_root_cards_from_states(
-                self.state.invocation_scope_card.as_ref(),
+            let live_roots = live_scope_root_cards_from_states(
+                self.state.authority().admitted_scope_card(),
                 &card_states,
             )?;
+            self.state
+                .authority_mut()
+                .replace_scope_root_cards(live_roots);
             let revoked_card_ids = card_states
                 .into_iter()
                 .filter_map(|(card_id, state)| (state == CardState::Revoked).then_some(card_id))
                 .collect::<Vec<_>>();
             if !revoked_card_ids.is_empty() {
-                self.state.authority_initialized = false;
+                self.state.invalidate_authority();
             }
             self.public_state
                 .worker()

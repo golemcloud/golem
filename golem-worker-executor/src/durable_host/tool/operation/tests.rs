@@ -383,9 +383,7 @@ async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
     };
 
     let expected = SerializableToolAdmissionRefusal::BeforeInputRead {
-        session: StreamRegistrationInvocation::Local(
-            golem_common::base_model::IdempotencyKey::new("input-owner".into()),
-        ),
+        session: StreamRegistrationInvocation::Local(uuid::Uuid::from_u128(701).into()),
         binding: Box::new(StreamBindingRecord {
             transport_stream_id: 7,
             source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(19))),
@@ -422,10 +420,12 @@ async fn missing_input_admission_waits_for_exact_refusal_or_cancellation() {
             .expect("exact refusal or cancellation wakes another missing demand")
             .unwrap_err();
         if cancel_first {
-            assert_eq!(
-                exact.to_string(),
-                crate::durable_host::tool_attachment_live_admission_cancelled_error().to_string()
-            );
+            assert!(matches!(
+                exact,
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::EntityCancellation,
+                }
+            ));
             assert_eq!(operation.observed_admission_refusal(), None);
         } else {
             assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&exact));
@@ -623,10 +623,12 @@ async fn historical_admission_refusal_does_not_block_child_validation() {
             index: 3,
         })
         .await;
-    assert_eq!(
-        error.to_string(),
-        crate::durable_host::tool_attachment_live_admission_cancelled_error().to_string()
-    );
+    assert!(matches!(
+        error,
+        WorkerExecutorError::Interrupted {
+            kind: InterruptKind::EntityCancellation,
+        }
+    ));
     assert_eq!(operation.observed_admission_refusal(), None);
 }
 
@@ -2434,6 +2436,72 @@ async fn ancestor_cancellation_preserves_selected_descendants_but_cancels_their_
 }
 
 #[test]
+#[timeout("10s")]
+async fn completed_replay_cancellation_closes_only_unrecorded_stdin() {
+    use super::super::attachment::AttachmentRead;
+    use golem_common::model::oplog::attachment::{ToolAttachmentId, ToolAttachmentSlot};
+
+    for recorded in [false, true] {
+        for terminal in [0, 1, 2] {
+            let operation = replay_operation(2);
+            let (stdin, input, _) = attachment_pair(16, AttachmentMemory::inert());
+            stdin.configure_live();
+            if recorded {
+                stdin.writer().set_identity(ToolAttachmentId {
+                    creation_start: OplogIndex::from_u64(3),
+                    slot: ToolAttachmentSlot::Stdin,
+                });
+            }
+            stdin.write(b"before".to_vec()).await.unwrap();
+            match terminal {
+                1 => stdin.finish().unwrap(),
+                2 => stdin.fail(ByteStreamFailure::Abandoned).unwrap(),
+                _ => {}
+            }
+            let (stdout, output, _) = attachment_pair(16, AttachmentMemory::inert());
+            stdout.configure_live();
+            assert!(operation.attach(Some(input.controller()), Some(output.controller()), None));
+            let execution = ToolExecution::new(operation.clone(), false, None);
+            execution.cancel();
+            execution.cancel();
+            assert!(!execution.is_cancelled());
+            assert!(matches!(
+                operation.winner_if_active(),
+                Some(ToolOperationWinner::Open)
+            ));
+            assert!(
+                matches!(input.read_next().await, AttachmentRead::Item(Ok(bytes)) if bytes == b"before")
+            );
+            match terminal {
+                1 => assert!(matches!(input.read_next().await, AttachmentRead::End)),
+                2 => assert!(matches!(
+                    input.read_next().await,
+                    AttachmentRead::Item(Err(ByteStreamFailure::Abandoned))
+                )),
+                _ if recorded => {
+                    stdin.write(b"after".to_vec()).await.unwrap();
+                    stdin.finish().unwrap();
+                    assert!(
+                        matches!(input.read_next().await, AttachmentRead::Item(Ok(bytes)) if bytes == b"after")
+                    );
+                    assert!(matches!(input.read_next().await, AttachmentRead::End));
+                }
+                _ => assert!(matches!(
+                    input.read_next().await,
+                    AttachmentRead::Item(Err(ByteStreamFailure::Cancelled))
+                )),
+            }
+            stdout.write(b"output".to_vec()).await.unwrap();
+            stdout.finish().unwrap();
+            assert!(
+                matches!(output.read_next().await, AttachmentRead::Item(Ok(bytes)) if bytes == b"output")
+            );
+            assert!(matches!(output.read_next().await, AttachmentRead::End));
+        }
+    }
+}
+
+#[test]
 async fn cancellation_selection_closes_attached_streams() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);
@@ -3457,9 +3525,9 @@ fn probed_entity_invocation(
         context.activation,
         context.principal,
         InvocationExecutionMode::Live,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
         false,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
     )
     .unwrap();
     let (destroyed, receipt) = tokio::sync::oneshot::channel();
@@ -3546,9 +3614,9 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
         operation.activation,
         operation.principal,
         InvocationExecutionMode::Live,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
         false,
-        golem_common::model::IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4().into(),
     )
     .unwrap();
     let registration = slot.register(&scope, Default::default()).unwrap();

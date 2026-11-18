@@ -34,8 +34,8 @@ mod invocation_id;
 mod retry;
 
 pub(crate) use custom::{
-    ActiveCustomInvocation, CustomInvocationContext, CustomInvocationScope,
-    OpenCustomInvocationScope,
+    ActiveCustomInvocation, CustomInvocationScope, GuestTaskContext, OpenCustomInvocationScope,
+    RetryPolicyScope,
 };
 pub use custom::{
     CustomBeginLifecycle, CustomInvocationContextSnapshot, LiveCustomDurableInvocation,

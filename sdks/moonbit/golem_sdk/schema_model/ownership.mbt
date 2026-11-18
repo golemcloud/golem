@@ -80,7 +80,10 @@ fn take_owned_capabilities(
     Stream(handle) =>
       match handle.take() {
         Some(Wrapped(raw)) => push_unique(wrapped_streams, raw)
-        Some(Native(raw)) => push_unique_native_stream(native_streams, raw)
+        Some(Native(raw, outcome)) => {
+          push_unique_native_stream(native_streams, raw)
+          outcome.drop_sync()
+        }
         None => ()
       }
     Record(values) | Tuple(values) | List(values) | FixedList(values) =>

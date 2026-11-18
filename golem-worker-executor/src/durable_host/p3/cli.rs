@@ -317,11 +317,7 @@ where
         } = self;
         // Safe park: waiting for guest-produced stream bytes (or the stream's end).
         while let Some(StdioChunk { contents, ack_tx }) = activity.park(chunks_rx.recv()).await {
-            let event = match stream {
-                StandardStream::Stdout => InternalWorkerEvent::stdout(contents),
-                StandardStream::Stderr => InternalWorkerEvent::stderr(contents),
-            };
-            emit_log_event_access::<Ctx, U>(accessor, event).await;
+            emit_stdio_event_access::<Ctx, U>(accessor, stream, contents).await;
             let _ = ack_tx.send(());
         }
         let _ = result_tx.send(Ok(Ok(())));
@@ -340,11 +336,13 @@ async fn wait_stdio_task_result(
     }
 }
 
-async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
+async fn emit_stdio_event_access<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
-    event: InternalWorkerEvent,
+    stream: StandardStream,
+    contents: Vec<u8>,
 ) {
     let (
+        event,
         has_oplog_processor,
         owned_agent_id,
         public_state,
@@ -357,15 +355,22 @@ async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         let trace_context = ctx
             .state
+            .invocation_state()
             .invocation_context
-            .span_origin(&ctx.state.current_span_id)
+            .span_origin(&ctx.state.invocation_state().current_span_id)
             .map(
                 |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
                     trace_id,
-                    span_id: ctx.state.current_span_id.clone(),
+                    span_id: ctx.state.invocation_state().current_span_id.clone(),
                 },
             );
+        let invocation_id = ctx.current_invocation_id().map(|id| id.id());
+        let event = match stream {
+            StandardStream::Stdout => InternalWorkerEvent::stdout(contents, invocation_id),
+            StandardStream::Stderr => InternalWorkerEvent::stderr(contents, invocation_id),
+        };
         (
+            event,
             ctx.owner_component_metadata()
                 .metadata
                 .has_oplog_processor(),
@@ -419,7 +424,10 @@ where
         activity,
         _phantom: PhantomData,
     };
-    store.spawn(async move |store| task.run(store).await)?;
+    let captured = durable_worker_ctx::<Ctx, U>(store.data_mut())
+        .attribution
+        .capture();
+    store.spawn(async move |store| captured.run(task.run(store)).await)?;
     let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
     FutureReader::new(&mut store, wait_stdio_task_result(result_rx, interrupt))
 }

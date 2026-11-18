@@ -1,9 +1,8 @@
 /** Effect-native runtime used by generated guest agent bridges. @since 1.6.0 */
 import { Effect, Schema, SchemaGetter, Scope, Stream } from "effect"
-import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { uuidToString } from "golem:core/types@2.0.0"
-import type { RemoteCallError as ClientRemoteCallError } from "./Client.js"
+import type { InvocationMetadata, RemoteCallError as ClientRemoteCallError } from "./Client.js"
 import * as Datetime from "./Datetime.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
@@ -13,7 +12,12 @@ import {
   agentStreamFromHandle as fromStreamHandle,
   agentStreamToHandle as toStreamHandle,
 } from "./internal/agentStream.js"
-import { awaitInvocation, scheduleCancelableInvocation, wrapHostThrow } from "./internal/rpc.js"
+import {
+  awaitInvocation,
+  invocationMetadataFromHost,
+  scheduleCancelableInvocation,
+  wrapHostThrow,
+} from "./internal/rpc.js"
 import { withCapabilityAdoptionTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
@@ -339,7 +343,7 @@ export interface AgentConfigEntry {
 }
 /** Awaited invocation result with host metadata. @since 1.6.0 @category models */
 export interface RemoteInvocationResult<A> {
-  readonly metadata: AgentHost.InvocationMetadata
+  readonly metadata: InvocationMetadata
   readonly value: A
 }
 /**
@@ -372,7 +376,7 @@ export interface RemoteAgentHandle {
   readonly invokeWithMetadata: (
     name: string,
     input: SchemaValue,
-  ) => Effect.Effect<AgentHost.InvocationMetadata, RemoteCallError>
+  ) => Effect.Effect<InvocationMetadata, RemoteCallError>
   readonly scheduleCancelable: (
     at: Datetime.Input,
     name: string,
@@ -387,7 +391,7 @@ export interface RemoteAgentHandle {
     name: string,
     input: SchemaValue,
   ) => Effect.Effect<
-    { readonly metadata: AgentHost.InvocationMetadata; readonly cancel: Effect.Effect<void> },
+    { readonly metadata: InvocationMetadata; readonly cancel: Effect.Effect<void> },
     RemoteCallError | Datetime.DatetimeConversionError,
     Scope.Scope
   >
@@ -446,7 +450,10 @@ const remote = (rpc: RpcConnection, agentId: string): RemoteAgentHandle => {
   const invokeWithMetadata = (name: string, input: SchemaValue) =>
     encode(input).pipe(
       Effect.flatMap((tree) =>
-        Effect.try({ try: () => rpc.invoke(name, tree), catch: wrapHostThrow }),
+        Effect.try({
+          try: () => invocationMetadataFromHost(rpc.invoke(name, tree)),
+          catch: wrapHostThrow,
+        }),
       ),
     )
   const scheduleWithMetadata = (at: Datetime.Input, name: string, input: SchemaValue) =>

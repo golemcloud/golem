@@ -2,28 +2,30 @@
 // Licensed under the Golem Source License v1.1
 
 import { WasmRpc } from 'golem:agent/host@2.0.0';
-import { connectRemoteAgent, type RemoteAgentCreation } from '../internal/agentIdentity';
+import {
+  connectRemoteAgent,
+  decodeAgentId,
+  type RemoteAgentCreation,
+} from '../internal/agentIdentity';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
-import type {
-  CancellationToken,
-  CancelableScheduledInvocationReceipt,
-  Datetime,
-  InvocationMetadata,
-  RpcError,
-  ScheduledInvocationReceipt,
-} from 'golem:agent/host@2.0.0';
+import type { CancellationToken, Datetime, RpcError } from 'golem:agent/host@2.0.0';
 import { awaitAbortable, throwIfAborted } from '../internal/pollableUtils';
 import {
   schemaValueFromWit,
   schemaValueToWit,
   schemaValueToWitAsync,
   typedSchemaValueFromWit,
-  typedSchemaValueToWit,
   preflightWitValueTree,
   type SchemaValue,
   type TypedSchemaValue,
 } from '../internal/schema-model';
 import type { Uuid } from '../uuid';
+import {
+  invocationMetadataFromHost,
+  type CancelableScheduledInvocationReceipt,
+  type InvocationMetadata,
+  type ScheduledInvocationReceipt,
+} from '../invocationId';
 import { borrowScopeCardInternal, type ScopeCard } from '../host/permissions';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import { restoreGuestPermissionCardHandleFromWire } from '../internal/schema-model/permissionCardHandle';
@@ -177,13 +179,6 @@ function mapRpcError<T>(context: string, operation: () => T): T {
   }
 }
 
-function snapshotInvocationMetadata(metadata: InvocationMetadata): InvocationMetadata {
-  return Object.freeze({
-    agentId: metadata.agentId,
-    idempotencyKey: metadata.idempotencyKey,
-  });
-}
-
 function disposeOwnedWitResources(tree: SchemaValueTree): void {
   for (const node of tree.valueNodes) {
     switch (node.tag) {
@@ -314,6 +309,31 @@ function resolveRemoteAgentWith(
     mode,
     create,
   );
+  return boundRemoteAgent(agentId, rpc);
+}
+
+/** Bind self without creating or initializing a target, retaining its recorded identity. */
+export function bindSelfRemoteAgent(expectedTypeName: string): RemoteAgentHandle {
+  const [agentId, rpc] = mapRpcError('Failed to bind self', () => WasmRpc.bindSelf());
+  try {
+    const [typeName] = decodeAgentId(agentId);
+    if (typeName !== expectedTypeName) {
+      throw remoteCallError('Failed to bind self', {
+        tag: 'remote-agent-error',
+        val: {
+          tag: 'invalid-type',
+          val: `Full agent client '${expectedTypeName}' cannot bind agent type '${typeName}'`,
+        },
+      });
+    }
+    return boundRemoteAgent(agentId, rpc);
+  } catch (error) {
+    (rpc as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    throw error;
+  }
+}
+
+function boundRemoteAgent(agentId: string, rpc: WasmRpc): RemoteAgentHandle {
   const remote = remoteTransport(
     rpc,
     agentId,
@@ -389,7 +409,8 @@ function remoteTransport<Value>(
       disposeOwnedWitResources(input);
       throw error;
     }
-    const metadata = snapshotInvocationMetadata(invocation.metadata);
+    // Absent metadata means the host rejected the call; the future reports the error.
+    const metadata = invocation.metadata && invocationMetadataFromHost(invocation.metadata);
     const future = invocation.future;
     let result;
     try {
@@ -397,6 +418,13 @@ function remoteTransport<Value>(
     } catch (error) {
       if (!isRpcError(error)) throw error;
       throw failure(`Remote agent ${agentId}.${method} errored`, error);
+    }
+    if (metadata === undefined) {
+      if (result !== undefined) disposeOwnedWitResources(result);
+      throw new RemoteCallError(`Remote agent ${agentId}.${method} errored`, {
+        tag: 'protocol-error',
+        details: 'completed invocation has no invocation metadata',
+      });
     }
     try {
       return {
@@ -424,7 +452,7 @@ function remoteTransport<Value>(
       const metadata = mapRpcError(`Remote agent ${agentId}.${method} errored`, () =>
         rpc.invoke(method, encode(params), undefined),
       );
-      return snapshotInvocationMetadata(metadata);
+      return invocationMetadataFromHost(metadata);
     },
     schedule(at, method, params) {
       mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
@@ -435,7 +463,7 @@ function remoteTransport<Value>(
       const receipt = mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
         rpc.scheduleInvocation(at, method, encode(params), undefined),
       );
-      return Object.freeze({ metadata: snapshotInvocationMetadata(receipt.metadata) });
+      return Object.freeze({ metadata: invocationMetadataFromHost(receipt.metadata) });
     },
     scheduleCancelable(at, method, params) {
       return mapRpcError(`Scheduling remote agent ${agentId}.${method} failed`, () =>
@@ -447,7 +475,7 @@ function remoteTransport<Value>(
         rpc.scheduleCancelableInvocation(at, method, encode(params), undefined),
       );
       return Object.freeze({
-        metadata: snapshotInvocationMetadata(receipt.metadata),
+        metadata: invocationMetadataFromHost(receipt.metadata),
         cancellationToken: receipt.cancellationToken,
       });
     },

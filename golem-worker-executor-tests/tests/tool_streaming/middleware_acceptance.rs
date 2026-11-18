@@ -243,7 +243,7 @@ macro_rules! setup_rate_limit_chain {
             &tool_name,
             $rate_limit_component.id,
             $rate_limit_component.revision,
-            "golem:rate-limit-middleware",
+            "golem-it:tool-streaming-rate-limit-middleware",
             &middleware_metadata.tool_middlewares,
             vec![(
                 definition.name.as_str(),
@@ -356,6 +356,127 @@ macro_rules! setup_probe_chain {
             occurrences,
         );
     };
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn middleware_return_stops_guest_tail_and_reconstructs_incomplete_timer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-return-cutoff"],
+        context,
+        environment,
+        executor,
+        _provider_component,
+        caller_component,
+        _middleware_metadata,
+        _agent_type,
+        deployment,
+        configure = Arc::new(|config| {
+            config.limits.tail_work_settle_timeout = Duration::from_millis(500);
+            config.oplog.default_snapshotting =
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+        })
+    );
+    environment.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent = agent_id!("ToolStreamingCaller", "middleware-return-cutoff");
+    let worker = executor
+        .start_agent(&caller_component.id, agent.clone())
+        .await?;
+    let result: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent,
+            "middleware_probe_once",
+            data_value!("cutoff"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(result, "leaf(cutoff)");
+    let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let timers: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.ends_with("monotonic-clock::wait-for") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(timers.len(), 1);
+    let timer = timers[0];
+    let reads: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.parent_start_index == Some(timer)
+                    && start.function_name.ends_with("monotonic-clock::now") =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reads.len(),
+        1,
+        "middleware cutoff must follow its internal clock read"
+    );
+    assert!(entries.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == reads[0])
+    ));
+    for entry in &entries {
+        match &entry.entry {
+            PublicOplogEntry::End(end) => assert_ne!(end.start_index, timer),
+            PublicOplogEntry::Cancelled(cancelled) => assert_ne!(cancelled.start_index, timer),
+            _ => {}
+        }
+    }
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment),
+            configure: Some(Arc::new(|config| {
+                config.oplog.default_snapshotting =
+                    golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let result: String = executor
+        .invoke_and_await_agent(&caller_component, &agent, "replay_probe", data_value!())
+        .await?
+        .into_typed()?;
+    assert_eq!(result, "replayed");
+    for entry in executor.get_oplog(&worker, OplogIndex::INITIAL).await? {
+        match &entry.entry {
+            PublicOplogEntry::End(end) => assert_ne!(end.start_index, timer),
+            PublicOplogEntry::Cancelled(cancelled) => assert_ne!(cancelled.start_index, timer),
+            PublicOplogEntry::Error(error) => panic!("reconstruction failed: {error:?}"),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 pub(super) async fn start_probe_effect_server() -> (
@@ -1040,10 +1161,9 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: checkpoint.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, checkpoint.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -1059,10 +1179,9 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: after_forward.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, after_forward.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -1398,9 +1517,10 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
 
     let agent_id = agent_id!("ToolSecretCaller", "shipped-audit-secret");
     let evidence = executor
-        .invoke_and_await_agent(
+        .invoke_and_await_agent_as_principal(
             &caller_component,
             &agent_id,
+            oidc_principal("audit-user"),
             "inspect_secret_policy",
             data_value!(),
         )
@@ -1429,7 +1549,10 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
         assert_eq!(record["toolName"], "secret-policy-probe");
         assert_eq!(record["input"]["secretHandles"], 1);
         assert_eq!(record["outcome"]["kind"], "success");
-        assert_eq!(record["principal"]["kind"], "anonymous");
+        // The middleware reads the caller from the invocation context: the user who invoked
+        // the agent whose call reached the tool.
+        assert_eq!(record["principal"]["kind"], "oidc");
+        assert_eq!(record["principal"]["subject"], "audit-user");
         assert!(
             record["owner"]["agentId"]
                 .as_str()
@@ -2067,10 +2190,9 @@ async fn middleware_race_cancels_loser_drops_observer_and_settles_all_siblings(
     loser_completion.restrict_to_start(cancelled_start);
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: cancel_ready.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, cancel_ready.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -3253,10 +3375,9 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: before_leaf.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, before_leaf.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -3286,10 +3407,9 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
     executor.simulated_crash(&worker_id).await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: after_leaf.oplog_idx,
-            },
+            &executor
+                .promise_id(&worker_id, after_leaf.oplog_idx)
+                .await?,
             vec![],
         )
         .await?;
@@ -3314,6 +3434,294 @@ async fn mixed_chain_suspends_before_leaf_and_after_effect_without_repeating_dis
     assert_eq!(fresh, "short(fresh)");
     effect_server.abort();
     promise_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn owner_restart_and_interrupt_retire_nested_tool_stores_and_reopen_entity_admission(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    setup_probe_chain!(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        &["streaming-universal-pass-through"],
+        context,
+        environment_state,
+        executor,
+        _provider_component,
+        caller_component,
+        _middleware_metadata,
+        _agent_type,
+        deployment,
+        agent_sockets = true
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoints) =
+        start_crash_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-owner-restart");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    // The probe reports the Start of every entity Store that is destroyed, for any reason.
+    async fn next_store_disposals(
+        disposals: &mut tokio::sync::mpsc::UnboundedReceiver<OplogIndex>,
+    ) -> anyhow::Result<Vec<OplogIndex>> {
+        let mut starts = Vec::new();
+        for _ in 0..2 {
+            starts.push(
+                tokio::time::timeout(std::time::Duration::from_secs(10), disposals.recv())
+                    .await?
+                    .expect("the disposal probe stays registered"),
+            );
+        }
+        starts.sort();
+        Ok(starts)
+    }
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("cascade-blocked(owner-restart-29)"),
+    );
+    tokio::pin!(invocation);
+    let _original = tokio::select! {
+        result = invocation.as_mut() => panic!("middleware call settled before its leaf blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+
+    let active = executor.active_agent(&owner).await.unwrap();
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let middleware_starts = entity_starts(
+        &oplog,
+        PublicAgentEntityKind::ToolMiddleware,
+        "streaming-universal-pass-through",
+    );
+    let leaf_starts = entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe");
+    assert_eq!(middleware_starts.len(), 1);
+    assert_eq!(leaf_starts.len(), 1);
+    let middleware_start = middleware_starts[0].oplog_index;
+    let leaf_start = leaf_starts[0].oplog_index;
+    let admitted_starts =
+        |metadata: golem_worker_executor::services::active_agents::ActiveAgentEntityMetadata| {
+            let mut starts = metadata
+                .slots
+                .iter()
+                .flat_map(|slot| {
+                    slot.invocations
+                        .iter()
+                        .map(|invocation| invocation.invocation_id.start_index())
+                })
+                .collect::<Vec<_>>();
+            starts.sort();
+            starts
+        };
+    assert!(active.entity_metadata().accepting_entities);
+    assert_eq!(
+        admitted_starts(active.entity_metadata()),
+        vec![middleware_start, leaf_start]
+    );
+
+    let crash = executor.signal_simulated_crash(&worker_id).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while active.entity_metadata().accepting_entities {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owner restart did not fence entity admission");
+    crash.await?;
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        vec![middleware_start, leaf_start]
+    );
+
+    let replayed = tokio::select! {
+        result = invocation.as_mut() => panic!("middleware call settled before its replayed leaf blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+    assert!(
+        Arc::ptr_eq(&executor.active_agent(&owner).await.unwrap(), &active),
+        "an in-place restart keeps the active agent"
+    );
+    assert!(
+        active.entity_metadata().accepting_entities,
+        "a new primary generation must reopen entity admission after an in-place restart"
+    );
+    assert_eq!(
+        admitted_starts(active.entity_metadata()),
+        vec![middleware_start, leaf_start],
+        "the reconstructed owner claims the recorded entity Starts"
+    );
+    replayed
+        .release
+        .send(())
+        .expect("release the replayed leaf");
+    let result: String = invocation.await?.into_typed()?;
+    assert_eq!(result, "leaf(cascade-blocked(owner-restart-29))");
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        vec![middleware_start, leaf_start],
+        "the completed call destroys its reconstructed Stores"
+    );
+
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted = executor.invoke_and_await_agent_with_key(
+        &caller_component,
+        &agent_id,
+        &interrupted_key,
+        "middleware_probe_once",
+        data_value!("cascade-blocked(owner-interrupt-31)"),
+    );
+    tokio::pin!(interrupted);
+    let _blocked = tokio::select! {
+        result = interrupted.as_mut() => panic!("middleware call settled before its leaf blocked: {result:?}"),
+        checkpoint = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf") => checkpoint?,
+    };
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let interrupted_starts = vec![
+        entity_starts(
+            &oplog,
+            PublicAgentEntityKind::ToolMiddleware,
+            "streaming-universal-pass-through",
+        )[1]
+        .oplog_index,
+        entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe")[1].oplog_index,
+    ];
+    assert_eq!(
+        admitted_starts(active.entity_metadata()),
+        interrupted_starts
+    );
+    executor.interrupt(&worker_id).await?;
+    let interruption = tokio::time::timeout(std::time::Duration::from_secs(30), interrupted)
+        .await?
+        .expect_err("a terminal interrupt fails the awaiting caller");
+    assert!(
+        interruption
+            .to_string()
+            .contains("Interrupted via the Golem API"),
+        "{interruption}"
+    );
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
+    assert!(
+        !active.entity_metadata().accepting_entities,
+        "an interrupted owner must not admit entities"
+    );
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        interrupted_starts
+    );
+
+    executor.resume(&worker_id, false).await?;
+    let resumed = next_crash_checkpoint(&mut checkpoints, "cascade-blocked-leaf").await?;
+    // A terminal interrupt removes the retired generation's active agent, so the resumed owner
+    // admits its entities through a new one.
+    let resumed_active = executor.active_agent(&owner).await.unwrap();
+    assert!(!Arc::ptr_eq(&resumed_active, &active));
+    assert!(!active.entity_metadata().accepting_entities);
+    assert!(
+        resumed_active.entity_metadata().accepting_entities,
+        "a resumed primary generation must reopen entity admission after a terminal interrupt"
+    );
+    assert_eq!(
+        admitted_starts(resumed_active.entity_metadata()),
+        interrupted_starts,
+        "the resumed owner claims the recorded entity Starts"
+    );
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        vec![middleware_start, leaf_start],
+        "resuming replays the completed call's entity bodies in new Stores"
+    );
+    resumed.release.send(()).expect("release the resumed leaf");
+    let resumed_result: String = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &interrupted_key,
+            "middleware_probe_once",
+            data_value!("cascade-blocked(owner-interrupt-31)"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(resumed_result, "leaf(cascade-blocked(owner-interrupt-31))");
+    assert_eq!(
+        next_store_disposals(&mut disposals).await?,
+        interrupted_starts,
+        "the completed call destroys its reconstructed Stores"
+    );
+    assert!(
+        disposals.try_recv().is_err(),
+        "no other entity Store was created"
+    );
+
+    executor.commit_oplog(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let finished = oplog
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .unwrap()
+        .oplog_index;
+    let middleware_starts = entity_starts(
+        &oplog,
+        PublicAgentEntityKind::ToolMiddleware,
+        "streaming-universal-pass-through",
+    );
+    let leaf_starts = entity_starts(&oplog, PublicAgentEntityKind::Tool, "middleware-probe");
+    assert_eq!(
+        middleware_starts.len(),
+        2,
+        "replay must not admit the restarted or resumed call again"
+    );
+    assert_eq!(leaf_starts.len(), 2);
+    assert_eq!(
+        vec![middleware_starts[0].oplog_index, leaf_starts[0].oplog_index],
+        vec![middleware_start, leaf_start]
+    );
+    assert_eq!(
+        vec![middleware_starts[1].oplog_index, leaf_starts[1].oplog_index],
+        interrupted_starts
+    );
+    for start in middleware_starts.into_iter().chain(leaf_starts) {
+        assert_one_terminal_before_finished(&oplog, start.oplog_index, finished);
+    }
+    checkpoint_server.abort();
     Ok(())
 }
 
@@ -3399,10 +3807,7 @@ async fn mixed_chain_trap_cascades_through_detached_leaf_and_all_ancestor_stores
     let admitted = next_promise_checkpoint(&mut promises, "cascade-child-admitted").await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: admitted.oplog_idx,
-            },
+            &executor.promise_id(&worker_id, admitted.oplog_idx).await?,
             vec![],
         )
         .await?;
@@ -3880,10 +4285,7 @@ async fn early_return_parent_end_survives_restart_while_detached_child_is_pendin
     );
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: child.oplog_idx,
-            },
+            &executor.promise_id(&worker_id, child.oplog_idx).await?,
             vec![],
         )
         .await?;
@@ -4026,10 +4428,9 @@ async fn approval_pending_blocks_dispatch_survives_restart_and_approves_once(
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id.clone(),
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(&worker_id, OplogIndex::from_u64(completion.oplog_idx))
+                .await?,
             completion.data,
         )
         .await?;
@@ -4185,10 +4586,9 @@ async fn approval_decisions_are_authenticated_owner_bound_and_denial_never_dispa
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: worker_id,
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(&worker_id, OplogIndex::from_u64(completion.oplog_idx))
+                .await?,
             completion.data,
         )
         .await?;
@@ -4306,10 +4706,9 @@ async fn approval_detach_cancel_and_owner_termination_have_distinct_terminals(
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: detached_worker,
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(&detached_worker, OplogIndex::from_u64(completion.oplog_idx))
+                .await?,
             completion.data,
         )
         .await?;
@@ -4355,10 +4754,12 @@ async fn approval_detach_cancel_and_owner_termination_have_distinct_terminals(
     let completion = approval.completion().await?;
     executor
         .complete_promise(
-            &PromiseId {
-                agent_id: cancelled_worker,
-                oplog_idx: OplogIndex::from_u64(completion.oplog_idx),
-            },
+            &executor
+                .promise_id(
+                    &cancelled_worker,
+                    OplogIndex::from_u64(completion.oplog_idx),
+                )
+                .await?,
             completion.data,
         )
         .await?;

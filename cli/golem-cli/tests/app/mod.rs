@@ -22,6 +22,7 @@ mod build_and_deploy_all;
 mod builtin_bash;
 mod cards;
 mod chunk_f_policy_boundary;
+mod deploy_staging;
 mod directory_source_ifs;
 mod effect_http_router;
 mod effect_source_conformance;
@@ -33,8 +34,10 @@ mod go_mcp_import;
 mod go_native_tool;
 mod go_principal;
 mod go_tools;
+mod initial_cards;
 mod mcp_import;
 mod mcp_oauth;
+mod mcp_serve;
 mod moonbit_config;
 mod moonbit_guest_streams;
 mod moonbit_http_router;
@@ -43,6 +46,7 @@ mod moonbit_native_tool;
 mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod multipart_snapshot;
+mod oplog_export;
 mod quantity_interop;
 mod remote_releases;
 mod rust_http_router;
@@ -125,14 +129,19 @@ tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
+tag_suite!(initial_cards, deploy);
 tag_suite!(account, deploy_runtime);
 tag_suite!(build_and_deploy_all, deploy_runtime);
 tag_suite!(builtin_bash, deploy_runtime);
 tag_suite!(cards, deploy_runtime);
+tag_suite!(initial_cards, deploy_runtime);
 tag_suite!(secrets, deploy_runtime);
 tag_suite!(self_identity, deploy_runtime);
 tag_suite!(ssh, deploy_runtime);
 tag_suite!(chunk_f_policy_boundary, deploy);
+tag_suite!(deploy_staging, deploy);
+// `mcp_serve` deploys the prebuilt agent-counters fixture, which only the `agents` shard restores.
+tag_suite!(mcp_serve, agents);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);
@@ -153,6 +162,7 @@ tag_suite!(moonbit_native_tool, agents_guest_bridge);
 tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(multipart_snapshot, deploy);
+tag_suite!(oplog_export, deploy);
 tag_suite!(rust_http_router, agents_guest_bridge);
 tag_suite!(rust_minimal_exports, deploy);
 tag_suite!(rust_refined_tool_args, deploy);
@@ -703,6 +713,16 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.cli_with_env(args, &[]).await
+    }
+
+    /// Runs the CLI with `env` added to the environment of the context.
+    #[must_use]
+    async fn cli_with_env<I, S>(&self, args: I, env: &[(&str, &str)]) -> Output
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         self.rewrite_local_http_domain_ports();
 
         let args = {
@@ -729,6 +749,7 @@ impl TestContext {
             .args(args)
             .env_remove("GOLEM_BUILTIN_LOCAL_URL")
             .envs(&self.env)
+            .envs(env.iter().copied())
             .current_dir(&working_dir)
             .kill_on_drop(true)
             .stdout(Stdio::piped())

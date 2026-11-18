@@ -141,14 +141,15 @@ interface retry {
 
     // ── Host functions ───────────────────────────────────────────────
 
-    /// Get all retry policies active for this agent
+    /// Get all retry policies active for the calling task: the agent-wide policies, overridden
+    /// by the retry policy scopes open in the task
     get-retry-policies: func() -> list<named-retry-policy>;
 
-    /// Get a specific retry policy by name
+    /// Get a specific retry policy by name, as `get-retry-policies` reports it
     get-retry-policy-by-name: func(name: string) -> option<named-retry-policy>;
 
     /// Resolve the matching retry policy for a given operation context.
-    /// Evaluates named policies in descending priority order; returns the
+    /// Evaluates the policies of `get-retry-policies` in descending priority order; returns the
     /// policy from the first rule whose predicate matches, or none.
     /// Invalid predicates return an error without trapping the invocation.
     resolve-retry-policy: func(
@@ -185,4 +186,18 @@ interface retry {
 
     /// Remove a named retry policy by name (persisted to oplog).
     remove-retry-policy: func(name: string);
+}
+
+interface retry-scope {
+    use retry.{named-retry-policy};
+
+    /// A named retry policy that applies to the host calls of the task that created the scope,
+    /// until the scope is dropped or the task ends. A subtask that the task creates while the
+    /// scope is open, and a host call that it starts, keep the scope after the scope is dropped.
+    ///
+    /// The innermost open scope with a name overrides the agent-wide policy with that name.
+    /// Opening and dropping a scope changes no agent-wide state and records no oplog entry.
+    resource retry-policy-scope {
+        constructor(policy: named-retry-policy);
+    }
 }

@@ -179,14 +179,18 @@ agents:
     initialCard:
       lowerBound:
         positive:
+          - "env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
           - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
         negative:
           - "tool(?component/git) @ ?agent : invoke : status --short --null"
       upperBound:
         positive:
+          - "env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
           - "tool(?component/git) @ ?agent : invoke : status --cwd=/workspace/**"
         negative: []
 ```
+
+An explicit `initialCard` replaces the default card. The Rust, TypeScript, Go, MoonBit and Effect SDKs read the agent's ID from `GOLEM_AGENT_ID`, and the agent sees that variable only when its card allows the read, so always include `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`, in the upper bound too when it has positive grants. Without it, Rust and TypeScript agents fail at their first call, and Go, MoonBit and Effect agents fail when they load a snapshot. Add a grant for each other environment variable that the code reads.
 
 Use primary command and long-option names in manifests and permission shares. Short aliases require effective metadata and are rejected at these context-free boundaries. Runtime derivation resolves aliases before attenuation and freezes their meaning durably.
 

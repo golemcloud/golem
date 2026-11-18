@@ -989,8 +989,11 @@ pub enum KeyValueStorageNamespace {
     AgentRejectedPeriodicSnapshots {
         agent_id: AgentId,
     },
+    /// Per-incarnation promise storage. The fingerprint is part of the namespace, so a promise ID
+    /// of a deleted incarnation finds no entry in the namespace of the re-created agent.
     Promise {
-        agent_id: Arc<AgentId>,
+        agent_id: AgentId,
+        fingerprint: AgentFingerprint,
     },
     Schedule,
     UserDefined {

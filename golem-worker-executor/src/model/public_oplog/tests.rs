@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -27,6 +28,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::types::{
     SecretRevealAudit, SerializableDateTime, SerializableEntityBodyExecution,
@@ -48,6 +50,7 @@ use golem_common::model::oplog::{
     HostResponseP3SocketsUdpSend, HostResponseSecretRevealed, HostStreamKind, LogLevel,
     OplogPayload,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::{
     CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
     ToolSource,
@@ -60,6 +63,7 @@ use golem_common::schema::tool::{CommandTree, Tool};
 use golem_common::schema::{
     IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, SecretValuePayload,
 };
+use golem_service_base::error::worker_executor::StaleCursorReason;
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use prost::Message;
@@ -76,7 +80,7 @@ fn tool_attachment_read_contract_roundtrips() {
         AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
         ToolAttachmentReadOutcome, ToolAttachmentSlot,
     };
-    use golem_common::model::{IdempotencyKey, OplogIndex};
+    use golem_common::model::OplogIndex;
     for (outcome, reobserves, payload) in [
         (
             ToolAttachmentReadOutcome::RawBytes {
@@ -107,7 +111,7 @@ fn tool_attachment_read_contract_roundtrips() {
                 creation_start: OplogIndex::from_u64(3),
                 slot: ToolAttachmentSlot::Stdout,
             },
-            logical_invocation: IdempotencyKey::fresh(),
+            logical_invocation: uuid::Uuid::new_v4().into(),
             observation: StreamConsumerObservation::Guest {
                 parent_start_index: Some(OplogIndex::from_u64(8)),
             },
@@ -284,13 +288,69 @@ fn tool_attachment_read_rejects_invalid_observation_schema() {
 }
 
 #[test]
+fn stream_terminal_public_wit_preserves_terminal_payloads() {
+    use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::model::durable_stream::{
+        LocalStreamId, StreamError, StreamOffset, StreamTerminal, StreamTerminalAuthor,
+        StreamTerminalOrigin, StreamTerminalRecord,
+    };
+    let declared = (17u32, "declared failure".to_string())
+        .into_typed_schema_value()
+        .unwrap();
+    for (origin, terminal) in [
+        StreamTerminal::Finished,
+        StreamTerminal::Failed(StreamError::Failed(Box::new(declared))),
+        StreamTerminal::Failed(StreamError::Trapped("guest trap".into())),
+        StreamTerminal::Failed(StreamError::Interrupted("session deleted".into())),
+        StreamTerminal::Failed(StreamError::ResourceExhausted("retention limit".into())),
+        StreamTerminal::ConsumerCancelled {
+            details: Some("reader dropped".into()),
+        },
+    ]
+    .into_iter()
+    .flat_map(|terminal| {
+        [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control]
+            .map(|origin| (origin, terminal.clone()))
+    }) {
+        let record = StreamTerminalRecord {
+            format_version: 1,
+            stream_id: LocalStreamId(OplogIndex::from_u64(4)),
+            sequence: 3,
+            offset: StreamOffset::new(OplogIndex::from_u64(8), 0),
+            authored_by: StreamTerminalAuthor::Host,
+            origin,
+            terminal,
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        let public = PublicOplogEntry::StreamTerminal(StreamTerminalParams {
+            timestamp: Timestamp::now_utc().rounded(),
+            record: record.clone(),
+        });
+        let wire: oplog::PublicOplogEntry = public.try_into().unwrap();
+        let oplog::PublicOplogEntry::StreamTerminal(wire) = wire else {
+            panic!("wrong public variant")
+        };
+        assert_eq!(
+            golem_schema::schema::wit::decode_typed(&wire.record).unwrap(),
+            record
+        );
+    }
+}
+
+#[test]
 fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
     use crate::preview2::golem_api_1_x::oplog;
+    use golem_common::model::durable_stream::StreamTerminalOrigin;
     use golem_common::model::oplog::{
-        DurableStreamEventSummary as Summary, DurableStreamOutcome as Outcome, PayloadId,
+        DurableStreamEventSummary as Summary, DurableStreamOutcome as Outcome,
+        DurableStreamTerminalOutcome as TerminalOutcome, PayloadId,
     };
 
-    for external in [false, true] {
+    for (external, origin) in [false, true].into_iter().flat_map(|external| {
+        [StreamTerminalOrigin::Source, StreamTerminalOrigin::Control]
+            .map(|origin| (external, origin))
+    }) {
         macro_rules! entry {
             ($variant:ident, $summary:expr) => {
                 OplogEntry::$variant {
@@ -316,18 +376,26 @@ fn raw_stream_telemetry_survives_uncached_payload_roundtrips() {
             entry!(StreamRegistered, Some(Summary::Registered)),
             entry!(StreamItems, Some(Summary::Items { item_count: 3 })),
             entry!(
-                StreamEnd,
-                Some(Summary::End {
-                    outcome: Outcome::Success
+                StreamTerminal,
+                Some(Summary::Terminal {
+                    outcome: TerminalOutcome::Finished,
+                    origin,
                 })
             ),
             entry!(
-                StreamEnd,
-                Some(Summary::End {
-                    outcome: Outcome::Error
+                StreamTerminal,
+                Some(Summary::Terminal {
+                    outcome: TerminalOutcome::Failed,
+                    origin,
                 })
             ),
-            entry!(StreamCancel, Some(Summary::Cancelled)),
+            entry!(
+                StreamTerminal,
+                Some(Summary::Terminal {
+                    outcome: TerminalOutcome::ConsumerCancelled,
+                    origin,
+                })
+            ),
             entry!(StreamSession, Some(Summary::SessionResult)),
             entry!(
                 StreamSession,
@@ -500,6 +568,212 @@ fn make_agent_metadata(
 }
 
 #[test]
+async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
+    use golem_common::base_model::component_metadata::ComponentProvisionConfig;
+    use golem_common::model::component::PluginPriority;
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+    use golem_common::model::plugin_registration::PluginRegistrationId;
+
+    struct RevisionComponentService(Component);
+
+    #[async_trait]
+    impl ComponentService for RevisionComponentService {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            panic!("rendering must not load executable components")
+        }
+
+        async fn get_metadata(
+            &self,
+            component_id: ComponentId,
+            forced_revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            assert_eq!(component_id, self.0.id);
+            let mut component = self.0.clone();
+            let revision = forced_revision.unwrap();
+            if revision != component.revision {
+                assert_eq!(revision, ComponentRevision::new(2).unwrap());
+                component.revision = revision;
+                component.metadata = component
+                    .metadata
+                    .with_component_config(Default::default(), ComponentProvisionConfig::default());
+            }
+            Ok(component)
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_reference: String,
+            _resolving_environment: EnvironmentId,
+            _resolving_application: golem_common::model::application::ApplicationId,
+            _resolving_account: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            panic!("rendering must use the supplied component identity")
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            Vec::new()
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+    }
+
+    let source_revision = ComponentRevision::INITIAL;
+    let updated_revision = ComponentRevision::new(2).unwrap();
+    let plugin = InstalledPlugin {
+        environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
+        priority: PluginPriority(0),
+        parameters: BTreeMap::new(),
+        plugin_registration_id: PluginRegistrationId::new(),
+        plugin_name: "removed-plugin".to_string(),
+        plugin_version: "1.0".to_string(),
+        oplog_processor_component_id: Some(ComponentId::new()),
+        oplog_processor_component_revision: Some(source_revision),
+    };
+    let component_id = ComponentId::new();
+    let environment_id = EnvironmentId::new();
+    let components = Arc::new(RevisionComponentService(Component {
+        id: component_id,
+        revision: source_revision,
+        environment_id,
+        component_name: ComponentName("source".to_string()),
+        hash: golem_common::model::diff::Hash::empty(),
+        application_id: golem_common::model::application::ApplicationId::new(),
+        account_id: AccountId::new(),
+        account_email: AccountEmail::new("test@golem"),
+        application_name: "test-app".parse().unwrap(),
+        environment_name: "test-env".parse().unwrap(),
+        component_size: 100,
+        metadata: ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .with_component_config(
+            Default::default(),
+            ComponentProvisionConfig {
+                plugins: vec![plugin.clone()],
+                ..Default::default()
+            },
+        ),
+        created_at: chrono::Utc::now(),
+        wasm_hash: golem_common::model::diff::Hash::empty(),
+        object_store_key: String::new(),
+    }));
+    let owner = OwnedAgentId::new(
+        environment_id,
+        &AgentId {
+            component_id,
+            agent_id: "source".to_string(),
+        },
+    );
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let timestamp = Timestamp::from(1_000_u64);
+    let update = PublicOplogEntry::from_oplog_entry(
+        OplogIndex::from_u64(10),
+        OplogEntry::SuccessfulUpdate {
+            timestamp,
+            target_revision: updated_revision,
+            new_component_size: 100,
+            new_total_linear_memory_size: None,
+            new_active_plugins: Default::default(),
+            snapshot_assisted_details: None,
+            bootstrap: None,
+        },
+        oplog_service.clone(),
+        components.clone(),
+        &owner,
+        AgentMode::Durable,
+        component_id,
+        OwnerKind::EphemeralExternalTool,
+        None,
+        source_revision,
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(update, PublicOplogEntry::SuccessfulUpdate(p) if p.new_active_plugins.is_empty())
+    );
+
+    let checkpoint = OplogEntry::OplogProcessorCheckpoint {
+        timestamp,
+        plugin_grant_id: plugin.environment_plugin_grant_id,
+        source_component_revision: source_revision,
+        target_agent_id: AgentId {
+            component_id: plugin.oplog_processor_component_id.unwrap(),
+            agent_id: OwnerKind::oplog_processor_instance_name(Uuid::new_v4()),
+        },
+        confirmed_up_to: OplogIndex::from_u64(8),
+        sending_up_to: OplogIndex::from_u64(8),
+        last_batch_start: OplogIndex::INITIAL,
+        delivery: None,
+    };
+    let public = PublicOplogEntry::from_oplog_entry(
+        OplogIndex::from_u64(11),
+        checkpoint.clone(),
+        oplog_service,
+        components,
+        &owner,
+        AgentMode::Durable,
+        component_id,
+        OwnerKind::EphemeralExternalTool,
+        None,
+        updated_revision,
+    )
+    .await
+    .unwrap();
+    let PublicOplogEntry::OplogProcessorCheckpoint(params) = &public else {
+        panic!("expected checkpoint")
+    };
+    assert_eq!(params.source_component_revision, source_revision);
+    assert_eq!(
+        params.plugin.environment_plugin_grant_id,
+        plugin.environment_plugin_grant_id
+    );
+    assert_eq!(params.plugin.plugin_name, plugin.plugin_name);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+    let wit: crate::preview2::golem_api_1_x::oplog::PublicOplogEntry =
+        public.clone().try_into().unwrap();
+    let crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::OplogProcessorCheckpoint(wit) =
+        wit
+    else {
+        panic!("expected public checkpoint")
+    };
+    assert_eq!(wit.source_component_revision, u64::from(source_revision));
+    let raw: golem_common::model::oplog::OplogEnrichmentEntry = public.try_into().unwrap();
+    assert_eq!(raw, checkpoint.clone().into());
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        checkpoint.clone().try_into().unwrap();
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), checkpoint);
+    let wit: crate::preview2::golem_api_1_x::oplog::OplogEntry =
+        checkpoint.clone().try_into().unwrap();
+    assert_eq!(
+        golem_common::model::oplog::OplogEnrichmentEntry::try_from(wit).unwrap(),
+        checkpoint.into()
+    );
+}
+
+#[test]
 async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_create_projection() {
     use golem_common::base_model::component_metadata::{ComponentProvisionConfig, KnownExports};
     use golem_common::model::component_metadata::ComponentMetadata;
@@ -624,6 +898,10 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                 new_total_linear_memory_size: Some(0),
                 new_active_plugins: [grant_id].into_iter().collect(),
                 snapshot_assisted_details: None,
+                bootstrap: Some(OplogRegion {
+                    start: OplogIndex::from_u64(3),
+                    end: OplogIndex::from_u64(7),
+                }),
             },
             oplog_service.clone(),
             components.clone(),
@@ -642,6 +920,13 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         assert_eq!(
             updated.new_active_plugins.len(),
             usize::from(owner_kind == OwnerKind::EphemeralExternalTool)
+        );
+        assert_eq!(
+            updated.bootstrap,
+            Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            })
         );
 
         let activated = PublicOplogEntry::from_oplog_entry(
@@ -876,9 +1161,9 @@ fn test_entity_request(
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
         input,
-        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
-            "entity-stream-session".to_string(),
-        ),
+        stream_session_idempotency_key: golem_common::model::InvocationId(uuid::Uuid::from_u128(
+            601,
+        )),
     }
     .into()
 }
@@ -1119,7 +1404,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
                 parent_span_id: None,
                 links: Vec::new(),
                 started_at: Timestamp::now_utc(),
-                attributes: AttributeMap(HashMap::new()),
+                attributes: AttributeMap(BTreeMap::new()),
                 kind: SpanKind::Internal,
             })),
             denial: None,
@@ -1130,6 +1415,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         .add(OplogEntry::error(
             Some(tool_start),
             golem_common::model::oplog::OplogErrorKind::Invocation,
+            Some(uuid::Uuid::from_u128(602).into()),
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             None,
@@ -1569,8 +1855,10 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         None,
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
+        None,
         1,
         "last-entity-attribution-needle",
+        ScanBudget::default(),
     )
     .await
     .unwrap();
@@ -1977,9 +2265,9 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let entity_request: HostRequest = HostRequestEntityInvocation {
         metadata: vec![1, 2, 3],
         input: entity_input.clone(),
-        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
-            "entity-stream-session".to_string(),
-        ),
+        stream_session_idempotency_key: golem_common::model::InvocationId(uuid::Uuid::from_u128(
+            601,
+        )),
     }
     .into();
     let entity_response: HostResponse = HostResponseEntityInvocation {
@@ -2400,6 +2688,10 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             active_cards: Vec::new(),
             wallet_generation: 0,
             filesystem_snapshot: None,
+            bootstrap: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(7),
+            }),
         })
         .await
         .unwrap();
@@ -2488,6 +2780,13 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
                 mime_type: "application/octet-stream".to_string(),
             }
         )
+    );
+    assert_eq!(
+        snapshot.bootstrap,
+        Some(OplogRegion {
+            start: OplogIndex::from_u64(3),
+            end: OplogIndex::from_u64(7),
+        })
     );
 
     assert!(
@@ -2588,12 +2887,12 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
                 max_entry_bytes: 1_000_000,
             },
             "needle",
+            ScanBudget::default(),
         )
     };
 
-    // Every internal chunk reads three entries. The 2000 byte log entries do not match and do
-    // not count against the budget, so the first two matches fit, from different chunks, and
-    // the third match ends the page.
+    // The 2000 byte log entries do not match and do not count against the budget, so the first
+    // two matches fit, from different chunks, and the third match ends the page.
     let first = search(OplogIndex::INITIAL).await.unwrap();
     assert_eq!(
         page_indices(&first.entries),
@@ -2603,6 +2902,91 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
 
     let second = search(first.next_oplog_index).await.unwrap();
     assert_eq!(page_indices(&second.entries), vec![(matching[2], true)]);
+}
+
+#[test]
+async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_last() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("search-count").await;
+    let needle = || OplogEntry::Log {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        level: LogLevel::Stderr,
+        context: "context".to_string(),
+        message: "needle".to_string(),
+        trace_context: None,
+    };
+    let first_index = oplog.add(log_entry(0)).await.unwrap();
+    let mut matching = Vec::new();
+    for _ in 0..4 {
+        matching.push(oplog.add(needle()).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(matching[0], first_index.next());
+
+    // A first chunk of two entries finds one match. The search then reads only the one entry
+    // that it still needs, not a full chunk, which would find two more matches.
+    let page = |from: OplogIndex| {
+        search_public_oplog_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            PublicOplogPageLimits {
+                count: 2,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            ScanBudget::default(),
+        )
+    };
+    let first = page(OplogIndex::INITIAL).await.unwrap();
+    assert_eq!(
+        page_indices(&first.entries),
+        vec![(matching[0], true), (matching[1], true)]
+    );
+    assert_eq!(first.next_oplog_index, matching[2]);
+    let second = page(first.next_oplog_index).await.unwrap();
+    assert_eq!(
+        page_indices(&second.entries),
+        vec![(matching[2], true), (matching[3], true)]
+    );
+
+    // A guest search has the same limit, and still reads no entry after its pinned end.
+    let guest = |from: OplogIndex| {
+        search_public_oplog(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            Some(matching[2]),
+            2,
+            "needle",
+            ScanBudget::default(),
+        )
+    };
+    let first = guest(OplogIndex::INITIAL).await.unwrap();
+    let indices = |entries: &[PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(indices(&first.entries), vec![matching[0], matching[1]]);
+    assert_eq!(first.next_oplog_index, matching[2]);
+    let second = guest(first.next_oplog_index).await.unwrap();
+    assert_eq!(indices(&second.entries), vec![matching[2]]);
+    assert_eq!(second.last_index, matching[2]);
 }
 
 #[test]
@@ -2618,6 +3002,7 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::new(),
                 snapshot_assisted_details: None,
+                bootstrap: None,
             }
         } else {
             log_entry(0)
@@ -2651,4 +3036,191 @@ async fn component_revision_lookup_reads_past_its_batch_size() {
         revision_at(OplogIndex::NONE).await.unwrap(),
         ComponentRevision::INITIAL
     );
+}
+
+#[test]
+async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_refused() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("cursor-rule").await;
+    let updated_revision = ComponentRevision::new(7).unwrap();
+    let mut indices = Vec::new();
+    for i in 0..13 {
+        let entry = if i == 1 {
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: updated_revision,
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: None,
+            }
+        } else if i == 9 {
+            OplogEntry::Log {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                level: LogLevel::Stderr,
+                context: "context".to_string(),
+                message: "needle".to_string(),
+                trace_context: None,
+            }
+        } else {
+            log_entry(0)
+        };
+        indices.push(oplog.add(entry).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let last_index = *indices.last().unwrap();
+
+    let budget = ScanBudget {
+        entries: std::num::NonZeroU64::new(5).unwrap(),
+        time: std::time::Duration::from_secs(600),
+    };
+    let search = |start: OplogIndex, revision: ComponentRevision| {
+        search_public_oplog_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            revision,
+            start,
+            PublicOplogPageLimits {
+                count: 3,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            budget,
+        )
+    };
+
+    // A read without a cursor starts after the update, with the revision that the update set.
+    let (start, revision) = oplog_page_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        indices[2],
+    )
+    .await
+    .unwrap();
+    assert_eq!((start, revision), (indices[2], updated_revision));
+
+    // The budget ends the first search after five entries, before the match. The page is empty,
+    // and its cursor points to the first entry it did not read, with the revision and the hash of
+    // the query.
+    let first = search(start, revision).await.unwrap();
+    assert!(first.entries.is_empty());
+    let cursor = oplog_page_cursor(
+        first.next_oplog_index,
+        first.current_component_revision,
+        first.last_index,
+        Some("needle"),
+    )
+    .expect("a page that ends before the last entry has a cursor");
+    assert_eq!(
+        cursor,
+        OplogCursor {
+            next_oplog_index: indices[7].as_u64(),
+            current_component_revision: updated_revision.into(),
+            query_hash: OplogCursor::query_hash(Some("needle")),
+        }
+    );
+
+    // A read of another query, or a read without a query, refuses the cursor.
+    for query in [Some("needles"), Some(""), None] {
+        assert_eq!(
+            check_oplog_cursor_query(&owned_agent_id, Some(&cursor), query),
+            Err(WorkerExecutorError::StaleCursor {
+                agent_id: owned_agent_id.agent_id.clone(),
+                next_oplog_index: indices[7],
+                reason: StaleCursorReason::QueryMismatch,
+            }),
+            "a read of {query:?} must refuse the cursor of a search for \"needle\""
+        );
+    }
+    assert_eq!(
+        check_oplog_cursor_query(&owned_agent_id, Some(&cursor), Some("needle")),
+        Ok(())
+    );
+
+    // The cursor continues where the first search stopped, with the revision it carries.
+    let (start, revision) = oplog_page_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(cursor),
+        OplogIndex::INITIAL,
+    )
+    .await
+    .unwrap();
+    assert_eq!((start, revision), (indices[7], updated_revision));
+    let second = search(start, revision).await.unwrap();
+    assert_eq!(page_indices(&second.entries), vec![(indices[9], true)]);
+    let second_cursor = oplog_page_cursor(
+        second.next_oplog_index,
+        second.current_component_revision,
+        second.last_index,
+        Some("needle"),
+    )
+    .expect("the budget ends the second search before the last entry");
+    assert_eq!(second_cursor.next_oplog_index, indices[12].as_u64());
+    assert_eq!(
+        second_cursor.current_component_revision,
+        u64::from(updated_revision)
+    );
+
+    // A page that reads the last entry has no cursor.
+    let third = search(indices[12], updated_revision).await.unwrap();
+    assert!(third.entries.is_empty());
+    assert_eq!(
+        oplog_page_cursor(
+            third.next_oplog_index,
+            third.current_component_revision,
+            third.last_index,
+            Some("needle"),
+        ),
+        None
+    );
+
+    // A cursor at the last entry is valid; one past it never came from a page of this oplog.
+    for (next_oplog_index, accepted) in [
+        (last_index.as_u64(), true),
+        (last_index.as_u64() + 1, false),
+        (last_index.as_u64() + 1000, false),
+    ] {
+        let result = oplog_page_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(OplogCursor {
+                next_oplog_index,
+                current_component_revision: updated_revision.into(),
+                query_hash: OplogCursor::query_hash(Some("needle")),
+            }),
+            OplogIndex::INITIAL,
+        )
+        .await;
+        match result {
+            Ok((start, _)) => {
+                assert!(accepted, "a cursor at {next_oplog_index} must be refused");
+                assert_eq!(start.as_u64(), next_oplog_index);
+            }
+            Err(error) => {
+                assert!(!accepted, "a cursor at {next_oplog_index} must be accepted");
+                assert_eq!(
+                    error,
+                    WorkerExecutorError::StaleCursor {
+                        agent_id: owned_agent_id.agent_id.clone(),
+                        next_oplog_index: OplogIndex::from_u64(next_oplog_index),
+                        reason: StaleCursorReason::PastEnd {
+                            last_oplog_index: last_index,
+                        },
+                    }
+                );
+            }
+        }
+    }
 }

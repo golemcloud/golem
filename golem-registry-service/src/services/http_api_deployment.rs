@@ -403,6 +403,7 @@ impl HttpApiDeploymentService {
             .http_api_deployment_repo
             .get_by_id_and_revision(http_api_deployment_id.0, revision.into())
             .await?
+            .filter(|record| !record.deployment.revision.audit.deleted)
             .ok_or(HttpApiDeploymentError::HttpApiDeploymentNotFound(
                 http_api_deployment_id,
             ))?;

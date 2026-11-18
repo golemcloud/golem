@@ -56,6 +56,7 @@ pub use state::{CallRecording, ResolvingReplay, SessionState};
 #[cfg(test)]
 use terminal::encode_response;
 pub(crate) use terminal::end_durable_function_access;
+pub(crate) use terminal::end_durable_function_initiation;
 pub(crate) use terminal::finish_span_in_memory;
 pub(crate) use terminal::record_released_resource_span;
 #[cfg(test)]
@@ -185,6 +186,9 @@ pub(super) struct BegunCallExecutionScope {
     /// when it begins, in guest call order, so live execution and replay agree on it. `None`
     /// outside an entity Store with logical key positions, and for accessor calls.
     pub(super) logical_key_position: Option<OplogIndex>,
+    /// The agent invocation that runs when the call begins. The call's retry errors name it, also
+    /// when the call outlives it.
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl BegunCallExecutionScope {
@@ -199,6 +203,7 @@ impl BegunCallExecutionScope {
             observational_owner: self.observational_owner,
             invocation_id: self.invocation_id,
             logical_key_position: self.logical_key_position,
+            agent_invocation: self.agent_invocation,
         }
     }
 }
@@ -218,6 +223,8 @@ pub(super) struct CallExecutionScope {
     pub(super) invocation_id: Option<DurableInvocationId>,
     /// See [`BegunCallExecutionScope::logical_key_position`].
     pub(super) logical_key_position: Option<OplogIndex>,
+    /// See [`BegunCallExecutionScope::agent_invocation`].
+    pub(super) agent_invocation: Option<golem_common::model::InvocationId>,
 }
 
 impl CallExecutionScope {
@@ -235,16 +242,25 @@ pub(crate) struct PreparedContextStart<Pair: HostPayloadPair, P: DropPolicy, Ctx
 }
 
 /// The request of an accessor call's `Start`.
-enum AccessRequest<Req, T: 'static, D: HasData + ?Sized + 'static, E = WorkerExecutorError> {
+enum AccessRequest<
+    Req,
+    T: 'static,
+    D: HasData + ?Sized + 'static,
+    Ctx: WorkerCtx,
+    E = WorkerExecutorError,
+> {
     /// A request known when the call is made.
     Ready(Req),
     /// A request built between the durable-scope open and the `Start` write or claim; see
     /// [`DurableCallSession::start_access_with`].
-    Built(AccessRequestBuilder<Req, T, D, E>),
+    Built(AccessRequestBuilder<Req, T, D, Ctx, E>),
 }
 
-type AccessRequestBuilder<Req, T, D, E> = Box<
-    dyn for<'a> FnOnce(AccessStartContext, &'a Accessor<T, D>) -> BoxFuture<'a, Result<Req, E>>
+type AccessRequestBuilder<Req, T, D, Ctx, E> = Box<
+    dyn for<'a> FnOnce(
+            AccessStartContext,
+            super::initiation_owner::InitiationRequestContext<'a, T, D, Ctx>,
+        ) -> BoxFuture<'a, Result<Req, E>>
         + Send,
 >;
 
@@ -281,7 +297,7 @@ struct OwnedAccessStart<
 > {
     stage: OwnedStartStage<Pair, P, Ctx>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    request: AccessRequest<Pair::Req, T, D, E>,
+    request: AccessRequest<Pair::Req, T, D, Ctx, E>,
     build_span: Option<BuildSpanCallback>,
     span_observer: Option<Arc<dyn CallSpanObserver>>,
     started: oneshot::Sender<Result<DurableCallSession<Pair, P>, E>>,
@@ -363,6 +379,9 @@ pub(crate) struct AccessClaimOptions {
     /// a `Cancelled` without a partial result, the replay claim drains their records, because a
     /// replayed call parks at that terminal and never makes them again.
     pub(crate) host_internal_calls: bool,
+    /// Opts audited host-internal observations into inert replay when completed tool
+    /// reconstruction parks an outer guest call that has no recorded terminal.
+    pub(crate) abandon_incomplete_host_internal_calls: bool,
     /// The invocation id this call records in its `Start`s and claims them by on replay.
     pub(crate) invocation_id: InvocationIdSource,
     /// The denial a live call records in its `Start` (see [`OplogEntry::Start`]). A call that
@@ -492,13 +511,6 @@ struct AcceptedAccessStart<P: DropPolicy> {
     cleanup_sink: Option<UnboundedSender<DropEvent>>,
     teardown: TeardownProbe,
     _policy: PhantomData<P>,
-}
-
-impl<P: DropPolicy> AcceptedAccessStart<P> {
-    fn take(mut self) -> (OplogIndex, PendingUpload) {
-        self.call = None;
-        self.result.take().expect("accepted Start result")
-    }
 }
 
 impl<P: DropPolicy> Drop for AcceptedAccessStart<P> {

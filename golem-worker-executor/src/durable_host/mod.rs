@@ -15,6 +15,7 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
+mod attribution;
 pub(crate) mod authorization;
 pub mod blobstore;
 mod call_coordinator;
@@ -22,6 +23,7 @@ mod calls;
 mod construction;
 mod entity_context;
 mod error_history;
+mod execution_state;
 mod filesystem;
 mod invocation;
 mod recovery;
@@ -40,9 +42,8 @@ pub(crate) use authorization::context::{
 };
 #[cfg(test)]
 use authorization::context::{
-    assert_live_authorization, clear_invocation_scope_state, derive_permission_uuid,
-    derive_permission_uuid_for_sequence, expired_wallet_card_ids_at,
-    remove_invocation_scope_for_revoked_roots,
+    assert_live_authorization, derive_permission_uuid, derive_permission_uuid_for_sequence,
+    expired_wallet_card_ids_at,
 };
 use authorization::context::{
     component_baseline_effective_surface_from_wallet, live_scope_root_cards_from_states,
@@ -109,8 +110,9 @@ pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 pub mod rpc;
-mod sockets;
+pub(crate) mod sockets;
 pub mod stream_bus;
+pub(crate) mod stream_outcome;
 pub mod stream_session;
 pub mod stream_transport;
 mod suspendable_wait;
@@ -270,6 +272,7 @@ use golem_common::model::oplog::{
     EphemeralCannotSuspendError, LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData,
     SnapshotAssistedUpdateDetails, UpdateDescription,
 };
+use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
@@ -355,13 +358,16 @@ pub(crate) struct LiveAuthorizationPermit {
 /// before the `Start` is appended, because the request is built without access to the context.
 #[derive(Debug, Clone)]
 pub(crate) struct IdempotencyKeyPosition {
-    parent: IdempotencyKey,
+    parent: golem_common::model::InvocationId,
     logical: Option<OplogIndex>,
 }
 
 impl IdempotencyKeyPosition {
     pub(crate) fn derive(&self, start_index: OplogIndex) -> IdempotencyKey {
-        IdempotencyKey::derived(&self.parent, self.index(start_index))
+        IdempotencyKey::derived(
+            &IdempotencyKey::from_uuid(self.parent.0),
+            self.index(start_index),
+        )
     }
 
     /// The oplog index the key derives from: the logical position, or else the `Start` index.
@@ -388,11 +394,15 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
     pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
-    primary_invocation_start_index: Option<OplogIndex>,
-    invocation_principal: Option<Principal>,
+    pub(crate) tool_frontends: Option<Arc<stream_transport::ToolFrontendScope>>,
+    pub(crate) host_initiations: Option<Arc<concurrent::initiation_owner::InitiationOwner<Ctx>>>,
+    pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
+    schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     owner_execution: Arc<OwnerExecution>,
     pub(crate) runtime_suspension: Option<Arc<crate::worker::suspension::RuntimeStore>>,
     pub(crate) guest_imports: Arc<durability::GuestImportNumbering>,
+    /// Which invocation each task group of this Store belongs to; see [`attribution`].
+    pub(crate) attribution: attribution::InvocationAttribution,
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
@@ -416,16 +426,18 @@ pub(crate) struct PrimaryInvocationBody {
     permit: Option<OwnerInvocationPermit>,
 }
 
-/// Golem's memory accounting covers guest linear memory only.
+/// Golem accounts every Wasmtime memory the same way: guest linear memories and the GC heaps
+/// that Wasmtime grows for the GC proposal through the same limiter callbacks
+/// (`MemoryKind::GcHeap`). GC heap growth takes an admission grant, counts toward the agent's
+/// memory limit and plan quotas. Refusing growth of an existing GC heap allows Wasmtime to
+/// collect before reporting allocation failure; linear memory and initial GC allocation
+/// retain immediate typed failures.
 ///
-/// Wasmtime also grows its internal GC heaps through the same limiter
-/// callbacks, tagged `MemoryKind::GcHeap`. That capacity belongs to the
-/// collector rather than to memory the guest declared, so it is admitted
-/// without taking a grant and correspondingly never releases one. Golem's
-/// engine config leaves the GC proposal disabled (see
-/// `golem_common::wasmtime_config`), so no store should allocate a GC heap in
-/// the first place; the arm is here so that enabling it does not silently start
-/// billing collector capacity as guest memory.
+/// GC heap growth depends on collector timing, so replay can grow differently than the live run
+/// did. Reconstruction reuses prepaid startup bytes and records an absolute
+/// `MemorySizeReconciled` hint at the accounting cutover. Subsequent committed growth records
+/// `GrowMemory` deltas once allocation reconciliation and accounting activation are complete,
+/// even if replay settlement still prevents live effects. Growth is not a checked replay fact.
 pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     fn durable_worker_ctx(&mut self) -> &mut DurableWorkerCtx<Ctx>;
 
@@ -438,20 +450,12 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
     ) -> impl Future<Output = wasmtime::Result<bool>> + Send {
         let ctx = self.durable_worker_ctx();
         async move {
-            match kind {
-                MemoryKind::LinearMemory => {
-                    ctx.admit_unshared_memory_growth(current, desired, maximum)
-                        .await
-                }
-                MemoryKind::GcHeap => Ok(true),
-            }
+            ctx.admit_unshared_memory_growth(current, desired, maximum, kind)
+                .await
         }
     }
 
-    fn durable_memory_grown(&mut self, current: usize, desired: usize, kind: MemoryKind) -> bool {
-        if kind != MemoryKind::LinearMemory {
-            return false;
-        }
+    fn durable_memory_grown(&mut self, current: usize, desired: usize) -> bool {
         let delta = desired.saturating_sub(current) as u64;
         if delta > 0 {
             self.durable_worker_ctx().increase_memory(delta);
@@ -461,10 +465,8 @@ pub trait DurableResourceLimiter<Ctx: WorkerCtx> {
         }
     }
 
-    fn durable_memory_grow_failed(&mut self, kind: MemoryKind) -> wasmtime::Result<()> {
-        if kind == MemoryKind::LinearMemory {
-            self.durable_worker_ctx().unshared_memory_growth_failed();
-        }
+    fn durable_memory_grow_failed(&mut self) -> wasmtime::Result<()> {
+        self.durable_worker_ctx().unshared_memory_growth_failed();
         Ok(())
     }
 }
@@ -694,7 +696,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             parent: self
                 .state
                 .get_current_idempotency_key()
-                .unwrap_or(IdempotencyKey::fresh()),
+                .unwrap_or_else(|| Uuid::new_v4().into()),
             logical,
         }
     }
@@ -736,11 +738,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         direction: TcpSocketStreamDirection,
     ) -> bool {
         self.state
-            .tcp_taken_streams
+            .socket_entries
             .get(&socket_rep)
             .map(|taken| match direction {
-                TcpSocketStreamDirection::Send => taken.send,
-                TcpSocketStreamDirection::Receive => taken.receive,
+                TcpSocketStreamDirection::Send => taken.send_taken,
+                TcpSocketStreamDirection::Receive => taken.receive_taken,
             })
             .unwrap_or(false)
     }
@@ -751,18 +753,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         socket_rep: u32,
         direction: TcpSocketStreamDirection,
     ) {
-        let taken = self.state.tcp_taken_streams.entry(socket_rep).or_default();
+        let taken = self
+            .state
+            .socket_entries
+            .get_mut(&socket_rep)
+            .expect("TCP socket entry");
         match direction {
-            TcpSocketStreamDirection::Send => taken.send = true,
-            TcpSocketStreamDirection::Receive => taken.receive = true,
+            TcpSocketStreamDirection::Send => taken.send_taken = true,
+            TcpSocketStreamDirection::Receive => taken.receive_taken = true,
         }
-    }
-
-    /// Drops the shadow taken-state for a TCP socket resource. Called from the
-    /// socket `drop` so a later resource-table rep reuse cannot inherit stale
-    /// taken flags.
-    pub(crate) fn forget_tcp_taken_streams(&mut self, socket_rep: u32) {
-        self.state.tcp_taken_streams.remove(&socket_rep);
     }
 
     fn io_ctx(&mut self) -> &mut IoCtx {
@@ -918,12 +917,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
         let trace_context = self
             .state
+            .invocation_state()
             .invocation_context
-            .span_origin(&self.state.current_span_id)
+            .span_origin(&self.state.invocation_state().current_span_id)
             .map(
                 |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
                     trace_id,
-                    span_id: self.state.current_span_id.clone(),
+                    span_id: self.state.invocation_state().current_span_id.clone(),
                 },
             );
         logging::policy::emit_log_event_with_state::<Ctx>(
@@ -944,6 +944,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed, replayed or live, and can change the state of the agent.
+    pub(crate) fn last_state_change(&self) -> Option<OplogIndex> {
+        self.state.last_state_change
+    }
+
     pub(crate) fn live_stream_event_capacity(&self) -> usize {
         self.state
             .config
@@ -1045,9 +1051,6 @@ pub(crate) struct PendingReplayToLive {
 const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
     "Tool attachment live-memory admission was exhausted";
 
-const TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED: &str =
-    "Tool attachment live-memory admission was cancelled";
-
 /// A failed replay of the recorded invocations of a start.
 struct ReplayFailure {
     error: WorkerExecutorError,
@@ -1082,15 +1085,6 @@ pub(crate) struct FilesystemOutputStreamState;
 pub(crate) enum TcpSocketStreamDirection {
     Send,
     Receive,
-}
-
-/// Tracks which of a TCP socket's one-shot `send`/`receive` streams have been
-/// acquired by the durable wrappers. Mirrors the wasmtime native per-socket
-/// taken flags so replay can rehydrate them deterministically.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct TcpTakenStreams {
-    send: bool,
-    receive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1130,7 +1124,11 @@ struct PrivateDurableWorkerState {
     created_by: AccountId,
     owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
-    current_idempotency_key: Option<IdempotencyKey>,
+    /// The same attribution as [`DurableWorkerCtx::attribution`], so the state's own readers
+    /// resolve their invocation.
+    attribution: attribution::InvocationAttribution,
+    /// The execution state of each invocation of this Store; see [`execution_state`].
+    invocations: execution_state::Invocations,
     /// Store-local child positions under an entity seed.
     entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
@@ -1142,8 +1140,6 @@ struct PrivateDurableWorkerState {
 
     /// Custom durable invocations whose committed logical `Start` is currently executing live.
     active_custom_invocations: HashMap<OplogIndex, ActiveCustomInvocation>,
-    /// Next tool invocation attempt ordinal in each durable parent namespace.
-    tool_invocation_attempt_ordinals: HashMap<OwnerInvocationId, u64>,
     /// Live custom invocation ownership scopes, keyed by their process-local resource identity.
     custom_invocation_scopes: HashMap<u64, OpenCustomInvocationScope>,
     next_custom_invocation_scope_id: u64,
@@ -1185,30 +1181,23 @@ struct PrivateDurableWorkerState {
     file_stream_pollables: HashSet<u32>,
 
     tcp_connect_replay: sockets::tcp::TcpConnectReplay,
+    /// The hostnames that this Store's completed address lookups linked to addresses, for the
+    /// grant check of socket connects and datagrams.
+    resolved_names: sockets::resolved_names::SharedResolvedNames,
     open_tcp_input_streams: HashSet<u32>,
     open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
     p2_timer_deadlines: HashMap<u32, std::time::Instant>,
 
-    /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
-    /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
-    /// from the oplog instead of invoking the native host call, so the native
-    /// "taken" state is not advanced on replay. This map records which directions
-    /// were acquired so a post-replay second call returns `InvalidState` exactly as
-    /// uninterrupted execution would. Reconstructed on replay from the durable
-    /// acquire calls and cleared when the socket resource is dropped.
-    tcp_taken_streams: HashMap<u32, TcpTakenStreams>,
+    socket_entries: sockets::SocketEntries,
 
     snapshotting_mode: bool,
 
-    /// Tracks whether the currently executing invocation is restricted to read-only side effects.
-    /// When `ReadOnly`, outgoing HTTP and RPC host calls are trapped before any oplog entry is
-    /// written. Defaults to `Normal` and is reset on every invocation exit path.
-    invocation_strictness: InvocationStrictness,
-
-    /// Name of the agent method currently being invoked under read-only strictness. Captured at
-    /// the invocation entry point so it can be reported in `AgentError::ReadOnlyViolation`.
-    read_only_method_name: Option<String>,
+    /// The index of the `AgentInvocationFinished` entry of the last invocation of this Store that
+    /// completed and can change the state of the agent, replayed or live. A `read_only` agent
+    /// method cannot. Replay sets it from the history after the baseline of the start, so after a
+    /// restart it still points at a change that no later automatic snapshot record holds.
+    last_state_change: Option<OplogIndex>,
 
     /// Oplog-processor plugin calls are admitted by the operator when the plugin is installed,
     /// outside the per-agent permission-card model. This is set only while dispatching the
@@ -1222,15 +1211,10 @@ struct PrivateDurableWorkerState {
     authority_wallet: Arc<WalletSnapshot>,
     card_boundary: Weak<CardEventBoundary>,
     replay_applications: VecDeque<Arc<replay_application::ReplayApplication>>,
-    agent_effective_surface: golem_common::model::card::EffectiveSurface,
     agent_wallet_cards: WalletCards,
-    invocation_scope_card: Option<ScopeCard>,
-    invocation_scope_root_cards: BTreeMap<CardId, StoredCard>,
-    invocation_scope_handles: HashMap<u32, Vec<CardId>>,
     /// Invocation scope an entity Store inherits from the Store that started its current entity
     /// invocation. It bounds the entity's effective surface but is not exposed as a wallet handle.
     inherited_invocation_scope: Option<InheritedInvocationScope>,
-    scope_interest: Option<Arc<crate::services::card_interest::CardInterestContribution>>,
     /// Cards the owner worker has revoked. Revocation events are drained by whichever of the
     /// owner's Stores reaches a boundary first, so every Store excludes these cards from its
     /// surfaces instead of relying on draining every event itself.
@@ -1238,12 +1222,7 @@ struct PrivateDurableWorkerState {
     wallet_id_hash: [u8; 32],
     wallet_generation: u64,
     published_authority_generation: Arc<AtomicU64>,
-    processed_authority_generation: u64,
-    authority_initialized: bool,
-    next_authority_expiration: Option<DateTime<Utc>>,
 
-    invocation_context: InvocationContext,
-    current_span_id: SpanId,
     forward_trace_context_headers: bool,
     set_outgoing_http_idempotency_key: bool,
 
@@ -1266,21 +1245,12 @@ struct PrivateDurableWorkerState {
     /// `Some(policy)` = set/overwrite, `None` = tombstone (removed).
     /// Applied on top of base policies from agent_config during `named_retry_policies()`.
     runtime_retry_policy_mutations: BTreeMap<String, Option<NamedRetryPolicy>>,
+    /// The identity of the next retry policy scope a task opens in this Store.
+    next_retry_policy_scope_id: u64,
 
     /// Maps child pollable rep → parent FutureInvokeResult rep.
     /// Used to finalize deferred parent deletion when a child pollable is dropped.
     rpc_pollable_to_parent: HashMap<u32, u32>,
-
-    /// The **global fallback** retry point: the index attached to an `Error` entry for a trap that
-    /// happens outside any in-flight durable call. It is maintained by `begin_function` /
-    /// transaction begin and the explicit HTTP/RPC retry-point writes, so it normally tracks the
-    /// last persisted side effect / open scope `Start`.
-    ///
-    /// An in-flight durable call no longer mirrors its own retry point into this field: a concurrent
-    /// durable call carries its retry grouping in its call-owned `execution_scope`
-    /// (`durable_host::concurrent`, read by `ScopedRetryHost`) and in the semantic-trap error
-    /// marker, so an overlapping call completing cannot clobber a sibling's grouping.
-    current_retry_point: OplogIndex,
 
     /// Transaction-owned protocol terminals. Each entry holds a host-call permit until closed.
     transaction_protocols: HashMap<OplogIndex, TransactionProtocol>,
@@ -1336,24 +1306,33 @@ struct PrivateDurableWorkerState {
     /// A protocol refusal ended replay without granting live authority.
     authoritative_replay_failure: Arc<AtomicBool>,
 
-    /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
-    /// Reset to 0 at the start of each exported function invocation.
-    http_call_count: u64,
+    /// The bootstrap phase of the primary Store while its core initializer runs.
+    bootstrap: Option<BootstrapPhase>,
+    /// The bootstrap range of this generation: the first `Start` to the last entry of the
+    /// durable calls that the core initializer appended or claimed. `None` when it made none.
+    bootstrap_range: Option<OplogRegion>,
+
     /// Per-invocation HTTP call limit from the account's Plan.
     per_invocation_http_call_limit: u64,
 
-    /// Number of RPC calls made in the current invocation (live only, not replayed).
-    /// Reset to 0 at the start of each exported function invocation.
-    rpc_call_count: u64,
     /// Per-invocation RPC call limit from the account's Plan.
     per_invocation_rpc_call_limit: u64,
-
-    /// Zero-based ordinal of the next successfully derived invocation-local scope card.
-    scope_card_mint_ordinal: u64,
 
     /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
     /// and to check remaining budgets from the epoch callback.
     resource_limit_entry: Arc<AtomicResourceEntry>,
+}
+
+/// The observation of the durable calls that a core initializer makes inside `instantiate`.
+struct BootstrapPhase {
+    /// The main cursor, while a bootstrap cursor stands in its place in `replay_state`.
+    main: Option<ReplayState>,
+    /// The lowest `Start` index that the initializer appended or claimed.
+    first_start: Option<OplogIndex>,
+    /// The last replayed non-hint index of the active cursor when the phase began.
+    replayed_before: OplogIndex,
+    /// The last appended non-hint index of the oplog when the phase began.
+    appended_before: Option<OplogIndex>,
 }
 
 #[derive(Clone)]
@@ -1372,6 +1351,7 @@ impl WakeupScheduler {
             .promise_service
             .create(
                 &self.owned_agent_id.agent_id,
+                self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
             .await?;
@@ -1398,6 +1378,15 @@ impl WakeupScheduler {
     }
 }
 
+fn overlay_retry_policy_scopes(
+    mutations: &mut BTreeMap<String, Option<NamedRetryPolicy>>,
+    scopes: &[durability::RetryPolicyScope],
+) {
+    for scope in scopes {
+        mutations.insert(scope.policy.name.clone(), Some(scope.policy.clone()));
+    }
+}
+
 impl PrivateDurableWorkerState {
     /// Returns the agent-config-derived retry policies (cached, cheap).
     pub fn agent_config_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
@@ -1414,6 +1403,23 @@ impl PrivateDurableWorkerState {
     /// agent config, environment-level policies (fetched dynamically via EnvironmentStateService),
     /// and runtime overlay.
     pub async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        let mutations = self.retry_policy_mutations();
+        self.named_retry_policies_with(&mutations).await
+    }
+
+    /// The named retry policies for the retry decision of a guest trap: the agent-wide policies
+    /// overlaid with the retry policy scopes that a task of the invocation had open after its
+    /// latest scope change.
+    pub async fn guest_trap_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        let mut mutations = self.runtime_retry_policy_mutations.clone();
+        overlay_retry_policy_scopes(&mut mutations, &self.invocation_state().trap_retry_scopes);
+        self.named_retry_policies_with(&mutations).await
+    }
+
+    async fn named_retry_policies_with(
+        &mut self,
+        mutations: &BTreeMap<String, Option<NamedRetryPolicy>>,
+    ) -> Vec<NamedRetryPolicy> {
         // Tier 0: default catch-all policy from GolemConfig (priority 0, Predicate::True)
         let default_policy = NamedRetryPolicy::default_from_config(&self.config.retry);
 
@@ -1435,8 +1441,18 @@ impl PrivateDurableWorkerState {
             default_policy,
             agent_config_policies,
             environment_policies,
-            &self.runtime_retry_policy_mutations,
+            mutations,
         )
+    }
+
+    /// The agent-wide runtime retry policy mutations, overlaid with the retry policy scopes open
+    /// in the task the running host code belongs to. The innermost scope with a name wins.
+    pub fn retry_policy_mutations(&self) -> BTreeMap<String, Option<NamedRetryPolicy>> {
+        let mut mutations = self.runtime_retry_policy_mutations.clone();
+        if let Some(context) = self.attribution.guest_task_context() {
+            overlay_retry_policy_scopes(&mut mutations, &context.retry_scopes);
+        }
+        mutations
     }
 
     /// Apply a set-retry-policy mutation (from oplog replay or live execution).
@@ -1473,10 +1489,12 @@ impl PrivateDurableWorkerState {
         self.live_host_calls.load(Ordering::Acquire) > 0
     }
 
-    /// Activity tracker for Golem-spawned store background tasks; used to delay invocation
-    /// completion until every spawned task is either finished or parked in a recognized safe wait.
+    /// The per-worker activity tracker of Golem-spawned store tasks, which delays invocation
+    /// completion until every spawned task is finished or parked in a recognized safe wait. It also
+    /// counts on the invocation the running host code belongs to.
     pub fn tail_work_tracker(&self) -> tail_work::TailWorkTracker {
-        self.tail_work.clone()
+        self.tail_work
+            .counting_on(&self.invocation_state().tail_work)
     }
 
     fn wakeup_scheduler(
@@ -1512,7 +1530,7 @@ impl PrivateDurableWorkerState {
     /// add a tier here: with overlapping sibling scopes there is no meaningful "innermost" scope, so
     /// grouping is driven by the explicitly-maintained `current_retry_point` instead.
     fn effective_retry_point(&self) -> OplogIndex {
-        self.current_retry_point
+        self.invocation_state().retry_point
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
@@ -1591,6 +1609,77 @@ impl PrivateDurableWorkerState {
                 || !self.replay_state.retains_unclaimed_start_charged_to(quota))
     }
 
+    /// Records that the core initializer appended or claimed the `Start` at `start_index`, while
+    /// a bootstrap phase observes it.
+    fn observe_bootstrap_start(&mut self, start_index: OplogIndex) {
+        if let Some(phase) = &mut self.bootstrap {
+            phase.first_start = Some(
+                phase
+                    .first_start
+                    .map_or(start_index, |first| first.min(start_index)),
+            );
+        }
+    }
+
+    /// Refuses `call` with a divergence while the core initializer runs on a bootstrap cursor,
+    /// which replays its bootstrap block or records the block of an update target. Every later
+    /// start from the restore point that names the block replays it on a strict cursor, which
+    /// holds no invocation and no owner wallet and can only return recorded results.
+    fn refuse_on_bootstrap_cursor(
+        &self,
+        call: impl std::fmt::Display,
+    ) -> Result<(), WorkerExecutorError> {
+        if self
+            .bootstrap
+            .as_ref()
+            .is_some_and(|phase| phase.main.is_some())
+        {
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                "a direct read call of the core initializer",
+                format!(
+                    "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
+                ),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Admits a direct durable call of the core initializer while a bootstrap cursor replays its
+    /// bootstrap block: only a read outside the permission-card and fork families, whose replay
+    /// depends on nothing but the block.
+    fn check_bootstrap_admission(
+        &self,
+        function_type: &DurableFunctionType,
+        host_function: &HostFunctionName,
+    ) -> Result<(), WorkerExecutorError> {
+        let read = matches!(
+            function_type,
+            DurableFunctionType::ReadLocal | DurableFunctionType::ReadRemote
+        );
+        let excluded_family = matches!(
+            host_function,
+            HostFunctionName::GolemApiDeriveCard
+                | HostFunctionName::GolemApiInstallCard
+                | HostFunctionName::GolemPermissionsDerivePersist
+                | HostFunctionName::GolemPermissionsRevokePersist
+                | HostFunctionName::GolemPermissionsInstallChildPersist
+                | HostFunctionName::GolemPermissionsInstallTransfer
+                | HostFunctionName::GolemPermissionsInspectDecision
+                | HostFunctionName::GolemPermissionsDeriveDecision
+                | HostFunctionName::GolemPermissionsDeriveFromWalletDecision
+                | HostFunctionName::GolemPermissionsDeriveScopeDecision
+                | HostFunctionName::GolemPermissionsInstallDecision
+                | HostFunctionName::GolemApiFork
+                | HostFunctionName::GolemApiForkWorker
+        );
+        if read && !excluded_family {
+            Ok(())
+        } else {
+            self.refuse_on_bootstrap_cursor(format_args!("{host_function} as {function_type:?}"))
+        }
+    }
+
     /// Whether this Store is an incomplete entity that already continued live locally while the
     /// shared cursor may still replay other owners' records. See
     /// [`ReplayState::claim_start_for_store`].
@@ -1607,12 +1696,71 @@ impl PrivateDurableWorkerState {
         !self.is_live()
     }
 
-    pub fn get_current_idempotency_key(&self) -> Option<IdempotencyKey> {
-        self.current_idempotency_key.clone()
+    /// The idempotency key of the invocation the running host code belongs to.
+    pub fn get_current_idempotency_key(&self) -> Option<golem_common::model::InvocationId> {
+        self.attributed_key().invocation_id()
     }
 
-    pub fn set_current_idempotency_key(&mut self, invocation_key: IdempotencyKey) {
-        self.current_idempotency_key = Some(invocation_key);
+    /// The invocation whose entry the running host code reads; see [`Invocations::key`].
+    pub fn attributed_key(&self) -> attribution::InvocationKey {
+        self.invocations.key(self.attribution.resolve())
+    }
+
+    /// Begins the invocation the invocation loop runs next.
+    pub fn set_current_idempotency_key(
+        &mut self,
+        invocation_key: golem_common::model::InvocationId,
+    ) {
+        self.invocations
+            .begin(attribution::InvocationKey::Invocation(invocation_key));
+    }
+
+    /// Ends the loop's invocation without beginning another, as an entity Store does when its
+    /// entity invocation scope is removed.
+    pub fn clear_current_idempotency_key(&mut self) {
+        self.invocations
+            .begin(attribution::InvocationKey::AgentLevel);
+    }
+
+    /// The execution state of the invocation the running host code belongs to.
+    pub fn invocation_state(&self) -> &execution_state::InvocationExecutionState {
+        self.invocations.get(self.attribution.resolve())
+    }
+
+    pub fn invocation_state_mut(&mut self) -> &mut execution_state::InvocationExecutionState {
+        let attributed = self.attribution.resolve();
+        self.invocations.get_mut(attributed)
+    }
+
+    /// The execution state of exactly the invocation that the calling code is attributed to,
+    /// while that invocation's entry lives.
+    pub fn own_invocation_state_mut(
+        &mut self,
+    ) -> Option<&mut execution_state::InvocationExecutionState> {
+        let attributed = self.attribution.resolve();
+        self.invocations.own_mut(attributed)
+    }
+
+    /// The authority of the invocation the calling code is attributed to.
+    pub fn authority(&self) -> &execution_state::InvocationAuthority {
+        &self.invocation_state().authority
+    }
+
+    pub fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {
+        &mut self.invocation_state_mut().authority
+    }
+
+    /// Marks the authority of every invocation as not synchronized, after a change to the
+    /// agent's wallet.
+    pub fn invalidate_authority(&mut self) {
+        for entry in self.invocations.entries_mut() {
+            entry.authority.invalidate();
+        }
+    }
+
+    /// The execution state of the invocation the invocation loop runs.
+    pub fn loop_invocation_state_mut(&mut self) -> &mut execution_state::InvocationExecutionState {
+        self.invocations.loop_entry_mut()
     }
 
     pub async fn get_workers(

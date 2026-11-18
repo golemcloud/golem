@@ -73,6 +73,11 @@ pub trait HttpClient4 {
 
     async fn post_with_writer_get(&self) -> String;
 
+    /// Reads the server-sent event stream at `/events`, whose events carry no `id:` field, with
+    /// a raw wasip3 GET. Returns `events=[<data>,...]` followed by ` end` when the stream ended,
+    /// or by ` incomplete(<error>) after <n> events` when the body ended with an error.
+    async fn read_sse_without_ids(&self) -> String;
+
     /// Sends a non-idempotent POST concurrently with a GET.
     async fn post_non_idempotent_with_concurrent_get(&self) -> String;
 
@@ -89,6 +94,11 @@ pub trait HttpClient4 {
 
     /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
     async fn post_with_status_retry_policy(&self) -> String;
+
+    /// Sends the terminal POST from a future spawned inside a retry policy scope that retries
+    /// HTTP 500 responses, then sends it again after the scope ends. Returns both responses and
+    /// whether the scoped policy is visible after the scope, separated by `|`.
+    async fn post_in_and_after_status_retry_scope(&self) -> String;
 
     /// Sends a raw wasip3 POST whose bounded body is terminal before send.
     async fn p3_terminal_post(&self) -> String;
@@ -313,6 +323,10 @@ impl HttpClient4 for HttpClient4Impl {
         do_post_inference_streamed(&port, true).await
     }
 
+    async fn read_sse_without_ids(&self) -> String {
+        do_read_sse_without_ids().await
+    }
+
     async fn post_non_idempotent_with_concurrent_get(&self) -> String {
         do_post_with_concurrent_get().await
     }
@@ -374,15 +388,27 @@ impl HttpClient4 for HttpClient4Impl {
     }
 
     async fn post_with_status_retry_policy(&self) -> String {
-        let policy = NamedPolicy::named(
-            "http-status-retry-test",
-            Policy::immediate().max_retries(10),
-        )
-        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
+        with_named_policy_async(&status_retry_policy(), || async {
+            do_p3_terminal_post().await
+        })
+        .await
+        .unwrap()
+    }
 
-        with_named_policy_async(&policy, || async { do_p3_terminal_post().await })
-            .await
-            .unwrap()
+    async fn post_in_and_after_status_retry_scope(&self) -> String {
+        let inside = with_named_policy_async(&status_retry_policy(), || async {
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            wit_bindgen::spawn_local(async move {
+                let _ = sender.send(do_p3_terminal_post().await);
+            });
+            receiver.await.expect("the spawned post should report")
+        })
+        .await
+        .unwrap();
+        let visible_after =
+            golem_rust::retry::get_retry_policy_by_name(STATUS_RETRY_POLICY).is_some();
+        let after = do_p3_terminal_post().await;
+        format!("{inside}|{visible_after}|{after}")
     }
 
     async fn p3_terminal_post(&self) -> String {
@@ -1491,6 +1517,72 @@ async fn do_post_inference_streamed(port: &str, get_after_write: bool) -> String
     }
 }
 
+/// Reads `/events` as a server-sent event stream and collects the `data:` field of every complete
+/// event. Each body chunk is committed before the next read, so a crash after a chunk finds it
+/// in the durable oplog.
+async fn do_read_sse_without_ids() -> String {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_bindgen::StreamResult;
+    use golem_rust::wasip3::wit_future;
+
+    let port = std::env::var("PORT").unwrap();
+    let headers =
+        types::Fields::from_list(&[("accept".to_string(), b"text/event-stream".to_vec())]).unwrap();
+    // Dropping the writer ends the empty request body without trailers, so the recorded
+    // request is complete and the host can resend it.
+    let (_, request_done_rx) = wit_future::new(|| Ok(None));
+    let (request, _transmit) = types::Request::new(headers, None, request_done_rx, None);
+    request.set_method(&types::Method::Get).unwrap();
+    request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+    request.set_path_with_query(Some("/events")).unwrap();
+
+    let response = match client::send(request).await {
+        Ok(response) => response,
+        Err(error) => return format!("error({error:?})"),
+    };
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (mut body, trailers) = types::Response::consume_body(response, response_done_rx);
+    let mut pending = String::new();
+    let mut events = Vec::new();
+    let mut buffer = Vec::with_capacity(1024);
+    loop {
+        let (result, next_buffer) = body.read(buffer).await;
+        buffer = next_buffer;
+        match result {
+            StreamResult::Complete(n) => {
+                pending.push_str(&String::from_utf8_lossy(&buffer[..n]));
+                buffer.clear();
+                while let Some(end) = pending.find("\n\n") {
+                    let event: String = pending.drain(..end + 2).collect();
+                    events.extend(
+                        event
+                            .lines()
+                            .filter_map(|line| line.strip_prefix("data: "))
+                            .map(str::to_string),
+                    );
+                }
+                golem_rust::oplog_commit(0);
+            }
+            StreamResult::Dropped => break,
+            StreamResult::Cancelled => panic!("event stream read was cancelled"),
+        }
+    }
+    drop(body);
+    let trailers = trailers.await;
+    let _ = response_done_tx.write(Ok(())).await;
+    let received = format!("events=[{}]", events.join(","));
+    match trailers {
+        Ok(_) => format!("{received} end"),
+        Err(error) => format!(
+            "{received} incomplete({error:?}) after {} events",
+            events.len()
+        ),
+    }
+}
+
 async fn do_put_with_p3_oversized_body() -> String {
     use futures_concurrency::prelude::*;
     use golem_rust::wasip3::http::{client, types};
@@ -1703,6 +1795,13 @@ async fn do_put_with_p3_declared_small_body_open_until_response() -> String {
     };
 
     (send, hold_body_open).race().await
+}
+
+const STATUS_RETRY_POLICY: &str = "http-status-retry-test";
+
+fn status_retry_policy() -> NamedPolicy {
+    NamedPolicy::named(STATUS_RETRY_POLICY, Policy::immediate().max_retries(10))
+        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16))
 }
 
 async fn do_p3_terminal_post() -> String {

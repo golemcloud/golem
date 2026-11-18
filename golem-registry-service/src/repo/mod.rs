@@ -40,6 +40,7 @@ pub mod report;
 pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
+pub mod shared_config;
 pub mod token;
 pub mod tool_middleware_release;
 pub mod tool_release;

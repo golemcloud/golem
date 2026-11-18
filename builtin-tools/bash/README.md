@@ -110,11 +110,11 @@ everything it started, so its TERM trap runs, and KILL a second later. The call 
 the script wrote, exit code 124 and `bash: the call exceeded its 600 s time limit` on stderr.
 
 `stdin` is the call's optional input stream. It is not the script's input: a script reads an empty
-input, and data sent on the stream is dropped. A caller that cancels the stream stops the script as
-Ctrl+C stops a command at a terminal: INT to the script and everything it started, so its INT trap
-runs, and KILL a second later. The call then returns what the script wrote and exit code 130; the
-stop adds no line to stderr. A stream that ends in any other way stops nothing, and without a
-stream only the time limit stops a script.
+input, and data sent on the stream is dropped. A caller that fails or cancels the stream stops the
+script as Ctrl+C stops a command at a terminal: INT to the script and everything it started, so
+its INT trap runs, and KILL a second later. The call then returns what the script wrote and exit
+code 130; the stop adds no line to stderr. Clean EOF and other terminal kinds stop nothing, and
+without a stream only the time limit stops a script.
 
 Each call creates a fresh shell, as `bash -c`
 does, and completes all owned tasks before returning. Output is collected until completion; it is
@@ -517,13 +517,13 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   that only waits (a `sleep`, a polling loop, a bound tool that sleeps) can be suspended by Golem
   in the middle of the call (see Implementation). At this Golem version the replay that resumes
   it can hang or permanently fail the owner; that is for Golem to fix.
-- **Stop.** A caller that cancels the call's `stdin` stream stops the script (see
+- **Stop.** A caller that fails or cancels the call's `stdin` stream stops the script (see
   [Contract](#contract)). The stop reaches what the time limit reaches, and no more: a loop of
   commands that never wait is stopped within 64 of its commands, also one that starts a pipeline
   in each round (see Time), and one command that computes for long without waiting ends
   first. A script that ignores INT (`trap '' INT`) is killed a second later, and one
-  that catches it runs its handler; the call returns 130 in each case. A stream cancelled before
-  the script starts ends the call before any of the script runs. Background jobs ignore INT, as
+  that catches it runs its handler; the call returns 130 in each case. A stream failed or cancelled
+  before the script starts ends the call before any of the script runs. Background jobs ignore INT, as
   bash's do without job control, so the end of the run stops and reports them like any leftover
   job.
 - **HTTP.** `curl` and `wget` hold at most 64 MiB of a response body when they must buffer it
@@ -600,16 +600,15 @@ Build it from the repository root:
 cargo make build-bash-tool
 ```
 
-It runs `golem.yaml`'s release preset with golem-cli: a Cargo build with the Rust toolchain
-`rust-toolchain.toml` pins and the profile `Cargo.toml` pins. The component is named
+It runs `golem.yaml`'s release preset with golem-cli: a Cargo build with the latest stable Rust
+toolchain and the profile `Cargo.toml` pins. The component is named
 `golem:bash`, and the `copy` command writes it to `builtin-tools/bash.wasm`. That file is not
 committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
 as part of tagged Golem releases and pinned by SHA-256 in the generated
 `builtin-artifacts.release.json`. Development uses `cargo make ensure-builtin-artifacts` to
 rebuild changed inputs locally. The Golem SDK is a path dependency: changes to it or to this
 workspace require a local rebuild, not a publication or lock update. See
-[the release procedure](../../BUILTIN_ARTIFACTS.md) for publication. A new Rust release means
-updating `rust-toolchain.toml`, then publishing a new artifact version.
+[the release procedure](../../BUILTIN_ARTIFACTS.md) for publication.
 
 A published artifact is immutable: any change to the component's bytes needs a new artifact
 version, and a change to the exported tool metadata a new tool version

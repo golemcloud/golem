@@ -8,6 +8,21 @@ pub(all) struct CounterClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn CounterClient::bind_self() -> CounterClient raise {
+  { client: @rpc.AgentClient::bind_self("Counter"), }
+}
+
+///|
+///
 pub fn CounterClient::get(
   name : String,
 ) -> CounterClient raise @common.AgentError {
@@ -236,6 +251,21 @@ pub fn CounterClient::schedule_cancelable_get_value(
 ///
 pub(all) struct WeatherAgentClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn WeatherAgentClient::bind_self() -> WeatherAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("WeatherAgent"), }
 }
 
 ///|
@@ -522,6 +552,21 @@ pub(all) struct AuditLogClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn AuditLogClient::bind_self() -> AuditLogClient raise {
+  { client: @rpc.AgentClient::bind_self("AuditLog"), }
+}
+
+///|
+///
 pub fn AuditLogClient::get(
   name : String,
 ) -> AuditLogClient raise @common.AgentError {
@@ -765,6 +810,21 @@ pub(all) struct FileOwnerClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn FileOwnerClient::bind_self() -> FileOwnerClient raise {
+  { client: @rpc.AgentClient::bind_self("FileOwner"), }
+}
+
+///|
+///
 pub fn FileOwnerClient::get(
   name : String,
 ) -> FileOwnerClient raise @common.AgentError {
@@ -908,6 +968,21 @@ pub fn FileOwnerClient::schedule_cancelable_update(
 ///
 pub(all) struct RpcExampleAgentClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn RpcExampleAgentClient::bind_self() -> RpcExampleAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("RpcExampleAgent"), }
 }
 
 ///|
@@ -1175,6 +1250,21 @@ pub fn RpcExampleAgentClient::schedule_cancelable_get_last_value(
 ///
 pub(all) struct ConfiguredAgentClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn ConfiguredAgentClient::bind_self() -> ConfiguredAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("ConfiguredAgent"), }
 }
 
 ///|
@@ -1505,6 +1595,21 @@ pub(all) struct TaskManagerClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn TaskManagerClient::bind_self() -> TaskManagerClient raise {
+  { client: @rpc.AgentClient::bind_self("TaskManager"), }
+}
+
+///|
+///
 pub fn TaskManagerClient::get() -> TaskManagerClient raise @common.AgentError {
   let constructor_input = @agents.encode_wire_input([])
   let client = @rpc.AgentClient::get("TaskManager", constructor_input)
@@ -1760,6 +1865,21 @@ pub(all) struct WebhookAgentClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn WebhookAgentClient::bind_self() -> WebhookAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("WebhookAgent"), }
+}
+
+///|
+///
 pub fn WebhookAgentClient::get(
   name : String,
 ) -> WebhookAgentClient raise @common.AgentError {
@@ -1978,6 +2098,21 @@ pub(all) struct MoonBitToolStreamingCallerClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn MoonBitToolStreamingCallerClient::bind_self() -> MoonBitToolStreamingCallerClient raise {
+  { client: @rpc.AgentClient::bind_self("MoonBitToolStreamingCaller"), }
+}
+
+///|
+///
 pub fn MoonBitToolStreamingCallerClient::get(
   name : String,
 ) -> MoonBitToolStreamingCallerClient raise @common.AgentError {
@@ -2147,6 +2282,21 @@ pub fn MoonBitToolStreamingCallerClient::schedule_cancelable_marker_before_eof(
 ///
 pub(all) struct MultipartIndexClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn MultipartIndexClient::bind_self() -> MultipartIndexClient raise {
+  { client: @rpc.AgentClient::bind_self("MultipartIndex"), }
 }
 
 ///|
@@ -2353,6 +2503,21 @@ pub fn MultipartIndexClient::schedule_cancelable_read_index(
 ///
 pub(all) struct MoonBitToolReflectionCallerClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn MoonBitToolReflectionCallerClient::bind_self() -> MoonBitToolReflectionCallerClient raise {
+  { client: @rpc.AgentClient::bind_self("MoonBitToolReflectionCaller"), }
 }
 
 ///|
@@ -2748,6 +2913,21 @@ pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_agent_round_trip(
 ///
 pub(all) struct VisionAgentClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn VisionAgentClient::bind_self() -> VisionAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("VisionAgent"), }
 }
 
 ///|

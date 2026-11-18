@@ -20,7 +20,7 @@ function expectedType({kind, value: v}) {
 
 function guest(values, {deny = false, malformed = false} = {}) {
   let instance, context = 0, nextSet = 1, returned;
-  const reads = [];
+  const captured = structuredClone(values);
   const view = () => new DataView(instance.exports.memory.buffer);
   const u32 = p => view().getUint32(p, true);
   const byte = p => view().getUint8(p);
@@ -128,15 +128,20 @@ function guest(values, {deny = false, malformed = false} = {}) {
         }
       },
     },
+    'golem:agent/invocation-context@2.0.0': {
+      caller: result => {
+        put(result, 3);
+        put(result + 112, 3);
+      },
+    },
     'golem:agent/host@2.0.0': {
       'get-config-value': (keys, length, nodes, nodeCount, defs, defCount, root, result) => {
         const key = Array.from({length}, (_, i) => str(keys + i * 8));
-        reads.push(key);
         if (deny) { put(result, 1); put(result + 4, 0); return; }
         const g = alloc(20);
         [nodes, nodeCount, defs, defCount, root].forEach((n, i) => put(g + i * 4, n));
         const schema = graph(g);
-        const value = key.reduce((v, name) => v[name], values);
+        const value = key.reduce((v, name) => v[name], captured);
         assert.notEqual(value, undefined, 'host must supply every resolved field, including absence');
         const tree = malformed ? encode('string', 'wrong shape', {}) : encode(schema.root, value, schema.defs);
         put(result, 0); put(result + 4, tree.ptr); put(result + 8, tree.length); put(result + 12, tree.root);
@@ -154,11 +159,10 @@ function guest(values, {deny = false, malformed = false} = {}) {
   instance.exports['cabi_post_golem:agent/guest@2.0.0#discover-agent-types'](discover);
   function call(operation, name, input) {
     const tree = encode(['record', input.map((_, i) => [String(i), 'string'])], Object.fromEntries(input.map((v, i) => [i, v])), {});
-    const args = alloc(128);
+    const args = alloc(8);
     writeString(args, name);
-    put(args + 8, tree.ptr); put(args + 12, tree.length); put(args + 16, tree.root); put(args + 24, 3);
     returned = undefined;
-    let status = instance.exports[`[async-lift]golem:agent/guest@2.0.0#${operation}`](args);
+    let status = instance.exports[`[async-lift]golem:agent/guest@2.0.0#${operation}`](u32(args), u32(args + 4), tree.ptr, tree.length, tree.root);
     for (let i = 0; status === 1 && i < 10; i++) {
       status = instance.exports[`[callback][async-lift]golem:agent/guest@2.0.0#${operation}`](0, 0, 0);
     }
@@ -166,7 +170,7 @@ function guest(values, {deny = false, malformed = false} = {}) {
     assert.notEqual(returned, undefined, 'export returned through task-return');
     return returned;
   }
-  return {agents, reads, initialize: (name, input = []) => call('initialize', name, input), read: () => call('invoke', 'read', [])};
+  return {agents, initialize: (name, input = []) => call('initialize', name, input), read: () => call('invoke', 'read', [])};
 }
 
 const discovered = guest({}).agents;
@@ -194,10 +198,8 @@ for (const c of corpus.staticCases.filter(c => c.schema === 'reference' && c.exp
   const g = guest(resolved);
   assert.equal(g.initialize(corpus.reference.agentType, [c.id])[0], 0);
   assert.deepEqual(g.read(), readExpected(c.expected), c.id);
-  assert.deepEqual(g.reads, expected.declarations.map(d => d.path));
   resolved.settings = {label: 'changed-after-initialization', count: 999};
-  assert.deepEqual(g.read(), readExpected(c.expected), 'static config was captured, not reread');
-  assert.equal(g.reads.length, 4);
+  assert.deepEqual(g.read(), readExpected(c.expected), 'host capture stays fixed until an explicit update');
   const reconstructed = guest(c.expected);
   assert.equal(reconstructed.initialize(corpus.reference.agentType, [c.id])[0], 0);
   assert.deepEqual(reconstructed.read(), readExpected(c.expected), 'fresh guest captures same resolved values');
@@ -214,7 +216,6 @@ const recursive = corpus.staticCases.find(c => c.id === 'static/recursive-defaul
 const g = guest({maxChars: 0, tree: recursive, cleared: null, enabled: false, values: []});
 assert.equal(g.initialize('StaticShapeAgent')[0], 0);
 assert.deepEqual(g.read(), {maxChars: 0, root: recursive.displayName, child: recursive.next.displayName, cleared: null, enabled: false, values: []});
-assert.deepEqual(g.reads, shapes.declarations.map(d => d.path));
 console.log('PASS: recursive data, renamed field, zero, false, empty list and explicit null');
 for (const options of [{deny: true}, {malformed: true}]) {
   const bad = guest(corpus.staticCases[0].expected, options);

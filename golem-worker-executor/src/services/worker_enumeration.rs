@@ -10,32 +10,15 @@ use crate::worker::Worker;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::base_model::worker_filter::{
-    AgentAndFilter, AgentModeFilter, AgentNotFilter, AgentOrFilter, FilterComparator,
-};
+use golem_common::base_model::worker_filter::{AgentAndFilter, AgentModeFilter, FilterComparator};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{Instrument, info, warn};
-
-/// Returns `true` if `filter` contains any `Mode(...)` reference at any depth.
-fn contains_mode(filter: &AgentFilter) -> bool {
-    match filter {
-        AgentFilter::Mode(_) => true,
-        AgentFilter::And(AgentAndFilter { filters })
-        | AgentFilter::Or(AgentOrFilter { filters }) => filters.iter().any(contains_mode),
-        AgentFilter::Not(AgentNotFilter { filter }) => contains_mode(filter),
-        AgentFilter::Name(_)
-        | AgentFilter::Status(_)
-        | AgentFilter::Revision(_)
-        | AgentFilter::CreatedAt(_)
-        | AgentFilter::Env(_)
-        | AgentFilter::Config(_) => false,
-    }
-}
 
 /// Derives the `modes` argument for `OplogService::scan_for_component` from the
 /// optional user-supplied `AgentFilter`.
@@ -69,7 +52,7 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
 
     // If the filter doesn't reference Mode at all, the default applies even
     // when other constraints (name, status, ...) are present.
-    if !contains_mode(filter) {
+    if !filter.mentions_mode() {
         return Some(AgentMode::Durable);
     }
 
@@ -100,13 +83,13 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
                     // Non-Mode child: must not hide a Mode reference inside,
                     // otherwise narrowing the scan could drop valid matches.
                     other => {
-                        if contains_mode(other) {
+                        if other.mentions_mode() {
                             return None;
                         }
                     }
                 }
             }
-            // `contains_mode(filter)` was true above and every nested-Mode case
+            // `filter.mentions_mode()` was true above and every nested-Mode case
             // has already short-circuited, so a top-level Mode(Equal, ..) must
             // have been captured.
             mode_eq.map(Some).unwrap_or(None)
@@ -230,17 +213,17 @@ impl DefaultWorkerEnumerationService {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+    ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>, u64), WorkerExecutorError> {
         let mut workers: Vec<AgentMetadata> = vec![];
 
         let modes = modes_from_filter(&filter);
-        let (new_cursor, keys) = self
+        let page = self
             .oplog_service
             .scan_for_component(environment_id, component_id, modes, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
 
-        for owned_agent_id in keys {
+        for owned_agent_id in page.agent_ids {
             // An agent whose oplog failed for good has no metadata to list: it is left out, and
             // every other agent is listed. A storage that did not answer fails the listing, which
             // the caller can retry.
@@ -304,7 +287,7 @@ impl DefaultWorkerEnumerationService {
             }
         }
 
-        Ok((new_cursor.into_option(), workers))
+        Ok((page.cursor.into_option(), workers, page.examined_keys))
     }
 }
 
@@ -357,29 +340,41 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
             precise = %precise,
             "Enumerating workers"
         );
-        let mut new_cursor: Option<ScanCursor> = Some(cursor);
+        let budget = self.golem_config.limits.scan_budget;
+        let batch_size = self.golem_config.limits.agent_scan_batch_size.get();
+        let started = Instant::now();
+        let mut scanned = 0u64;
+        let mut new_cursor = cursor;
         let mut workers: Vec<AgentMetadata> = vec![];
 
-        while new_cursor.is_some() && (workers.len() as u64) < count {
-            let new_count = count - (workers.len() as u64);
+        loop {
+            let batch = (count - workers.len() as u64)
+                .min(budget.remaining_entries(scanned))
+                .min(batch_size);
 
-            let (next_cursor, workers_page) = self
+            let (next_cursor, workers_page, batch_scanned) = self
                 .get_internal(
                     environment_id,
                     component_id,
                     filter.clone(),
-                    new_cursor.unwrap_or_default(),
-                    new_count,
+                    new_cursor,
+                    batch,
                     precise,
                 )
                 .await?;
 
             workers.extend(workers_page);
+            scanned += batch_scanned;
 
-            new_cursor = next_cursor;
+            match next_cursor {
+                Some(next_cursor)
+                    if (workers.len() as u64) < count && !budget.is_spent(scanned, started) =>
+                {
+                    new_cursor = next_cursor;
+                }
+                next_cursor => return Ok((next_cursor, workers)),
+            }
         }
-
-        Ok((new_cursor, workers))
     }
 }
 

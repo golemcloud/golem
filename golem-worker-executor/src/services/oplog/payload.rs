@@ -117,8 +117,7 @@ pub struct OrderedOplogStart {
 pub enum DurableStreamOplogRecord {
     Registered(Option<OplogIndex>, Box<StreamRegisteredRecord>),
     Items(Option<OplogIndex>, StreamItemsRecord),
-    End(Option<OplogIndex>, StreamEndRecord),
-    Cancel(Option<OplogIndex>, StreamCancelRecord),
+    Terminal(Option<OplogIndex>, StreamTerminalRecord),
     Session(Option<OplogIndex>, Box<StreamSessionRecord>),
     InlineEntry(OplogEntry),
 }
@@ -128,8 +127,7 @@ impl DurableStreamOplogRecord {
         match self {
             Self::Registered(_, record) => serialize(record),
             Self::Items(_, record) => serialize(record),
-            Self::End(_, record) => serialize(record),
-            Self::Cancel(_, record) => serialize(record),
+            Self::Terminal(_, record) => serialize(record),
             Self::Session(_, record) => serialize(record),
             Self::InlineEntry(_) => Ok(Vec::new()),
         }
@@ -152,19 +150,14 @@ impl DurableStreamOplogRecord {
                     Some(summary),
                 ))
             }
-            Self::End(entity_parent_start_index, record) => {
-                let summary = DurableStreamEventSummary::end(&record);
-                Ok(OplogEntry::stream_end(
+            Self::Terminal(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::terminal(&record);
+                Ok(OplogEntry::stream_terminal(
                     entity_parent_start_index,
                     raw.into_payload_with_cache(Arc::new(record))?,
                     Some(summary),
                 ))
             }
-            Self::Cancel(entity_parent_start_index, record) => Ok(OplogEntry::stream_cancel(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::new(record))?,
-                Some(DurableStreamEventSummary::Cancelled),
-            )),
             Self::Session(entity_parent_start_index, record) => {
                 let summary = DurableStreamEventSummary::session(&record);
                 Ok(OplogEntry::stream_session(
@@ -192,19 +185,14 @@ impl DurableStreamOplogRecord {
                     Some(summary),
                 )
             }
-            Self::End(entity_parent_start_index, record) => {
-                let summary = DurableStreamEventSummary::end(&record);
-                OplogEntry::stream_end(
+            Self::Terminal(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::terminal(&record);
+                OplogEntry::stream_terminal(
                     entity_parent_start_index,
                     OplogPayload::Inline(Box::new(record)),
                     Some(summary),
                 )
             }
-            Self::Cancel(entity_parent_start_index, record) => OplogEntry::stream_cancel(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-                Some(DurableStreamEventSummary::Cancelled),
-            ),
             Self::Session(entity_parent_start_index, record) => {
                 let summary = DurableStreamEventSummary::session(&record);
                 OplogEntry::stream_session(

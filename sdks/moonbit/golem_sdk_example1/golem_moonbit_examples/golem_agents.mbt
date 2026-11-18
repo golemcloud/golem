@@ -155,8 +155,12 @@ fn init {
         description: "Get current temperature",
         http_endpoint: [
           {
-            http_method: @common.HttpMethod::Get,
-            path_suffix: [@common.PathSegment::Literal("current")],
+            http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Get),
+            path_suffix: [
+              @common.PathSegment::Segment(
+                @coreHttp.PathSegment::Literal("current"),
+              ),
+            ],
             header_vars: [],
             query_vars: [{ query_param_name: "unit", variable_name: "unit", }],
             auth_details: None,
@@ -190,8 +194,12 @@ fn init {
         description: "Set the temperature (for testing)",
         http_endpoint: [
           {
-            http_method: @common.HttpMethod::Post,
-            path_suffix: [@common.PathSegment::Literal("set")],
+            http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Post),
+            path_suffix: [
+              @common.PathSegment::Segment(
+                @coreHttp.PathSegment::Literal("set"),
+              ),
+            ],
             header_vars: [{ header_name: "X-Source", variable_name: "source", }],
             query_vars: [],
             auth_details: None,
@@ -234,8 +242,12 @@ fn init {
         description: "Download the weather report as a raw CSV body. There is no report until a\n temperature is set, and only the `csv` format is supported.",
         http_endpoint: [
           {
-            http_method: @common.HttpMethod::Get,
-            path_suffix: [@common.PathSegment::Literal("report")],
+            http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Get),
+            path_suffix: [
+              @common.PathSegment::Segment(
+                @coreHttp.PathSegment::Literal("report"),
+              ),
+            ],
             header_vars: [],
             query_vars: [
               { query_param_name: "format", variable_name: "format", },
@@ -278,9 +290,11 @@ fn init {
     mode: @common.AgentMode::DURABLE,
     http_mount: Some({
       path_prefix: [
-        @common.PathSegment::Literal("api"),
-        @common.PathSegment::PathVariable({ variable_name: "city", }),
-        @common.PathSegment::Literal("weather"),
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("api")),
+        @common.PathSegment::Segment(
+          @coreHttp.PathSegment::PathVariable({ variable_name: "city", }),
+        ),
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("weather")),
       ],
       auth_details: Some({ required: false, }),
       phantom_agent: false,
@@ -540,17 +554,19 @@ fn init {
     dependencies: [],
     mode: @common.AgentMode::EPHEMERAL,
     http_mount: Some({
-      path_prefix: [@common.PathSegment::Literal("site")],
+      path_prefix: [
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("site")),
+      ],
       auth_details: None,
       phantom_agent: false,
       cors_options: { allowed_patterns: [], },
       webhook_suffix: [],
       static_bindings: [
-        @common.FileMapping::Subtree({
+        @coreHttp.FileMapping::Subtree({
           public_prefix: ["assets"],
           filesystem_root: "/preferred",
         }),
-        @common.FileMapping::Subtree({
+        @coreHttp.FileMapping::Subtree({
           public_prefix: ["assets"],
           filesystem_root: "/public",
         }),
@@ -633,8 +649,12 @@ fn init {
         description: "update",
         http_endpoint: [
           {
-            http_method: @common.HttpMethod::Put,
-            path_suffix: [@common.PathSegment::Literal("value")],
+            http_method: @common.HttpMethod::Method(@coreHttp.HttpMethod::Put),
+            path_suffix: [
+              @common.PathSegment::Segment(
+                @coreHttp.PathSegment::Literal("value"),
+              ),
+            ],
             header_vars: [],
             query_vars: [],
             auth_details: None,
@@ -663,8 +683,10 @@ fn init {
     mode: @common.AgentMode::DURABLE,
     http_mount: Some({
       path_prefix: [
-        @common.PathSegment::Literal("files"),
-        @common.PathSegment::PathVariable({ variable_name: "name", }),
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("files")),
+        @common.PathSegment::Segment(
+          @coreHttp.PathSegment::PathVariable({ variable_name: "name", }),
+        ),
       ],
       auth_details: None,
       phantom_agent: false,
@@ -672,7 +694,7 @@ fn init {
       webhook_suffix: [],
       static_bindings: [],
       filesystem_bindings: [
-        @common.FileMapping::Exact({
+        @coreHttp.FileMapping::Exact({
           public_path: ["value"],
           file_path: "/value.txt",
         }),
@@ -745,13 +767,15 @@ fn init {
     dependencies: [],
     mode: @common.AgentMode::EPHEMERAL,
     http_mount: Some({
-      path_prefix: [@common.PathSegment::Literal("static")],
+      path_prefix: [
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("static")),
+      ],
       auth_details: None,
       phantom_agent: false,
       cors_options: { allowed_patterns: [], },
       webhook_suffix: [],
       static_bindings: [
-        @common.FileMapping::Subtree({
+        @coreHttp.FileMapping::Subtree({
           public_prefix: [],
           filesystem_root: "/public",
         }),
@@ -1203,13 +1227,17 @@ fn init {
     mode: @common.AgentMode::DURABLE,
     http_mount: Some({
       path_prefix: [
-        @common.PathSegment::Literal("webhook"),
-        @common.PathSegment::PathVariable({ variable_name: "name", }),
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("webhook")),
+        @common.PathSegment::Segment(
+          @coreHttp.PathSegment::PathVariable({ variable_name: "name", }),
+        ),
       ],
       auth_details: Some({ required: false, }),
       phantom_agent: false,
       cors_options: { allowed_patterns: [], },
-      webhook_suffix: [@common.PathSegment::Literal("events")],
+      webhook_suffix: [
+        @common.PathSegment::Segment(@coreHttp.PathSegment::Literal("events")),
+      ],
       static_bindings: [],
       filesystem_bindings: [],
       file_response_headers: [],

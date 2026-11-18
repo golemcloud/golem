@@ -17,6 +17,7 @@ use super::rebuild::P3HttpSendRebuild;
 use super::serialization::{serialize_error_code, serialize_request, serialize_response_headers};
 use super::*;
 use crate::durable_host::authorization::targets::http_target;
+use crate::durable_host::concurrent::initiation::InitiationAccess;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessPermissionCheck, CallSpanObserver, Cancellable,
     DeferredCallReplayOutcome, DropPolicy, DurableCallSession, access_invocation_id,
@@ -166,9 +167,17 @@ where
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         (
             ctx.state.owned_agent_id.clone(),
-            ctx.state.invocation_context.trace_id.clone(),
-            ctx.state.invocation_context.trace_states.clone(),
-            ctx.state.current_span_id.clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_id
+                .clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_states
+                .clone(),
+            ctx.state.invocation_state().current_span_id.clone(),
         )
     });
     let span_request = serialized_request.clone();
@@ -200,17 +209,18 @@ where
             durable_worker_ctx::<Ctx, U>,
             function_type.clone(),
             claim_options,
-            move |start, store| {
+            move |start, mut access| {
                 Box::pin(async move {
                     if start.is_live && !start.is_denied {
-                        store.with(|mut access| {
-                            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                            ctx.state
-                                .check_and_increment_http_call_count()
-                                .map_err(wasmtime::Error::from)?;
-                            ctx.record_monthly_http_call()
-                                .map_err(wasmtime::Error::from_anyhow)
-                        })?;
+                        access
+                            .window(|ctx| {
+                                ctx.state
+                                    .check_and_increment_http_call_count()
+                                    .map_err(wasmtime::Error::from)?;
+                                ctx.record_monthly_http_call()
+                                    .map_err(wasmtime::Error::from_anyhow)
+                            })
+                            .await??;
                     }
                     Ok(quota_request)
                 })
@@ -259,9 +269,17 @@ where
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             (
                 ctx.state.owned_agent_id.clone(),
-                ctx.state.invocation_context.trace_id.clone(),
-                ctx.state.invocation_context.trace_states.clone(),
-                ctx.state.current_span_id.clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_id
+                    .clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_states
+                    .clone(),
+                ctx.state.invocation_state().current_span_id.clone(),
             )
         });
         SpanStarted {

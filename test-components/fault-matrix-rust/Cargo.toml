@@ -1,0 +1,18 @@
+[package]
+name = "golem_it_fault_matrix_rust"
+version = "0.0.1"
+edition = "2024"
+
+# Standalone workspace root, so cargo does not attach this component to an enclosing workspace.
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }

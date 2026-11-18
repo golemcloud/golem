@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::identity::parse_agent_id;
+use super::identity::{golem_env_var_not_readable, parse_agent_id};
 use crate::agentic::{
     agent_registry, get_principal, get_resolved_agent, register_initialized_agent,
 };
@@ -25,6 +25,13 @@ use crate::{
     },
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Guest},
 };
+
+/// Reads the ID of the running agent from `GOLEM_AGENT_ID`. It panics with the card grant that the
+/// agent needs when the variable is not readable.
+fn agent_id_from_env() -> String {
+    std::env::var("GOLEM_AGENT_ID")
+        .unwrap_or_else(|_| panic!("{}", golem_env_var_not_readable("GOLEM_AGENT_ID")))
+}
 
 fn serialize_principal(p: &Principal) -> Vec<u8> {
     serde_json::to_vec(p).expect("Failed to serialize principal to JSON")
@@ -177,10 +184,8 @@ struct AgentRuntime;
 #[doc(hidden)]
 pub fn install_agent_exports() {
     let _ = super::exports::AGENT.set(super::exports::AgentHooks {
-        initialize: |name, input, principal| {
-            Box::pin(AgentRuntime::initialize(name, input, principal))
-        },
-        invoke: |name, input, principal| Box::pin(AgentRuntime::invoke(name, input, principal)),
+        initialize: |name, input| Box::pin(AgentRuntime::initialize(name, input)),
+        invoke: |name, input| Box::pin(AgentRuntime::invoke(name, input)),
         get_definition: AgentRuntime::get_definition,
         discover: AgentRuntime::discover_agent_types,
         load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
@@ -194,8 +199,8 @@ impl Guest for AgentRuntime {
     async fn initialize(
         agent_type: String,
         input: crate::schema::wit::wire::SchemaValueTree,
-        principal: Principal,
     ) -> Result<(), AgentError> {
+        let principal = super::immediate_caller();
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -232,11 +237,10 @@ impl Guest for AgentRuntime {
     async fn invoke(
         method_name: String,
         input: crate::schema::wit::wire::SchemaValueTree,
-        principal: Principal,
     ) -> Result<Option<crate::schema::wit::wire::SchemaValueTree>, AgentError> {
+        let principal = super::immediate_caller();
         {
-            let agent_id = std::env::var("GOLEM_AGENT_ID")
-                .expect("GOLEM_AGENT_ID environment variable must be set");
+            let agent_id = agent_id_from_env();
             parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
         }
 
@@ -278,8 +282,7 @@ impl LoadSnapshotGuest for AgentRuntime {
             return Err("Agent is already initialized".to_string());
         }
 
-        let id = std::env::var("GOLEM_AGENT_ID")
-            .expect("GOLEM_AGENT_ID environment variable must be set");
+        let id = agent_id_from_env();
 
         load_agent_snapshot(snapshot, &id, parse_restore_identity).await
     }
@@ -339,8 +342,8 @@ impl SaveSnapshotGuest for AgentRuntime {
 #[cfg(test)]
 mod tests {
     use super::{
-        ParsedRestoreIdentity, decode_snapshot, encode_json_snapshot, load_agent_snapshot,
-        serialize_principal,
+        ParsedRestoreIdentity, agent_id_from_env, decode_snapshot, encode_json_snapshot,
+        golem_env_var_not_readable, load_agent_snapshot, serialize_principal,
     };
     use crate::agentic::{
         AgentInitiator, AgentInvocationResult, BaseAgent, ResolvedAgent, SnapshotData,
@@ -460,6 +463,22 @@ mod tests {
             payload,
             mime_type: "application/octet-stream".to_string(),
         }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
+    )]
+    fn unreadable_agent_id_names_the_card_grant() {
+        agent_id_from_env();
+    }
+
+    #[test]
+    fn unreadable_component_id_names_its_own_card_grant() {
+        assert_eq!(
+            golem_env_var_not_readable("GOLEM_COMPONENT_ID"),
+            "GOLEM_COMPONENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_COMPONENT_ID"
+        );
     }
 
     #[test]

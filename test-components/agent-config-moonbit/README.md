@@ -37,11 +37,13 @@ wasm-tools validate --features all _build/wasm/release/agent_config_moonbit.agen
 
 `check-core.mjs` executes actual metadata, initialization and invocation exports.
 It compares declarations and schema graphs with the independent corpus and gives
-the host import the corpus's already-resolved expected values. It checks capture,
-unchanged reads after a host-value change, fresh-instance recapture, canonical
+the host import an immutable copy of the corpus's already-resolved expected values.
+It checks repeated reads from that host capture, fresh-instance recapture, canonical
 paths, recursive data and failed host reads/decodes without a code fallback.
-It does **not** resolve selectors, merge layers, validate supplied config defaults
-or replay an oplog. Fresh instantiation is not executor reconstruction.
+It does **not** resolve selectors, merge layers, validate supplied config defaults,
+perform an explicit update or replay an oplog. Fresh instantiation is not executor
+reconstruction. The CLI constructor-update regression covers recapture on explicit
+update and replay after a real server restart.
 
 The generated-override test checks that recursive creation values use canonical
 config field names while ordinary method schemas retain native field names.

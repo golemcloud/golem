@@ -973,6 +973,7 @@ async fn revocation_between_underlying_calls(
         .complete_promise(
             &PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
             Vec::new(),
@@ -1198,6 +1199,7 @@ async fn crash_during_an_admitted_call_repairs_it_and_denies_later_descendants(
         .complete_promise(
             &PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
             Vec::new(),
@@ -1393,6 +1395,18 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     );
 
     let key = IdempotencyKey::fresh();
+    let request_key = golem_common::model::InvocationRequestKey::external(
+        fixture.executor.auth_ctx().idempotency_scope(),
+        Some(&key),
+    );
+    let stored_key = fixture
+        .executor
+        .finalized_invocation_key(
+            &fixture.owner_id,
+            &request_key,
+            &format!("tool:{PERMISSION_PROBE}/read"),
+        )
+        .await?;
     let due = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap()
         + chrono::Duration::hours(24);
     let request =
@@ -1430,11 +1444,12 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
                     fresh_owner: false,
                     ..Default::default()
                 }),
+                request_key: Some(request_key.clone().into()),
                 ..Default::default()
             })
         };
     let first_request = request("read", "/public", due)?;
-    let retry_request = request("delete", "/other", due + chrono::Duration::hours(1))?;
+    let retry_request = request("read", "/public", due + chrono::Duration::hours(1))?;
     let first = tokio::spawn({
         let fixture = fixture.clone();
         async move { fixture.executor.invoke_agent_session(first_request).await }
@@ -1443,7 +1458,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     let before = owner_oplog(&fixture).await?;
     let pending = before.iter().filter_map(|entry| match &entry.entry {
         PublicOplogEntry::PendingAgentInvocation(params)
-            if matches!(&params.invocation, PublicAgentInvocation::ExternalTool(tool) if tool.idempotency_key == key) => Some(params),
+            if matches!(&params.invocation, PublicAgentInvocation::ExternalTool(tool) if tool.invocation_id == stored_key) => Some(params),
         _ => None,
     }).collect::<Vec<_>>();
     assert_eq!(
@@ -1477,6 +1492,33 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
         missing.iter().all(|wake| wake.schedule_id != id),
         "the first wake registration was lost"
     );
+
+    // Retries without a schedule time take the existing-result path; a changed request must
+    // still be compared with the accepted one there, also without a deployment revision pin.
+    let mut changed_input = request("read", "/other", due)?;
+    changed_input.schedule_at = None;
+    let mut changed_principal = request("read", "/public", due)?;
+    changed_principal.schedule_at = None;
+    changed_principal.principal = Some(
+        Principal::GolemUser(GolemUserPrincipal {
+            account_id: AccountId::new(),
+        })
+        .into(),
+    );
+    for (name, conflicting) in [
+        ("changed input", changed_input),
+        ("changed principal", changed_principal),
+    ] {
+        let conflict = fixture
+            .executor
+            .invoke_agent_session(conflicting)
+            .await
+            .expect_err(name);
+        assert!(
+            conflict.to_string().contains("IdempotencyConflict"),
+            "{name}: {conflict}"
+        );
+    }
 
     fixture.executor.invoke_agent_session(retry_request).await?;
     assert_eq!(
@@ -1512,8 +1554,11 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     };
     assert_eq!(*target_worker_fingerprint, fixture.fingerprint);
     assert_eq!(owned_agent_id.agent_id, fixture.owner_id);
-    assert_eq!(idempotency_key, &key);
-    assert_eq!(id, ScheduleId::for_invocation(fixture.fingerprint, &key));
+    assert_eq!(idempotency_key, &stored_key);
+    assert_eq!(
+        id,
+        ScheduleId::for_invocation(fixture.fingerprint, &stored_key)
+    );
     let after = owner_oplog(&fixture).await?;
     assert_eq!(
         after.iter().map(comparable).collect::<Vec<_>>(),
@@ -1568,6 +1613,9 @@ async fn invoke_owner_method_with_scope(
             scope_card: Some(scope.try_into().map_err(anyhow::Error::msg)?),
             origin_invocation: None,
             external_tool: None,
+            request_key: Some(
+                golem_common::model::InvocationRequestKey::external(None, None).into(),
+            ),
         })
         .await?;
     let Some(invocation_session_result::Result::MethodResult(value)) = result.result else {
@@ -1627,6 +1675,7 @@ async fn scope_revocation_consumed_by_middleware_gives_ambient_and_underlying_th
         .complete_promise(
             &PromiseId {
                 agent_id: fixture.owner_id.clone(),
+                fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
             Vec::new(),

@@ -5,7 +5,7 @@ use super::*;
 use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
 use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
 use golem_service_base::custom_api::{
-    CompiledInputSchema, CompiledOutputSchema, RouteBehaviour, RouterMethod,
+    CompiledInputSchema, CompiledOutputSchema, MountAgentMethod, RouteBehaviour, RouterMethod,
 };
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
@@ -44,20 +44,23 @@ pub(in crate::custom_api) fn provider_routes(
     let mut routes = vec![test_route(0, "/openapi.json", Some("GET"), "reserved")];
     for id in 1..=providers {
         let mut route = test_route(id as i32, &format!("/r{id}"), None, "router");
-        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+        let RouteBehaviour::Mount(router) = &mut route.behavior else {
             unreachable!()
         };
-        router.openapi_provider_method = Some(RouterMethod {
-            method_name: "describe".into(),
-            input: CompiledInputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
-                input_schema: InputSchema::Parameters(vec![]),
+        router.openapi_provider = Some(MountTarget::AgentMethod(MountAgentMethod {
+            agent: router.files.agent().clone(),
+            method: RouterMethod {
+                method_name: "describe".into(),
+                input: CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                    input_schema: InputSchema::Parameters(vec![]),
+                },
+                output: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                },
             },
-            output: CompiledOutputSchema {
-                graph: SchemaGraph::anonymous(SchemaType::string()),
-                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
-            },
-        });
+        }));
         routes.push(route);
     }
     routes
@@ -67,7 +70,7 @@ pub(in crate::custom_api) fn document() -> String {
     json!({"openapi":"3.1.0","info":{"title":"Provider","version":"1"},"paths":{"/":{"get":{"responses":{"200":{"description":"ok"}}}}}}).to_string()
 }
 type Call = (
-    IdempotencyKey,
+    golem_common::model::InvocationRequestKey,
     oneshot::Sender<Result<String, OpenApiError>>,
 );
 struct ControlledInvoker(mpsc::UnboundedSender<Call>);
@@ -199,11 +202,12 @@ async fn worker_adapter_uses_derived_private_identity_and_canonical_input() {
         }],
     );
     let mut routes = provider_routes(1);
-    let RouteBehaviour::HttpRouter(router) = &mut routes[1].behavior else {
+    let RouteBehaviour::Mount(router) = &mut routes[1].behavior else {
         unreachable!()
     };
-    router.component_id = harness.component_id;
-    router.agent_type = AgentTypeName("mcp-agent".into());
+    let MountTarget::AgentMethod(provider) = router.openapi_provider.as_mut().unwrap();
+    provider.agent.component_id = harness.component_id;
+    provider.agent.agent_type = AgentTypeName("mcp-agent".into());
     let resolved = test_resolver(routes)
         .resolve_matching_route(
             &poem::Request::builder()

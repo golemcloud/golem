@@ -40,4 +40,3 @@ import (
 type SchemaValueTree = golem_core_types.SchemaValueTree
 type AgentError = golem_agent_common.AgentError
 type AgentType = golem_agent_common.AgentType
-type Principal = golem_agent_common.Principal

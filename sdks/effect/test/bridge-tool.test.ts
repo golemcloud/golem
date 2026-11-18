@@ -64,9 +64,12 @@ describe("BridgeTool", () => {
         if (mode === "rejected") throw new Error("close failed")
         return { done: true as const, value: undefined }
       })
-      const stream = await SchemaValueStream.wrap({
-        [Symbol.asyncIterator]: () => ({ next, return: close }),
-      })
+      const stream = await SchemaValueStream.wrap(
+        {
+          [Symbol.asyncIterator]: () => ({ next, return: close }),
+        },
+        Promise.resolve(undefined),
+      )
       Object.assign(stream, { [Symbol.dispose]: disposes[3] })
       const payload: Common.TypedSchemaValue = {
         graph: Effect.runSync(
@@ -793,16 +796,19 @@ describe("BridgeTool", () => {
         const closeGate = new Promise<void>((r) => {
           finishClose = r
         })
-        const raw = await SchemaValueStream.wrap({
-          [Symbol.asyncIterator]: () => ({
-            next: async () => ({ done: true as const, value: undefined }),
-            return: async () => {
-              beginClose()
-              await closeGate
-              return { done: true as const, value: undefined }
-            },
-          }),
-        })
+        const raw = await SchemaValueStream.wrap(
+          {
+            [Symbol.asyncIterator]: () => ({
+              next: async () => ({ done: true as const, value: undefined }),
+              return: async () => {
+                beginClose()
+                await closeGate
+                return { done: true as const, value: undefined }
+              },
+            }),
+          },
+          Promise.resolve(undefined),
+        )
         Object.assign(raw, { [Symbol.dispose]: release })
         const payload: Common.TypedSchemaValue = {
           graph: {} as never,

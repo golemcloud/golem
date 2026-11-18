@@ -42,6 +42,7 @@
 //!     referenced name (with the "any element/occurrence" relaxation for
 //!     list-typed and repeatable names).
 //!   * A body's `default-formatter` resolves to one of its `formatters`.
+//!   * Every declared error case has a non-zero exit code.
 //!   * A `tail-positional` with `verbatim = true` declares a `separator`.
 //!   * `variant` types never appear in (or are reachable from) an input
 //!     position; input-side discrimination uses `union` instead.
@@ -128,6 +129,8 @@ pub enum ToolValidationError {
     DuplicateTypeId { id: String },
     /// A body's `default-formatter` does not resolve to one of its formatters.
     UnresolvedDefaultFormatter { command: String, formatter: String },
+    /// A declared error case has exit code 0, which means success.
+    ZeroErrorExitCode { command: String, error: String },
     /// A `tail-positional` declares `verbatim = true` without a `separator`.
     VerbatimWithoutSeparator { command: String, positional: String },
     /// A `variant` type is reachable from an input position; input-side
@@ -221,6 +224,12 @@ impl Display for ToolValidationError {
                 write!(
                     f,
                     "default-formatter {formatter:?} is not declared in command {command:?}"
+                )
+            }
+            ToolValidationError::ZeroErrorExitCode { command, error } => {
+                write!(
+                    f,
+                    "error case {error:?} in command {command:?} has exit code 0, which means success; a declared error needs an exit code from 1 to 255"
                 )
             }
             ToolValidationError::VerbatimWithoutSeparator {
@@ -1085,6 +1094,12 @@ impl<'a> Validator<'a> {
 
         for error_case in &body.errors {
             self.check_identifier("error-case name", &error_case.name);
+            if error_case.exit_code == 0 {
+                self.errors.push(ToolValidationError::ZeroErrorExitCode {
+                    command: command.to_string(),
+                    error: error_case.name.clone(),
+                });
+            }
             if let Some(payload) = &error_case.payload {
                 self.check_type_well_formed(command, &error_case.name, payload);
             }

@@ -1,0 +1,74 @@
+{
+  "caseIds": [
+    "openai-chat-plain",
+    "openai-chat-stream",
+    "openai-chat-401",
+    "openai-chat-429",
+    "openai-chat-503",
+    "openai-chat-malformed",
+    "openai-structured-output-plain",
+    "openai-structured-output-stream",
+    "openai-structured-output-401",
+    "openai-structured-output-429",
+    "openai-structured-output-503",
+    "openai-structured-output-malformed",
+    "openai-tool-calls-plain",
+    "openai-tool-calls-stream",
+    "openai-tool-calls-401",
+    "openai-tool-calls-429",
+    "openai-tool-calls-503",
+    "openai-tool-calls-malformed",
+    "openai-embed-plain",
+    "openai-embed-401",
+    "openai-embed-429",
+    "openai-embed-503",
+    "openai-embed-malformed"
+  ],
+  "cases": [
+    "openai-chat-plain.json",
+    "openai-chat-stream.json",
+    "openai-chat-401.json",
+    "openai-chat-429.json",
+    "openai-chat-503.json",
+    "openai-chat-malformed.json",
+    "openai-structured-output-plain.json",
+    "openai-structured-output-stream.json",
+    "openai-structured-output-401.json",
+    "openai-structured-output-429.json",
+    "openai-structured-output-503.json",
+    "openai-structured-output-malformed.json",
+    "openai-tool-calls-plain.json",
+    "openai-tool-calls-stream.json",
+    "openai-tool-calls-401.json",
+    "openai-tool-calls-429.json",
+    "openai-tool-calls-503.json",
+    "openai-tool-calls-malformed.json",
+    "openai-embed-plain.json",
+    "openai-embed-401.json",
+    "openai-embed-429.json",
+    "openai-embed-503.json",
+    "openai-embed-malformed.json"
+  ],
+  "operations": [
+    {
+      "provider": "openai",
+      "operation": "chat",
+      "streaming": true
+    },
+    {
+      "provider": "openai",
+      "operation": "structured-output",
+      "streaming": true
+    },
+    {
+      "provider": "openai",
+      "operation": "tool-calls",
+      "streaming": true
+    },
+    {
+      "provider": "openai",
+      "operation": "embed",
+      "streaming": false
+    }
+  ]
+}

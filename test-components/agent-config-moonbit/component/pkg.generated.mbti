@@ -54,9 +54,9 @@ pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
 
 pub fn wasmExportGetToolPostReturn(Int32) -> Unit
 
-pub fn wasmExportInitialize(Int32) -> Int32
+pub fn wasmExportInitialize(Int32, Int32, Int32, Int32, Int32) -> Int32
 
-pub fn wasmExportInvokeGolemAgentGuest(Int32) -> Int32
+pub fn wasmExportInvokeGolemAgentGuest(Int32, Int32, Int32, Int32, Int32) -> Int32
 
 pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
 
@@ -130,6 +130,7 @@ pub fn StaticDefaultsAgent::read(Self) -> String
 pub(all) struct StaticDefaultsAgentClient {
   client : @rpc.AgentClient
 }
+pub fn StaticDefaultsAgentClient::bind_self() -> Self raise
 pub fn StaticDefaultsAgentClient::drop(Self) -> Unit
 pub fn StaticDefaultsAgentClient::get(String) -> Self raise @common.AgentError
 pub fn StaticDefaultsAgentClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -166,6 +167,7 @@ pub fn StaticShapeAgent::read(Self) -> String
 pub(all) struct StaticShapeAgentClient {
   client : @rpc.AgentClient
 }
+pub fn StaticShapeAgentClient::bind_self() -> Self raise
 pub fn StaticShapeAgentClient::drop(Self) -> Unit
 pub fn StaticShapeAgentClient::get() -> Self raise @common.AgentError
 pub fn StaticShapeAgentClient::get_agent_id(Self) -> String raise @common.AgentError

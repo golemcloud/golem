@@ -108,13 +108,25 @@ pub fn wasmExportGetToolPostReturn(p0 : Int32) -> Unit {
 }
 
 ///|
-pub fn wasmExportInitialize(p0 : Int32) -> Int32 {
-  @gen.wasmExportInitialize(p0)
+pub fn wasmExportInitialize(
+  p0 : Int32,
+  p1 : Int32,
+  p2 : Int32,
+  p3 : Int32,
+  p4 : Int32,
+) -> Int32 {
+  @gen.wasmExportInitialize(p0, p1, p2, p3, p4)
 }
 
 ///|
-pub fn wasmExportInvokeGolemAgentGuest(p0 : Int32) -> Int32 {
-  @gen.wasmExportInvokeGolemAgentGuest(p0)
+pub fn wasmExportInvokeGolemAgentGuest(
+  p0 : Int32,
+  p1 : Int32,
+  p2 : Int32,
+  p3 : Int32,
+  p4 : Int32,
+) -> Int32 {
+  @gen.wasmExportInvokeGolemAgentGuest(p0, p1, p2, p3, p4)
 }
 
 ///|

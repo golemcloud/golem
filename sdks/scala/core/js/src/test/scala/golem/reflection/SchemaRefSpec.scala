@@ -507,9 +507,12 @@ object SchemaRefSpec extends ZIOSpecDefault {
     test("rejects missing, unexpected, and malformed reflected outputs") {
       val input    = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(RecordType(Nil))))
       val output   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
-      val metadata = InvocationMetadata(ParsedAgentId("test"), "key")
-      val unit     = AgentMethod("unit", "", None, input, None)
-      val single   = AgentMethod("single", "", None, input, Some(output))
+      val metadata = InvocationMetadata(
+        ParsedAgentId("test"),
+        golem.InvocationId("test", java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+      )
+      val unit   = AgentMethod("unit", "", None, input, None)
+      val single = AgentMethod("single", "", None, input, Some(output))
 
       assertTrue(
         ReflectionInternals.validateInvocationOutput(unit, Invocation(metadata, None)).isRight,

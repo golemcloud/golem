@@ -19,6 +19,17 @@ use crate::schema::metadata::{MetadataEnvelope, TypeId};
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 
+pub use crate::model::StreamError;
+
+impl From<String> for StreamError {
+    fn from(message: String) -> Self {
+        Self::Failed(Box::new(crate::schema::TypedSchemaValue::new(
+            crate::schema::SchemaGraph::anonymous(SchemaType::string()),
+            SchemaValue::String(message),
+        )))
+    }
+}
+
 #[cfg(all(feature = "guest", not(feature = "host")))]
 type RawSchemaValueStream = wit_bindgen::StreamReader<super::wit::wire::SchemaValueTree>;
 
@@ -152,42 +163,92 @@ mod active {
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
 mod active {
-    use super::RawSchemaValueStream;
+    use super::{RawSchemaValueStream, StreamError};
     use crate::schema::wit::wire;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex, MutexGuard};
 
-    /// A lazy guest producer. Local reads retain errors; forwarding a failure
-    /// traps the producer because native streams have no error terminal.
+    /// A lazy guest producer whose error is carried by the completion future.
     pub trait SchemaValueStreamSource: Send {
         fn next(
             &mut self,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<wire::SchemaValueTree>, String>> + Send + '_>>;
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Option<wire::SchemaValueTree>, StreamError>> + Send + '_,
+            >,
+        >;
     }
 
     enum State {
         Wrapped(wire::SchemaValueStream),
-        Native(RawSchemaValueStream),
+        Native(
+            RawSchemaValueStream,
+            wit_bindgen::FutureReader<wire::StreamOutcome>,
+        ),
+        Produced(
+            RawSchemaValueStream,
+            wit_bindgen::FutureReader<Option<wire::StreamOutcome>>,
+        ),
         Source(Box<dyn SchemaValueStreamSource>),
+        Ended,
     }
 
-    fn source_reader(mut source: Box<dyn SchemaValueStreamSource>) -> RawSchemaValueStream {
+    fn source_reader(
+        mut source: Box<dyn SchemaValueStreamSource>,
+    ) -> (
+        RawSchemaValueStream,
+        wit_bindgen::FutureReader<Option<wire::StreamOutcome>>,
+    ) {
         let (mut writer, reader) = crate::schema::wit::new_schema_value_stream();
+        let (outcome_writer, outcome) = crate::schema::wit::new_schema_stream_outcome();
         wit_bindgen::spawn_local(async move {
-            loop {
+            let outcome = loop {
                 match source.next().await {
                     Ok(Some(item)) => {
                         if writer.write_one(item).await.is_some() {
-                            break;
+                            return;
                         }
                     }
-                    Ok(None) => break,
-                    Err(error) => panic!("agent stream producer failed: {error}"),
+                    Ok(None) => break Ok(()),
+                    Err(error) => break Err(error.into_wire().await),
                 }
-            }
+            };
+            drop(writer);
+            let _ = outcome_writer.write(Some(outcome)).await;
         });
-        reader
+        (reader, outcome)
+    }
+
+    impl StreamError {
+        pub async fn into_wire(self) -> wire::StreamError {
+            match self {
+                Self::Failed(value) => wire::StreamError::Failed(
+                    crate::schema::wit::encode_typed_async(&value)
+                        .await
+                        .expect("valid stream error value"),
+                ),
+                Self::Trapped(details) => wire::StreamError::Trapped(details),
+                Self::Cancelled => wire::StreamError::Cancelled,
+                Self::Abandoned => wire::StreamError::Abandoned,
+                Self::Interrupted(details) => wire::StreamError::Interrupted(details),
+                Self::ResourceExhausted(details) => wire::StreamError::ResourceExhausted(details),
+            }
+        }
+
+        pub fn from_wire(value: wire::StreamError) -> Result<Self, String> {
+            Ok(match value {
+                wire::StreamError::Failed(value) => Self::Failed(Box::new(
+                    crate::schema::wit::decode_typed_owned(value)
+                        .map_err(|error| error.to_string())?,
+                )),
+                wire::StreamError::Trapped(details) => Self::Trapped(details),
+                wire::StreamError::Cancelled => Self::Cancelled,
+                wire::StreamError::Abandoned => Self::Abandoned,
+                wire::StreamError::Interrupted(details) => Self::Interrupted(details),
+                wire::StreamError::ResourceExhausted(details) => Self::ResourceExhausted(details),
+            })
+        }
     }
 
     /// Guest-side stream leaf. A leaf can hold the recursive WIT resource or
@@ -212,9 +273,22 @@ mod active {
         }
 
         #[doc(hidden)]
-        pub fn from_native(reader: RawSchemaValueStream) -> Self {
+        pub fn from_native(
+            reader: RawSchemaValueStream,
+            outcome: wit_bindgen::FutureReader<Option<wire::StreamOutcome>>,
+        ) -> Self {
             Self {
-                inner: Arc::new(Mutex::new(Some(State::Native(reader)))),
+                inner: Arc::new(Mutex::new(Some(State::Produced(reader, outcome)))),
+            }
+        }
+
+        #[doc(hidden)]
+        pub fn from_reader(
+            reader: RawSchemaValueStream,
+            outcome: wit_bindgen::FutureReader<wire::StreamOutcome>,
+        ) -> Self {
+            Self {
+                inner: Arc::new(Mutex::new(Some(State::Native(reader, outcome)))),
             }
         }
 
@@ -245,7 +319,7 @@ mod active {
             let mut state = self.state();
             match state.take() {
                 Some(State::Wrapped(stream)) => Some(stream),
-                Some(native @ (State::Native(_) | State::Source(_))) => {
+                Some(native) => {
                     *state = Some(native);
                     None
                 }
@@ -261,44 +335,46 @@ mod active {
                 .ok_or_else(|| "schema value stream was already transferred".to_string())?;
             Ok(match state {
                 State::Wrapped(stream) => stream,
-                State::Native(reader) => wire::SchemaValueStream::wrap(reader).await,
-                State::Source(source) => wire::SchemaValueStream::wrap(source_reader(source)).await,
+                State::Produced(reader, outcome) => {
+                    wire::SchemaValueStream::wrap(reader, outcome).await
+                }
+                State::Native(reader, outcome) => {
+                    let (writer, completion) = crate::schema::wit::new_schema_stream_outcome();
+                    wit_bindgen::spawn_local(async move {
+                        let _ = writer.write(Some(outcome.await)).await;
+                    });
+                    wire::SchemaValueStream::wrap(reader, completion).await
+                }
+                State::Source(source) => {
+                    let (reader, outcome) = source_reader(source);
+                    wire::SchemaValueStream::wrap(reader, outcome).await
+                }
+                State::Ended => return Err("schema stream has ended".into()),
             })
         }
 
         #[doc(hidden)]
         pub async fn ensure_wrapped(&self) -> Result<(), String> {
-            let state = self
-                .state()
-                .take()
-                .ok_or_else(|| "schema value stream was already transferred".to_string())?;
-            *self.state() = Some(match state {
-                State::Wrapped(stream) => State::Wrapped(stream),
-                State::Native(reader) => {
-                    State::Wrapped(wire::SchemaValueStream::wrap(reader).await)
-                }
-                State::Source(source) => {
-                    State::Wrapped(wire::SchemaValueStream::wrap(source_reader(source)).await)
-                }
-            });
+            let wrapped = self.take_wrapped_async().await?;
+            *self.state() = Some(State::Wrapped(wrapped));
             Ok(())
         }
 
         #[doc(hidden)]
-        pub async fn take_native(self) -> Result<RawSchemaValueStream, String> {
-            let state = self
-                .state()
-                .take()
-                .ok_or_else(|| "schema value stream was already transferred".to_string())?;
-            Ok(match state {
-                State::Wrapped(stream) => wire::SchemaValueStream::unwrap(stream).await,
-                State::Native(reader) => reader,
-                State::Source(source) => source_reader(source),
-            })
+        pub async fn take_native(
+            self,
+        ) -> Result<
+            (
+                RawSchemaValueStream,
+                wit_bindgen::FutureReader<wire::StreamOutcome>,
+            ),
+            String,
+        > {
+            Ok(wire::SchemaValueStream::unwrap(self.take_wrapped_async().await?).await)
         }
 
         #[doc(hidden)]
-        pub async fn next_wire(&self) -> Result<Option<wire::SchemaValueTree>, String> {
+        pub async fn next_wire(&self) -> Result<Option<wire::SchemaValueTree>, StreamError> {
             let state = self.state().take().ok_or_else(|| {
                 "schema value stream is already in use or was transferred".to_string()
             })?;
@@ -310,22 +386,50 @@ mod active {
                 }
                 impl Drop for Restore<'_> {
                     fn drop(&mut self) {
-                        *self.stream.state() = self.source.take().map(State::Source);
+                        *self.stream.state() = Some(
+                            self.source
+                                .take()
+                                .map(State::Source)
+                                .unwrap_or(State::Ended),
+                        );
                     }
                 }
                 let mut restore = Restore {
                     stream: self,
                     source: Some(source),
                 };
-                return restore.source.as_mut().unwrap().next().await;
+                let item = restore.source.as_mut().unwrap().next().await;
+                if !matches!(item, Ok(Some(_))) {
+                    restore.source = None;
+                    *self.state() = Some(State::Ended);
+                }
+                return item;
             }
-            let mut reader = match state {
+            let (mut reader, outcome) = match state {
                 State::Wrapped(stream) => wire::SchemaValueStream::unwrap(stream).await,
-                State::Native(reader) => reader,
+                State::Produced(reader, outcome) => {
+                    wire::SchemaValueStream::unwrap(
+                        wire::SchemaValueStream::wrap(reader, outcome).await,
+                    )
+                    .await
+                }
+                State::Native(reader, outcome) => (reader, outcome),
                 State::Source(_) => unreachable!(),
+                State::Ended => {
+                    *self.state() = Some(State::Ended);
+                    return Ok(None);
+                }
             };
             let item = reader.next().await;
-            *self.state() = Some(State::Native(reader));
+            if item.is_none() {
+                let completion = outcome.await;
+                *self.state() = Some(State::Ended);
+                if let Err(error) = completion {
+                    return Err(StreamError::from_wire(error).map_err(StreamError::from)?);
+                }
+            } else {
+                *self.state() = Some(State::Native(reader, outcome));
+            }
             Ok(item)
         }
     }
@@ -334,8 +438,9 @@ mod active {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let state = match &*self.state() {
                 Some(State::Wrapped(_)) => "wrapped",
-                Some(State::Native(_)) => "native",
+                Some(State::Native(_, _) | State::Produced(_, _)) => "native",
                 Some(State::Source(_)) => "source",
+                Some(State::Ended) => "ended",
                 None => "consumed",
             };
             f.debug_tuple("SchemaValueStream").field(&state).finish()

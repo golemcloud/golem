@@ -8,6 +8,21 @@ pub(all) struct StaticDefaultsAgentClient {
 
 ///|
 ///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn StaticDefaultsAgentClient::bind_self() -> StaticDefaultsAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("StaticDefaultsAgent"), }
+}
+
+///|
+///
 pub fn StaticDefaultsAgentClient::get(
   _name : String,
 ) -> StaticDefaultsAgentClient raise @common.AgentError {
@@ -242,6 +257,21 @@ pub async fn[T] StaticDefaultsAgentClient::scoped_get_phantom_with_config(
 ///
 pub(all) struct StaticShapeAgentClient {
   client : @rpc.AgentClient
+}
+
+///|
+///
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn StaticShapeAgentClient::bind_self() -> StaticShapeAgentClient raise {
+  { client: @rpc.AgentClient::bind_self("StaticShapeAgent"), }
 }
 
 ///|

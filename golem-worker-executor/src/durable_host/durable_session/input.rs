@@ -539,20 +539,30 @@ impl StreamSession {
         &self,
         transport_stream_id: u64,
         sequence: u64,
+        authored_by: StreamTerminalAuthor,
+        terminal: StreamTerminal,
     ) -> Result<Option<golem_common::model::durable_stream::StreamOffset>, SessionError> {
+        let terminal = (authored_by, terminal);
+        let retained_bytes =
+            DurableStreamStore::external_input_reservation(None, Some(&terminal), None)?;
         let session = self.clone();
         self.producer
-            .run_admitted(None, 0, false, move |_, admission| async move {
-                let _session_guard = session.session_lock.lock().await;
-                let session_for_write = session.clone();
-                admission
-                    .submit(move |_, context| async move {
-                        session_for_write
-                            .end_input_owned(&context, transport_stream_id, sequence)
-                            .await
-                    })
-                    .await
-            })
+            .run_admitted(
+                None,
+                retained_bytes,
+                false,
+                move |_, admission| async move {
+                    let _session_guard = session.session_lock.lock().await;
+                    let session_for_write = session.clone();
+                    admission
+                        .submit(move |_, context| async move {
+                            session_for_write
+                                .end_input_owned(&context, transport_stream_id, sequence, terminal)
+                                .await
+                        })
+                        .await
+                },
+            )
             .await
     }
 
@@ -561,6 +571,7 @@ impl StreamSession {
         context: &StreamWriteContext,
         transport_stream_id: u64,
         sequence: u64,
+        terminal: (StreamTerminalAuthor, StreamTerminal),
     ) -> Result<Option<golem_common::model::durable_stream::StreamOffset>, SessionError> {
         self.ensure_current_attachment().await?;
         let handle = self
@@ -573,7 +584,7 @@ impl StreamSession {
                 &self.session_key,
                 handle.stream_id,
                 None,
-                true,
+                Some(terminal),
                 Some(crate::durable_host::durable_stream::ExternalProducer {
                     id: golem_common::base_model::durable_stream::ExternalProducerId::Attached,
                     epoch: 0,
@@ -642,6 +653,25 @@ impl StreamSession {
         Ok(result)
     }
 
+    pub(crate) fn retain_input_recording(
+        value: &SchemaValue,
+        graph: &SchemaGraph,
+        root: &SchemaType,
+    ) -> Result<Vec<tokio_util::task::task_tracker::TaskTrackerToken>, SessionError> {
+        let mut recordings = Vec::new();
+        encode_recursive_stream_value_with_schema(value, graph, root, |stream, _| {
+            if let Ok(Some(recording)) =
+                stream.with_host_endpoint::<LiveStreamEndpoint, _>(|endpoint| {
+                    endpoint.lifecycle().recording()
+                })
+            {
+                recordings.push(recording);
+            }
+            Ok(0)
+        })?;
+        Ok(recordings)
+    }
+
     /// Replaces input stream handles with consumers backed by this session journal.
     pub async fn materialize_agent_input(
         &self,
@@ -652,6 +682,7 @@ impl StreamSession {
     ) -> Result<SessionValue, SessionError> {
         preflight_recursive_stream_value(value)?;
         let mut next_stream_index = 0u64;
+        let recordings = Self::retain_input_recording(value, graph, root)?;
         let retained_bytes =
             encode_recursive_stream_value_with_schema(value, graph, root, |_stream, _path| {
                 let index = next_stream_index;
@@ -665,30 +696,46 @@ impl StreamSession {
         let value = value.clone();
         let graph = graph.clone();
         let root = root.clone();
-        self.producer
-            .run_admitted(
-                None,
-                retained_bytes,
-                false,
-                move |_, admission| async move {
-                    let _guard = session.session_lock.lock().await;
-                    let session_for_write = session.clone();
-                    admission
-                        .submit(move |_, context| async move {
-                            session_for_write
-                                .materialize_agent_input_owned(
-                                    &context,
-                                    value,
-                                    graph,
-                                    root,
-                                    component_revision,
-                                )
-                                .await
-                        })
-                        .await
-                },
-            )
-            .await
+        let retain_recording = !recordings.is_empty();
+        let producer = self.producer.clone();
+        let materialize = async move {
+            let _recordings = recordings;
+            producer
+                .run_admitted(
+                    None,
+                    retained_bytes,
+                    false,
+                    move |_, admission| async move {
+                        let _guard = session.session_lock.lock().await;
+                        let session_for_write = session.clone();
+                        admission
+                            .submit(move |_, context| async move {
+                                session_for_write
+                                    .materialize_agent_input_owned(
+                                        &context,
+                                        value,
+                                        graph,
+                                        root,
+                                        component_revision,
+                                    )
+                                    .await
+                            })
+                            .await
+                    },
+                )
+                .await
+        };
+        if retain_recording {
+            let (reply, result) = tokio::sync::oneshot::channel();
+            self.producer.tasks().spawn(async move {
+                let _ = reply.send(materialize.await);
+            });
+            result
+                .await
+                .map_err(|_| SessionError::from("tool input recording stopped".to_string()))?
+        } else {
+            materialize.await
+        }
     }
 
     async fn materialize_agent_input_owned(
@@ -724,7 +771,11 @@ impl StreamSession {
                 let (endpoint, forwarded_input) = match forwarded {
                     Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None => (
-                        Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                        Some(
+                            stream
+                                .take_host_endpoint::<LiveStreamEndpoint>()?
+                                .into_recording(),
+                        ),
                         None,
                     ),
                 };
@@ -738,8 +789,29 @@ impl StreamSession {
                 u64::try_from(pending.len() - 1)
                     .map_err(|_| "durable input handle index overflow".to_string())
             })?;
+        let mut new_stream_count = 0;
+        for input in &pending {
+            let missing = if let Some(forwarded) = &input.forwarded_input {
+                self.mapping_for_reference(
+                    &StreamRecordReference::Foreign(forwarded.handle.clone()),
+                    SessionStreamRole::Input,
+                )
+                .is_none()
+            } else {
+                self.producer
+                    .handle_for_coordinate(&StreamRegistrationCoordinate::Root {
+                        invocation_id: self.session_key.clone(),
+                        root_kind: StreamRootKind::MethodInput,
+                        recursive_value_path: input.path.clone(),
+                    })
+                    .await
+                    .map_err(SessionError::from)?
+                    .is_none()
+            };
+            new_stream_count += usize::from(missing);
+        }
         self.producer
-            .validate_new_session_stream_count(&self.session_key, pending.len())
+            .validate_new_session_stream_count(&self.session_key, new_stream_count)
             .await
             .map_err(SessionError::from)?;
 
@@ -1037,7 +1109,8 @@ impl StreamSession {
                             record.session_key == self.session_reference
                                 && record.reader_id == reader_id
                         }
-                        StreamSessionRecord::ConsumerTerminal(record) => {
+                        StreamSessionRecord::ConsumerTerminal(record)
+                        | StreamSessionRecord::ConsumerOutcome(record) => {
                             record.session_key == self.session_reference
                                 && record.reader_id == reader_id
                         }
@@ -1172,6 +1245,7 @@ impl StreamSession {
                                     })?,
                                     packed_u8_batch_end: Some(batch_end),
                                     terminal_author: None,
+                                    terminal_origin: None,
                                     nested_handles: Vec::new(),
                                     nested_references: Vec::new(),
                                     payload: CommittedProducerStreamEventPayload::PackedU8(byte),
@@ -1187,6 +1261,7 @@ impl StreamSession {
                                 offset: record.source_offset,
                                 packed_u8_batch_end: None,
                                 terminal_author: None,
+                                terminal_origin: None,
                                 nested_references: mappings
                                     .iter()
                                     .map(|mapping| {
@@ -1206,6 +1281,8 @@ impl StreamSession {
                     if record.session_key == self.session_reference
                         && record.reader_id == reader_id =>
                 {
+                    // A guest EOF observation replaces a previously prepared source-loss overlay.
+                    events.retain(|(ordinal, _)| *ordinal != record.consumer_read_ordinal);
                     events.push((
                         record.consumer_read_ordinal,
                         CommittedProducerStreamEvent {
@@ -1213,23 +1290,11 @@ impl StreamSession {
                             producer_sequence: record.consumer_read_ordinal,
                             offset: record.source_offset,
                             packed_u8_batch_end: None,
-                            terminal_author: None,
+                            terminal_author: Some(record.authored_by),
+                            terminal_origin: None,
                             nested_handles: Vec::new(),
                             nested_references: Vec::new(),
-                            payload: match record.terminal {
-                                StreamConsumerTerminal::End(result) => {
-                                    CommittedProducerStreamEventPayload::End(result)
-                                }
-                                StreamConsumerTerminal::Cancel {
-                                    role,
-                                    reason,
-                                    details,
-                                } => CommittedProducerStreamEventPayload::Cancel {
-                                    role,
-                                    reason,
-                                    details,
-                                },
-                            },
+                            payload: CommittedProducerStreamEventPayload::Terminal(record.terminal),
                         },
                     ));
                 }
@@ -1245,13 +1310,14 @@ impl StreamSession {
                             offset: record.source_offset,
                             packed_u8_batch_end: None,
                             terminal_author: None,
+                            terminal_origin: None,
                             nested_handles: Vec::new(),
                             nested_references: Vec::new(),
-                            payload: CommittedProducerStreamEventPayload::Cancel {
-                                role: StreamCancelRole::System,
-                                reason: StreamCancelReason::SourceUnavailable,
-                                details: None,
-                            },
+                            payload: CommittedProducerStreamEventPayload::Terminal(
+                                StreamTerminal::Failed(StreamError::Interrupted(
+                                    "durable stream source unavailable".into(),
+                                )),
+                            ),
                         },
                     ));
                 }
@@ -1285,12 +1351,12 @@ pub(super) fn discards_input_after_terminal(
     matches!(
         error,
         StreamStoreError::SessionFinished(finished) if finished == session_key
-    ) || matches!(
-        error,
-        StreamStoreError::ClosedByOtherProducer
-            | StreamStoreError::FencedByTerminal(CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer,
-                ..
-            })
-    )
+    ) || matches!(error, StreamStoreError::ClosedByOtherProducer)
+        || matches!(
+            error,
+            StreamStoreError::FencedByTerminal(event)
+                if matches!(event.payload, CommittedProducerStreamEventPayload::Terminal(
+                    StreamTerminal::ConsumerCancelled { .. }
+                ))
+        )
 }

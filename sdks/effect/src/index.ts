@@ -140,6 +140,9 @@ export * as HttpRouter from "./HttpRouter.js"
  */
 export * as Ids from "./Ids.js"
 
+/** Typed IDs of agent invocations in the `<agent-id>.<uuid>` text form. @since 1.6.0 @category modules */
+export * as InvocationId from "./InvocationId.js"
+
 /**
  * Effect-typed wrappers around the eventually-consistent subset of
  * `wasi:keyvalue@0.1.0` (`eventual` + `eventual-batch`).

@@ -55,7 +55,10 @@ describe("native tool reflection", () => {
     const close = vi.fn(async () => ({ done: true as const, value: undefined }))
     const raw =
       tag === "stream-value"
-        ? await SchemaValueStream.wrap({ [Symbol.asyncIterator]: () => ({ next, return: close }) })
+        ? await SchemaValueStream.wrap(
+            { [Symbol.asyncIterator]: () => ({ next, return: close }) },
+            Promise.resolve(undefined),
+          )
         : {}
     Object.assign(raw, { [Symbol.dispose]: dispose })
     const payload: Common.TypedSchemaValue = {

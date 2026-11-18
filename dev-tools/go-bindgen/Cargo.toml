@@ -1,0 +1,14 @@
+[package]
+name = "go-bindgen"
+version = "0.0.0"
+edition = "2024"
+license-file = "../../LICENSE"
+publish = false
+description = "Generates the Go SDK host bindings with outlined memory conversions"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0"
+wit-bindgen-core = { git = "https://github.com/golemcloud/wit-bindgen", rev = "eb0b3cea51363cc2c6ae6bd4ece73ed57ac64b10" }
+wit-bindgen-go = { git = "https://github.com/golemcloud/wit-bindgen", rev = "eb0b3cea51363cc2c6ae6bd4ece73ed57ac64b10" }

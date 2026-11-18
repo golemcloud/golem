@@ -106,6 +106,51 @@ impl StructuredOutput for AgentOplogEntryView {
     const KIND: &'static str = "agent.oplog";
 }
 
+/// One page of an oplog, which `agent oplog --page` emits. Each entry is the `agent.oplog`
+/// document that `agent oplog` streams for it, so the entries of every page, in order, are the
+/// stream.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentOplogPageView {
+    #[serde(serialize_with = "serialize_oplog_documents")]
+    pub entries: Vec<AgentOplogEntryView>,
+    /// The cursor of the next page, when the oplog has entries after this page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+fn serialize_oplog_documents<S: serde::Serializer>(
+    entries: &[AgentOplogEntryView],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::{Error, SerializeSeq};
+    let mut documents = serializer.serialize_seq(Some(entries.len()))?;
+    for entry in entries {
+        let document = crate::model::cli_output::to_structured_output_value(entry.clone())
+            .map_err(S::Error::custom)?;
+        documents.serialize_element(&document)?;
+    }
+    documents.end()
+}
+
+impl StructuredOutput for AgentOplogPageView {
+    const KIND: &'static str = "agent.oplog-page";
+}
+
+impl TextOutput for AgentOplogPageView {
+    fn log(&self) {
+        for entry in &self.entries {
+            entry.log();
+        }
+        if let Some(cursor) = &self.cursor {
+            logln("");
+            logln(format!(
+                "Cursor of the next page: {}",
+                format_id(cursor.as_str())
+            ));
+        }
+    }
+}
+
 impl TextOutput for AgentOplogEntryView {
     fn log(&self) {
         logln(format!(
@@ -348,6 +393,10 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!(
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
@@ -380,6 +429,22 @@ impl TextOutput for PublicOplogEntry {
                     }
                 }
             }
+            PublicOplogEntry::AgentInvocationFailed(params) => {
+                logln(format_message_highlight("INVOKE FAILED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id)
+                ));
+                logln(format!("{pad}start index:       {}", params.start_index));
+                logln(format!(
+                    "{pad}error:             {}",
+                    format_error(&params.error)
+                ));
+            }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
                 logln(format!(
@@ -394,6 +459,12 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!("{pad}kind:              {:?}", params.kind));
+                if let Some(invocation_id) = &params.invocation_id {
+                    logln(format!(
+                        "{pad}invocation id:     {}",
+                        format_id(invocation_id)
+                    ));
+                }
                 logln(format!("{pad}retry from:        {}", params.retry_from));
                 logln(format!(
                     "{pad}error:             {}",
@@ -509,6 +580,12 @@ impl TextOutput for PublicOplogEntry {
                         format_id(&details.snapshot_index),
                     ));
                 }
+                if let Some(bootstrap) = &params.bootstrap {
+                    logln(format!(
+                        "{pad}bootstrap:         {}",
+                        format_id(&format!("{}..={}", bootstrap.start, bootstrap.end)),
+                    ));
+                }
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
@@ -566,6 +643,17 @@ impl TextOutput for PublicOplogEntry {
                 logln(format!(
                     "{pad}increase:          {}",
                     format_id(&format_binary_size(&params.delta)),
+                ));
+            }
+            PublicOplogEntry::MemorySizeReconciled(params) => {
+                logln(format_message_highlight("MEMORY SIZE RECONCILED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}allocation:        {}",
+                    format_id(&format_binary_size(&params.bytes))
                 ));
             }
             PublicOplogEntry::CreateResource(params) => {
@@ -652,8 +740,8 @@ impl TextOutput for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}idempotency key:   {}",
-                    format_id(&params.idempotency_key),
+                    "{pad}invocation id:     {}",
+                    format_id(&params.invocation_id),
                 ));
             }
             PublicOplogEntry::BeginRemoteTransaction(params) => {
@@ -719,6 +807,12 @@ impl TextOutput for PublicOplogEntry {
                 ));
                 if let Some(name) = &params.filesystem_snapshot {
                     logln(format!("{pad}filesystem:        {}", format_id(name)));
+                }
+                if let Some(bootstrap) = &params.bootstrap {
+                    logln(format!(
+                        "{pad}bootstrap:         {}",
+                        format_id(&format!("{}..={}", bootstrap.start, bootstrap.end)),
+                    ));
                 }
                 log_snapshot_data(pad, &params.data);
             }
@@ -889,19 +983,8 @@ impl TextOutput for PublicOplogEntry {
                     typed_schema_value_to_string(&params.record)
                 ));
             }
-            PublicOplogEntry::StreamEnd(params) => {
-                logln(format_message_highlight("STREAM END"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}record:            {}",
-                    typed_schema_value_to_string(&params.record)
-                ));
-            }
-            PublicOplogEntry::StreamCancel(params) => {
-                logln(format_message_highlight("STREAM CANCEL"));
+            PublicOplogEntry::StreamTerminal(params) => {
+                logln(format_message_highlight("STREAM TERMINAL"));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
@@ -1146,8 +1229,8 @@ fn render_agent_invocation(
     match invocation {
         PublicAgentInvocation::AgentInitialization(params) => {
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(
@@ -1157,8 +1240,8 @@ fn render_agent_invocation(
         }
         PublicAgentInvocation::AgentMethodInvocation(params) => {
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.function_input));
@@ -1170,8 +1253,8 @@ fn render_agent_invocation(
                 params.command_path.join("/")
             ));
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.input));
@@ -1182,8 +1265,8 @@ fn render_agent_invocation(
         }
         PublicAgentInvocation::ProcessOplogEntries(params) => {
             lines.push(format!(
-                "{pad}idempotency key:   {}",
-                format_id(&params.idempotency_key)
+                "{pad}invocation id:     {}",
+                format_id(&params.invocation_id)
             ));
         }
         PublicAgentInvocation::ManualUpdate(params) => {
@@ -1361,6 +1444,7 @@ fn render_snapshot_data_lines(pad: &str, snapshot: &PublicSnapshotData) -> Vec<S
 mod tests {
     use super::*;
     use comfy_table::{Cell, Table as ComfyTable};
+    use golem_common::model::InvocationId;
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
@@ -1370,12 +1454,12 @@ mod tests {
         ProcessOplogEntriesParameters, PublicAgentEntity, PublicAgentEntityKind,
         PublicEntityInvocationContext, PublicToolInvocationOperation, RawSnapshotData,
     };
-    use golem_common::model::{Empty, IdempotencyKey};
     use golem_common::schema::{
         IntoTypedSchemaValue, NamedFieldType, PermissionCardSpec, PermissionCardValuePayload,
         QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
         SecretValuePayload,
     };
+    use golem_schema::Empty;
     use test_r::test;
 
     fn timestamp() -> Timestamp {
@@ -1489,7 +1573,7 @@ mod tests {
 
     fn agent_initialization() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentInitialization(AgentInitializationParameters {
-            idempotency_key: IdempotencyKey::new("init-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(1)),
             constructor_parameters: typed_string_value("constructor"),
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
@@ -1499,7 +1583,7 @@ mod tests {
 
     fn agent_method_invocation() -> PublicAgentInvocation {
         PublicAgentInvocation::AgentMethodInvocation(AgentMethodInvocationParameters {
-            idempotency_key: IdempotencyKey::new("method-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(2)),
             method_name: "generated-method".to_string(),
             function_input: typed_string_value("input"),
             trace_id: TraceId::generate(),
@@ -1523,7 +1607,7 @@ mod tests {
 
     fn process_oplog_entries() -> PublicAgentInvocation {
         PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
-            idempotency_key: IdempotencyKey::new("process-key".to_string()),
+            invocation_id: InvocationId(uuid::Uuid::from_u128(3)),
         })
     }
 
@@ -1637,7 +1721,7 @@ mod tests {
     #[test]
     fn oplog_typed_values_show_safe_secret_metadata() {
         let secret_id = uuid::Uuid::from_u128(1);
-        let permission_card_id = uuid::Uuid::from_u128(2);
+        let permission_card_id = uuid::Uuid::from_u128(0xca4d);
         let schema = SchemaType::record(vec![
             NamedFieldType {
                 name: "credential".to_string(),
@@ -1773,7 +1857,7 @@ mod tests {
                 agent_initialization(),
                 vec![
                     "INVOKE initialize",
-                    "idempotency key:   init-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000001",
                     "input:",
                     "constructor",
                 ],
@@ -1782,7 +1866,7 @@ mod tests {
                 agent_method_invocation(),
                 vec![
                     "INVOKE generated-method",
-                    "idempotency key:   method-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000002",
                     "input:",
                     "input",
                 ],
@@ -1800,7 +1884,7 @@ mod tests {
                 process_oplog_entries(),
                 vec![
                     "INVOKE process oplog entries",
-                    "idempotency key:   process-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000003",
                 ],
             ),
             (
@@ -1827,7 +1911,7 @@ mod tests {
                 agent_initialization(),
                 vec![
                     "ENQUEUED AGENT INITIALIZATION",
-                    "idempotency key:   init-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000001",
                     "input:",
                     "constructor",
                 ],
@@ -1836,7 +1920,7 @@ mod tests {
                 agent_method_invocation(),
                 vec![
                     "ENQUEUED INVOCATION generated-method",
-                    "idempotency key:   method-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000002",
                     "input:",
                     "input",
                 ],
@@ -1854,7 +1938,7 @@ mod tests {
                 process_oplog_entries(),
                 vec![
                     "ENQUEUED PROCESS OPLOG ENTRIES",
-                    "idempotency key:   process-key",
+                    "invocation id:     00000000-0000-0000-0000-000000000003",
                 ],
             ),
             (

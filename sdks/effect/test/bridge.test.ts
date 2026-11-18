@@ -4,6 +4,7 @@ import { Effect, Fiber, Layer, Stream } from "effect"
 import * as Bridge from "../src/Bridge.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
+import { hostInvocationMetadata } from "./invocation-metadata.js"
 
 describe("Bridge", () => {
   it.effect(
@@ -15,7 +16,10 @@ describe("Bridge", () => {
         const connect = vi.fn(() => Effect.succeed({ drop } as unknown as RpcConnection))
         const services = Layer.merge(
           Layer.succeed(AgentHostClient, { makeAgentId } as never),
-          Layer.succeed(RpcClient, { connect }),
+          Layer.succeed(RpcClient, {
+            bindSelf: () => Effect.die("unexpected self binding"),
+            connect,
+          }),
         )
         const resolve = Bridge.resolveRemoteAgent(
           "Ephemeral",
@@ -45,6 +49,7 @@ describe("Bridge", () => {
             Layer.merge(
               Layer.succeed(AgentHostClient, { makeAgentId } as never),
               Layer.succeed(RpcClient, {
+                bindSelf: () => Effect.die("unexpected self binding"),
                 connect: () => Effect.fail(new RpcHostError(cause, "WasmRpc.create")),
               }),
             ),
@@ -67,20 +72,20 @@ describe("Bridge", () => {
     let cancels = 0
     let drops = 0
     const connection: RpcConnection = {
-      invokeAndAwait: () => ({ metadata: { agentId: "agent", idempotencyKey: "sync" } }),
-      invoke: () => ({ agentId: "agent", idempotencyKey: "trigger" }),
+      invokeAndAwait: () => ({ metadata: hostInvocationMetadata("agent") }),
+      invoke: () => hostInvocationMetadata("agent"),
       asyncInvokeAndAwait: () => {
         invokes++
         return {
-          metadata: { agentId: "agent", idempotencyKey: "await" },
+          metadata: hostInvocationMetadata("agent"),
           get: () => new Promise(() => undefined),
           cancel: () => cancels++,
           drop: () => drops++,
         }
       },
-      scheduleInvocation: () => ({ metadata: { agentId: "agent", idempotencyKey: "schedule" } }),
+      scheduleInvocation: () => ({ metadata: hostInvocationMetadata("agent") }),
       scheduleCancelableInvocation: () => ({
-        metadata: { agentId: "agent", idempotencyKey: "schedule" },
+        metadata: hostInvocationMetadata("agent"),
         token: { cancel: () => undefined, drop: () => undefined },
       }),
       drop: () => undefined,
@@ -88,6 +93,7 @@ describe("Bridge", () => {
     const rpc = Layer.succeed(
       RpcClient,
       RpcClient.of({
+        bindSelf: () => Effect.die("unexpected self binding"),
         connect: () => {
           connects++
           return Effect.succeed(connection)

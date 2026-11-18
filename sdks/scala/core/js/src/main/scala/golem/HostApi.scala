@@ -314,7 +314,7 @@ object HostApi {
    * Awaits a promise completion and returns the payload bytes.
    */
   def awaitPromise(promiseId: PromiseId): Future[Array[Byte]] =
-    awaitPromiseRaw(promiseId).map(fromUint8Array)(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+    awaitPromiseRaw(promiseId).map(fromUint8Array)(golem.concurrent.GolemExecutionContext.global)
 
   /** Low-level await using `Uint8Array` (internal; prefer `Array[Byte]`). */
   private[golem] def awaitPromiseRaw(promiseId: PromiseId): Future[Uint8Array] =
@@ -336,7 +336,7 @@ object HostApi {
         case Right(value) => value
         case Left(err)    => throw new IllegalArgumentException(err.toString)
       }
-    }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+    }(golem.concurrent.GolemExecutionContext.global)
 
   /**
    * Encode a value as JSON and complete the promise with the encoded bytes.
@@ -386,7 +386,7 @@ object HostApi {
      */
     def await(): Future[WebhookRequestPayload] =
       awaitPromiseRaw(promiseId).map(new WebhookRequestPayload(_))(
-        scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+        golem.concurrent.GolemExecutionContext.global
       )
   }
 

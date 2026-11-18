@@ -33,6 +33,7 @@ use golem_common::poem::{
 };
 use golem_service_base::body_limit::RequestBodyLimit;
 use golem_service_base::http_server;
+use golem_service_base::model::auth::with_json_auth_errors;
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
@@ -102,7 +103,7 @@ impl RegistryService {
         let services = Services::new(&self.config, join_set, &self.startup_progress).await?;
 
         let grpc_port = self.start_grpc_server(join_set, &services).await?;
-        let endpoint = api::make_open_api_service(&services)
+        let endpoint = with_json_auth_errors(api::make_open_api_service(&services))
             .with(self.body_limit())
             .boxed();
 
@@ -154,7 +155,7 @@ impl RegistryService {
             .allow_credentials(true);
 
         let app = Route::new()
-            .nest("/", api_service)
+            .nest("/", with_json_auth_errors(api_service))
             .nest("/docs", ui)
             .nest("/specs", spec)
             .nest("/metrics", metrics)

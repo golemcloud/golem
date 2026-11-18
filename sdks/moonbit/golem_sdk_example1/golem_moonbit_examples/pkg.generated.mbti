@@ -62,9 +62,9 @@ pub fn wasmExportGetToolMiddlewarePostReturn(Int32) -> Unit
 
 pub fn wasmExportGetToolPostReturn(Int32) -> Unit
 
-pub fn wasmExportInitialize(Int32) -> Int32
+pub fn wasmExportInitialize(Int32, Int32, Int32, Int32, Int32) -> Int32
 
-pub fn wasmExportInvokeGolemAgentGuest(Int32) -> Int32
+pub fn wasmExportInvokeGolemAgentGuest(Int32, Int32, Int32, Int32, Int32) -> Int32
 
 pub fn wasmExportInvokeGolemToolGuest(Int32) -> Int32
 
@@ -101,6 +101,7 @@ pub(all) struct AuditLogClient {
   client : @rpc.AgentClient
 }
 pub async fn AuditLogClient::add_entry(Self, String, scope_card? : @permissions.ScopeCard) -> Unit
+pub fn AuditLogClient::bind_self() -> Self raise
 pub fn AuditLogClient::drop(Self) -> Unit
 pub fn AuditLogClient::get(String) -> Self raise @common.AgentError
 pub fn AuditLogClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -284,6 +285,7 @@ pub fn ConfiguredAgent::settings(Self) -> String
 pub(all) struct ConfiguredAgentClient {
   client : @rpc.AgentClient
 }
+pub fn ConfiguredAgentClient::bind_self() -> Self raise
 pub fn ConfiguredAgentClient::drop(Self) -> Unit
 pub fn ConfiguredAgentClient::get() -> Self raise @common.AgentError
 pub fn ConfiguredAgentClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -321,6 +323,7 @@ pub fn Counter::increment(Self) -> Unit
 pub(all) struct CounterClient {
   client : @rpc.AgentClient
 }
+pub fn CounterClient::bind_self() -> Self raise
 pub async fn CounterClient::decrement(Self, scope_card? : @permissions.ScopeCard) -> Unit
 pub fn CounterClient::drop(Self) -> Unit
 pub fn CounterClient::get(String) -> Self raise @common.AgentError
@@ -368,6 +371,7 @@ pub async fn FileOwner::update(Self, String) -> Unit
 pub(all) struct FileOwnerClient {
   client : @rpc.AgentClient
 }
+pub fn FileOwnerClient::bind_self() -> Self raise
 pub fn FileOwnerClient::drop(Self) -> Unit
 pub fn FileOwnerClient::get(String) -> Self raise @common.AgentError
 pub fn FileOwnerClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -402,6 +406,7 @@ pub(all) struct MoonBitToolReflectionCallerClient {
   client : @rpc.AgentClient
 }
 pub async fn MoonBitToolReflectionCallerClient::agent_round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
+pub fn MoonBitToolReflectionCallerClient::bind_self() -> Self raise
 pub async fn MoonBitToolReflectionCallerClient::canonical_round_trip(Self, scope_card? : @permissions.ScopeCard) -> String
 pub fn MoonBitToolReflectionCallerClient::drop(Self) -> Unit
 pub fn MoonBitToolReflectionCallerClient::get(String) -> Self raise @common.AgentError
@@ -438,6 +443,7 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt6
 pub(all) struct MoonBitToolStreamingCallerClient {
   client : @rpc.AgentClient
 }
+pub fn MoonBitToolStreamingCallerClient::bind_self() -> Self raise
 pub fn MoonBitToolStreamingCallerClient::drop(Self) -> Unit
 pub fn MoonBitToolStreamingCallerClient::get(String) -> Self raise @common.AgentError
 pub fn MoonBitToolStreamingCallerClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -480,6 +486,7 @@ pub(all) struct MultipartIndexClient {
   client : @rpc.AgentClient
 }
 pub async fn MultipartIndexClient::append(Self, Bytes, scope_card? : @permissions.ScopeCard) -> Int32
+pub fn MultipartIndexClient::bind_self() -> Self raise
 pub fn MultipartIndexClient::drop(Self) -> Unit
 pub fn MultipartIndexClient::get(String) -> Self raise @common.AgentError
 pub fn MultipartIndexClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -519,6 +526,7 @@ pub async fn RpcExampleAgent::task_rpc_example(Self) -> UInt64
 pub(all) struct RpcExampleAgentClient {
   client : @rpc.AgentClient
 }
+pub fn RpcExampleAgentClient::bind_self() -> Self raise
 pub async fn RpcExampleAgentClient::counter_rpc_example(Self, scope_card? : @permissions.ScopeCard) -> UInt64
 pub fn RpcExampleAgentClient::drop(Self) -> Unit
 pub fn RpcExampleAgentClient::get() -> Self raise @common.AgentError
@@ -568,6 +576,7 @@ pub(all) struct TaskManagerClient {
   client : @rpc.AgentClient
 }
 pub async fn TaskManagerClient::add_task(Self, TaskInfo, scope_card? : @permissions.ScopeCard) -> UInt64
+pub fn TaskManagerClient::bind_self() -> Self raise
 pub fn TaskManagerClient::drop(Self) -> Unit
 pub fn TaskManagerClient::get() -> Self raise @common.AgentError
 pub fn TaskManagerClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -609,6 +618,7 @@ pub(all) struct VisionAgentClient {
   client : @rpc.AgentClient
 }
 pub async fn VisionAgentClient::analyze(Self, @multimodal.Multimodal[TextOrImage], scope_card? : @permissions.ScopeCard) -> String
+pub fn VisionAgentClient::bind_self() -> Self raise
 pub async fn VisionAgentClient::describe(Self, String, @multimodal.Multimodal[TextOrImage], scope_card? : @permissions.ScopeCard) -> String
 pub fn VisionAgentClient::drop(Self) -> Unit
 pub async fn VisionAgentClient::echo(Self, @multimodal.Multimodal[TextOrImage], scope_card? : @permissions.ScopeCard) -> @multimodal.Multimodal[TextOrImage]
@@ -646,6 +656,7 @@ pub fn WeatherAgent::set_temperature(Self, Double, String) -> String
 pub(all) struct WeatherAgentClient {
   client : @rpc.AgentClient
 }
+pub fn WeatherAgentClient::bind_self() -> Self raise
 pub fn WeatherAgentClient::drop(Self) -> Unit
 pub fn WeatherAgentClient::get(String) -> Self raise @common.AgentError
 pub fn WeatherAgentClient::get_agent_id(Self) -> String raise @common.AgentError
@@ -679,6 +690,7 @@ pub async fn WebhookAgent::wait_for_webhook(Self) -> String
 pub(all) struct WebhookAgentClient {
   client : @rpc.AgentClient
 }
+pub fn WebhookAgentClient::bind_self() -> Self raise
 pub fn WebhookAgentClient::drop(Self) -> Unit
 pub fn WebhookAgentClient::get(String) -> Self raise @common.AgentError
 pub fn WebhookAgentClient::get_agent_id(Self) -> String raise @common.AgentError

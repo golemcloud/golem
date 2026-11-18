@@ -3276,6 +3276,7 @@ fn the_record_of_a_successful_assisted_update_stays_after_later_periodic_confirm
                 kind: golem_common::model::AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
                     filesystem_snapshot: Some(assisted.clone()),
                 },
+                bootstrap: None,
             }),
             ..Default::default()
         };

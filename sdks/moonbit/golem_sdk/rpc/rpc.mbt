@@ -10,12 +10,23 @@ pub(all) struct AgentClient {
   phantom_id : @schema.Uuid?
   rpc : @agentHost.WasmRpc
   priv mut default_scope_card : @permissions.ScopeCard?
+  priv bound_agent_id : String?
 }
 
 ///|
 pub(all) struct InvocationMetadata {
   agent_id : String
-  idempotency_key : String
+  invocation_id : InvocationId
+}
+
+///|
+fn invocation_metadata(
+  metadata : @agentHost.InvocationMetadata,
+) -> InvocationMetadata {
+  {
+    agent_id: metadata.agent_id,
+    invocation_id: InvocationId::from_host(metadata),
+  }
 }
 
 ///|
@@ -60,6 +71,40 @@ fn make_client(
     phantom_id,
     rpc,
     default_scope_card: None,
+    bound_agent_id: None,
+  }
+}
+
+///|
+/// Binds the current durable incarnation without creating it or waiting for initialization.
+///
+/// Use this to schedule work on self from inside the constructor. Normal `get` reuses
+/// an initialized agent without rerunning its constructor, but waits for an unfinished
+/// constructor. Calling `get` on self from that constructor would therefore deadlock.
+///
+/// Scheduled work runs after construction finishes. This does not make awaited
+/// self-calls reentrant or bypass method permissions. A different client type raises
+/// an error. Replay preserves the recorded incarnation.
+pub fn AgentClient::bind_self(agent_type_name : String) -> AgentClient raise {
+  let (id, rpc) = match @agentHost.WasmRpc::bind_self() {
+    Ok(bound) => bound
+    Err(@agentHost.RpcError::RemoteAgentError(error)) => raise error
+    Err(error) => raise error
+  }
+  errdefer rpc.drop()
+  let parsed = @identity.parse(id)
+  if parsed.type_name != agent_type_name {
+    raise @common.AgentError::InvalidType(
+      "self binding expects \{agent_type_name}, identity is \{parsed.type_name}",
+    )
+  }
+  {
+    agent_type_name: parsed.type_name,
+    constructor_input: parsed.input.value,
+    phantom_id: parsed.phantom_id,
+    rpc,
+    default_scope_card: None,
+    bound_agent_id: Some(id),
   }
 }
 
@@ -148,6 +193,9 @@ pub fn AgentClient::get_phantom_with_config(
 pub fn AgentClient::get_agent_id(
   self : AgentClient,
 ) -> String raise @common.AgentError {
+  if self.bound_agent_id is Some(id) {
+    return id
+  }
   @identity.Constructor::from_wire(
     self.agent_type_name,
     self.constructor_input,
@@ -215,15 +263,14 @@ pub async fn AgentClient::invoke_and_await(
     errdefer invocation.future.cancel()
     invocation.future.get()
   }
-  match result {
-    Ok(value) => {
-      let metadata : InvocationMetadata = {
-        agent_id: invocation.metadata.agent_id,
-        idempotency_key: invocation.metadata.idempotency_key,
-      }
-      { metadata, value, }
-    }
-    Err(e) => panic_on_rpc_error(e)
+  match (result, invocation.metadata) {
+    (Ok(value), Some(metadata)) =>
+      { metadata: invocation_metadata(metadata), value, }
+    (Ok(_), None) =>
+      abort(
+        "RPC protocol error: completed invocation has no invocation metadata",
+      )
+    (Err(e), _) => panic_on_rpc_error(e)
   }
 }
 
@@ -234,8 +281,7 @@ pub fn AgentClient::invoke(
   input : @types.SchemaValueTree,
 ) -> InvocationMetadata {
   match self.rpc.invoke(function_name, input, None) {
-    Ok(value) =>
-      { agent_id: value.agent_id, idempotency_key: value.idempotency_key, }
+    Ok(value) => invocation_metadata(value)
     Err(e) => panic_on_rpc_error(e)
   }
 }
@@ -248,13 +294,7 @@ pub fn AgentClient::schedule_invocation(
   input : @types.SchemaValueTree,
 ) -> ScheduledInvocationReceipt {
   match self.rpc.schedule_invocation(scheduled_at, function_name, input, None) {
-    Ok(value) =>
-      {
-        metadata: {
-          agent_id: value.metadata.agent_id,
-          idempotency_key: value.metadata.idempotency_key,
-        },
-      }
+    Ok(value) => { metadata: invocation_metadata(value.metadata), }
     Err(e) => panic_on_rpc_error(e)
   }
 }
@@ -275,10 +315,7 @@ pub fn AgentClient::schedule_cancelable_invocation(
     ) {
     Ok(value) =>
       {
-        metadata: {
-          agent_id: value.metadata.agent_id,
-          idempotency_key: value.metadata.idempotency_key,
-        },
+        metadata: invocation_metadata(value.metadata),
         cancellation_token: value.cancellation_token,
       }
     Err(e) => panic_on_rpc_error(e)
