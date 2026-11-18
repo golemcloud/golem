@@ -51,9 +51,21 @@ cycles, resource high-water marks and cancellation before finalizing them.
 `Makefile.main-validation.toml` prepares built-ins, native binaries, SDKs and
 fixtures before their consumers. A failed producer blocks dependent consumers;
 old cache contents never release them. General checks record ordinary failure
-and let the remaining prepared workloads run. A separate executor target prevents
-service compilation from replacing live worker test binaries. Test consumers use
-local nextest binaries metadata, not cross-job archives.
+and let the remaining prepared workloads run. Native producers share the Cargo
+target but keep their exact package and feature selections. After the executor
+producer succeeds, copy all its test executables and rewrite only their paths in
+the local metadata. Service compilation can then overlap workers without replacing
+live worker executables. Test consumers use local nextest binaries metadata, not
+cross-job archives.
+
+Executor snapshots use ordinary copies, not links. Dependency checks reject
+unresolved libraries and libraries from the mutable Cargo target, and require
+library resolution to remain unchanged after copying. The snapshot remains below
+the repository's target directory so managed-XFS Lima can access it through the
+repository mount. Verify its recorded hashes before XFS reuse and remove it after
+the final join. Preparation and interrupted runs can leave snapshots for the
+runner to reclaim. The retained manifest and task logs record dependency and hash
+evidence; sharing a cache is not a claim of measured speedup.
 
 Parallel execution is the default. Worker tests overlap service compilation,
 then service and CLI tests. Groups within

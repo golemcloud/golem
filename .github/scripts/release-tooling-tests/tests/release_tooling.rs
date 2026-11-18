@@ -43,6 +43,24 @@ fn main_validation_retains_logs_and_reports_actual_task_lifetimes() {
 }
 
 #[test]
+fn main_validation_freezes_executor_binaries_without_changing_the_selection() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_freeze.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn release_preparation_requires_the_selected_preflight_and_never_publishes_after_a_failed_gate() {
     let workflow: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(workspace_path().join(".github/workflows/prepare-golem-release.yaml"))

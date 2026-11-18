@@ -1,5 +1,5 @@
 # One selected source per invocation. GitHub Actions prevents overlapping cycles.
-# The worker target is separate so the service build cannot replace live tests.
+# Worker executables are frozen before the service build can replace Cargo outputs.
 
 [env.MAIN_VALIDATION_REPORT_DIR]
 value = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-reports"
@@ -74,6 +74,7 @@ script = '''
 exec --fail-on-error cargo build --profile dev-ci --workspace --bins --tests
 mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation
 metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --workspace --bins --tests --list-type binaries-only --message-format json
+echo ${metadata.stderr}
 writefile ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json ${metadata.stdout}
 # Existing source generators consume debug paths, as in restore-binaries.
 mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug
@@ -85,12 +86,19 @@ end
 
 [tasks.main-validation-executor-native]
 private = true
-env = { CARGO_TARGET_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-executor" }
 script_runner = "@duckscript"
 script = '''
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json.manifest.json
 exec --fail-on-error cargo build --profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common
 metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common --list-type binaries-only --message-format json
-writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json ${metadata.stdout}
+echo ${metadata.stderr}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json ${metadata.stdout}
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+cycle = basename ${temporary}
+snapshot = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/frozen-${cycle}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt ${snapshot}
+exec --fail-on-error python3 .github/main-validation/freeze-binaries.py --metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --destination ${snapshot} --output ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
 '''
 
 [tasks.main-validation-service-native]
@@ -99,6 +107,7 @@ script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build --profile dev-ci --bins --tests -p integration-tests -p golem-cli -p golem-service-base -p golem-registry-service -p golem-worker-service -p golem-shard-manager -p golem-test-framework -p golem-component-compilation-service -p golem-worker-executor
 metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --bins --tests -p integration-tests -p golem-cli -p golem-service-base -p golem-registry-service -p golem-worker-service -p golem-shard-manager -p golem-test-framework -p golem-component-compilation-service -p golem-worker-executor --list-type binaries-only --message-format json
+echo ${metadata.stderr}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json ${metadata.stdout}
 # CLI service-config tests use debug paths, but require this producer's selection.
 binaries = array golem-registry-service golem-worker-service golem-shard-manager golem-component-compilation-service worker-executor
@@ -254,6 +263,10 @@ for branch in ${branches}
 end
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 rm -r ${temporary}
+if is_path_exists ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+    snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+    rm -r ${snapshot}
+end
 if ${failed}
     trigger_error "Main validation failed; retain every original report and log"
 end
@@ -309,6 +322,7 @@ exec --fail-on-error sbt -batch "++3.8.2; integrationTests/test"
 private = true
 script_runner = "@duckscript"
 script = '''
+exec --fail-on-error python3 .github/main-validation/freeze-binaries.py --verify ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
 exec --fail-on-error integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh --self-test-initial-file-wasm
 metadata = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/xfs-binaries.json
 runner = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/cargo-test-r
@@ -317,7 +331,7 @@ installed_runner = exec --fail-on-error which cargo-test-r
 installed_runner = trim ${installed_runner.stdout}
 cp ${installed_runner} ${runner}
 set_env GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES 1
-set_env GOLEM_MANAGED_XFS_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-executor
+set_env GOLEM_MANAGED_XFS_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 set_env GOLEM_MANAGED_XFS_CARGO_TEST_R ${runner}
 set_env GOLEM_MANAGED_XFS_BINARIES_METADATA ${metadata}
 code = exec --get-exit-code integration-tests/scripts/managed-filesystem/run-lima.sh
