@@ -50,8 +50,37 @@ export const callerFromHost = (host: AgentCommon.Caller): Caller =>
  * @since 2.0.0
  */
 export interface EndableInvocationContext extends InvocationContextShape {
-  /** Marks the call as over. A first read of the caller after this throws. */
-  readonly end: () => void
+  /**
+   * Marks the call as over. A first read of the caller after this throws, unless the call
+   * returned a stream: its producer runs after the return, so the caller is read from the host
+   * now, while the call still holds it, and kept for the producer.
+   */
+  readonly end: (returnedStream?: boolean) => void
+}
+
+/**
+ * Whether the result of a call holds a stream, whose producer runs after the call returns: an
+ * encoded method result, or a tool result with an encoded value.
+ *
+ * @internal
+ * @since 2.0.0
+ */
+export const returnsStream = (result: unknown): boolean => {
+  const tree =
+    typeof result === "object" && result !== null && "result" in result
+      ? (result as { readonly result?: { readonly value?: unknown } }).result?.value
+      : result
+  if (typeof tree !== "object" || tree === null || !("valueNodes" in tree)) return false
+  const nodes = (tree as { readonly valueNodes: unknown }).valueNodes
+  return (
+    Array.isArray(nodes) &&
+    nodes.some(
+      (node) =>
+        typeof node === "object" &&
+        node !== null &&
+        (node as { readonly tag?: unknown }).tag === "stream-value",
+    )
+  )
 }
 
 /**
@@ -77,7 +106,10 @@ export const lazyInvocationContext = (read: () => AgentCommon.Caller): EndableIn
       }
       return caller
     },
-    end: () => {
+    end: (returnedStream = false) => {
+      if (returnedStream && caller === undefined && !ended) {
+        caller = callerFromHost(read())
+      }
       ended = true
     },
   }

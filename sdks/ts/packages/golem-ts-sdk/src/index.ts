@@ -327,6 +327,11 @@ async function initialize(agentTypeName: string, input: SchemaValueTree): Promis
   }
 }
 
+/** Whether an encoded result holds a stream, whose producer runs after the call returns. */
+function returnsStream(tree: SchemaValueTree | undefined): boolean {
+  return tree?.valueNodes.some((node) => node.tag === 'stream-value') ?? false;
+}
+
 async function invokeAgent(
   methodName: string,
   input: SchemaValueTree,
@@ -339,7 +344,7 @@ async function invokeAgent(
   try {
     result = await initializedAgent.agent.invoke(methodName, input, context);
   } finally {
-    context.end();
+    context.end(result?.tag === 'ok' && returnsStream(result.val));
   }
 
   if (result.tag === 'ok') {
@@ -376,6 +381,7 @@ async function invokeTool(
   stderr: ToolOutputWriter | undefined,
 ): Promise<InvocationResult> {
   let invocation: EndableInvocationContext | undefined;
+  let toolResult: InvocationResult | undefined;
   let inputAdapter: ToolInputStreamAdapter | undefined;
   let stdoutAdapter: ToolOutputStreamAdapter | undefined;
   let stderrAdapter: ToolOutputStreamAdapter | undefined;
@@ -441,6 +447,7 @@ async function invokeTool(
     outputFinishes = [stdoutAdapter?.finish(), stderrAdapter?.finish()];
     await Promise.all(outputFinishes);
     const result = await projectToolOutcome(body, outcome);
+    toolResult = result;
     await disposeInput();
     return result;
   } catch (error) {
@@ -452,7 +459,7 @@ async function invokeTool(
     await Promise.allSettled(outputFinishes);
     throw error;
   } finally {
-    invocation?.end();
+    invocation?.end(returnsStream(toolResult?.result?.value));
     for (const writer of [stdout, stderr]) {
       try {
         (writer as { [Symbol.dispose]?: () => void } | undefined)?.[Symbol.dispose]?.();

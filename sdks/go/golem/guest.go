@@ -175,7 +175,7 @@ func beginAgent(agentType string, input types.SchemaValueTree) (*instance, refle
 func init() {
 	guestExports.Exports.Initialize = func(agentType string, input types.SchemaValueTree) witTypes.Result[witTypes.Unit, common.AgentError] {
 		caller, end := lazyCaller()
-		defer end()
+		defer end(false)
 		return initializeAgent(agentType, input, caller)
 	}
 
@@ -196,8 +196,9 @@ func init() {
 		// The caller is read only when the handler asks for it: the read allocates, and an
 		// allocation can start a garbage collection whose clock reads the oplog records.
 		caller, end := lazyCaller()
-		defer end()
+		defer end(false)
 		out, err := m.invoke(active, caller, input)
+		end(err == nil && out != nil && engine.HoldsStream(out.ValueNodes))
 		if err != nil {
 			return fail(toAgentError(err))
 		}
@@ -272,7 +273,7 @@ func init() {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}
 		caller, end := lazyCaller()
-		defer end()
+		defer end(false)
 		if err := restoreAgent(agentType, ctorParams, caller, state); err != nil {
 			return witTypes.Err[witTypes.Unit](err.Error())
 		}

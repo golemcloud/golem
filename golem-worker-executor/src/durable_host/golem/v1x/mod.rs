@@ -1038,7 +1038,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 CreateRequestKind::Fork,
                 None,
                 Caller::entry(self.self_principal()),
-                &self.clone_as_inherited_stack(&self.state.current_span_id),
+                &self.clone_as_inherited_stack(&self.state.invocation_state().current_span_id),
             );
             let fork_result = loop {
                 let fork_result = self

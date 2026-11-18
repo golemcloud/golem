@@ -189,9 +189,17 @@ class TextFormParser {
 
 export type PrincipalKind = 'user' | 'account' | 'agent' | 'tool' | 'anonymous';
 
+const liveValueSerialization =
+  'a Caller, a Principal and a TokenProvenance are live values and cannot be serialized; store ctx.caller.original.ref instead';
+
 abstract class BasePrincipal {
   // Prevents structural compatibility between the kinds.
   private readonly _brand!: void;
+
+  /** A principal is a live value: serializing it throws. Store its `ref` instead. */
+  toJSON(): never {
+    throw new Error(liveValueSerialization);
+  }
 
   abstract readonly kind: PrincipalKind;
   abstract readonly ref: PrincipalRef | undefined;
@@ -327,6 +335,11 @@ export class TokenProvenance {
     this.id = Uuid.from(inner.id);
     this.maker = inner.maker === undefined ? undefined : fromHostRef(inner.maker);
   }
+
+  /** A token provenance is a live value: serializing it throws. */
+  toJSON(): never {
+    throw new Error(liveValueSerialization);
+  }
 }
 
 /**
@@ -336,6 +349,11 @@ export class TokenProvenance {
 export class Caller {
   // Prevents structural compatibility with plain records.
   private readonly _brand!: void;
+
+  /** A caller is a live value: serializing it throws. Store `original.ref` instead. */
+  toJSON(): never {
+    throw new Error(liveValueSerialization);
+  }
 
   readonly original: Principal;
   readonly immediate: Principal;
@@ -394,8 +412,12 @@ export function callerFromHost(host: HostCaller): Caller {
 
 /** An invocation context that the SDK ends when its call returns. */
 export interface EndableInvocationContext extends InvocationContext {
-  /** Marks the call as over. A first read of the caller after this throws. */
-  end(): void;
+  /**
+   * Marks the call as over. A first read of the caller after this throws, unless the call
+   * returned a stream: its producer runs after the return, so the caller is read from the host
+   * now, while the call still holds it, and kept for the producer.
+   */
+  end(returnedStream?: boolean): void;
 }
 
 /**
@@ -419,7 +441,10 @@ export function currentInvocationContext(): EndableInvocationContext {
       }
       return caller;
     },
-    end(): void {
+    end(returnedStream = false): void {
+      if (returnedStream && caller === undefined && !ended) {
+        caller = callerFromHost(hostCaller());
+      }
       ended = true;
     },
   };

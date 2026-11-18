@@ -197,34 +197,39 @@ impl<Ctx: WorkerCtx> FutureProducer<Ctx> for InputOutcomeProducer {
                 retry_from: InFunctionRetryHost::current_retry_point(ctx),
             };
             let live_call_permit = LiveCallPermit::new(ctx.state.live_host_call_counter());
+            let captured = ctx.attribution.capture();
             store.as_context_mut().spawn(async move |accessor| {
-                let record = StreamConsumerTerminalRecord {
-                    format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
-                    observation,
-                    reobserves: None,
-                    session_key: streams.session_reference.clone(),
-                    reader_id: reader_id.await.map_err(wasmtime::Error::msg)?,
-                    source_offset: completion.source_offset,
-                    consumer_read_ordinal: completion.ordinal,
-                    authored_by: completion.authored_by,
-                    terminal: completion.terminal,
-                };
-                let observation = streams.completion_observation(record).await?;
-                PrepareInputObservation {
-                    observation,
-                    streams,
-                    replay,
-                    guest_order,
-                    runtime,
-                    activity,
-                    result,
-                    runtime_teardown,
-                    cleanup_sink,
-                    trap_context,
-                    live_call_permit,
-                }
-                .run(accessor)
-                .await
+                captured
+                    .run(async move {
+                        let record = StreamConsumerTerminalRecord {
+                            format_version: STREAM_CONSUMER_RECORD_FORMAT_VERSION,
+                            observation,
+                            reobserves: None,
+                            session_key: streams.session_reference.clone(),
+                            reader_id: reader_id.await.map_err(wasmtime::Error::msg)?,
+                            source_offset: completion.source_offset,
+                            consumer_read_ordinal: completion.ordinal,
+                            authored_by: completion.authored_by,
+                            terminal: completion.terminal,
+                        };
+                        let observation = streams.completion_observation(record).await?;
+                        PrepareInputObservation {
+                            observation,
+                            streams,
+                            replay,
+                            guest_order,
+                            runtime,
+                            activity,
+                            result,
+                            runtime_teardown,
+                            cleanup_sink,
+                            trap_context,
+                            live_call_permit,
+                        }
+                        .run(accessor)
+                        .await
+                    })
+                    .await
             })?;
             self.delivery = Some(delivery);
         }

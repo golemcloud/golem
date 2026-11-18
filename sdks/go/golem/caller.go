@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -483,6 +484,30 @@ func isLiveValueType(t reflect.Type) bool {
 		(t.Kind() != reflect.Interface && t.Implements(principalType))
 }
 
+// errLiveValue is the refusal of an ordinary serialization of a live value.
+var errLiveValue = errors.New("a Caller, a Principal and a TokenProvenance are live values and cannot be serialized; store ctx.Caller().Original.Ref() instead")
+
+// MarshalJSON refuses: a caller is a live value. Store ctx.Caller().Original.Ref() instead.
+func (Caller) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
+// MarshalJSON refuses: a token provenance is a live value.
+func (TokenProvenance) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
+// MarshalJSON refuses: a principal is a live value. Store its Ref() instead.
+func (UserPrincipal) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
+// MarshalJSON refuses: a principal is a live value. Store its Ref() instead.
+func (AccountPrincipal) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
+// MarshalJSON refuses: a principal is a live value. Store its Ref() instead.
+func (AgentPrincipal) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
+// MarshalJSON refuses: a principal is a live value. Store its Ref() instead.
+func (ToolPrincipal) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
+// MarshalJSON refuses: a principal is a live value.
+func (AnonymousPrincipal) MarshalJSON() ([]byte, error) { return nil, errLiveValue }
+
 // misplacedCaller is the message of every build-time refusal of a live value.
 const misplacedCaller = "Principal and Caller cannot appear in a method, constructor or tool signature, or inside a value type. Read the caller with ctx.Caller() (golem.Caller), and store ctx.Caller().Original.Ref() as a PrincipalRef."
 
@@ -492,8 +517,10 @@ const misplacedCaller = "Principal and Caller cannot appear in a method, constru
 // collection whose clock reads record in the oplog: an invocation that never
 // looks at its caller never pays for it. Once the call has ended the host holds
 // another invocation's caller, so a first read after that panics, and a caller
-// read during the call stays what it was.
-func lazyCaller() (read func() Caller, end func()) {
+// read during the call stays what it was. A call that returned a stream ends
+// with returnedStream set: its producer runs after the return, so the end reads
+// the caller while the call still holds it, and the producer gets that value.
+func lazyCaller() (read func() Caller, end func(returnedStream bool)) {
 	var c Caller
 	var have, ended bool
 	read = func() Caller {
@@ -505,7 +532,12 @@ func lazyCaller() (read func() Caller, end func()) {
 		}
 		return c
 	}
-	return read, func() { ended = true }
+	return read, func(returnedStream bool) {
+		if returnedStream && !have && !ended {
+			c, have = callerFromWit(currentCaller()), true
+		}
+		ended = true
+	}
 }
 
 // callerEnded is the panic of a first read of the caller after the call ended.

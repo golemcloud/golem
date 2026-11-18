@@ -32,6 +32,10 @@ const golemAliases = [
   { find: "golem:api/oplog@1.5.0", replacement: resolve(mockDir, "golem-api-oplog.ts") },
   { find: "golem:api/retry@1.5.0", replacement: resolve(mockDir, "golem-api-retry.ts") },
   {
+    find: "golem:api/retry-scope@1.5.0",
+    replacement: resolve(mockDir, "golem-api-retry-scope.ts"),
+  },
+  {
     find: "wasm-rquickjs:custom-invocation-context",
     replacement: resolve(mockDir, "wasm-rquickjs-custom-invocation-context.ts"),
   },

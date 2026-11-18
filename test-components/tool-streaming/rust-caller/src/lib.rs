@@ -126,7 +126,6 @@ mod definition_owned_matrix_proxy {
     }
 }
 
-#[path = "../../../../builtin-tools/filesystem-tools/src/bounded_stream.rs"]
 mod bounded_stream;
 
 #[ctor::ctor]

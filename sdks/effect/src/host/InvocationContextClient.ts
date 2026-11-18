@@ -4,13 +4,14 @@
  *
  * @internal — not re-exported from `src/index.ts`.
  */
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Exit, Layer } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import * as InvocationContext from "golem:agent/invocation-context@2.0.0"
 import { InvocationContext as InvocationContextService } from "../InvocationContext.js"
 import {
   type EndableInvocationContext,
   lazyInvocationContext,
+  returnsStream,
 } from "../internal/invocationContext.js"
 
 export interface InvocationContextClientShape {
@@ -52,5 +53,6 @@ export const provideInvocationContext = <A, E, R>(
   Effect.acquireUseRelease(
     currentInvocationContext,
     (context) => Effect.provideService(self, InvocationContextService, context),
-    (context) => Effect.sync(context.end),
+    (context, exit) =>
+      Effect.sync(() => context.end(Exit.isSuccess(exit) && returnsStream(exit.value))),
   )

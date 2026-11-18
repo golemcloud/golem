@@ -150,6 +150,24 @@ struct CtrfTest {
     duration: Option<f64>,
     retries: Option<u64>,
     flaky: Option<bool>,
+    extra: Option<CtrfTestExtra>,
+}
+
+#[derive(Deserialize)]
+struct CtrfTestExtra {
+    #[serde(rename = "testR")]
+    test_r: Option<TestRHistory>,
+}
+
+#[derive(Deserialize)]
+struct TestRHistory {
+    #[serde(default)]
+    attempts: Vec<TestRAttempt>,
+}
+
+#[derive(Deserialize)]
+struct TestRAttempt {
+    status: String,
 }
 
 pub fn observations_from_archive(
@@ -181,17 +199,32 @@ pub fn observations_from_archive(
         };
         found_report = true;
         for test in report.results.tests {
-            let retries = match test.retries.unwrap_or(0) {
+            let attempts = test
+                .extra
+                .as_ref()
+                .and_then(|extra| extra.test_r.as_ref())
+                .map(|history| history.attempts.as_slice())
+                .unwrap_or_default();
+            // test-r records attempts in execution order. Use the last result,
+            // not a retained initial failure or the previous suite snapshots.
+            let status = attempts
+                .last()
+                .map(|attempt| attempt.status.clone())
+                .or(test.status)
+                .unwrap_or_else(|| "unknown".to_string())
+                .to_lowercase();
+            let retries = test
+                .retries
+                .unwrap_or(0)
+                .max(attempts.len().saturating_sub(1) as u64);
+            let retries = match retries {
                 _ if test.flaky == Some(false) => 0,
                 0 if test.flaky == Some(true) => 1,
                 retries => retries,
             };
             observations.push(Observation {
                 name: test.name.unwrap_or_else(|| "<unnamed test>".to_string()),
-                status: test
-                    .status
-                    .unwrap_or_else(|| "unknown".to_string())
-                    .to_lowercase(),
+                status,
                 duration: test.duration.filter(|value| *value >= 0.0).unwrap_or(0.0),
                 retries,
                 run_id: context.run_id,
@@ -652,6 +685,65 @@ mod tests {
         assert_eq!(result["suite::flip"].flips, 1);
         assert_eq!(result["suite::retry"].retries, 2);
         assert_eq!(result["suite::flaky-flag"].retries, 1);
+    }
+
+    #[test]
+    fn test_r_attempt_history_distinguishes_recovery_from_persistent_failure() {
+        let archive = report_archive(serde_json::json!([
+            {"name": "recovered", "status": "failed", "extra": {"testR": {"attempts": [
+                {"attempt": 1, "status": "failed"},
+                {"attempt": 2, "status": "failed"},
+                {"attempt": 3, "status": "passed"}
+            ]}}},
+            {"name": "persistent", "status": "failed", "retries": 2,
+                "extra": {"testR": {"attempts": [
+                    {"attempt": 1, "status": "failed"},
+                    {"attempt": 2, "status": "failed"},
+                    {"attempt": 3, "status": "failed"}
+                ]}}},
+            {"name": "normalized", "status": "passed", "retries": 1, "flaky": true,
+                "extra": {"testR": {"attempts": [
+                    {"attempt": 1, "status": "failed"},
+                    {"attempt": 2, "status": "passed"}
+                ]}}},
+            {"name": "non-flaky", "status": "passed", "flaky": false,
+                "extra": {"testR": {"attempts": [
+                    {"attempt": 1, "status": "passed"},
+                    {"attempt": 2, "status": "passed"}
+                ]}}}
+        ]));
+        let context = ArtifactContext {
+            run_id: 1,
+            attempt: 1,
+            branch: "main".into(),
+            seen_at: "2026-09-03T10:00:00Z".into(),
+            artifact_name: "main-validation-test-report-attempt1".into(),
+            run_url: "https://example.test/runs/1".into(),
+        };
+        let observations = observations_from_archive(&archive, &context).unwrap();
+        assert_eq!(observations.len(), 4);
+        assert_eq!(observations[0].status, "passed");
+        assert_eq!(observations[0].retries, 2);
+        assert_eq!(observations[1].status, "failed");
+        assert_eq!(observations[1].retries, 2);
+        assert_eq!(observations[2].retries, 1);
+        assert_eq!(observations[3].retries, 0);
+        let result = aggregate(observations)
+            .into_iter()
+            .map(|test| (test.name.clone(), test))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(result.len(), 3);
+        let recovered = &result["recovered"];
+        assert_eq!(recovered.failures, 0);
+        assert_eq!(recovered.main_failures, 0);
+        assert!(recovered.failure_jobs.is_empty());
+        assert_eq!(recovered.score(), 3);
+        assert_eq!(recovered.flips, 0);
+        assert_eq!(result["persistent"].failures, 1);
+        assert_eq!(result["persistent"].main_failures, 1);
+        assert_eq!(result["persistent"].score(), 5);
+        assert_eq!(result["normalized"].failures, 0);
+        assert_eq!(result["normalized"].score(), 3);
     }
 
     #[test]
