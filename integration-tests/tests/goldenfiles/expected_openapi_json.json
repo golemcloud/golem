@@ -1104,7 +1104,7 @@
           {
             "allowEmptyValue": false,
             "description": "Query parameter: limit",
-            "explode": false,
+            "explode": true,
             "in": "query",
             "name": "limit",
             "required": true,
@@ -1124,6 +1124,460 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Output_golem_it_agent_sdk_rust.http.model.PathAndQueryResponse"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          }
+        },
+        "security": [],
+        "x-golem-route-mode": "plain"
+      }
+    },
+    "/http-agents/{agent-name}/query-body": {
+      "post": {
+        "description": "",
+        "operationId": "HttpAgent-query_body",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "labels": {
+                    "items": {
+                      "items": false,
+                      "maxItems": 2,
+                      "minItems": 2,
+                      "prefixItems": [
+                        {
+                          "maximum": 4294967295,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ],
+                      "type": "array"
+                    },
+                    "type": "array"
+                  },
+                  "values": {
+                    "items": {
+                      "maximum": 4294967295,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "values",
+                  "labels"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "description": "JSON body",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          }
+        },
+        "security": [],
+        "x-golem-route-mode": "plain"
+      }
+    },
+    "/http-agents/{agent-name}/query-delete": {
+      "delete": {
+        "description": "",
+        "operationId": "HttpAgent-query_scalar",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: value",
+            "explode": true,
+            "in": "query",
+            "name": "value",
+            "required": true,
+            "schema": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "maximum": 4294967295,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          }
+        },
+        "security": [],
+        "x-golem-route-mode": "plain"
+      }
+    },
+    "/http-agents/{agent-name}/query-explicit": {
+      "post": {
+        "description": "",
+        "operationId": "HttpAgent-query_explicit",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: values",
+            "explode": true,
+            "in": "query",
+            "name": "values",
+            "required": true,
+            "schema": {
+              "items": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: labels",
+            "explode": true,
+            "in": "query",
+            "name": "labels",
+            "required": true,
+            "schema": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "minProperties": 1,
+              "propertyNames": {
+                "minLength": 1,
+                "pattern": "^[^\\[\\]]+$",
+                "type": "string"
+              },
+              "type": "object",
+              "x-golem-key-schema": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "style": "deepObject"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          }
+        },
+        "security": [],
+        "x-golem-route-mode": "plain"
+      }
+    },
+    "/http-agents/{agent-name}/query-optional": {
+      "get": {
+        "description": "",
+        "operationId": "HttpAgent-query_optional",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: values",
+            "explode": true,
+            "in": "query",
+            "name": "values",
+            "required": false,
+            "schema": {
+              "items": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: labels",
+            "explode": true,
+            "in": "query",
+            "name": "labels",
+            "required": false,
+            "schema": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "minProperties": 1,
+              "propertyNames": {
+                "minLength": 1,
+                "pattern": "^[^\\[\\]]+$",
+                "type": "string"
+              },
+              "type": "object",
+              "x-golem-key-schema": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "style": "deepObject"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response 200"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsBody"
+                }
+              }
+            },
+            "description": "Response 400"
+          }
+        },
+        "security": [],
+        "x-golem-route-mode": "plain"
+      }
+    },
+    "/http-agents/{agent-name}/query/{item}": {
+      "get": {
+        "description": "",
+        "operationId": "HttpAgent-query_values",
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: item",
+            "explode": false,
+            "in": "path",
+            "name": "item",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: values",
+            "explode": true,
+            "in": "query",
+            "name": "values",
+            "required": true,
+            "schema": {
+              "items": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: q",
+            "explode": true,
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "allowEmptyValue": false,
+            "description": "Query parameter: labels",
+            "explode": true,
+            "in": "query",
+            "name": "labels",
+            "required": true,
+            "schema": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "minProperties": 1,
+              "propertyNames": {
+                "minLength": 1,
+                "pattern": "^[^\\[\\]]+$",
+                "type": "string"
+              },
+              "type": "object",
+              "x-golem-key-schema": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "style": "deepObject"
+          },
+          {
+            "description": "Header parameter: x-request-id",
+            "explode": false,
+            "in": "header",
+            "name": "x-request-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               }
             },

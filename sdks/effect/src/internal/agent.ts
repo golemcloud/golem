@@ -77,7 +77,7 @@ import * as GolemLogging from "../Logging.js"
 import * as GolemTracing from "../Tracing.js"
 import { withCustomScopes } from "./customScope.js"
 import { mergeGraphDefs } from "./schema-model/builder.js"
-import { t, v, type SchemaGraph } from "./schema-model/model.js"
+import { t, v, resolveShapeType, type SchemaGraph, type SchemaType } from "./schema-model/model.js"
 import { GraphEncoder, typedSchemaValueToWit } from "./schema-model/wit.js"
 
 /**
@@ -812,6 +812,7 @@ export const registerAgent = <
         nonStringBindableParams: collectNonStringBindableParams(spec.input),
         stringBindableParams: collectStringBindableParams(spec.input),
         queryOrHeaderBindableParams: collectQueryOrHeaderBindableParams(spec.input),
+        ...collectHttpQueryParams(mc.inputCodec.graph),
       })
     }
 
@@ -955,6 +956,48 @@ export const registerAgent = <
       compiledSnapshot,
     })
   })
+
+const collectHttpQueryParams = (graph: SchemaGraph) => {
+  const queryBindableParams = new Set<string>()
+  const streamParams = new Set<string>()
+  const bindable = (type: SchemaType, collections = true): boolean => {
+    const shape = resolveShapeType(graph, type)
+    if (!shape) return false
+    switch (shape.tag) {
+      case "bool":
+      case "s8":
+      case "s16":
+      case "s32":
+      case "s64":
+      case "u8":
+      case "u16":
+      case "u32":
+      case "u64":
+      case "f32":
+      case "f64":
+      case "char":
+      case "string":
+      case "enum":
+        return true
+      case "option":
+        return collections && bindable(shape.element)
+      case "list":
+        return collections && bindable(shape.element, false)
+      case "map":
+        return collections && bindable(shape.key, false) && bindable(shape.value, false)
+      default:
+        return false
+    }
+  }
+  const root = resolveShapeType(graph, graph.root)
+  if (root?.tag === "record") {
+    for (const field of root.fields) {
+      if (bindable(field.body)) queryBindableParams.add(field.name)
+      if (resolveShapeType(graph, field.body)?.tag === "stream") streamParams.add(field.name)
+    }
+  }
+  return { queryBindableParams, streamParams }
+}
 
 const collectNonStringBindableParams = (
   params: Readonly<Record<string, unknown>>,

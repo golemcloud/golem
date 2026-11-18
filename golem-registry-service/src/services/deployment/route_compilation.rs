@@ -42,7 +42,7 @@ use golem_schema::http as schema_http;
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema,
     ConstructorParameter, CorsOptions, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
-    MountAgent, MountAgentMethod, MountBehaviour, MountFileSource, MountTarget,
+    MethodParameter, MountAgent, MountAgentMethod, MountBehaviour, MountFileSource, MountTarget,
     OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment, PhantomSelection,
     RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod, SessionFromHeaderRouteSecurity,
     WebhookCallbackBehaviour,
@@ -374,6 +374,27 @@ pub fn add_agent_method_http_routes(
                 ),
                 errors
             );
+
+            if route_mode == AgentRouteMode::DurableStreams
+                && let Some(name) = method_parameters
+                    .iter()
+                    .find_map(|parameter| match parameter {
+                        MethodParameter::Query {
+                            query_parameter_name,
+                            ..
+                        } if ["offset", "live", "cursor"]
+                            .contains(&query_parameter_name.as_str()) =>
+                        {
+                            Some(query_parameter_name)
+                        }
+                        _ => None,
+                    })
+            {
+                errors.push(make_route_validation_error(format!(
+                    "Query input '{name}' conflicts with a Durable Streams query control"
+                )));
+                continue;
+            }
 
             let path_segments: Vec<PathSegment> = http_mount
                 .path_prefix
@@ -1206,7 +1227,9 @@ mod tests {
     };
     use golem_schema::Empty;
     use golem_schema::http::LiteralSegment;
-    use golem_service_base::custom_api::{CompiledSchema, MethodParameter};
+    use golem_service_base::custom_api::{
+        CompiledSchema, MethodParameter, PathSegmentType, QueryOrHeaderType,
+    };
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
     use uuid::Uuid;
@@ -1445,6 +1468,25 @@ mod tests {
     }
 
     #[test]
+    fn durable_stream_query_controls_cannot_be_method_inputs() {
+        use golem_common::schema::NamedField;
+        for name in ["offset", "live", "cursor"] {
+            let mut agent = test_agent(AgentMode::Durable, false);
+            agent.methods[0].input_schema =
+                InputSchema::parameters([NamedField::user_supplied(name, SchemaType::string())]);
+            assert!(compile_test_routes(&agent).1.is_empty());
+
+            // A stream output selects Durable Streams mode by default.
+            agent.methods[0].output_schema =
+                OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
+            let (_, errors) = compile_test_routes(&agent);
+            assert!(
+                format!("{errors:?}").contains("conflicts with a Durable Streams query control")
+            );
+        }
+    }
+
+    #[test]
     fn durable_stream_routes_register_family_and_roundtrip_mode() {
         use golem_common::schema::NamedField;
         let mut agent = test_agent(AgentMode::Durable, false);
@@ -1539,16 +1581,13 @@ mod tests {
             );
             assert_eq!(call.method_parameters.len(), 1);
             assert_eq!(call.method_input.input_schema.fields().len(), 2);
-            let RequestBodySchema::JsonBody { ref expected } = call.body else {
-                panic!()
-            };
+            assert!(matches!(call.body, RequestBodySchema::Unused));
             assert_eq!(
-                expected.graph.root,
-                SchemaType::record(vec![NamedFieldType {
-                    name: "limit".into(),
-                    body: SchemaType::u32(),
-                    metadata: Default::default(),
-                }])
+                call.method_parameters,
+                vec![MethodParameter::Query {
+                    query_parameter_name: "limit".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                }]
             );
             let bytes = desert_rust::serialize(&route, Vec::new()).unwrap();
             let restored: UnboundCompiledRoute = desert_rust::deserialize(&bytes).unwrap();

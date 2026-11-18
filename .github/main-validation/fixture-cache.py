@@ -52,7 +52,7 @@ def cli_source_roots(root):
     return {str(path.parent.relative_to(root)) for path in found}
 
 
-def fingerprint(root, app, variant):
+def source_inputs(root, app):
     if Path(app).name != app or app in ("", ".", ".."):
         raise ValueError("invalid application directory")
     tracked = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True,
@@ -81,6 +81,11 @@ def fingerprint(root, app, variant):
             paths.extend(p for p in tracked if p == target_relative or p.startswith(target_relative + "/"))
         else:
             files[relative] = [digest(path), path.stat().st_mode & 0o777]
+    return files
+
+
+def fingerprint(root, app, variant, sources=None):
+    files = source_inputs(root, app) if sources is None else sources
     return identity({"schema": SCHEMA, "app": app, "variant": variant,
                      "sources": files, "helper": digest(Path(__file__))})
 
@@ -193,15 +198,18 @@ def main():
     else:
         receipt = pending / (identity([args.app, args.variant]) + ".json")
         try:
-            key = fingerprint(root, args.app, args.variant)
+            sources = source_inputs(root, args.app)
+            key = fingerprint(root, args.app, args.variant, sources)
             if args.operation == "restore":
-                receipt.write_text(json.dumps({"key": key, "before": stamps(root)}))
+                receipt.write_text(json.dumps({"key": key, "before": stamps(root), "sources": sources}))
                 restore(root, cache / key, key)
                 print(f"Fixture cache hit: {args.app} ({args.variant}) {key}", flush=True)
             else:
                 previous = json.loads(receipt.read_text())
                 if previous["key"] != key:
-                    raise ValueError("checked-in build inputs changed during compilation")
+                    changed = sorted(path for path in previous["sources"].keys() | sources.keys()
+                                     if previous["sources"].get(path) != sources.get(path))
+                    raise ValueError("checked-in build inputs changed during compilation: " + ", ".join(changed))
                 stage(root, pending, key, previous["before"])
         except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
             print(f"Fixture cache {args.operation} miss: {args.app} ({args.variant}): {error}", flush=True)
