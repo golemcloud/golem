@@ -153,7 +153,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: OnDelivered,
     ) -> Result<Pair::Resp, TerminalCallError>
     where
         T: 'static,

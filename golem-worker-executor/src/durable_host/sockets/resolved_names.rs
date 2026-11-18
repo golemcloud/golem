@@ -59,42 +59,6 @@ impl SharedResolvedNames {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()))
     }
-
-    /// A link that a P3 lookup sets once its result is known, and the hook that adds it to the
-    /// index when the guest receives that result. A hook that never runs, because the guest
-    /// discarded the result, adds nothing. Every clone of the hook adds the link at most once.
-    pub fn deferred_link(&self) -> (DeferredLink, impl FnOnce() + Clone + Send + use<>) {
-        let slot: LinkSlot = Arc::new(Mutex::new(None));
-        let link = DeferredLink(slot.clone());
-        let names = self.clone();
-        let on_delivered = move || {
-            let taken = slot
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take();
-            if let Some((name, addresses)) = taken {
-                names.with(|names| names.insert(&name, addresses));
-            }
-        };
-        (link, on_delivered)
-    }
-}
-
-/// The link of one P3 lookup, set before the guest can receive its result; see
-/// [`SharedResolvedNames::deferred_link`].
-pub struct DeferredLink(LinkSlot);
-
-/// The hostname and addresses of a deferred link, once its lookup has completed.
-type LinkSlot = Arc<Mutex<Option<(String, Vec<IpAddr>)>>>;
-
-impl DeferredLink {
-    pub fn set(&self, name: &str, addresses: impl IntoIterator<Item = IpAddr>) {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            Some((name.to_string(), addresses.into_iter().collect()));
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -656,29 +620,6 @@ mod tests {
         );
         assert_eq!(updated.hostnames(bulk_address(0)), vec!["initializer.test"]);
         assert!(updated.hostnames(bulk_address(1)).is_empty());
-    }
-
-    #[test]
-    fn a_deferred_link_is_added_only_when_its_hook_runs() {
-        let shared = SharedResolvedNames::default();
-        // The guest discards the returned result: the observer drops the hook unrun.
-        let (discarded, hook) = shared.deferred_link();
-        discarded.set("discarded.test", [ip("10.0.0.5")]);
-        drop(hook);
-        // The guest receives the result: the hook runs, and a clone of it adds nothing more.
-        let (delivered, hook) = shared.deferred_link();
-        delivered.set("delivered.test", [ip("10.0.0.6")]);
-        let replay_clone = hook.clone();
-        hook();
-        shared.with(|names| names.insert("later.test", [ip("10.0.0.6")]));
-        replay_clone();
-        shared.with(|names| {
-            assert!(names.hostnames(ip("10.0.0.5")).is_empty());
-            assert_eq!(
-                names.hostnames(ip("10.0.0.6")),
-                vec!["later.test", "delivered.test"]
-            );
-        });
     }
 
     #[test]

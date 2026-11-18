@@ -41,6 +41,11 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   guest never saw. The serialized direct path records no markers
   (`DurableCallSession::replay` rejects `CompletionDelivered` for a non-accessor call) and
   delivers at the host return.
+- **Delivered hooks** (`OnDelivered`, `deliver_at_accessor_terminal_with_delivered`) run inside
+  Wasmtime's event loop when the guest receives a completion. A hook must not touch the Store,
+  block or panic (the executor builds with `panic = "abort"`), and may take only a lock that no
+  holder keeps across a call into Wasmtime. Build the hook from the response, so live and replay
+  run the same hook at the same delivery.
 - **Host-internal results** retain durable Start/End and cancellation tracking, but create no
   guest-terminal observer, delivery token, delivery/discard marker, or replay-tail gate. Use
   `invoke_host_internal_access` with an outer call that owns cancellation until the host
