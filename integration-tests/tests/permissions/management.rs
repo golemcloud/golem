@@ -141,17 +141,28 @@ const fn grant(class: &'static str, verb: &'static str, on: On, resource: &'stat
 /// How a request denied for a missing grant must look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LooksLike {
-    /// The same response as for an agent that does not exist.
+    /// The same response as the caller's own request on an agent that does
+    /// not exist. Only for a request whose owner, with full authority, does
+    /// not get the unknown-agent `404`; each use says why.
     UnknownAgent,
-    /// The same response as for an invocation of the same agent that does
-    /// not exist.
+    /// The same response as the caller's own request on an invocation of the
+    /// same agent that does not exist. Only for a request whose owner does
+    /// not get a not-found answer; each use says why.
     UnknownInvocation,
     /// The `404` that the owner gets for an agent of the same type that does
-    /// not exist, for a request whose server resolves the agent's absence.
-    /// The caller's own request on a missing agent is not the baseline: a
-    /// server that refuses every such request alike with a `403` would pass
-    /// that comparison.
+    /// not exist. The caller's own request on a missing agent is not the
+    /// baseline: a server that refuses every such request alike with a `403`
+    /// would pass that comparison. The comparison puts `REQUESTED_ID` in
+    /// place of the requested agent ID in both bodies (`masked`).
     MissingAgent,
+    /// The answer that the owner gets for a cancel of an invocation of the
+    /// same agent that does not exist: a `400` with `INVOCATION_NOT_FOUND`.
+    MissingInvocation,
+    /// The answer that the owner gets for a lookup of an invocation of the
+    /// same agent that does not exist: a success with the status `Unknown`.
+    /// A denied lookup answers the same, so it is not a denial. The lookup
+    /// puts `REQUESTED_ID` in place of the key that it requests (`invoke_tool`).
+    UnknownStatus,
     /// A `403`, for a part on a tool by name.
     Forbidden,
     /// Not decided yet, with what decides it. The case asserts no shape.
@@ -240,7 +251,12 @@ struct Case {
 }
 
 const VIEW: Grant = grant("agent", "view", On::Target, "");
-const VIEW_DENIED: (Grant, LooksLike) = (VIEW, LooksLike::UnknownAgent);
+/// The metadata read and the hosted tool description resolve the agent's
+/// metadata, which the owner gets as a `404` for a missing agent.
+const VIEW_DENIED: (Grant, LooksLike) = (VIEW, LooksLike::MissingAgent);
+/// The owner's oplog read of a missing agent is a `400` validation error
+/// ("agent … does not exist"), not the unknown-agent `404`. It moves to
+/// `MissingAgent` when the server answers it with the `404` (GOL-1272).
 const OPLOG_READ: (Grant, LooksLike) = (
     grant("oplog", "read", On::Target, "*"),
     LooksLike::UnknownAgent,
@@ -250,17 +266,20 @@ const TOOL_INVOKE_RUN: (Grant, LooksLike) = (
     grant("tool", "invoke", On::Tool, "run"),
     LooksLike::Forbidden,
 );
+/// A lookup of an invocation's result.
 const INVOCATION_READ: (Grant, LooksLike) = (
     grant("invocation", "read", On::TargetInvocations, ""),
-    LooksLike::UnknownInvocation,
+    LooksLike::UnknownStatus,
 );
+/// No adapter sends input yet (`PENDING_REQUESTS`), so no owner answer for
+/// an unknown invocation is known.
 const INVOCATION_SEND: (Grant, LooksLike) = (
     grant("invocation", "send", On::TargetInvocations, ""),
     LooksLike::UnknownInvocation,
 );
 const INVOCATION_CANCEL: (Grant, LooksLike) = (
     grant("invocation", "cancel", On::TargetInvocations, ""),
-    LooksLike::UnknownInvocation,
+    LooksLike::MissingInvocation,
 );
 /// The output of an agent's invocations on a live connection to the agent,
 /// which names no invocation. Without `invocation : read` the server
@@ -283,12 +302,34 @@ const SESSION_SEND: (Grant, LooksLike) = (
     LooksLike::Pending("GOL-1051: a signed session token for an unknown invocation"),
 );
 
+/// A control of the agent, which the owner gets as a `404` for a missing
+/// agent.
 const fn control(verb: &'static str, resource: &'static str) -> (Grant, LooksLike) {
     (
         grant("agent", verb, On::Target, resource),
-        LooksLike::UnknownAgent,
+        LooksLike::MissingAgent,
     )
 }
+
+/// The owner's start or trigger creates the missing agent.
+const INVOKE_ADD: (Grant, LooksLike) = (
+    grant("agent", "invoke", On::Target, "add"),
+    LooksLike::UnknownAgent,
+);
+/// The owner's interrupt of a missing agent succeeds and changes nothing. It
+/// moves to `MissingAgent` when the server answers it with the `404`
+/// (GOL-1272).
+const INTERRUPT: (Grant, LooksLike) = (
+    grant("agent", "interrupt", On::Target, ""),
+    LooksLike::UnknownAgent,
+);
+/// The owner's simulated crash of a missing agent succeeds and changes
+/// nothing, as its interrupt does. It moves to `MissingAgent` when the server
+/// answers it with the `404` (GOL-1272).
+const SIMULATE_CRASH: (Grant, LooksLike) = (
+    grant("agent", "simulate-crash", On::Target, ""),
+    LooksLike::UnknownAgent,
+);
 
 const fn expected(spec: &'static str, grants: &'static [(Grant, LooksLike)]) -> ExpectedRequest {
     ExpectedRequest {
@@ -308,10 +349,7 @@ const OUTPUT_CONNECTION: ExpectedRequest = expected(
     "follow without no_stream,stdout_format=raw: invocation read @invocation:agent-connection",
     &[CONNECTION_OUTPUT],
 );
-const INVOKE: ExpectedRequest = expected(
-    "operation: agent invoke @agent [method]",
-    &[control("invoke", "add")],
-);
+const INVOKE: ExpectedRequest = expected("operation: agent invoke @agent [method]", &[INVOKE_ADD]);
 const SEND_STDIN: ExpectedRequest = expected(
     "input if stdin-marker: invocation send @invocation:accepted",
     &[INVOCATION_SEND],
@@ -330,13 +368,26 @@ const RESUME_SESSION: &[ExpectedRequest] = &[
 ];
 const DESCRIBE_HOSTED: &[(Grant, LooksLike)] = &[VIEW_DENIED, TOOL_VIEW];
 const EXEC: &[(Grant, LooksLike)] = &[control("exec", ""), TOOL_INVOKE_RUN];
+/// The start of an `ssh` command through an invocation session. The owner's
+/// start on a missing agent is rejected as `InternalError` today: the session
+/// maps only a top-level `AgentNotFound` to `NotFound`, not the one that the
+/// metadata read wraps.
+const SESSION_EXEC: &[(Grant, LooksLike)] = &[
+    (
+        grant("agent", "exec", On::Target, ""),
+        LooksLike::Pending(
+            "GOL-1272: the session renders the owner's tool start on a missing agent as `NotFound`",
+        ),
+    ),
+    TOOL_INVOKE_RUN,
+];
 const SSH_DESCRIBE: ExpectedRequest = expected(
     "prepare: agent view @agent, tool view @tool",
     DESCRIBE_HOSTED,
 );
 const SSH_START: ExpectedRequest = expected(
     "operation: agent exec @agent, tool invoke @tool [tool-command] + if tool-reads-static-file-config: tool invoke @tool [any-tool-command]",
-    EXEC,
+    SESSION_EXEC,
 );
 const SSH_STOP: ExpectedRequest = expected(
     "input if stopped-through-stdin: invocation send @invocation:accepted",
@@ -594,10 +645,7 @@ const CASES: &[Case] = &[
         ManagementControl,
         &[
             PREPARE,
-            expected(
-                "operation: agent interrupt @agent",
-                &[control("interrupt", "")],
-            ),
+            expected("operation: agent interrupt @agent", &[INTERRUPT]),
         ],
         Effect::Interrupted,
     ),
@@ -620,10 +668,7 @@ const CASES: &[Case] = &[
         ManagementControl,
         &[
             PREPARE,
-            expected(
-                "operation: agent simulate-crash @agent",
-                &[control("simulate-crash", "")],
-            ),
+            expected("operation: agent simulate-crash @agent", &[SIMULATE_CRASH]),
         ],
         Effect::Pending("GOL-1403: an observation of a simulated crash in the agent's metadata"),
     ),
@@ -697,7 +742,7 @@ const CASES: &[Case] = &[
                     "operation: filesystem list @agent [path]",
                     &[(
                         grant("filesystem", "list", On::Target, "/**"),
-                        LooksLike::UnknownAgent,
+                        LooksLike::MissingAgent,
                     )],
                 ),
             ],
@@ -716,7 +761,7 @@ const CASES: &[Case] = &[
                     "operation: filesystem read @agent [path]",
                     &[(
                         grant("filesystem", "read", On::Target, "/**"),
-                        LooksLike::UnknownAgent,
+                        LooksLike::MissingAgent,
                     )],
                 ),
             ],
@@ -1064,6 +1109,55 @@ impl RawResponse {
     }
 }
 
+/// What a comparison with the owner's answer for a missing target puts in
+/// place of the requested ID. A not-found answer may name the requested ID
+/// and nothing else that differs between two targets; the unknown-ID
+/// renderer (GOL-1272) has to follow this rule.
+const REQUESTED_ID: &str = "<requested-id>";
+
+/// `outcome` with `REQUESTED_ID` in place of each occurrence of the agent
+/// ID `requested`, as it is and as a JSON string escapes it, in an HTTP
+/// body. A `content-length` header follows the new body.
+fn masked(outcome: &Outcome, requested: &str) -> Outcome {
+    let Outcome::Denied(Denial::Http(response)) = outcome else {
+        return outcome.clone();
+    };
+    let escaped = serde_json::to_string(requested).expect("a string is JSON");
+    let escaped = &escaped[1..escaped.len() - 1];
+    let mut body = response.body.clone();
+    for form in [escaped, requested] {
+        body = replace_bytes(&body, form.as_bytes(), REQUESTED_ID.as_bytes());
+    }
+    let headers = response
+        .headers
+        .iter()
+        .map(|(name, value)| match name.as_str() {
+            "content-length" => (name.clone(), body.len().to_string().into_bytes()),
+            _ => (name.clone(), value.clone()),
+        })
+        .collect();
+    Outcome::Denied(Denial::Http(RawResponse {
+        status: response.status,
+        headers,
+        body,
+    }))
+}
+
+fn replace_bytes(haystack: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+    let mut replaced = Vec::with_capacity(haystack.len());
+    let mut rest = haystack;
+    while let Some(at) = rest
+        .windows(needle.len())
+        .position(|window| window == needle)
+    {
+        replaced.extend_from_slice(&rest[..at]);
+        replaced.extend_from_slice(replacement);
+        rest = &rest[at + needle.len()..];
+    }
+    replaced.extend_from_slice(rest);
+    replaced
+}
+
 /// Keeps the last response of the caller's HTTP clients, which the
 /// generated clients reduce to a parsed body.
 #[derive(Clone, Default)]
@@ -1343,7 +1437,8 @@ impl Seed {
     }
 
     /// The same seed, addressing an agent of the same type that does not
-    /// exist.
+    /// exist, also where it names the agent that `agent new` creates, which
+    /// may exist by then.
     fn with_unknown_agent(&self) -> Self {
         let target = agent_id!(self.target.agent_type.0, "management-unknown");
         Self {
@@ -1351,6 +1446,7 @@ impl Seed {
                 component_id: self.component.id,
                 agent_id: target.to_string(),
             },
+            new_agent: target.clone(),
             target,
             ..self.clone()
         }
@@ -1429,21 +1525,20 @@ impl Seed {
     }
 
     /// Waits until the owner's lookup of the tool invocation under `key`
-    /// returns its result. Any other answer is an error of the test: it does
-    /// not show that the invocation ended.
+    /// returns its result. A lookup of a running invocation answers at once
+    /// without a result, so the owner looks up again. A failed lookup is an
+    /// error of the test: it does not show that the invocation ended.
     async fn wait_until_the_command_ends(&self, key: &str) -> anyhow::Result<()> {
         let request = tool_request(self, true, NativeToolInvocationMode::Lookup, key)?;
-        let lookup = async {
-            agent_client(&self.owner)
-                .await
-                .invoke_tool(Some(key), &request)
-                .await
-        };
-        match tokio::time::timeout(Duration::from_secs(60), lookup).await {
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => anyhow::bail!("the owner's lookup of `{key}` failed: {error:?}"),
-            Err(_) => anyhow::bail!("the stopped command did not end"),
+        let agent = agent_client(&self.owner).await;
+        for _ in 0..60 {
+            match agent.invoke_tool(Some(key), &request).await {
+                Ok(answer) if answer.result.is_some() => return Ok(()),
+                Ok(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+                Err(error) => anyhow::bail!("the owner's lookup of `{key}` failed: {error:?}"),
+            }
         }
+        anyhow::bail!("the stopped command did not end")
     }
 
     async fn wait_until_only_the_scheduled_invocations_are_pending(&self) -> anyhow::Result<()> {
@@ -1473,6 +1568,17 @@ impl Seed {
 
     fn agent_name(&self) -> &str {
         &self.target_id.agent_id
+    }
+
+    /// The ID of the agent that `request` addresses: the agent that
+    /// `agent new` creates for the one request that finds nothing, the
+    /// target otherwise.
+    fn requested_agent(&self, request: &ExpectedRequest) -> String {
+        if request.finds_nothing {
+            self.new_agent.to_string()
+        } else {
+            self.agent_name().to_string()
+        }
     }
 
     /// The caller's clients, which keep their last response.
@@ -2091,20 +2197,29 @@ async fn describe(seed: &Seed, hosted: bool) -> anyhow::Result<Outcome> {
     )
 }
 
+/// A lookup's answer echoes the key that it requests, which it records as
+/// `REQUESTED_ID`.
 async fn invoke_tool(
     seed: &Seed,
     hosted: bool,
     mode: NativeToolInvocationMode,
     idempotency_key: &str,
 ) -> anyhow::Result<Outcome> {
-    seed.rest(
+    let lookup = matches!(mode, NativeToolInvocationMode::Lookup);
+    let outcome = seed.rest(
         seed.agent()
             .invoke_tool(
                 Some(idempotency_key),
                 &tool_request(seed, hosted, mode, idempotency_key)?,
             )
             .await,
-    )
+    )?;
+    Ok(match outcome {
+        Outcome::Allowed(answer) if lookup => {
+            Outcome::Allowed(answer.replace(idempotency_key, REQUESTED_ID))
+        }
+        outcome => outcome,
+    })
 }
 
 async fn cancel(seed: &Seed, idempotency_key: &str) -> anyhow::Result<Outcome> {
@@ -2152,10 +2267,13 @@ const RESULT_WAIT: Duration = Duration::from_secs(5);
 /// A lookup that is still waiting when the CLI gives up on it. A denial
 /// answers at once.
 const NO_RESULT: &str = "no result within the wait";
-/// What the service answers to a cancel of an invocation that already runs
-/// (`cancel_invocation_internal` of the executor). The CLI reads it as
-/// "still running" and goes on.
-const ALREADY_RUNNING: &str = "Invocation not found";
+/// What the service answers, with a `400`, to a cancel of an invocation that
+/// the agent does not have (`cancel_invocation_internal` of the executor).
+const INVOCATION_NOT_FOUND: &str = "Invocation not found";
+/// What the service answers to a cancel of an invocation that already runs:
+/// the answer for an unknown invocation. The CLI reads it as "still running"
+/// and goes on.
+const ALREADY_RUNNING: &str = INVOCATION_NOT_FOUND;
 
 /// One command of an `ssh` session (`session`) or script: the description,
 /// the read of the agent's state at a session's prompt, the start, and then
@@ -2241,6 +2359,13 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
             matches!(&cancelled, Outcome::Allowed(answer) if answer.contains("canceled: true"));
         trace.push(Step::GoesOn(cancelled));
         if matches!(stop, Stop::CancelAndLookUp | Stop::OutcomeUnknown) {
+            // The CLI's lookup answers at once, also for a script that still
+            // runs. For `CancelAndLookUp`, the owner first sees the result,
+            // so that the caller's lookup finds the script ended and the
+            // trace does not depend on which of the two ends first.
+            if stop == Stop::CancelAndLookUp && !withdrawn {
+                seed.wait_until_the_command_ends(accepted).await?;
+            }
             let looking_up = seed.at(trace.outcomes.len());
             let addressed = looking_up.addressed(trace.outcomes.len(), accepted);
             let looked_up = match tokio::time::timeout(
@@ -2257,9 +2382,13 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
                 Ok(outcome) => outcome?,
                 Err(_) => Outcome::Allowed(NO_RESULT.to_string()),
             };
-            let found = matches!(&looked_up, Outcome::Allowed(result) if result != NO_RESULT);
-            // Without a result, also after a denied lookup, the CLI reports
-            // an unknown outcome with the agent's state.
+            let found = matches!(
+                &looked_up,
+                Outcome::Allowed(answer) if answer != NO_RESULT && !answer.contains("result: None")
+            );
+            // Without a result, also after a denied lookup or a lookup whose
+            // status is `Unknown`, the CLI reports an unknown outcome with
+            // the agent's state.
             trace.push(Step::GoesOn(looked_up));
             if !found {
                 trace.push(metadata(&seed.at(trace.outcomes.len())).await?);
@@ -2281,6 +2410,16 @@ async fn ssh_command(seed: &Seed, session: bool, stop: Stop) -> anyhow::Result<T
 
 type Run = for<'a> fn(&'a Seed) -> BoxFuture<'a, anyhow::Result<Trace>>;
 
+/// A request of an adapter that the comparison with a missing target makes
+/// on its own, because an earlier request of the adapter changes the target
+/// so that a second run cannot reach it: a second update of the same agent
+/// to the same revision is refused.
+struct Direct {
+    /// The index of the request among the mode's requests.
+    index: usize,
+    request: for<'a> fn(&'a Seed) -> BoxFuture<'a, anyhow::Result<Outcome>>,
+}
+
 /// The requests of one variant of one mode of a command row, as the caller.
 struct Adapter {
     path: &'static [&'static str],
@@ -2293,11 +2432,14 @@ struct Adapter {
     /// The mode's request at this index answers `ALREADY_RUNNING` also with
     /// all grants: the cancel of an `ssh` command that already runs.
     already_running: Option<usize>,
+    /// The request that the comparison with a missing target makes on its
+    /// own.
+    direct: Option<Direct>,
     run: Run,
 }
 
 macro_rules! adapter {
-    ([$($segment:literal),+], $mode:literal, $variant:literal, [$($index:literal),+], $(effect: $effect:expr,)? $(already_running: $running:literal,)? |$seed:ident| $body:expr) => {
+    ([$($segment:literal),+], $mode:literal, $variant:literal, [$($index:literal),+], $(effect: $effect:expr,)? $(already_running: $running:literal,)? $(direct: $direct:literal => $request:expr,)? |$seed:ident| $body:expr) => {
         Adapter {
             path: &[$($segment),+],
             mode: $mode,
@@ -2305,6 +2447,10 @@ macro_rules! adapter {
             makes: &[$($index),+],
             effect: adapter!(@some $($effect)?),
             already_running: adapter!(@some $($running)?),
+            direct: adapter!(@some $(Direct {
+                index: $direct,
+                request: |seed| Box::pin($request(seed)),
+            })?),
             run: |$seed| Box::pin(async move { $body }),
         }
     };
@@ -2553,6 +2699,7 @@ const ADAPTERS: &[Adapter] = &[
         "automatic",
         "await",
         [0, 1, 2],
+        direct: 2 => await_update,
         |seed| in_order!(
             seed;
             prepare_target(seed).await?,
@@ -2576,6 +2723,7 @@ const ADAPTERS: &[Adapter] = &[
         "manual",
         "await",
         [0, 1, 2],
+        direct: 2 => await_update,
         |seed| in_order!(
             seed;
             prepare_target(seed).await?,
@@ -3260,9 +3408,142 @@ async fn check_effect(
     panic!("{at} did not have its effect {effect:?}")
 }
 
+/// Whether `outcome` is the owner's answer for the missing target of an
+/// owner look, and not an authorization refusal.
+fn is_owner_not_found(looks_like: LooksLike, outcome: &Outcome) -> bool {
+    match (looks_like, outcome) {
+        (
+            LooksLike::MissingAgent,
+            Outcome::Denied(Denial::Http(RawResponse { status: 404, .. })),
+        ) => true,
+        (
+            LooksLike::MissingInvocation,
+            Outcome::Denied(Denial::Http(RawResponse {
+                status: 400, body, ..
+            })),
+        ) => String::from_utf8_lossy(body).contains(INVOCATION_NOT_FOUND),
+        (LooksLike::UnknownStatus, Outcome::Allowed(answer)) => {
+            answer.contains("status: Some(Unknown)") && answer.contains("result: None")
+        }
+        _ => false,
+    }
+}
+
+/// Checks the outcome `denied` of the request `at`, made without a grant,
+/// against its look. `unknown` is the outcome of the same request on the
+/// missing target: the caller's for an `Unknown` look, the owner's for the
+/// other looks. `requested` is the agent ID that each of the two requests
+/// addresses; a `MissingAgent` comparison puts `REQUESTED_ID` in its place.
+fn assert_looks_like(
+    at: &str,
+    looks_like: LooksLike,
+    denied: &Outcome,
+    unknown: Option<&Outcome>,
+    requested: Option<(&str, &str)>,
+) {
+    if looks_like != LooksLike::UnknownStatus {
+        assert!(
+            matches!(denied, Outcome::Denied(_)),
+            "{at} was not denied: {denied:?}"
+        );
+    }
+    match looks_like {
+        LooksLike::UnknownAgent | LooksLike::UnknownInvocation => {
+            assert_eq!(unknown, Some(denied), "{at} differs from an unknown target")
+        }
+        LooksLike::MissingAgent | LooksLike::MissingInvocation | LooksLike::UnknownStatus => {
+            assert!(
+                unknown.is_some_and(|unknown| is_owner_not_found(looks_like, unknown)),
+                "{at}: the owner's request on a missing target is not its not-found answer: {unknown:?}"
+            );
+            let (denied, unknown) = match (looks_like, requested, unknown) {
+                (LooksLike::MissingAgent, Some((denied_id, unknown_id)), Some(unknown)) => {
+                    (masked(denied, denied_id), Some(masked(unknown, unknown_id)))
+                }
+                (LooksLike::MissingAgent, None, _) => {
+                    panic!("{at}: a missing-agent comparison needs the requested IDs")
+                }
+                _ => (denied.clone(), unknown.cloned()),
+            };
+            assert_eq!(
+                unknown.as_ref(),
+                Some(&denied),
+                "{at} differs from the owner's request on a missing target"
+            );
+        }
+        LooksLike::Forbidden => assert!(
+            matches!(
+                denied,
+                Outcome::Denied(Denial::Http(RawResponse { status: 403, .. }))
+            ),
+            "{at} is not a 403 on a tool by name: {denied:?}"
+        ),
+        LooksLike::Pending(_) => {}
+    }
+}
+
+/// The comparison with the owner's not-found answer ignores only the
+/// requested ID: a body that differs in any other detail of its target
+/// still differs.
+#[test]
+fn management_a_denial_differs_from_not_found_in_nothing_but_the_requested_id() {
+    let response = |agent: &str, extra: &str| {
+        let body = format!(
+            r#"{{"error":"Worker not found: c/{}","code":"AGENT_NOT_FOUND"{extra}}}"#,
+            serde_json::to_string(agent).unwrap().trim_matches('"')
+        );
+        Outcome::Denied(Denial::Http(RawResponse {
+            status: 404,
+            headers: vec![
+                (
+                    "content-length".to_string(),
+                    body.len().to_string().into_bytes(),
+                ),
+                ("content-type".to_string(), b"application/json".to_vec()),
+            ],
+            body: body.into_bytes(),
+        }))
+    };
+    let real = r#"Repository("management-target")"#;
+    let unknown = r#"Repository("management-unknown")"#;
+    let other = r#"Repository("management-other")"#;
+    let compare = |denied: &Outcome| {
+        std::panic::catch_unwind(|| {
+            assert_looks_like(
+                "the masking test",
+                LooksLike::MissingAgent,
+                denied,
+                Some(&response(unknown, "")),
+                Some((real, unknown)),
+            )
+        })
+        .is_ok()
+    };
+    assert!(
+        compare(&response(real, "")),
+        "the requested ID alone differs"
+    );
+    for wrong in [
+        response(real, r#","status":"Idle""#),
+        response(
+            real,
+            &format!(r#","agent":"{}""#, other.replace('"', r#"\""#)),
+        ),
+        response(other, ""),
+        response(&format!("{real}-2"), ""),
+    ] {
+        assert!(
+            !compare(&wrong),
+            "a target-specific detail passed: {wrong:?}"
+        );
+    }
+}
+
 /// Each request of each mode is allowed with its grants, and denied without
 /// any one of them, with the same response as an unknown target where the
-/// target is a Rule 21 kind. A denied operation changes nothing. A denied
+/// target is a Rule 21 kind: the owner's response on a missing target where
+/// the owner gets a not-found answer, the caller's own otherwise (see
+/// `LooksLike`). A denied operation changes nothing. A denied
 /// metadata read of the named agent does not stop the command, as the CLI
 /// goes on with the component's current revision.
 #[test]
@@ -3324,7 +3605,7 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
                     && needing
                         .iter()
                         .any(|(position, _, _)| *position + 1 == trace.outcomes.len());
-                for (position, _, looks_like) in &needing {
+                for (position, request, looks_like) in &needing {
                     if let LooksLike::Pending(_) = looks_like {
                         continue;
                     }
@@ -3334,50 +3615,47 @@ async fn management_every_operation_is_allowed_with_its_grants_and_looks_unknown
                         assert!(stopped_by_it, "{at} did not make request {position}");
                         continue;
                     };
-                    let denied = match outcome {
-                        Outcome::Denied(denial) => denial.clone(),
-                        other => panic!("{at} request {position} was not denied: {other:?}"),
-                    };
-                    match looks_like {
-                        LooksLike::UnknownAgent | LooksLike::UnknownInvocation => {
-                            let unknown = if *looks_like == LooksLike::UnknownAgent {
-                                seed.with_unknown_agent_at(*position)
-                            } else {
-                                seed.with_unknown_invocation_at(*position)
-                            };
-                            let unknown = (adapter.run)(&unknown).await?;
-                            assert_eq!(
-                                unknown.outcomes.get(*position),
-                                Some(&Outcome::Denied(denied)),
-                                "{at} request {position} differs from an unknown target"
-                            );
+                    let baseline = match looks_like {
+                        LooksLike::UnknownAgent => Some(seed.with_unknown_agent_at(*position)),
+                        LooksLike::UnknownInvocation => {
+                            Some(seed.with_unknown_invocation_at(*position))
                         }
                         LooksLike::MissingAgent => {
-                            let missing = seed.as_owner().with_unknown_agent_at(*position);
-                            let missing = (adapter.run)(&missing).await?;
-                            let baseline = missing.outcomes.get(*position);
-                            assert!(
-                                matches!(
-                                    baseline,
-                                    Some(Outcome::Denied(Denial::Http(RawResponse {
-                                        status: 404,
-                                        ..
-                                    })))
-                                ),
-                                "{at} request {position}: the owner's request on a missing agent is not a 404: {baseline:?}"
-                            );
-                            assert_eq!(
-                                baseline,
-                                Some(&Outcome::Denied(denied)),
-                                "{at} request {position} differs from the owner's request on a missing agent"
-                            );
+                            Some(seed.as_owner().with_unknown_agent_at(*position))
                         }
-                        LooksLike::Forbidden => assert!(
-                            matches!(denied, Denial::Http(RawResponse { status: 403, .. })),
-                            "{at} request {position} is not a 403 on a tool by name: {denied:?}"
-                        ),
-                        LooksLike::Pending(_) => {}
-                    }
+                        LooksLike::MissingInvocation | LooksLike::UnknownStatus => {
+                            Some(seed.as_owner().with_unknown_invocation_at(*position))
+                        }
+                        LooksLike::Forbidden | LooksLike::Pending(_) => None,
+                    };
+                    let unknown = match (&baseline, &adapter.direct) {
+                        (Some(baseline), Some(direct))
+                            if direct.index == adapter.makes[*position] =>
+                        {
+                            Some((direct.request)(&baseline.at(*position)).await?)
+                        }
+                        (Some(baseline), _) => (adapter.run)(baseline)
+                            .await?
+                            .outcomes
+                            .get(*position)
+                            .cloned(),
+                        (None, _) => None,
+                    };
+                    let requested = baseline.as_ref().map(|baseline| {
+                        (
+                            seed.requested_agent(request),
+                            baseline.at(*position).requested_agent(request),
+                        )
+                    });
+                    assert_looks_like(
+                        &format!("{at} request {position}"),
+                        *looks_like,
+                        outcome,
+                        unknown.as_ref(),
+                        requested
+                            .as_ref()
+                            .map(|(denied, unknown)| (denied.as_str(), unknown.as_str())),
+                    );
                 }
             }
             let seed = Seed::new(deps, case.fixture).await?;
@@ -3495,11 +3773,13 @@ async fn management_cancel_needs_the_invocation_cancel_grant(
     )
     .await?;
     let denied = cancel(&seed, &seed.scheduled_invocation).await?;
-    let unknown = seed.with_unknown_invocation();
-    assert_eq!(
-        denied,
-        cancel(&unknown, &unknown.scheduled_invocation).await?,
-        "a cancel under a read grant differs from a cancel of an unknown invocation"
+    let unknown = seed.as_owner().with_unknown_invocation();
+    assert_looks_like(
+        "a cancel under a read grant",
+        INVOCATION_CANCEL.1,
+        &denied,
+        Some(&cancel(&unknown, &unknown.scheduled_invocation).await?),
+        None,
     );
 
     give(
@@ -3508,10 +3788,12 @@ async fn management_cancel_needs_the_invocation_cancel_grant(
     )
     .await?;
     let other = cancel(&seed, &seed.other_scheduled_invocation).await?;
-    assert_eq!(
-        other,
-        cancel(&unknown, &unknown.other_scheduled_invocation).await?,
-        "a cancel grant on one invocation reached another one"
+    assert_looks_like(
+        "a cancel of another invocation",
+        INVOCATION_CANCEL.1,
+        &other,
+        Some(&cancel(&unknown, &unknown.other_scheduled_invocation).await?),
+        None,
     );
     let cancelled = cancel(&seed, &seed.scheduled_invocation).await?;
     assert!(
@@ -3549,8 +3831,26 @@ async fn management_replay_cannot_change_a_real_agent(
     for real in [update, manual, delete] {
         let before = seed.observe().await?;
         let trace = (real.run)(&seed).await?;
-        let unknown = (real.run)(&seed.with_unknown_agent()).await?;
-        assert_eq!(trace.outcomes.get(1), unknown.outcomes.get(1));
+        let Some(denied) = trace.outcomes.get(1) else {
+            panic!(
+                "`{}` did not reach its operation under replay: {:?}",
+                real.variant, trace.outcomes
+            );
+        };
+        // The owner's update or delete of a missing agent is the `404`.
+        let missing = seed.as_owner().with_unknown_agent_at(1);
+        let unknown = (real.run)(&missing).await?;
+        assert_looks_like(
+            &format!(
+                "`{}` mode `{}` under replay",
+                real.path.join(" "),
+                real.mode
+            ),
+            LooksLike::MissingAgent,
+            denied,
+            unknown.outcomes.get(1),
+            Some((seed.agent_name(), missing.at(1).agent_name())),
+        );
         assert_eq!(seed.observe().await?, before, "replay changed a real agent");
     }
     anyhow::bail!(
