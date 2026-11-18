@@ -14,6 +14,7 @@ import type { QuotaToken, SchemaGraph, Secret } from 'golem:core/types@2.0.0';
 import { Reservation, reserve } from 'golem:quota/types@1.5.0';
 import { reveal } from 'golem:secrets/reveal@0.1.0';
 import { z } from 'zod/v4';
+import { createPromise } from 'golem:api/host@1.5.0';
 
 const U32 = s.u32() as unknown as z.ZodType<number, number>;
 
@@ -243,6 +244,21 @@ toolDefinition('ts-streaming')
 
       if (mode === 'resource-exhausted') {
         await writer.abort(new ToolStreamError({ tag: 'resource-exhausted' }));
+        return ok(bytesRead);
+      }
+
+      if (mode === 'referenced-timer-unawaited' || mode === 'referenced-timer-awaited') {
+        await writer.write(new TextEncoder().encode('ts-before-return:'));
+        if (mode === 'referenced-timer-awaited') {
+          await new Promise<void>((resolve) =>
+            setTimeout(() => {
+              createPromise();
+              resolve();
+            }, 20),
+          );
+        } else {
+          setTimeout(() => createPromise(), 1000);
+        }
         return ok(bytesRead);
       }
 

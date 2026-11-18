@@ -38,7 +38,8 @@ use crate::model::oplog::payload::external_durable_stream::{
 };
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, PermissionCardDeriveError, PermissionCardRevokeError,
-    SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableFileTimes,
+    SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableDnsError,
+    SerializableDnsRecord, SerializableDnsRecordType, SerializableFileTimes,
     SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
     SerializableP3UdpDatagram, SerializablePermissionCardLiveness, SerializablePermissionError,
     SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
@@ -233,6 +234,10 @@ oplog_payload! {
         P3SocketsResolveName {
             name: String
         },
+        NetworkDnsResolve {
+            name: String,
+            record_type: SerializableDnsRecordType,
+        },
         WebsocketConnect {
             url: String,
             headers: Option<Vec<(String, String)>>,
@@ -269,9 +274,12 @@ oplog_payload! {
         PermissionCardLiveness {
             card_id: Uuid,
         },
-        /// The ids of the cards behind the handles that a card operation decides on, in argument
-        /// order.
+        /// The invocation that a card operation decides for, and the ids of the cards behind the
+        /// handles that it decides on, in argument order. `invocation_id` is the ID of the agent
+        /// or entity invocation that the deciding host call is attributed to, or `None` for work
+        /// that no invocation is attributed to.
         PermissionCardDecision {
+            invocation_id: Option<InvocationId>,
             card_ids: Vec<Uuid>,
         },
         PermissionCardTransfer {
@@ -612,6 +620,9 @@ oplog_payload! {
         },
         P3SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableP3IpNameLookupError>
+        },
+        NetworkDnsResolve {
+            result: Result<Vec<SerializableDnsRecord>, SerializableDnsError>
         },
         WebsocketConnectResponse {
             result: Result<(), SerializableWebsocketError>,
@@ -991,6 +1002,7 @@ pub mod host_functions {
         (FilesystemTypesDescriptorStatAt => "filesystem::types::descriptor", "stat_at", FileSystemPath, FileSystemStat, denied = denied::filesystem::stat),
         (SocketsIpNameLookupResolveAddresses => "sockets::ip_name_lookup", "resolve_addresses", SocketsResolveName, SocketsResolveName, denied = denied::sockets::resolve_name),
         (P3SocketsIpNameLookupResolveAddresses => "sockets::ip-name-lookup", "resolve-addresses", P3SocketsResolveName, P3SocketsResolveName, denied = denied::sockets::p3_resolve_name),
+        (GolemNetworkDnsResolve => "golem::network::dns", "resolve", NetworkDnsResolve, NetworkDnsResolve, denied = denied::sockets::dns_resolve),
         (GolemAgentGetAllAgentTypes => "golem::agent", "get_all_agent_types", NoInput, GolemAgentAgentTypes),
         (GolemAgentGetAgentType => "golem::agent", "get_agent_type", GolemAgentGetAgentType, GolemAgentAgentType),
         (GolemAgentCreateWebhook => "golem::agent", "create_webhook", GolemApiPromiseId, GolemAgentWebhookUrl, denied = denied::golem_api::webhook_url),

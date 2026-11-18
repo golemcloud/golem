@@ -14,6 +14,7 @@ world agent-guest {
   import golem:api/context@1.5.0;
   import golem:api/oplog@1.5.0;
   import golem:api/retry@1.5.0;
+  import golem:api/retry-scope@1.5.0;
   import golem:durability/durability@1.6.0;
   import golem:quota/types@1.5.0;
   import golem:secrets/types@0.1.0;
@@ -39,6 +40,7 @@ world agent-guest {
   import wasi:config/store@0.2.0-draft;
 
   import golem:websocket/client@1.5.0;
+  import golem:network/dns@0.1.0;
 
   include golem:agent/agent-guest@2.0.0;
   export golem:tool/guest@0.1.0;

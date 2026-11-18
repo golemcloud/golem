@@ -1,10 +1,12 @@
-use golem_rust::agentic::{Principal, SnapshotRestoreContext};
+use golem_rust::agentic::{Principal, SnapshotRestoreContext, spawn_local};
 use golem_rust::golem_agentic::golem::agent::host::WasmRpc;
 use golem_rust::golem_agentic::golem::agent::invocation_context;
 use golem_rust::schema::SchemaValue;
 use golem_rust::schema::wit::wire::InvocationOwner;
 use golem_rust::{agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// What `golem:agent/invocation-context` answered at one point of the agent's life.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +63,8 @@ struct SavedState {
     constructor: Observation,
     constructor_principal: String,
     saved: Observation,
+    spawned: Vec<Observation>,
+    after_return: Vec<Observation>,
 }
 
 #[agent_definition(snapshotting = "enabled")]
@@ -74,6 +78,22 @@ pub trait InvocationContextProbe {
     /// Awaits `report` on the probe named `peer`, then triggers another `report` on it. Returns
     /// the awaited report and the invocation ID from the metadata of the triggered call.
     async fn report_of_peer(&self, peer: String) -> String;
+
+    /// Spawns a future before the method makes any host call. The future generates an
+    /// idempotency key, which is a durable host call, and observes the invocation context.
+    /// Returns its observation and keeps it.
+    async fn report_from_spawned_future(&mut self) -> String;
+
+    /// Returns every observation `report_from_spawned_future` kept, in order.
+    fn spawned_future_reports(&self) -> String;
+
+    /// Spawns a future and returns at once. After the method's result is returned, the future
+    /// waits, generates an idempotency key and observes the invocation context, and keeps its
+    /// observation.
+    async fn observe_after_return(&self);
+
+    /// Returns every observation the futures of `observe_after_return` kept, in order.
+    fn after_return_reports(&self) -> String;
 }
 
 struct InvocationContextProbeImpl {
@@ -81,6 +101,8 @@ struct InvocationContextProbeImpl {
     constructor_principal: String,
     saved: Option<Observation>,
     loaded: Option<Observation>,
+    spawned: Vec<Observation>,
+    after_return: Rc<RefCell<Vec<Observation>>>,
 }
 
 #[agent_implementation]
@@ -91,6 +113,8 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
             constructor_principal: principal_text(&principal),
             saved: None,
             loaded: None,
+            spawned: Vec::new(),
+            after_return: Rc::default(),
         }
     }
 
@@ -129,11 +153,41 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
         serde_json::json!({ "report": report, "triggered": triggered }).to_string()
     }
 
+    async fn report_from_spawned_future(&mut self) -> String {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        spawn_local(async move {
+            golem_rust::generate_idempotency_key();
+            let _ = sender.send(observe());
+        });
+        let observation = receiver.await.expect("the spawned future should report");
+        self.spawned.push(observation.clone());
+        serde_json::to_string(&observation).expect("observation should serialize")
+    }
+
+    fn spawned_future_reports(&self) -> String {
+        serde_json::to_string(&self.spawned).expect("observations should serialize")
+    }
+
+    async fn observe_after_return(&self) {
+        let after_return = self.after_return.clone();
+        spawn_local(async move {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(10_000_000).await;
+            golem_rust::generate_idempotency_key();
+            after_return.borrow_mut().push(observe());
+        });
+    }
+
+    fn after_return_reports(&self) -> String {
+        serde_json::to_string(&*self.after_return.borrow()).expect("observations should serialize")
+    }
+
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&SavedState {
             constructor: self.constructor.clone(),
             constructor_principal: self.constructor_principal.clone(),
             saved: observe(),
+            spawned: self.spawned.clone(),
+            after_return: self.after_return.borrow().clone(),
         })
         .map_err(|error| error.to_string())
     }
@@ -149,6 +203,8 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
             constructor_principal: state.constructor_principal,
             saved: Some(state.saved),
             loaded: Some(observe()),
+            spawned: state.spawned,
+            after_return: Rc::new(RefCell::new(state.after_return)),
         })
     }
 }

@@ -482,7 +482,7 @@ where
                     &ctx.state.config.retry,
                 ),
                 agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
-                runtime_retry_policy_mutations: ctx.state.runtime_retry_policy_mutations.clone(),
+                runtime_retry_policy_mutations: ctx.state.retry_policy_mutations(),
                 max_in_function_retry_delay: ctx.state.config.max_in_function_retry_delay,
                 current_retry_policy_state: None,
                 retry_properties: rdbms_retry_properties(ctx, "transaction-status", &tx.pool_key),

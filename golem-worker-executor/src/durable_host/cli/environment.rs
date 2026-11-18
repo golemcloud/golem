@@ -86,7 +86,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 let allowed = self.operator_authorizes_current_invocation()
                     || self
                         .state
-                        .agent_effective_surface
+                        .authority()
+                        .effective_surface()
                         .authorize(target)
                         .unwrap_or(false);
                 (target.clone(), allowed)

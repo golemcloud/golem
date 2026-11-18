@@ -5,6 +5,37 @@ targeting Golem's WASI Preview 3 agent, tool, and tool-middleware contracts.
 
 > Keep the `effect` version generated for an application aligned with the SDK.
 
+## Agent endpoint query schemas
+
+Declared GET, HEAD, and DELETE endpoints bind remaining user method inputs from query
+parameters by name. Scalars, scalar lists, native `WitTypes.Map` schemas with scalar keys
+and values, and repeated outer options are supported. Maps use `name[key]=value` and cannot bind
+from headers. Tuples, fixed lists, records, variants, and rich payloads need a body method.
+Top-level DurableStreams input slots remain resource bindings rather than query inputs.
+
+A required list or map must have at least one entry; an absent optional collection is none.
+Repeated scalars, duplicate parsed map keys (including numeric `1` and `01`), malformed
+brackets, and nested map forms return `400` naming the input. Original schema constraints
+also apply to collection elements and map keys and values.
+
+Other declared verbs keep remaining inputs in the body; explicit query templates still
+work on those verbs. Inference uses the declared verb, not expanded DurableStreams
+resource verbs. In 2.0, typed agent endpoints reject unknown query keys with a named `400`,
+including on body methods and cache hits. Declared phantom selectors and applicable
+DurableStreams read controls remain recognized. File routes still ignore query strings;
+raw handlers receive them unchanged.
+
+Compile-time checks inspect Effect 4 schema constructors and concrete child schemas.
+Golem helpers retain their wire kinds in phantom types: for example, `WitTypes.Text()`
+does not become a query scalar just because its JavaScript value is a string.
+
+Widened `Schema.Top`/`Schema.Codec` types, suspended schemas, and arbitrary runtime
+annotations can erase or change the wire shape without exposing that change to TypeScript.
+These cases still undergo registration-time checks against the compiled schema graph and
+registry compilation. A scalar-like `Schema.Type` alone is not a query-binding guarantee.
+The TypeScript SDK's Effect 3 `standardSchemaV1` adapter is a separate, erased-schema path;
+this SDK uses Effect 4 schemas directly.
+
 ## Install and define an agent
 
 ```console

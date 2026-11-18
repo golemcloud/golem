@@ -104,14 +104,14 @@ export const WIT_MARKER: unique symbol = Symbol('golem.witMarker');
 export type MarkerDescriptor = (recurse: (child: unknown) => SchemaCodec) => SchemaCodec;
 
 /**
- * Type-level classification of a marker. `'scalar'` covers everything that can
- * be bound from a string source (numeric pins, `char`, `datetime`, `url`,
- * `secret`, …); the other three tag the rich payload markers that can NOT be
- * bound from a path / query / header variable and therefore must be excluded
- * from HTTP variable binding (see {@link MarkerKindOf} / `BindableKeys`).
+ * Type-level wire classification used by HTTP binding checks. Scalars bind
+ * from string sources; options and maps retain their concrete child schemas.
+ * Rich payloads and capabilities require a request body.
  */
 export type MarkerKind =
   | 'scalar'
+  | 'rich'
+  | 'map'
   | 'multimodal'
   | 'unstructured-text'
   | 'unstructured-binary'
@@ -124,11 +124,13 @@ export type MarkerKind =
 
 /** Pure phantom key carrying a marker's {@link MarkerKind} at the type level. */
 declare const MARKER_KIND: unique symbol;
+declare const MARKER_INNER: unique symbol;
 
 /** A Standard Schema that additionally carries a {@link WIT_MARKER} brand. */
 export interface MarkerSchema<
   Output = unknown,
   Kind extends MarkerKind = 'scalar',
+  Inner = unknown,
 > extends StandardSchemaV1<Output, Output> {
   readonly [WIT_MARKER]: MarkerDescriptor;
   /**
@@ -137,6 +139,8 @@ export interface MarkerSchema<
    * {@link MarkerKind} is recoverable at the type level via {@link MarkerKindOf}.
    */
   readonly [MARKER_KIND]?: Kind;
+  /** Concrete child schemas retained for schema-based HTTP type checks. */
+  readonly [MARKER_INNER]?: Inner;
 }
 
 /**
@@ -173,7 +177,7 @@ export function isSecretMarker(value: unknown): value is SecretMarkerSchema<unkn
 }
 
 /** Type guard: does this value carry a {@link WIT_MARKER} brand? */
-export function isMarkerSchema(value: unknown): value is MarkerSchema {
+export function isMarkerSchema(value: unknown): value is MarkerSchema<unknown, MarkerKind> {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -195,10 +199,10 @@ type Validator<Output> = (
  * branded with the codec-builder `descriptor`. The `vendor` is informational
  * (markers are intercepted before vendor dispatch).
  */
-function marker<Output, Kind extends MarkerKind = 'scalar'>(
+function marker<Output, Kind extends MarkerKind = 'scalar', Inner = unknown>(
   validate: Validator<Output>,
   descriptor: MarkerDescriptor,
-): MarkerSchema<Output, Kind> {
+): MarkerSchema<Output, Kind, Inner> {
   return {
     '~standard': {
       version: 1,
@@ -340,7 +344,7 @@ function charMarker(): MarkerSchema<string> {
   return marker(validate, descriptor);
 }
 
-function uuidMarker(): MarkerSchema<Uuid> {
+function uuidMarker(): MarkerSchema<Uuid, 'rich'> {
   const validate: Validator<Uuid> = (value) =>
     value instanceof Uuid &&
     value.highBits >= 0n &&
@@ -366,7 +370,7 @@ function isDatetime(value: unknown): value is Datetime {
   );
 }
 
-function datetimeMarker(): MarkerSchema<Datetime> {
+function datetimeMarker(): MarkerSchema<Datetime, 'rich'> {
   const validate: Validator<Datetime> = (value) =>
     isDatetime(value)
       ? ok(value)
@@ -379,7 +383,7 @@ function datetimeMarker(): MarkerSchema<Datetime> {
   return marker(validate, descriptor);
 }
 
-function durationMarker(): MarkerSchema<bigint> {
+function durationMarker(): MarkerSchema<bigint, 'rich'> {
   const validate: Validator<bigint> = (value) => {
     if (typeof value === 'bigint') return ok(value);
     if (typeof value === 'number' && Number.isInteger(value)) return ok(BigInt(value));
@@ -393,7 +397,7 @@ function durationMarker(): MarkerSchema<bigint> {
   return marker(validate, descriptor);
 }
 
-function urlMarker(): MarkerSchema<string> {
+function urlMarker(): MarkerSchema<string, 'rich'> {
   const validate: Validator<string> = (value) =>
     typeof value === 'string' ? ok(value) : fail('Expected a string URL for WIT url');
   const descriptor: MarkerDescriptor = () => ({
@@ -415,7 +419,7 @@ export interface PathOptions {
   allowedExtensions?: string[];
 }
 
-function pathMarker(options: PathOptions = {}): MarkerSchema<string> {
+function pathMarker(options: PathOptions = {}): MarkerSchema<string, 'rich'> {
   const spec = {
     direction: options.direction ?? ('in-out' as const),
     kind: options.kind ?? ('any' as const),
@@ -484,7 +488,7 @@ function quantityLessOrEqual(a: QuantityValue, b: QuantityValue): boolean | unde
   return left <= right;
 }
 
-function quantityMarker(options: QuantityOptions): MarkerSchema<QuantityValue> {
+function quantityMarker(options: QuantityOptions): MarkerSchema<QuantityValue, 'rich'> {
   const spec: QuantitySpec = {
     baseUnit: options.baseUnit,
     allowedSuffixes: options.allowedSuffixes ? [...options.allowedSuffixes] : [],
@@ -532,7 +536,7 @@ export interface KeyValueOptions<Key> {
 function keyValueMarker<Value, Key = string>(
   valueSchema: StandardSchemaV1<Value>,
   options?: KeyValueOptions<Key>,
-): MarkerSchema<Map<Key, Value>> {
+): MarkerSchema<Map<Key, Value>, 'map'> {
   return marker(
     (value) => {
       if (!(value instanceof Map)) return fail('Expected a Map value');
@@ -597,7 +601,7 @@ function keyValueMarker<Value, Key = string>(
   );
 }
 
-function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array> {
+function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array, 'rich'> {
   const restrictions: BinaryRestrictions = {
     mimeTypes: options.mimeTypes ? [...options.mimeTypes] : undefined,
     minBytes: options.minBytes,
@@ -622,7 +626,7 @@ function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array
   );
 }
 
-function textMarker(options: TextRestrictions = {}): MarkerSchema<string> {
+function textMarker(options: TextRestrictions = {}): MarkerSchema<string, 'rich'> {
   const restrictions: TextRestrictions = {
     languages: options.languages ? [...options.languages] : undefined,
     minLength: options.minLength,
@@ -654,32 +658,40 @@ function textMarker(options: TextRestrictions = {}): MarkerSchema<string> {
 }
 
 /** A filesystem path value backed by the rich WIT `path` schema node. */
-export function Path(options?: PathOptions): MarkerSchema<string> {
+export function Path(options?: PathOptions): MarkerSchema<string, 'rich'> {
   return pathMarker(options);
 }
 
 /** A fixed-point quantity backed by the rich WIT `quantity` schema node. */
-export function Quantity(options: QuantityOptions): MarkerSchema<QuantityValue> {
+export function Quantity(options: QuantityOptions): MarkerSchema<QuantityValue, 'rich'> {
   return quantityMarker(options);
 }
 
 /** A key-value collection backed by a real WIT `map` node. */
-export function KeyValue<Value>(
-  valueSchema: StandardSchemaV1<Value>,
-): MarkerSchema<Map<string, Value>>;
-export function KeyValue<Value, Key>(
-  valueSchema: StandardSchemaV1<Value>,
-  options: KeyValueOptions<Key> & { keySchema: StandardSchemaV1<Key> },
-): MarkerSchema<Map<Key, Value>>;
+export function KeyValue<V extends StandardSchemaV1>(
+  valueSchema: V,
+): MarkerSchema<
+  Map<string, StandardSchemaV1.InferOutput<V>>,
+  'map',
+  { key: MarkerSchema<string>; value: V }
+>;
+export function KeyValue<V extends StandardSchemaV1, K extends StandardSchemaV1>(
+  valueSchema: V,
+  options: { keySchema: K },
+): MarkerSchema<
+  Map<StandardSchemaV1.InferOutput<K>, StandardSchemaV1.InferOutput<V>>,
+  'map',
+  { key: K; value: V }
+>;
 export function KeyValue<Value, Key = string>(
   valueSchema: StandardSchemaV1<Value>,
   options?: KeyValueOptions<Key>,
-): MarkerSchema<Map<Key, Value>> {
+): MarkerSchema<Map<Key, Value>, 'map'> {
   return keyValueMarker(valueSchema, options);
 }
 
 /** Binary data backed by the rich WIT `binary` node, not `list<u8>`. */
-export function Bytes(options?: BinaryRestrictions): MarkerSchema<Uint8Array> {
+export function Bytes(options?: BinaryRestrictions): MarkerSchema<Uint8Array, 'rich'> {
   return binaryMarker(options);
 }
 
@@ -777,7 +789,7 @@ function secretMarker<Output>(inner: StandardSchemaV1<Output>): SecretMarkerSche
 // Capability node: quota-token
 // ============================================================
 
-function quotaTokenMarker(): MarkerSchema<RawQuotaToken> {
+function quotaTokenMarker(): MarkerSchema<RawQuotaToken, 'rich'> {
   const validate: Validator<RawQuotaToken> = (value) =>
     value !== null && typeof value === 'object'
       ? ok(value as RawQuotaToken)
@@ -844,13 +856,15 @@ export interface PermissionCardOptions<Polymorphic extends boolean = boolean> {
  * {@link PolymorphicPermissionCard}. A received card is decoded into the
  * declared type; the host keeps the card's real kind.
  */
-function permissionCardMarker(options: PermissionCardOptions<false>): MarkerSchema<PermissionCard>;
+function permissionCardMarker(
+  options: PermissionCardOptions<false>,
+): MarkerSchema<PermissionCard, 'rich'>;
 function permissionCardMarker(
   options: PermissionCardOptions<true>,
-): MarkerSchema<PolymorphicPermissionCard>;
+): MarkerSchema<PolymorphicPermissionCard, 'rich'>;
 function permissionCardMarker(
   options: PermissionCardOptions,
-): MarkerSchema<PermissionCard | PolymorphicPermissionCard> {
+): MarkerSchema<PermissionCard | PolymorphicPermissionCard, 'rich'> {
   const polymorphic = options.polymorphic;
   if (typeof polymorphic !== 'boolean') {
     throw new TypeError('s.permissionCard expects { polymorphic: boolean }');
@@ -1084,10 +1098,10 @@ function multimodalMarker(
  * is `none`, any other value is `some`. It wraps any schema, including markers
  * such as `s.unstructuredBinary()` that vendor `optional` wrappers cannot wrap.
  */
-function optionMarker<Inner>(
-  innerSchema: StandardSchemaV1<Inner>,
-): MarkerSchema<Inner | undefined, 'option'> {
-  const validate: Validator<Inner | undefined> = (value) =>
+function optionMarker<S extends StandardSchemaV1>(
+  innerSchema: S,
+): MarkerSchema<StandardSchemaV1.InferOutput<S> | undefined, 'option', S> {
+  const validate: Validator<StandardSchemaV1.InferOutput<S> | undefined> = (value) =>
     value === undefined ? ok(undefined) : innerSchema['~standard'].validate(value);
   const descriptor: MarkerDescriptor = (recurse) => {
     const innerCodec = recurse(innerSchema);
@@ -1102,7 +1116,7 @@ function optionMarker<Inner>(
       },
     };
   };
-  return marker<Inner | undefined, 'option'>(validate, descriptor);
+  return marker<StandardSchemaV1.InferOutput<S> | undefined, 'option', S>(validate, descriptor);
 }
 
 // ============================================================
@@ -1423,7 +1437,7 @@ export const s = {
   unstructuredBinary: (opts?: UnstructuredBinaryOpts) => unstructuredBinaryMarker(opts),
 
   // Optional value: `s.option(inner)` → WIT `option<inner>`, `undefined` is `none`.
-  option: <Inner>(innerSchema: StandardSchemaV1<Inner>) => optionMarker(innerSchema),
+  option: <S extends StandardSchemaV1>(innerSchema: S) => optionMarker(innerSchema),
 
   // Typed method result: `returns: s.result(ok, err)` → WIT `result<ok, err>`.
   result: <Ok, Err>(okSchema: StandardSchemaV1<Ok>, errSchema: StandardSchemaV1<Err>) =>

@@ -77,6 +77,136 @@ pub enum ContextInitHintError {
 
 impl Error for ContextInitHintError {}
 
+/// The kinds of question that the CLI asks its user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    Confirm,
+    Select,
+    MultiSelect,
+    Text,
+    Password,
+    /// The command reads its input from the process's stdin.
+    Stdin,
+}
+
+impl PromptKind {
+    pub fn id(&self) -> &'static str {
+        match self {
+            PromptKind::Confirm => "confirm",
+            PromptKind::Select => "select",
+            PromptKind::MultiSelect => "multi-select",
+            PromptKind::Text => "text",
+            PromptKind::Password => "password",
+            PromptKind::Stdin => "stdin",
+        }
+    }
+}
+
+/// What gives the answer to a question in advance, so that the command does not ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptAnswer {
+    /// The `--yes` flag, for a confirmation.
+    Yes,
+    /// The command argument with this clap ID.
+    Argument(&'static str),
+}
+
+/// A command asked its user a question in a process that never asks, such as
+/// `golem mcp serve`, and the question was not answered in advance.
+#[derive(Debug, Clone)]
+pub struct InputRequired {
+    pub kind: PromptKind,
+    pub question: String,
+    /// The choices of a select prompt.
+    pub options: Vec<String>,
+    pub answer: Option<PromptAnswer>,
+}
+
+impl Display for InputRequired {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            PromptKind::Confirm => {
+                write!(f, "This action requires confirmation: {}", self.question)
+            }
+            PromptKind::Stdin => write!(
+                f,
+                "The command reads {} from stdin, which this process cannot read",
+                self.question
+            ),
+            _ => write!(
+                f,
+                "The command asks for input, which this process cannot ask for: {}",
+                self.question
+            ),
+        }
+    }
+}
+
+impl Error for InputRequired {}
+
+/// The command needs a login of the user in a browser, in a process that never asks for one,
+/// such as `golem mcp serve`. `login` names whose login it is, such as `profile cloud`.
+#[derive(Debug)]
+pub struct LoginRequired {
+    pub login: String,
+}
+
+impl Display for LoginRequired {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The {} has no valid login token, and this process cannot log in with a browser. \
+             Log in with a `golem` command that contacts the server, such as \
+             `golem environment list`, in a terminal with the same profile or environment; \
+             the next call uses the new token",
+            self.login
+        )
+    }
+}
+
+impl Error for LoginRequired {}
+
+/// The profile that a process selected at start, such as `golem mcp serve`, is no longer in the
+/// config, so its login token cannot be read.
+#[derive(Debug)]
+pub struct ProfileMissing {
+    pub profile: ProfileName,
+}
+
+impl Display for ProfileMissing {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The profile {} that this process started with is no longer in the config. Create \
+             it again, or start this process with another profile",
+            self.profile
+        )
+    }
+}
+
+impl Error for ProfileMissing {}
+
+/// A command named an environment other than the one that the process works in,
+/// such as the environment that `golem mcp serve` was started in.
+#[derive(Debug)]
+pub struct OutsideEnvironment {
+    pub requested: String,
+    pub environment: String,
+}
+
+impl Display for OutsideEnvironment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} is outside the environment {} that this server works in; \
+             start another `golem mcp serve` for it",
+            self.requested, self.environment
+        )
+    }
+}
+
+impl Error for OutsideEnvironment {}
+
 pub mod service {
     use crate::client::ServerStartingError;
     use crate::log::LogColorize;
@@ -163,6 +293,18 @@ pub mod service {
     }
 
     impl ServiceError {
+        /// The platform's error code, such as `AGENT_NOT_FOUND`: the code of an error response,
+        /// or `SERVER_STARTING` for a server that does not serve yet.
+        pub fn error_code(&self) -> Option<&str> {
+            if self.server_starting_error().is_some() {
+                return Some(api::error_code::SERVER_STARTING);
+            }
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(response) => response.code.as_deref(),
+                _ => None,
+            }
+        }
+
         /// Renders transport failures that have a clear cause (the server is still starting, or
         /// it cannot be reached) instead of the generic HTTP client and middleware messages.
         fn render_transport_failure(&self) -> Option<String> {

@@ -351,9 +351,17 @@ impl EntityInvocationDurability {
         let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             (
-                ctx.state.invocation_context.trace_id.clone(),
-                ctx.state.invocation_context.trace_states.clone(),
-                ctx.state.current_span_id.clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_id
+                    .clone(),
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_states
+                    .clone(),
+                ctx.state.invocation_state().current_span_id.clone(),
             )
         });
         let span_started = entity_span_started(
@@ -1213,9 +1221,17 @@ where
     let (trace_id, trace_states, parent_span_id) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
-            ctx.state.invocation_context.trace_id.clone(),
-            ctx.state.invocation_context.trace_states.clone(),
-            ctx.state.current_span_id.clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_id
+                .clone(),
+            ctx.state
+                .invocation_state()
+                .invocation_context
+                .trace_states
+                .clone(),
+            ctx.state.invocation_state().current_span_id.clone(),
         )
     });
     let span_started = SpanStarted {
@@ -1682,7 +1698,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use golem_common::model::AgentId;
     use golem_common::model::account::{AccountEmail, AccountId};
@@ -1944,6 +1960,18 @@ mod tests {
                 activation: tool_activation(),
             },
         ])
+        .unwrap()
+    }
+
+    pub(crate) fn middleware_position() -> ResolvedEntityInvocationPosition {
+        resolve_recorded_plan_from_root_payload(
+            OplogIndex::from_u64(42),
+            &AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            EntityInvocationPlanReference::Root {
+                plan: three_layer_plan(),
+            },
+            None,
+        )
         .unwrap()
     }
 

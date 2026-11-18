@@ -840,3 +840,13 @@ environments:
     server: cloud
     componentPresets: cloud
 ```
+
+#### How the presets differ
+
+The example above uses its own preset names. The built-in Rust, MoonBit, and Go templates name their presets `debug` and `release`: they build with the `debug` preset in the `local` environment and with the `release` preset in the `cloud` environment. Both presets build the same source, but in Rust and MoonBit the program can behave differently between them:
+
+- **Rust:** `debug` uses Cargo's `dev` profile, which checks integer overflow and runs `debug_assert!`. `release` uses Cargo's `release` profile, which does neither. For example, `u8::MAX + 1` on a runtime value panics in `debug` and gives `0` in `release`.
+- **MoonBit:** a file that a package's `targets` option gives a `debug` or `release` condition is compiled only into the matching build, so the two presets can compile different files.
+- **Go:** `release` only removes the `name` custom section (function names), so the behavior is the same in both presets.
+
+Test with the preset that the target environment selects, for example `golem build --yes -P release`. See [How the presets differ](/next/how-to-guides/common/golem-profiles-and-environments#how-the-presets-differ) for details.

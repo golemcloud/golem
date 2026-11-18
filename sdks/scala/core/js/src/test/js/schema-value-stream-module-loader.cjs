@@ -293,6 +293,13 @@ Module._load = function (request) {
       nextRetryDelay: missingHostImport("nextRetryDelay"),
     };
   }
+  if (request === "golem:api/retry-scope@1.5.0") {
+    return {
+      RetryPolicyScope: function RetryPolicyScope() {
+        missingHostImport("RetryPolicyScope")();
+      },
+    };
+  }
   if (request === "wasi:clocks/monotonic-clock@0.3.0") {
     return {
       now: missingHostImport("now"),

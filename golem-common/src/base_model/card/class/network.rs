@@ -77,14 +77,17 @@ pub enum NetworkResourcePattern {
         host: String,
         ports: PortPattern,
     },
-    /// The destination of a raw socket connect or outgoing datagram. It is a request, never a
-    /// grant: card text never parses to it. A grant whose host has a wildcard matches it only when
-    /// the address is [`AddressClass::Public`] and is not an address of this host
-    /// (`this_host`); every other address needs a grant that names it.
+    /// The destination of a raw socket connect or outgoing datagram, with the hostnames that the
+    /// agent's recorded address lookups linked to the address. It is a request, never a grant:
+    /// card text never parses to it. A grant matches it when it matches the address or one of the
+    /// hostnames, and a grant whose host has a wildcard matches it only when the address is
+    /// [`AddressClass::Public`] and is not an address of this host (`this_host`). Every other
+    /// address needs a grant that names it: the address itself, or an exact linked hostname.
     SocketAddress {
         host: String,
         port: u16,
         this_host: bool,
+        hostnames: Vec<String>,
     },
 }
 
@@ -107,31 +110,40 @@ impl NetworkResourcePattern {
         }
     }
 
-    /// A socket destination; `this_host` tells whether `ip` is an address of the executor host.
-    pub fn socket_address(ip: IpAddr, port: u16, this_host: bool) -> Self {
+    /// A socket destination; `this_host` tells whether `ip` is an address of the executor host,
+    /// and `hostnames` are the normalized hostnames linked to `ip`.
+    pub fn socket_address(ip: IpAddr, port: u16, this_host: bool, hostnames: Vec<String>) -> Self {
         Self::SocketAddress {
             host: canonical_ip_host(ip),
             port,
             this_host,
+            hostnames,
         }
     }
 
     /// Whether this pattern, used as a denial, covers `other`. A denial with a wildcard host also
-    /// covers socket destinations that are not public, and a denial of an IPv4 host also covers
-    /// the IPv6 forms that embed it (NAT64, 6to4, IPv4-compatible).
+    /// covers socket destinations that are not public, a denial of an IPv4 host also covers the
+    /// IPv6 forms that embed it (NAT64, 6to4, IPv4-compatible), and a denial that covers a linked
+    /// hostname covers the address.
     pub fn denies(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Any, _) => true,
             (
                 Self::HostPort { host, ports },
                 Self::SocketAddress {
-                    host: target, port, ..
+                    host: target,
+                    port,
+                    hostnames,
+                    ..
                 },
             ) => {
                 ports.subsumes(&PortPattern::Single(*port))
                     && (host_pattern_subsumes(host, target)
                         || embedded_ipv4_host(target)
-                            .is_some_and(|ipv4| host_pattern_subsumes(host, &ipv4)))
+                            .is_some_and(|ipv4| host_pattern_subsumes(host, &ipv4))
+                        || hostnames
+                            .iter()
+                            .any(|name| host_pattern_subsumes(host, name)))
             }
             _ => self.subsumes(other),
         }
@@ -223,11 +235,14 @@ impl ResourcePattern for NetworkResourcePattern {
                     host: target,
                     port,
                     this_host,
+                    hostnames,
                 },
             ) => {
                 (!host.contains('*') || wildcard_host_reaches(target, *this_host))
-                    && host_pattern_subsumes(host, target)
                     && ports.subsumes(&PortPattern::Single(*port))
+                    && std::iter::once(target)
+                        .chain(hostnames)
+                        .any(|name| host_pattern_subsumes(host, name))
             }
             (Self::HostPort { .. }, Self::Any) => false,
             (Self::SocketAddress { .. }, _) => false,

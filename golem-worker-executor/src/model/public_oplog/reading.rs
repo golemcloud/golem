@@ -405,11 +405,12 @@ pub async fn search_public_oplog_page(
     .await
 }
 
-/// Searches the oplog from `initial_oplog_index` in chunks of at most `count` entries, until the
-/// result holds `count` matches, the page is full, the oplog or `last_oplog_index` ends the
-/// search, or `budget` is spent. The budget counts the oplog entries that the search reads,
-/// matching or not, and the time since the call started. A search always reads at least one
-/// chunk, and the result points to the first entry it did not read.
+/// Searches the oplog from `initial_oplog_index` until the result holds `count` matches, the page
+/// is full, the oplog or `last_oplog_index` ends the search, or `budget` is spent. The budget
+/// counts the oplog entries that the search reads, matching or not, and the time since the call
+/// started. Each chunk reads at most as many entries as the result still needs matches, so the
+/// result never holds more than `count` matches. A search always reads at least one chunk, and
+/// the result points to the first entry it did not read.
 #[allow(clippy::too_many_arguments)]
 async fn search_public_oplog_with<B: ChunkBuilder>(
     component_service: Arc<dyn ComponentService>,
@@ -440,7 +441,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
         let to_last = last_oplog_index.map_or(u64::MAX, |last| {
             (last.as_u64() + 1).saturating_sub(current_index.as_u64())
         });
-        let chunk_size = (count as u64)
+        let chunk_size = (count.saturating_sub(results.len()) as u64)
             .min(budget.remaining_entries(scanned))
             .min(to_last) as usize;
         let (chunk, page_full) = read_public_oplog_chunk(

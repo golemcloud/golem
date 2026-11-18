@@ -38,6 +38,7 @@ mod go_tools;
 mod initial_cards;
 mod mcp_import;
 mod mcp_oauth;
+mod mcp_serve;
 mod moonbit_guest_streams;
 mod moonbit_http_router;
 mod moonbit_mcp_import;
@@ -140,6 +141,8 @@ tag_suite!(self_identity, deploy_runtime);
 tag_suite!(ssh, deploy_runtime);
 tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(deploy_staging, deploy);
+// `mcp_serve` deploys the prebuilt agent-counters fixture, which only the `agents` shard restores.
+tag_suite!(mcp_serve, agents);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
 tag_suite!(effect_http_router, deploy);

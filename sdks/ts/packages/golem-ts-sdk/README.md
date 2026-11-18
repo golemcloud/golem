@@ -30,6 +30,40 @@ configuration accessor and identity/principal helpers. The SDK rejects these fie
 initialization or restoration, even if their value is `undefined`. Rename them or nest them
 inside another state field; nested fields may use these names.
 
+## Agent endpoint query inputs
+
+Declared `GET`, `HEAD`, and `DELETE` endpoints bind method inputs that have no explicit
+path, query, or header binding from query parameters with the same names. Other verbs
+use the request body for remaining inputs. The registry compiler performs this inference;
+the SDK does not add query templates to the endpoint metadata.
+
+Query inputs support scalars, lists of scalars, maps with scalar keys and values, and
+repeated outer options. Tuples, records, variants, nested collections, and rich payloads need a
+body method. Maps use `name[key]=value`; lists repeat `name=value`.
+
+A required list or map must have at least one entry; an absent optional collection is none.
+Repeated scalars, duplicate parsed map keys (including numeric `1` and `01`), malformed
+brackets, and nested map forms return `400` naming the input. Original schema constraints
+also apply to collection elements and map keys and values.
+
+In 2.0, typed agent endpoints reject unknown query keys with a named `400`, including on
+body methods and cache hits. Declared phantom selectors and applicable DurableStreams
+read controls remain recognized. File routes still ignore query strings and raw handlers
+receive them unchanged. Stream resource slots are not inferred query inputs; inference
+uses the declared endpoint verb, not expanded DurableStreams resource verbs.
+
+The TypeScript checks inspect concrete schema constructors, not only inferred JavaScript
+value types. SDK options retain their inner schemas, so wrapping a tuple in `s.option`
+does not make it query-bindable. Transparent wrappers retain scalar eligibility.
+
+Compile-time validation requires concrete schema types. Widening a schema to
+`StandardSchemaV1`, dynamic schema construction, lazy schemas, ArkType's public schema
+types, and Effect 3's `standardSchemaV1` conversion can erase the structure needed for
+these checks. These cases defer to registration-time validation of the compiled schema
+graph and to the registry compiler. They do not gain a guarantee from having a scalar-like
+inferred output. The separate Effect SDK uses Effect 4 schemas directly rather than the
+Effect 3 Standard Schema conversion.
+
 ## HTTP routers and files
 
 `defineHttpRouter` registers a parameterless, ephemeral, snapshot-disabled HTTP router alongside

@@ -2,16 +2,17 @@ declare module 'golem:api/retry@1.5.0' {
   import * as wasiClocks030Types from 'wasi:clocks/types@0.3.0';
   /**
    * ── Host functions ───────────────────────────────────────────────
-   * Get all retry policies active for this agent
+   * Get all retry policies active for the calling task: the agent-wide policies, overridden
+   * by the retry policy scopes open in the task
    */
   export function getRetryPolicies(): NamedRetryPolicy[];
   /**
-   * Get a specific retry policy by name
+   * Get a specific retry policy by name, as `get-retry-policies` reports it
    */
   export function getRetryPolicyByName(name: string): NamedRetryPolicy | undefined;
   /**
    * Resolve the matching retry policy for a given operation context.
-   * Evaluates named policies in descending priority order; returns the
+   * Evaluates the policies of `get-retry-policies` in descending priority order; returns the
    * policy from the first rule whose predicate matches, or none.
    * Invalid predicates return an error without trapping the invocation.
    * @throws string

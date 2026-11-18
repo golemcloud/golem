@@ -59,12 +59,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             accessor,
             accessor.getter(),
             DurableFunctionType::WriteLocal,
-            |context, accessor| {
+            |context, mut access| {
                 Box::pin(async move {
                     if context.is_live {
-                        crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
-                            accessor,
-                            accessor.getter(),
+                        let _ = crate::durable_host::call_coordinator::capture_live_agent_authority_initiation(
+                            &mut access,
+                            |_| (),
                         )
                         .await?;
                     }

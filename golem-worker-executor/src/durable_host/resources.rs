@@ -207,11 +207,12 @@ impl PrivateDurableWorkerState {
             return Ok(());
         }
         if self.per_invocation_http_call_limit != u64::MAX
-            && self.http_call_count >= self.per_invocation_http_call_limit
+            && self.invocation_state().http_call_count >= self.per_invocation_http_call_limit
         {
             return Err(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit);
         }
-        self.http_call_count = self.http_call_count.saturating_add(1);
+        let state = self.invocation_state_mut();
+        state.http_call_count = state.http_call_count.saturating_add(1);
         Ok(())
     }
 
@@ -225,19 +226,22 @@ impl PrivateDurableWorkerState {
             return Ok(());
         }
         if self.per_invocation_rpc_call_limit != u64::MAX
-            && self.rpc_call_count >= self.per_invocation_rpc_call_limit
+            && self.invocation_state().rpc_call_count >= self.per_invocation_rpc_call_limit
         {
             return Err(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit);
         }
-        self.rpc_call_count = self.rpc_call_count.saturating_add(1);
+        let state = self.invocation_state_mut();
+        state.rpc_call_count = state.rpc_call_count.saturating_add(1);
         Ok(())
     }
 
+    /// Resets the counters of the invocation the invocation loop runs.
     pub fn reset_invocation_call_counts(&mut self) {
-        self.http_call_count = 0;
-        self.rpc_call_count = 0;
-        self.scope_card_mint_ordinal = 0;
-        self.tool_invocation_attempt_ordinals.clear();
+        let state = self.loop_invocation_state_mut();
+        state.http_call_count = 0;
+        state.rpc_call_count = 0;
+        state.scope_card_mint_ordinal = 0;
+        state.tool_invocation_attempt_ordinals.clear();
     }
 }
 

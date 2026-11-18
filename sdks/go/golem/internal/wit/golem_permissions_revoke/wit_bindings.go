@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -59,7 +60,7 @@ func RevokeCard(c *golem_core_types.PermissionCard) witTypes.Result[uint32, gole
 
 		result0 = witTypes.Ok[uint32, golem_permissions_types.PermissionError](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))
 	case 1:
-		result := wasm_lift_1_t947(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t950(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[uint32, golem_permissions_types.PermissionError](result)
 	default:
@@ -71,7 +72,7 @@ func RevokeCard(c *golem_core_types.PermissionCard) witTypes.Result[uint32, gole
 }
 
 //go:noinline
-func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.PermissionError {
+func wasm_lift_1_t950(src unsafe.Pointer) golem_permissions_types.PermissionError {
 	var variant golem_permissions_types.PermissionError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

@@ -166,7 +166,7 @@ macro_rules! setup_k3_rate_limit_chain_with_checkpoint {
             &tool_name,
             $rate_limit_component.id,
             $rate_limit_component.revision,
-            "golem:rate-limit-middleware",
+            "golem-it:tool-streaming-rate-limit-middleware",
             &rate_limit_metadata.tool_middlewares,
             vec![(
                 rate_limit_definition.name.as_str(),
@@ -490,7 +490,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
         &ToolName::try_from("middleware-probe").unwrap(),
         rate_limit_component.id,
         rate_limit_component.revision,
-        "golem:rate-limit-middleware",
+        "golem-it:tool-streaming-rate-limit-middleware",
         std::slice::from_ref(&definition),
         vec![(
             definition.name.as_str(),

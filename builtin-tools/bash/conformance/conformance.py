@@ -761,7 +761,8 @@ def main(argv=None):
     parser.add_argument("--oracle-image", default=ORACLE_IMAGE)
     parser.add_argument("--case", action="append", default=[], help="select a case by exact name")
     parser.add_argument("--prefix", action="append", default=[], help="select cases whose name starts with this")
-    parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
+    parser.add_argument("--jobs", type=int,
+                        default=int(os.environ.get("BASH_CONFORMANCE_JOBS", os.cpu_count() or 1)))
     parser.add_argument("--report", type=pathlib.Path, help="write failures as JSON, for triage")
     parser.add_argument(
         "--tier", choices=["pr", "all"], default="pr",

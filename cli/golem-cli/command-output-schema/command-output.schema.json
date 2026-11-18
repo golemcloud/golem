@@ -100,6 +100,9 @@
       "$ref": "#/definitions/agent.oplog-export-coverage"
     },
     {
+      "$ref": "#/definitions/agent.oplog-page"
+    },
+    {
       "$ref": "#/definitions/agent.plugin-toggle"
     },
     {
@@ -3052,6 +3055,32 @@
         "discovered": {
           "type": "integer",
           "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog-page": {
+      "type": "object",
+      "description": "One page of an agent's oplog, emitted by `golem agent oplog --page`. Each entry is the `agent.oplog` document that `golem agent oplog` streams for it. A page can be empty and still have a cursor, when the server's scan budget ended a search before a match.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent oplog",
+      "required": [
+        "$type",
+        "entries"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-page"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/agent.oplog"
+          }
+        },
+        "cursor": {
+          "type": "string",
+          "description": "The cursor of the next page, present when the oplog has entries after this page. Pass it back unchanged as `--cursor` with the same `--query`."
         }
       },
       "additionalProperties": false
@@ -10764,6 +10793,10 @@
     {
       "type": "agent.oplog-export-coverage",
       "rustType": "AgentOplogExportCoverageView"
+    },
+    {
+      "type": "agent.oplog-page",
+      "rustType": "AgentOplogPageView"
     },
     {
       "type": "agent.plugin-toggle",

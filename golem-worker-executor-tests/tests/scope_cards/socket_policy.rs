@@ -24,14 +24,14 @@ use test_r::{test, timeout};
 const API: [&str; 2] = ["p2", "p3"];
 
 /// A TCP peer that counts the connections it accepts.
-struct CountingPeer {
-    address: std::net::SocketAddr,
+pub(super) struct CountingPeer {
+    pub(super) address: std::net::SocketAddr,
     accepted: Arc<AtomicUsize>,
     _task: tokio_util::task::AbortOnDropHandle<()>,
 }
 
 impl CountingPeer {
-    async fn start(address: &str) -> anyhow::Result<Self> {
+    pub(super) async fn start(address: &str) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(address).await?;
         let address = listener.local_addr()?;
         let accepted = Arc::new(AtomicUsize::new(0));
@@ -49,7 +49,7 @@ impl CountingPeer {
         })
     }
 
-    fn accepted(&self) -> usize {
+    pub(super) fn accepted(&self) -> usize {
         self.accepted.load(Ordering::SeqCst)
     }
 }
@@ -65,7 +65,7 @@ fn network_permission(resource: &str) -> PolymorphicPermissionPattern {
         .expect("valid test network permission")
 }
 
-async fn networking_component(
+pub(super) async fn networking_component(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     host_api_tests: &PrecompiledComponent,
@@ -90,7 +90,7 @@ async fn networking_component(
         .await
 }
 
-async fn socket_operation(
+pub(super) async fn socket_operation(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     agent: &golem_common::model::agent::ParsedAgentKey,
@@ -109,7 +109,7 @@ async fn socket_operation(
         .into_typed::<Result<String, String>>()
 }
 
-fn assert_denied(result: &Result<String, String>, what: &str) {
+pub(super) fn assert_denied(result: &Result<String, String>, what: &str) {
     assert!(
         result
             .as_ref()
@@ -366,5 +366,246 @@ async fn named_network_grants_reach_internal_socket_destinations_except_refused_
     assert_eq!(peer.accepted(), 2);
 
     executor.check_oplog_is_queryable(&worker).await?;
+    Ok(())
+}
+
+/// Looks `name` up on `api` and returns whether the lookup found addresses.
+async fn resolve(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentKey,
+    api: &str,
+    name: &str,
+) -> anyhow::Result<Result<bool, String>> {
+    Ok(if api == "p2" {
+        executor
+            .invoke_and_await_agent(
+                component,
+                agent,
+                "probe_p2",
+                data_value!("resolve-addresses", name, 0u16, Vec::<u8>::new()),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?
+            .map(|_| true)
+    } else {
+        executor
+            .invoke_and_await_agent(component, agent, "resolve_p3", data_value!(name))
+            .await?
+            .into_typed::<Result<Vec<String>, String>>()?
+            .map(|addresses| !addresses.is_empty())
+    })
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn exact_hostname_grants_reach_the_addresses_of_recorded_lookups(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let peer = CountingPeer::start("127.0.0.1:0").await?;
+    let peer_address = peer.address.to_string();
+    let mut connected = 0;
+
+    for lookup_api in API {
+        let component = networking_component(
+            &executor,
+            &context,
+            host_api_tests,
+            &["localhost".to_string()],
+        )
+        .await?;
+        let agent = agent_key!("Networking", format!("socket-policy-links-{lookup_api}"));
+        configure_scope_card_root(&authority, &component, &agent)?;
+        let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+        // An address that no lookup returned has no hostname, so the hostname grant does not
+        // reach it.
+        for api in API {
+            let denied = socket_operation(
+                &executor,
+                &component,
+                &agent,
+                api,
+                "tcp-connect",
+                &peer_address,
+            )
+            .await?;
+            assert_denied(
+                &denied,
+                &format!("{api} connect before the {lookup_api} lookup"),
+            );
+        }
+        let resolved = resolve(&executor, &component, &agent, lookup_api, "localhost").await?;
+        assert_eq!(resolved, Ok(true), "the {lookup_api} lookup of localhost");
+        for api in API {
+            let result = socket_operation(
+                &executor,
+                &component,
+                &agent,
+                api,
+                "tcp-connect",
+                &peer_address,
+            )
+            .await?;
+            assert_eq!(
+                result,
+                Ok("connected".to_string()),
+                "{api} connect after the {lookup_api} lookup"
+            );
+            connected += 1;
+        }
+
+        // Replay returns the lookup again, so the link survives the crash.
+        executor.simulated_crash(&worker).await?;
+        let after_crash = socket_operation(
+            &executor,
+            &component,
+            &agent,
+            "p3",
+            "tcp-connect",
+            &peer_address,
+        )
+        .await?;
+        assert_eq!(
+            after_crash,
+            Ok("connected".to_string()),
+            "P3 connect after the crash, linked by the {lookup_api} lookup"
+        );
+        connected += 1;
+        executor.check_oplog_is_queryable(&worker).await?;
+    }
+    assert_eq!(peer.accepted(), connected);
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn wildcard_grants_do_not_reach_internal_addresses_through_links(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let peer = CountingPeer::start("127.0.0.1:0").await?;
+    let component =
+        networking_component(&executor, &context, host_api_tests, &["*".to_string()]).await?;
+    let agent = agent_key!("Networking", "socket-policy-wildcard-links");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let peer_address = peer.address.to_string();
+    for lookup_api in API {
+        let resolved = resolve(&executor, &component, &agent, lookup_api, "localhost").await?;
+        assert_eq!(resolved, Ok(true), "the {lookup_api} lookup of localhost");
+    }
+    for api in API {
+        for operation in ["tcp-connect", "udp-send"] {
+            let result =
+                socket_operation(&executor, &component, &agent, api, operation, &peer_address)
+                    .await?;
+            assert_denied(
+                &result,
+                &format!("{api} {operation} to a linked loopback address under a wildcard grant"),
+            );
+        }
+    }
+    assert_eq!(peer.accepted(), 0);
+    executor.check_oplog_is_queryable(&worker).await?;
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn hostname_links_are_rebuilt_after_snapshot_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let card_authority = authority.clone();
+    let overrides = TestExecutorOverrides {
+        create_card_service: Some(Arc::new(move || {
+            Arc::new(ScopeCardService {
+                authority: card_authority.clone(),
+            })
+        })),
+        configure: Some(Arc::new(|config| {
+            config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+        })),
+        ..TestExecutorOverrides::default()
+    }
+    .with_agent_sockets();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let peer = CountingPeer::start("127.0.0.1:0").await?;
+    let port = peer.address.port();
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .unique()
+        .without_default_host_permissions("SocketSession")
+        .update_agent_provision_config("SocketSession", |config| {
+            config
+                .initial_permissions
+                .lower_bound
+                .positive
+                .push(network_permission("localhost"));
+        })
+        .store()
+        .await?;
+    let agent = agent_key!("SocketSession", "socket-policy-snapshot-links");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let resolved = executor
+        .invoke_and_await_agent(&component, &agent, "p3_resolve", data_value!("localhost"))
+        .await?
+        .into_typed::<Result<u32, String>>()?;
+    assert!(
+        resolved.as_ref().is_ok_and(|count| *count > 0),
+        "the lookup of localhost, got {resolved:?}"
+    );
+    let connected = executor
+        .invoke_and_await_agent(&component, &agent, "p3_tcp_connect", data_value!("a", port))
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(connected, Ok(()), "connect through the link");
+
+    // The open receive stream blocks snapshots, so the snapshot follows the close.
+    let before_close = executor
+        .get_oplog(&worker, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index)
+        .expect("the agent has an oplog");
+    executor
+        .invoke_and_await_agent(&component, &agent, "close", data_value!("a"))
+        .await?;
+    crate::hot_update::wait_for_snapshot_after(&executor, &worker, before_close).await?;
+
+    // The recovery loads the snapshot, so it does not replay the lookup: only the rebuild from
+    // the history before the snapshot gives the connect its link.
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let mut events = executor.capture_output(&worker).await?;
+    let reconnected = executor
+        .invoke_and_await_agent(&component, &agent, "p3_tcp_connect", data_value!("b", port))
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(reconnected, Ok(()), "connect after the snapshot recovery");
+    crate::durability::assert_snapshot_recovery_loaded(&mut events).await;
+    assert_eq!(peer.accepted(), 2);
     Ok(())
 }

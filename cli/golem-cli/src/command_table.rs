@@ -19,8 +19,9 @@
 //! This table adds what neither of them says: the command's class, the
 //! permission parts that the server checks for it and their targets, whether
 //! the command stays on the CLI, which of its arguments only the CLI may take,
-//! which arguments every other surface must pass, which arguments read stdin
-//! when their value is `-`, and whether it is destructive.
+//! which arguments every other surface must pass, which integer arguments every
+//! other surface caps, which arguments read stdin when their value is `-`, and
+//! whether it is destructive.
 //!
 //! Every `golem agent` command has a row. The bulk controls outside
 //! `golem agent` (`update-agents`, `redeploy-agents`, `component update-agents`,
@@ -95,8 +96,14 @@ pub struct CommandRow {
     /// live input or a local server, write to stdout outside the JSON output,
     /// touch host files, or change agents beyond the command's target.
     pub cli_only_args: &'static [&'static str],
+    /// The command's output types that only its CLI-only arguments select, so that no surface
+    /// other than the CLI returns them.
+    pub cli_only_output_types: &'static [&'static str],
     /// Long flags that every surface other than the CLI always passes.
     pub fixed_args: &'static [&'static str],
+    /// Clap argument IDs of integer arguments, with the largest value that every surface other
+    /// than the CLI accepts for them.
+    pub capped_args: &'static [(&'static str, u64)],
     /// Clap argument IDs whose value `-` reads the process's stdin. A surface
     /// other than the CLI must refuse `-` as their value.
     pub stdin_marker_args: &'static [&'static str],
@@ -136,7 +143,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Invoke, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -146,7 +155,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Invoke, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -171,7 +182,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
             "stream_no_timestamp",
             "logs_only",
         ],
+        cli_only_output_types: &[],
         fixed_args: &["--no-stream"],
+        capped_args: &[],
         stdin_marker_args: &["arguments"],
         destructive: false,
     },
@@ -181,7 +194,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -191,7 +206,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Delete, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: true,
     },
@@ -201,7 +218,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, ComponentAgents)],
         interactive: false,
         cli_only_args: &["refresh"],
-        fixed_args: &[],
+        cli_only_output_types: &[],
+        fixed_args: &["--page"],
+        capped_args: &[("max_count", 50)],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -212,7 +231,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent)],
         interactive: true,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -223,7 +244,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent)],
         interactive: true,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -234,7 +257,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::UpdateRevision, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: true,
     },
@@ -246,7 +271,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Interrupt, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: true,
     },
@@ -256,7 +283,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Resume, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -267,18 +296,38 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Interrupt, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: true,
     },
-    // `--html` writes a host file; the viewer flags serve or open it locally.
+    // `--html` writes a host file; the viewer flags serve or open it locally. The obfuscated
+    // export reads the whole oplog, and `--page` cannot be combined with `--obfuscate`.
     CommandRow {
         path: &["agent", "oplog"],
         class: ManagementRead,
         parts: &[agent(A::View, Agent), oplog(OplogVerb::Read)],
         interactive: false,
-        cli_only_args: &["html", "serve", "port", "open", "no_open"],
-        fixed_args: &[],
+        cli_only_args: &[
+            "html",
+            "serve",
+            "port",
+            "open",
+            "no_open",
+            "obfuscate",
+            "keep_scalars",
+            "keep_shape",
+            "keep_error_text",
+            "max_entry_bytes",
+        ],
+        cli_only_output_types: &[
+            "agent.oplog-export-header",
+            "agent.oplog-export-entry",
+            "agent.oplog-export-coverage",
+        ],
+        fixed_args: &["--page"],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -288,7 +337,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Revert, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: true,
     },
@@ -298,7 +349,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::CancelInvocation, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -312,7 +365,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         ],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -325,7 +380,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), filesystem(FilesystemVerb::Read)],
         interactive: true,
         cli_only_args: &["output"],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -335,7 +392,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::ActivatePlugin, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -345,7 +404,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::DeactivatePlugin, Agent)],
         interactive: false,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -359,7 +420,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         parts: &[agent(A::View, Agent), agent(A::Invoke, Agent)],
         interactive: true,
         cli_only_args: &[],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &[],
         destructive: false,
     },
@@ -378,7 +441,9 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         ],
         interactive: false,
         cli_only_args: &["stdin", "stdout", "output", "stderr", "stderr_output"],
+        cli_only_output_types: &[],
         fixed_args: &[],
+        capped_args: &[],
         stdin_marker_args: &["stdin"],
         destructive: false,
     },
@@ -395,11 +460,6 @@ mod test {
 
     /// Rows outside `golem agent` that the table must keep.
     const REQUIRED_PATHS: &[&[&str]] = &[&["ssh"], &["tool", "invoke"]];
-
-    /// Non-interactive commands whose only JSON output is a finite stream of
-    /// documents. `agent oplog` emits one `agent.oplog` document per entry and
-    /// ends at the end of the oplog.
-    const FINITE_STREAMS: &[&str] = &["agent oplog"];
 
     fn find<'a>(root: &'a Command, path: &[&str]) -> Option<&'a Command> {
         path.iter()
@@ -444,6 +504,17 @@ mod test {
                     problems.push(format!("`{path}` has no argument `{arg}`"));
                 }
             }
+            let output_types = command_output_types(&path).unwrap();
+            for output_type in row.cli_only_output_types {
+                if !output_types.iter().any(|known| known == output_type) {
+                    problems.push(format!("`{path}` has no output type `{output_type}`"));
+                }
+            }
+            for (arg, _) in row.capped_args {
+                if !command.get_arguments().any(|a| a.get_id() == *arg) {
+                    problems.push(format!("`{path}` has no capped argument `{arg}`"));
+                }
+            }
             for arg in row.stdin_marker_args {
                 if !command.get_arguments().any(|a| a.get_id() == *arg) {
                     problems.push(format!("`{path}` has no stdin argument `{arg}`"));
@@ -469,7 +540,6 @@ mod test {
             if row.interactive {
                 continue;
             }
-            let output_types = command_output_types(&path).unwrap();
             if output_types.is_empty() {
                 problems.push(format!(
                     "`{path}` is non-interactive but has no JSON output type"
@@ -478,8 +548,7 @@ mod test {
             let only_streams = output_types.iter().all(|output_type| {
                 schema["definitions"][output_type]["x-golem-output-mode"] == "stream"
             });
-            if !output_types.is_empty() && only_streams && !FINITE_STREAMS.contains(&path.as_str())
-            {
+            if !output_types.is_empty() && only_streams {
                 problems.push(format!(
                     "`{path}` is non-interactive but has only stream output"
                 ));

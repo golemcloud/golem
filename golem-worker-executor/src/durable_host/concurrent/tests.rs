@@ -805,6 +805,151 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
 }
 
 #[test]
+async fn the_delivered_hook_runs_only_when_the_guest_receives_the_terminal() {
+    // A host call has returned its result and armed the observer. The guest then either
+    // receives the terminal or cancels it unread (`subtask.cancel` on a returned terminal).
+    for (consumption, expected_hook, expected_marker) in [
+        (TerminalConsumption::Delivered, true, "delivered"),
+        (TerminalConsumption::NotDelivered, false, "discarded"),
+    ] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hook_ran = ran.clone();
+        let guard = AccessorDeliveryGuard {
+            delivery: Some(token),
+            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+        };
+        guard.consume(consumption);
+        assert_eq!(
+            ran.load(Ordering::Acquire),
+            expected_hook,
+            "{expected_marker}"
+        );
+        if let Ok(DropEvent::AwaitCompletionMarker {
+            receipt: Some(mut receipt),
+            ..
+        }) = rx.try_recv()
+        {
+            await_marker_receipt(&mut receipt)
+                .await
+                .expect("marker append must succeed");
+        }
+        let entries = oplog.entries.lock().await;
+        let marker = match entries.as_slice() {
+            [OplogEntry::CompletionDelivered { .. }] => "delivered",
+            [OplogEntry::CompletionDiscarded { .. }] => "discarded",
+            other => panic!("expected one completion marker, got {other:?}"),
+        };
+        assert_eq!(marker, expected_marker);
+    }
+}
+
+#[test]
+async fn the_delivered_hook_runs_at_the_recorded_marker_on_replay() {
+    // Replay reaches the recorded `CompletionDelivered` marker and arms the token. The hook runs
+    // only when the replayed guest receives the terminal again.
+    for (consumption, expected_hook) in [
+        (TerminalConsumption::Delivered, true),
+        (TerminalConsumption::NotDelivered, false),
+    ] {
+        let (_oplog, replay_state, mut token) = tail_gated_token_over_crash_tail(
+            vec![OplogEntry::CompletionDelivered {
+                timestamp: Timestamp::now_utc(),
+                start_index: idx(2),
+            }],
+            None,
+        )
+        .await;
+        token.state = CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
+            replay_state: replay_state.clone(),
+            start_index: idx(2),
+            marker_index: idx(4),
+            runtime: None,
+        });
+        token.prepare_delivery(None).await.unwrap();
+        assert!(matches!(
+            token.state,
+            CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
+        ));
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hook_ran = ran.clone();
+        AccessorDeliveryGuard {
+            delivery: Some(token),
+            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+        }
+        .consume(consumption);
+        assert_eq!(
+            ran.load(Ordering::Acquire),
+            expected_hook,
+            "{consumption:?}"
+        );
+        assert_eq!(replay_state.last_replayed_index(), idx(4));
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn the_delivered_hook_runs_without_an_observer_only_for_a_settled_delivery() {
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, None::<u32>);
+    let (_tail_oplog, _replay_state, at_tail) =
+        tail_gated_token_over_crash_tail(vec![], None).await;
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let live = live_delivery_token(
+        Arc::new(InMemoryOplog::new()),
+        Arc::new(AtomicUsize::new(0)),
+        tx,
+    )
+    .await;
+
+    store
+        .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+            // No guest-visible subtask exists here, so no observer can watch these tokens.
+            for (name, token, expected_hook) in [
+                // An unpersisted live call settles as delivered at the host return.
+                ("unarmed", CompletionDelivery::unarmed(), true),
+                // A replayed markerless End has no guest that could receive it.
+                ("at replay tail", at_tail, false),
+                // A persisted live call whose observer cannot register reaches no guest.
+                ("live armed", live, false),
+            ] {
+                let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let hook_ran = ran.clone();
+                token
+                    .deliver_at_accessor_terminal_with_delivered(
+                        accessor,
+                        Box::new(move || hook_ran.store(true, Ordering::Release)),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(ran.load(Ordering::Acquire), expected_hook, "{name}");
+            }
+
+            // A replayed discarded completion parks and never runs the hook.
+            let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let hook_ran = ran.clone();
+            let mut delivery = Box::pin(
+                CompletionDelivery::replay_discarded().deliver_at_accessor_terminal_with_delivered(
+                    accessor,
+                    Box::new(move || hook_ran.store(true, Ordering::Release)),
+                ),
+            );
+            assert!(futures::poll!(&mut delivery).is_pending());
+            drop(delivery);
+            assert!(!ran.load(Ordering::Acquire));
+            Ok(())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
 async fn completion_delivery_discarded_appends_marker_inline() {
     // `discarded` (caller-detected silent discard) appends exactly one marker inline and
     // returns once it is durable; the permit is released and no drain event is queued.

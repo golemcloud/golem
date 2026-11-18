@@ -65,6 +65,7 @@ governor = { workspace = true }
 half = { workspace = true }
 heck = { workspace = true }
 hex = { workspace = true }
+hickory-resolver = { workspace = true }
 ignite-v2-client = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -115,7 +116,7 @@ tracing = { workspace = true }
 try_match = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { workspace = true, features = ["call-hook"] }
+wasmtime = { workspace = true, features = ["call-hook", "task-group-hook"] }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 zstd = { workspace = true }

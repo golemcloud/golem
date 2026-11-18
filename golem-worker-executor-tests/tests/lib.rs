@@ -309,8 +309,8 @@ test_component!(
 test_component!(
     rate_limit_middleware,
     "rate_limit_middleware",
-    "golem_rate_limit_middleware_release",
-    "golem:rate-limit-middleware"
+    "golem_it_tool_streaming_rate_limit_middleware_release",
+    "golem-it:tool-streaming-rate-limit-middleware"
 );
 test_component!(
     tool_runtime_bypass_owner,

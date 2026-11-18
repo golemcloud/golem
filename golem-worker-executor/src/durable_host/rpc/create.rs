@@ -113,9 +113,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
                 .map_err(wasmtime::Error::from)?;
             Ok::<_, anyhow::Error>(SpanStarted {
                 span_id: SpanId::generate(),
-                trace_id: ctx.state.invocation_context.trace_id.clone(),
-                trace_states: ctx.state.invocation_context.trace_states.clone(),
-                parent_span_id: Some(ctx.state.current_span_id.clone()),
+                trace_id: ctx
+                    .state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_id
+                    .clone(),
+                trace_states: ctx
+                    .state
+                    .invocation_state()
+                    .invocation_context
+                    .trace_states
+                    .clone(),
+                parent_span_id: Some(ctx.state.invocation_state().current_span_id.clone()),
                 links: Vec::new(),
                 started_at: golem_common::model::Timestamp::now_utc(),
                 attributes: AttributeMap(BTreeMap::from([
@@ -146,7 +156,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWasmRpcWithStore<U> for HasSelf<Dura
         let span = if handle.is_live() {
             accessor.with(|mut access| {
                 let ctx = access.get();
-                let parent = ctx.state.current_span_id.clone();
+                let parent = ctx.state.invocation_state().current_span_id.clone();
                 install_embedded_span(ctx, &span_started, &parent)
             })?
         } else {

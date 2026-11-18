@@ -36,7 +36,8 @@ inherit_test_dep!(Tracing);
 
 use super::count_oplog_errors_containing;
 use super::http_servers::{
-    start_status_code_retry_http_server, start_withheld_status_retry_http_server,
+    start_status_500_http_server_holding_attempt, start_status_code_retry_http_server,
+    start_withheld_status_retry_http_server,
 };
 
 #[test]
@@ -81,6 +82,136 @@ async fn http_status_retry_policy_exposes_latest_response_when_exhausted(
             .iter()
             .all(|key| key.as_ref() == Some(first_key))
     );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_retry_policy_scope_applies_to_a_future_spawned_inside_it_and_ends_with_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+    let (port, counter, _) = start_status_code_retry_http_server(20).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let agent_id = agent_key!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "post_in_and_after_status_retry_scope",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "500 retry-me|false|500 retry-me");
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        12,
+        "the scoped policy retries the spawned POST ten times, and the POST after the scope once"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog.iter().any(|entry| matches!(
+            entry.entry,
+            PublicOplogEntry::SetRetryPolicy(_) | PublicOplogEntry::RemoveRetryPolicy(_)
+        )),
+        "a retry policy scope does not change the agent-wide policies"
+    );
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stored_full_response", data_value!())
+        .await?;
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        12,
+        "replaying the completed POSTs sends nothing"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_retry_policy_scope_reopened_by_replay_keeps_retrying_after_a_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+    let (port, counter, held) = start_status_500_http_server_holding_attempt(4).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let agent_id = agent_key!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    {
+        let invocation = executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_in_and_after_status_retry_scope",
+            data_value!(),
+        );
+        tokio::pin!(invocation);
+        tokio::select! {
+            _ = held.notified() => {}
+            result = &mut invocation => panic!("completed before the scoped retry was held: {result:?}"),
+        }
+    }
+    assert_eq!(counter.load(Ordering::SeqCst), 4);
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, Default::default()).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_in_and_after_status_retry_scope",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "500 retry-me|false|500 retry-me");
+    let attempts = counter.load(Ordering::SeqCst);
+    assert_eq!(
+        attempts, 13,
+        "after the restart, the reopened scope retries the held POST until its ten retries are \
+         used, and the POST after the scope is sent once; the held attempt is sent again"
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog.iter().any(|entry| matches!(
+            entry.entry,
+            PublicOplogEntry::SetRetryPolicy(_) | PublicOplogEntry::RemoveRetryPolicy(_)
+        )),
+        "a retry policy scope does not change the agent-wide policies"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }
 

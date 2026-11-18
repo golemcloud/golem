@@ -1148,40 +1148,6 @@ fn invocation_scope_card(root_card_ids: Vec<CardId>) -> ScopeCard {
 }
 
 #[test]
-fn unrelated_revocation_preserves_invocation_scope_and_handles() {
-    let scope_root = CardId(Uuid::from_u128(1));
-    let unrelated = CardId(Uuid::from_u128(2));
-    let mut scope_card = Some(invocation_scope_card(vec![scope_root]));
-    let mut handles = HashMap::from([(7, vec![scope_root])]);
-
-    assert_eq!(
-        remove_invocation_scope_for_revoked_roots(&mut scope_card, &mut handles, &[unrelated],),
-        (false, HashSet::new())
-    );
-    assert!(scope_card.is_some());
-    assert_eq!(handles, HashMap::from([(7, vec![scope_root])]));
-}
-
-#[test]
-fn matching_revocation_removes_scope_and_dependent_handles_only() {
-    let revoked_root = CardId(Uuid::from_u128(1));
-    let unrelated_root = CardId(Uuid::from_u128(2));
-    let mut scope_card = Some(invocation_scope_card(vec![revoked_root]));
-    let mut handles = HashMap::from([
-        (7, vec![revoked_root]),
-        (11, vec![unrelated_root]),
-        (13, vec![revoked_root, unrelated_root]),
-    ]);
-
-    assert_eq!(
-        remove_invocation_scope_for_revoked_roots(&mut scope_card, &mut handles, &[revoked_root],),
-        (true, HashSet::from([7, 13]))
-    );
-    assert!(scope_card.is_none());
-    assert_eq!(handles, HashMap::from([(11, vec![unrelated_root])]));
-}
-
-#[test]
 fn inherited_scope_roots_are_checked_once_and_unknown_roots_are_errors() {
     let first = CardId(Uuid::from_u128(1));
     let second = CardId(Uuid::from_u128(2));
@@ -1256,23 +1222,6 @@ fn inherited_scope_detects_revoked_and_expired_roots() {
         !InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]))
             .roots_expired(now + chrono::Duration::seconds(60))
     );
-}
-
-#[test]
-fn invocation_end_clears_scope_card_and_all_invocation_handles() {
-    let mut scope_card = Some(invocation_scope_card(vec![CardId(Uuid::from_u128(1))]));
-    let mut handles = HashMap::from([
-        (7, vec![CardId(Uuid::from_u128(1))]),
-        (11, vec![CardId(Uuid::from_u128(2))]),
-    ]);
-
-    let (scope_changed, removed_handles) =
-        clear_invocation_scope_state(&mut scope_card, &mut handles);
-
-    assert!(scope_changed);
-    assert!(scope_card.is_none());
-    assert!(handles.is_empty());
-    assert_eq!(removed_handles, HashSet::from([7, 11]));
 }
 
 #[test]

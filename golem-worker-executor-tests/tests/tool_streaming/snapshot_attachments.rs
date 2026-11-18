@@ -198,19 +198,13 @@ async fn completed_entity_writer_disposal_replays_its_attachment_terminals(
             }
             _ => None,
         });
-        if live_schedule != 2 {
-            assert_eq!(
-                terminal,
-                Some(&ToolAttachmentTerminal::Application(
-                    ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)
-                ))
-            );
-        } else {
-            assert_eq!(
-                terminal, None,
-                "neither unreachable endpoint is collected before Store teardown"
-            );
-        }
+        assert_eq!(
+            terminal,
+            Some(&ToolAttachmentTerminal::Application(
+                ByteStreamCloseCause::Failed(ByteStreamFailure::Abandoned)
+            )),
+            "unreachable outputs are abandoned before successful Store teardown"
+        );
         let controls = |history: &[OplogEntry]| {
             history
                 .iter()

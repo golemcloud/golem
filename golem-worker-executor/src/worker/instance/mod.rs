@@ -19,7 +19,7 @@ use super::owner_wallet::{OwnerWallet, WalletBaseline};
 use super::state_actor::OwnerCommitController;
 use super::tasks::RuntimeAppendTasks;
 use super::{ObservedPrimaryStore, Worker};
-use crate::durable_host::durability::CustomInvocationContext;
+use crate::durable_host::durability::GuestTaskContext;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -50,7 +50,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
-use tracing::warn;
+use tracing::{error, warn};
 use wasmtime::component::{Component, Instance};
 use wasmtime::{AsContext, AsContextMut, CallHook, Store, StoreMemory, UpdateDeadline};
 
@@ -903,17 +903,25 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
+        let attribution = store.data().durable_ctx().attribution.clone();
+        store.as_context_mut().task_group_hook(attribution.hook());
         let fuel_metering = store.data().fuel_metering_enabled();
         store.call_hook(move |mut store, boundary| {
             // Wasmtime reports the import's runtime activity right after `CallingHost`, before
             // the import's host code runs; see `GuestImportNumbering`.
             match boundary {
                 CallHook::CallingHost => {
+                    if attribution.resolve().is_none() {
+                        error!(
+                            agent_id = %store.data().agent_id(),
+                            "A guest host call has no attributed invocation"
+                        );
+                    }
                     let custom_invocation_scope = store
                         .as_context()
-                        .guest_task_context::<CustomInvocationContext>()?
+                        .guest_task_context::<GuestTaskContext>()?
                         .as_deref()
-                        .and_then(CustomInvocationContext::current);
+                        .and_then(GuestTaskContext::current);
                     guest_imports.number_next_import(
                         store
                             .data()
@@ -971,8 +979,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let instance_pre = linker
             .instantiate_pre(component)
             .map_err(|error| self.creation_error(error.into()))?;
-        let instance = instance_pre
-            .instantiate_async(&mut *store)
+        // Instantiation runs the core initializer under the invocation the Store is created for:
+        // the entity invocation of an entity Store, and no invocation for a fresh primary Store.
+        let attribution = store.data().durable_ctx().attribution.clone();
+        let invocation_key = store.data().durable_ctx().invocation_key();
+        let instance = attribution
+            .instantiating(invocation_key, instance_pre.instantiate_async(&mut *store))
             .await
             .map_err(|error| match instantiation_failure(&self.runtime, &error) {
                 Some(failure) => failure,
@@ -1288,6 +1300,14 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         self.store.into_data()
     }
 
+    pub(crate) fn into_returned_context(self) -> ObservedPrimaryStore<Ctx> {
+        self.store
+            .data()
+            .durable_ctx()
+            .begin_stream_runtime_teardown();
+        self.store.into_data()
+    }
+
     pub(crate) fn into_parts(self) -> (Instance, ObservedPrimaryStore<Store<Ctx>>) {
         (self.instance, self.store.into_inner())
     }
@@ -1488,11 +1508,21 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         {
             hook.mutate_completed_reconstruction_response(response);
         }
-        // A trapped or cancelled body keeps its scope through original-context host-only cleanup.
-        let retained_cleanup = matches!(
-            &result,
-            Ok(Ok(super::entity_invocation::EntityBodyOutcome::Cancelled))
-        ) || matches!(&result, Ok(Ok(super::entity_invocation::EntityBodyOutcome::Completed(response))) if super::entity_invocation::is_trapped_tool_response(response));
+        // A returned export cannot re-enter the Store, even when later materialization
+        // fails. Keep its scope through original-context cleanup after Store destruction.
+        let retained_cleanup = self
+            .store
+            .data()
+            .durable_ctx()
+            .entity_body_finalization
+            .guest_returned()
+            || matches!(
+                &result,
+                Ok(Ok(super::entity_invocation::EntityBodyOutcome::Cancelled
+                    | super::entity_invocation::EntityBodyOutcome::Completed(
+                        _
+                    )))
+            );
         let cleanup = if retained_cleanup {
             Ok(())
         } else {

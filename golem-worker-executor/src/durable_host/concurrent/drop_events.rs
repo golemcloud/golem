@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::call_coordinator::process_pending_replay_events_initiation;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 use crate::durable_host::tail_work::TailActivity;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
@@ -275,6 +277,8 @@ pub enum DropEvent {
     SettleCustomInvocationBegin {
         lifecycle: Arc<CustomBeginLifecycle>,
         terminal: Option<tokio::task::JoinHandle<Result<Option<OplogIndex>, WorkerExecutorError>>>,
+        /// Retained after the join so a torn removal window can requeue the cleanup.
+        cancelled_start: Option<OplogIndex>,
     },
     /// An invocation-context span whose owning resource was dropped from a synchronous host
     /// context (e.g. a p3 HTTP response dropped before its body was consumed). Finish it from the
@@ -440,6 +444,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
         DropEvent::SettleCustomInvocationBegin {
             lifecycle,
             terminal,
+            cancelled_start,
         } => {
             let cancelled_start = if let Some(terminal) = terminal {
                 terminal
@@ -454,7 +459,7 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                     })?
                     .map_err(|err| TerminalCallError::new(err, ambient_trap_context(ctx)))?
             } else {
-                None
+                cancelled_start
             };
             if let Some(start_index) = cancelled_start {
                 ctx.state.active_custom_invocations.remove(&start_index);
@@ -495,16 +500,10 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
                 .map_err(|error| TerminalCallError::new(error, trap_context))?;
         }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
-            let result = async {
-                if cancellation.defer_if_replaying(ctx)? {
-                    return Ok(());
-                }
-                ctx.process_pending_replay_events().await?;
-                cancellation
-                    .cancel()
-                    .await
-                    .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))
-            }
+            let result = cancel_dropped_durable_input_initiation(
+                &mut InlineInitiationAccess::new(ctx),
+                &cancellation,
+            )
             .await;
             result.map_err(|error| TerminalCallError::new(error, ambient_trap_context(ctx)))?;
         }
@@ -526,10 +525,25 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    if store.with(|mut access| cancellation.defer_if_replaying(get_ctx(access.data_mut())))? {
+    cancel_dropped_durable_input_initiation(
+        &mut InlineInitiationAccess::new(&mut AccessorContext::new(store, get_ctx)),
+        cancellation,
+    )
+    .await
+}
+
+pub(crate) async fn cancel_dropped_durable_input_initiation<Ctx: WorkerCtx>(
+    access: &mut impl InitiationAccess<Ctx>,
+    cancellation: &DroppedDurableInput,
+) -> Result<(), WorkerExecutorError> {
+    let deferred = cancellation.clone();
+    if access
+        .window(move |ctx| deferred.defer_if_replaying(ctx))
+        .await??
+    {
         return Ok(());
     }
-    process_pending_replay_events_access(store, get_ctx).await?;
+    process_pending_replay_events_initiation(access).await?;
     cancellation
         .cancel()
         .await
@@ -602,17 +616,32 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let (oplog, sink, events) = store.with(|mut access| {
-        let ctx = get_ctx(access.data_mut());
-        (
-            ctx.state.oplog.clone(),
-            ctx.state
+    let context = store.with(|mut access| ambient_trap_context(get_ctx(access.data_mut())));
+    drain_dropped_call_events_initiation(&mut InlineInitiationAccess::new(
+        &mut AccessorContext::new(store, get_ctx),
+    ))
+    .await
+    .map_err(|error| TerminalCallError::new(error, context))?
+}
+
+/// The outer error is a transport failure before the queue and its trap context were captured.
+pub(in crate::durable_host) async fn drain_dropped_call_events_initiation<Ctx: WorkerCtx>(
+    access: &mut impl InitiationAccess<Ctx>,
+) -> Result<Result<usize, TerminalCallError>, WorkerExecutorError> {
+    let (oplog, mut drain, context) = access
+        .window(|ctx| {
+            let sink = ctx
+                .state
                 .dropped_call_event_sender()
-                .expect("dropped-call event sender is always available"),
-            ctx.state.take_dropped_call_events(),
-        )
-    });
-    let mut drain = AccessDropEventDrainGuard::new(sink, events);
+                .expect("dropped-call event sender is always available");
+            let events = ctx.state.take_dropped_call_events();
+            (
+                ctx.state.oplog.clone(),
+                AccessDropEventDrainGuard::new(sink, events),
+                ambient_trap_context(ctx),
+            )
+        })
+        .await?;
     let mut recorded = 0;
     let mut first_error = None;
     while drain.start_next() {
@@ -637,7 +666,7 @@ where
                             live_call_permit,
                         });
                         if let Err(err) =
-                            end_durable_function_access(store, get_ctx, function_type, false).await
+                            end_durable_function_initiation(access, function_type, false).await
                             && first_error.is_none()
                         {
                             first_error = Some(TerminalCallError::new(err, context));
@@ -694,7 +723,7 @@ where
                 }
                 if terminal_recorded {
                     if let Err(err) =
-                        end_durable_function_access(store, get_ctx, function_type, false).await
+                        end_durable_function_initiation(access, function_type, false).await
                     {
                         if first_error.is_none() {
                             first_error = Some(TerminalCallError::new(err, trap_context));
@@ -732,8 +761,8 @@ where
             DropEvent::SettleCustomInvocationBegin {
                 lifecycle,
                 terminal,
+                cancelled_start,
             } => {
-                let mut cancelled_start = None;
                 if let Some(handle) = terminal {
                     match handle.await.map_err(|err| {
                         WorkerExecutorError::runtime(format!(
@@ -742,49 +771,41 @@ where
                     }) {
                         Ok(Ok(start_index)) => {
                             *terminal = None;
-                            cancelled_start = start_index;
+                            *cancelled_start = start_index;
                             recorded += 1;
                         }
                         Ok(Err(err)) | Err(err) => {
                             if first_error.is_none() {
-                                first_error = Some(TerminalCallError::new(
-                                    err,
-                                    store.with(|mut access| {
-                                        let ctx = get_ctx(access.data_mut());
-                                        ambient_trap_context(ctx)
-                                    }),
-                                ));
+                                first_error = Some(TerminalCallError::new(err, context));
                             }
                         }
                     }
                 }
                 if terminal.is_none() {
-                    if let Some(start_index) = cancelled_start {
-                        store.with(|mut access| {
-                            get_ctx(access.data_mut())
-                                .state
-                                .active_custom_invocations
-                                .remove(&start_index);
-                        });
+                    if let Some(start_index) = *cancelled_start {
+                        if let Err(error) = access
+                            .window(move |ctx| {
+                                ctx.state.active_custom_invocations.remove(&start_index);
+                            })
+                            .await
+                        {
+                            return Ok(Err(first_error
+                                .unwrap_or_else(|| TerminalCallError::new(error, context))));
+                        }
+                        *cancelled_start = None;
                     }
                     lifecycle.release_initiation();
                 }
             }
             DropEvent::FinishSpan { span_id } => {
                 let span_id = span_id.clone();
-                let finish_result = store.with(|mut access| {
-                    let ctx = get_ctx(access.data_mut());
-                    finish_span_in_memory(ctx, &span_id)
-                });
+                let finish_result = access
+                    .window(move |ctx| finish_span_in_memory(ctx, &span_id))
+                    .await
+                    .and_then(|result| result);
                 if let Err(err) = finish_result {
                     if first_error.is_none() {
-                        first_error = Some(TerminalCallError::new(
-                            err,
-                            store.with(|mut access| {
-                                let ctx = get_ctx(access.data_mut());
-                                ambient_trap_context(ctx)
-                            }),
-                        ));
+                        first_error = Some(TerminalCallError::new(err, context));
                     }
                 } else {
                     recorded += 1;
@@ -793,19 +814,15 @@ where
             DropEvent::FinishP3HttpSpan { cleanup } => {
                 let result = async {
                     cleanup.progress.clone().await?;
-                    store.with(|mut access| {
-                        finish_span_in_memory(get_ctx(access.data_mut()), &cleanup.finished.span_id)
-                    })
+                    let span_id = cleanup.finished.span_id.clone();
+                    access
+                        .window(move |ctx| finish_span_in_memory(ctx, &span_id))
+                        .await?
                 }
                 .await;
                 if let Err(error) = result {
                     if first_error.is_none() {
-                        first_error = Some(TerminalCallError::new(
-                            error,
-                            store.with(|mut access| {
-                                ambient_trap_context(get_ctx(access.data_mut()))
-                            }),
-                        ));
+                        first_error = Some(TerminalCallError::new(error, context));
                     }
                 } else {
                     recorded += 1;
@@ -815,8 +832,7 @@ where
                 disposal,
                 trap_context,
             } => {
-                let mut access = AccessorContext::new(store, get_ctx);
-                if let Err(error) = disposal.finish(&mut access).await {
+                if let Err(error) = disposal.finish_initiation(access).await {
                     if first_error.is_none() {
                         first_error = Some(TerminalCallError::new(error, *trap_context));
                     }
@@ -826,16 +842,10 @@ where
             }
             DropEvent::CancelDroppedDurableInput { cancellation } => {
                 if let Err(error) =
-                    cancel_dropped_durable_input_access(store, get_ctx, cancellation).await
+                    cancel_dropped_durable_input_initiation(access, cancellation).await
                 {
                     if first_error.is_none() {
-                        first_error = Some(TerminalCallError::new(
-                            error,
-                            store.with(|mut access| {
-                                let ctx = get_ctx(access.data_mut());
-                                ambient_trap_context(ctx)
-                            }),
-                        ));
+                        first_error = Some(TerminalCallError::new(error, context));
                     }
                 } else {
                     recorded += 1;
@@ -853,10 +863,10 @@ where
         drain.finish_current();
     }
     if let Some(err) = first_error {
-        return Err(err);
+        return Ok(Err(err));
     }
     drain.disarm();
-    Ok(recorded)
+    Ok(Ok(recorded))
 }
 
 #[cfg(test)]

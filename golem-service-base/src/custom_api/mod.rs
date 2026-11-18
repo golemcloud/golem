@@ -180,13 +180,27 @@ pub enum QueryOrHeaderType {
     Option {
         name: Option<String>,
         owner: Option<String>,
-        inner: Box<PathSegmentType>,
+        inner: Box<QueryOrHeaderType>,
     },
     List {
         name: Option<String>,
         owner: Option<String>,
         inner: Box<PathSegmentType>,
     },
+    Map {
+        key: PathSegmentType,
+        value: PathSegmentType,
+    },
+}
+
+impl QueryOrHeaderType {
+    pub fn is_map(&self) -> bool {
+        match self {
+            Self::Map { .. } => true,
+            Self::Option { inner, .. } => inner.is_map(),
+            _ => false,
+        }
+    }
 }
 
 impl From<QueryOrHeaderType> for SchemaType {
@@ -195,11 +209,16 @@ impl From<QueryOrHeaderType> for SchemaType {
         match value {
             QueryOrHeaderType::Primitive(inner) => (&inner).into(),
             QueryOrHeaderType::Option { inner, .. } => SchemaType::Option {
-                inner: Box::new(SchemaType::from(&*inner)),
+                inner: Box::new(SchemaType::from(*inner)),
                 metadata,
             },
             QueryOrHeaderType::List { inner, .. } => SchemaType::List {
                 element: Box::new(SchemaType::from(&*inner)),
+                metadata,
+            },
+            QueryOrHeaderType::Map { key, value } => SchemaType::Map {
+                key: Box::new(SchemaType::from(&key)),
+                value: Box::new(SchemaType::from(&value)),
                 metadata,
             },
         }
@@ -214,12 +233,16 @@ impl TryFrom<SchemaType> for QueryOrHeaderType {
             SchemaType::Option { inner, .. } => Ok(Self::Option {
                 name: None,
                 owner: None,
-                inner: Box::new(PathSegmentType::try_from(*inner)?),
+                inner: Box::new(Self::try_from(*inner)?),
             }),
             SchemaType::List { element, .. } => Ok(Self::List {
                 name: None,
                 owner: None,
                 inner: Box::new(PathSegmentType::try_from(*element)?),
+            }),
+            SchemaType::Map { key, value, .. } => Ok(Self::Map {
+                key: PathSegmentType::try_from(*key)?,
+                value: PathSegmentType::try_from(*value)?,
             }),
             other => Ok(Self::Primitive(
                 PathSegmentType::try_from(other)
