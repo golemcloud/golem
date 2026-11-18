@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   select:
-    if: github.repository == 'golemcloud/golem' && (github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && vars.MAIN_VALIDATION_ENABLED == 'true'))
+    if: github.repository == 'golemcloud/golem' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -47,7 +47,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ACCEPTANCE: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance }}
           REQUESTED_SOURCE: ${{ inputs.source }}
-          ENABLED: ${{ vars.MAIN_VALIDATION_ENABLED }}
         shell: bash
         run: |
           set -euo pipefail
@@ -61,7 +60,7 @@ jobs:
             [[ "$source" =~ ^[a-f0-9]{40}$ ]]
             gh api "$repository/commits/$source" --silent
           else
-            [[ "$ENABLED" == true && "$GITHUB_REF" == refs/heads/main && -z "$REQUESTED_SOURCE" ]]
+            [[ "$GITHUB_REF" == refs/heads/main && -z "$REQUESTED_SOURCE" ]]
             main=$(gh api "$repository/git/ref/heads/main" --jq .object.sha)
             gh api --paginate --slurp "$repository/issues?state=open&labels=main-validation-request&sort=created&direction=asc&per_page=100" > "$RUNNER_TEMP/requests.json"
             while IFS= read -r issue; do

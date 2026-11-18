@@ -1,9 +1,10 @@
 # Acceptance and operations
 
-Neither production sampling nor the new release gate is enabled. Do not change
-variables, dispatch workflows, create request labels/issues/statuses, post to
-Slack or change rulesets without authorization. Keep today's CI active until
-the real Blacksmith flow and reporting are accepted.
+The cutover code makes production sampling and the exact-source release gate
+permanent when merged. It removes the activation variables and full reusable-CI
+release fallback. Preparing this change does not merge it or change live settings.
+Do not dispatch workflows, create request labels/issues/statuses, post to Slack
+or change rulesets without separate authorization.
 
 ## Blacksmith acceptance
 
@@ -12,7 +13,8 @@ the real Blacksmith flow and reporting are accepted.
    source. Account separately for checks which do not emit CTRF.
 2. Run a warm acceptance cycle with `parallel=true`. Measure duration, peak memory
    and disk. Check ports, Redis, files and containers across all three subflows.
-   Keep production serial if overlap does not pass.
+   Do not call overlap accepted if this fails; production uses the existing
+   parallel flow, so an unresolved isolation failure blocks safe cutover.
 3. Exercise a persistent test failure and a recovered flaky test. Confirm two
    failed-test retries, the final result and retained original failures.
 4. Cancel a genuine run, then verify the next run can use the sticky disks and
@@ -23,12 +25,21 @@ the real Blacksmith flow and reporting are accepted.
 6. Verify APFS succeeds on the same source. Measure the provisional 300-minute
    workload and 330-minute Linux job limits before finalizing them.
 
-Acceptance uses `Main validation (acceptance)`, not the release status. The
-production flags remain independent: `MAIN_VALIDATION_ENABLED` for sampling,
-`MAIN_VALIDATION_RELEASE_GATE_ENABLED` for preparation. Accept the full-CI and
-new release paths, the exact frozen preparation head, both skip results, and
-failed/missing/pending status before switching the release path. One real release
-must pass the new gate before calling release acceptance complete.
+Acceptance uses `Main validation (acceptance)`, not the release status. Feature
+branch acceptance never satisfies release preparation. Replacement acceptance
+run [44267744093](https://github.com/golemcloud/golem/actions/runs/44267744093)
+uses the already-pushed source `dbf3b9cdd`; it is not evidence for later local
+cutover edits. Do not cancel or replace it as part of preparing this change.
+
+Local fixtures execute the real selection, result and release-gate shells with
+offline API responses. They cover missing/pending/failed statuses, wrong creators,
+acceptance-only success and publication after failed or skipped prerequisites.
+They do not establish real Blacksmith test identities, overlap isolation, cold/warm
+resource limits, sticky-disk cancellation recovery or same-source APFS completion.
+Record the real acceptance outcomes separately, including any outstanding cases.
+The exact frozen preparation head must pass the new gate in one real release
+before release acceptance is complete. Signing and publication are not exercised
+by offline fixtures.
 
 ## Requests and reports
 
@@ -67,13 +78,34 @@ Accept one failed and one green run, including a repeated wake-up which must not
 double-post. `.github/tools/flaky-tests` also needs real report-artifact acceptance
 before cutover.
 
-## Coordinated cutover (not performed)
+## Coordinated cutover (live changes not performed)
 
-Under an approved merge pause, enable production sampling, remove main/PR full
-suite triggers from `ci.yaml` and `builtin-bash.yaml`, and retain manual/reusable
-CI and full CI on maintenance branches (`N.N.x`). Extract the cheap path-filtered
-skill-harness PR checks. Split required checks so main keeps CLA while maintenance
-lines keep today's full checks. Update contributor/agent guidance and remove the
-three experiment branches only with authorization. Verify a real main merge,
-PR and Slack report before calling the ticket complete. The own machine and
-parked outer-VM scripts follow later; they are not prerequisites for Blacksmith.
+Under an approved merge pause, coordinate protection changes with the cutover
+merge. The live ruleset `16972918`, named `main`, currently applies jointly to
+`~DEFAULT_BRANCH`, `release-*` and `N.N.x`. Its 62 required statuses include
+`CLAAssistant` and legacy full-CI jobs. Do not remove the full-CI requirements from
+that shared ruleset wholesale: maintenance branches must retain them.
+
+Split main protection from release/maintenance protection, or make an equivalent
+scoped ruleset update. Main must no longer require jobs removed by the cutover;
+release and maintenance protection must not lose their existing full-CI checks.
+Preserve reviews, CLA, bypass policy, deletion restrictions and non-force-push
+safeguards. Keep Vouch and the existing docs/billing preview and deployment rules.
+Do not require `Main validation` on each PR: it samples main after merge and does
+not validate every PR or intermediate main commit. Do not add the path-filtered
+skill check as an unconditional requirement for unrelated PRs.
+
+The merged code activates the ten-minute schedule without a variable update and
+stops automatic full-platform/heavy Bash checks on ordinary main PRs and pushes.
+It retains manual/reusable CI, maintenance full CI and the cheap path-filtered
+main PR skill-harness workflow. No optional full PR validation is introduced.
+Release preparation always requires the exact-source production result and
+release-only prerequisites. Existing activation variables no longer control it.
+
+Verify a real main merge, unrelated PR, skill-only PR, maintenance PR/push and
+Slack report before calling the ticket complete. Confirm there is no duplicate
+automatic full-platform flow and that removed checks no longer block main PRs.
+Daniel Vigovszky owns outages and merge/release pauses; do not automatically
+restore paid full PR CI during an outage. Update contributor/agent guidance with
+the same merge. Branch deletion requires separate authorization. The own machine
+and parked outer-VM scripts follow later; they are not prerequisites for Blacksmith.

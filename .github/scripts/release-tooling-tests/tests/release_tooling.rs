@@ -133,67 +133,144 @@ fn main_validation_keeps_failed_workload_results_separate_from_cache_delivery() 
 }
 
 #[test]
-fn release_preparation_requires_the_selected_preflight_and_never_publishes_after_a_failed_gate() {
+fn release_preparation_requires_exact_validation_and_release_prerequisites() {
     let workflow: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(workspace_path().join(".github/workflows/prepare-golem-release.yaml"))
             .unwrap(),
     )
     .unwrap();
     let jobs = &workflow["jobs"];
-    let conditions = ["preflight", "release-prerequisites", "publish-builtins"]
-        .map(|job| jobs[job]["if"].as_str().unwrap());
+    assert!(jobs.get("preflight").is_none());
+    assert!(jobs["validate"].get("outputs").is_none());
+    assert!(jobs["release-prerequisites"].get("if").is_none());
+    assert_eq!(jobs["release-prerequisites"]["needs"], "validate");
+    assert_eq!(
+        jobs["publish-builtins"]["needs"],
+        serde_yaml::to_value(["validate", "release-prerequisites"]).unwrap()
+    );
+    let condition = jobs["publish-builtins"]["if"].as_str().unwrap();
     let states = ["success", "failure", "cancelled", "skipped"];
     let mut cases = Vec::new();
-    for mode in ["false", "true", "", "invalid"] {
-        for validate in states {
-            for preflight in states {
-                for prerequisites in states {
-                    for cancelled in [false, true] {
-                        let validated = validate == "success";
-                        let publish = !cancelled
-                            && validated
-                            && match mode {
-                                "false" => preflight == "success" && prerequisites == "skipped",
-                                "true" => prerequisites == "success" && preflight == "skipped",
-                                _ => false,
-                            };
-                        cases.push(json!({
-                            "needs": {
-                                "validate": {"result": validate, "outputs": {"use-main-validation": mode}},
-                                "preflight": {"result": preflight},
-                                "release-prerequisites": {"result": prerequisites}
-                            },
-                            "cancelled": cancelled,
-                            "expected": [validated && mode == "false", validated && mode == "true", publish]
-                        }));
-                    }
-                }
+    for validate in states {
+        for prerequisites in states {
+            for cancelled in [false, true] {
+                cases.push(json!({
+                    "needs": {
+                        "validate": {"result": validate},
+                        "release-prerequisites": {"result": prerequisites}
+                    },
+                    "cancelled": cancelled,
+                    "expected": !cancelled && validate == "success" && prerequisites == "success"
+                }));
             }
         }
     }
-    // These predicates use JavaScript's boolean/string operators. Model Actions'
-    // implicit success() guard too: a skipped dependency otherwise blocks a job.
     let output = Command::new("node")
         .args([
             "--input-type=module",
             "-e",
             r#"
 import assert from 'node:assert/strict';
-const [conditions, cases] = JSON.parse(process.argv[1]);
+const [condition, cases] = JSON.parse(process.argv[1]);
 for (const value of cases) {
-    const results = conditions.map((condition, index) => {
-        const expression = condition.replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, '$1');
-        const code = expression.replace(/\.([A-Za-z_][A-Za-z0-9_-]*)/g, "['$1']");
-        const needs = index === 2 ? value.needs : {validate: value.needs.validate};
-        const explicitStatus = /\b(always|success|failure|cancelled)\s*\(/.test(expression);
-        return (explicitStatus || Object.values(needs).every(job => job.result === 'success')) &&
-            Boolean(Function('needs', 'cancelled', `return (${code});`)(needs, () => value.cancelled));
-    });
-    assert.deepEqual(results, value.expected, JSON.stringify(value));
+    const expression = condition.replace(/^\s*\$\{\{([\s\S]*)\}\}\s*$/, '$1');
+    const code = expression.replace(/\.([A-Za-z_][A-Za-z0-9_-]*)/g, "['$1']");
+    const result = Boolean(Function('needs', 'cancelled', `return (${code});`)(value.needs, () => value.cancelled));
+    assert.equal(result, value.expected, JSON.stringify(value));
 }
 "#,
-            &serde_json::to_string(&(conditions, cases)).unwrap(),
+            &serde_json::to_string(&(condition, cases)).unwrap(),
         ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn cutover_keeps_maintenance_ci_and_only_cheap_skill_checks_on_main_prs() {
+    let load = |name: &str| -> serde_yaml::Value {
+        serde_yaml::from_str(
+            &fs::read_to_string(workspace_path().join(".github/workflows").join(name)).unwrap(),
+        )
+        .unwrap()
+    };
+    let ci = load("ci.yaml");
+    let bash = load("builtin-bash.yaml");
+    let steps = ci["jobs"]["unit-tests-and-checks"]["steps"]
+        .as_sequence()
+        .unwrap();
+    let python = steps
+        .iter()
+        .position(|step| step["uses"] == "actions/setup-python@v6")
+        .unwrap();
+    let release_tests = steps
+        .iter()
+        .position(|step| step["name"] == "Test release tooling")
+        .unwrap();
+    assert!(python < release_tests);
+    assert_eq!(steps[python]["with"]["python-version"], "3.14");
+    for workflow in [&ci, &bash] {
+        for event in ["push", "pull_request"] {
+            assert_eq!(
+                workflow["on"][event]["branches"],
+                serde_yaml::to_value(["[0-9]+.[0-9]+.x"]).unwrap()
+            );
+        }
+        assert!(workflow["on"].get("workflow_dispatch").is_some());
+    }
+    assert!(ci["on"].get("workflow_call").is_some());
+    for event in ["push", "pull_request"] {
+        assert_eq!(
+            ci["on"][event]["paths-ignore"],
+            serde_yaml::to_value([
+                "docs/**",
+                "golem-cloud-billing/**",
+                ".github/workflows/golem-cloud-billing.yaml"
+            ])
+            .unwrap()
+        );
+    }
+    let skills = load("skill-harness-pr.yaml");
+    assert_eq!(skills["on"].as_mapping().unwrap().len(), 1);
+    assert_eq!(
+        skills["on"]["pull_request"]["branches"],
+        serde_yaml::to_value(["main"]).unwrap()
+    );
+    assert_eq!(
+        skills["on"]["pull_request"]["paths"],
+        serde_yaml::to_value(["golem-skills/**", ".github/workflows/skill-harness-pr.yaml"])
+            .unwrap()
+    );
+    assert_eq!(skills["jobs"].as_mapping().unwrap().len(), 1);
+    let commands: Vec<_> = skills["jobs"]["unit-tests"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            "npm install\nnpm run build\n",
+            "npm run format:check",
+            "npm test"
+        ]
+    );
+}
+
+#[test]
+fn main_validation_cutover_executes_selection_and_exact_release_gate_shells() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_cutover.py",
+        ])
+        .current_dir(workspace_path())
         .output()
         .unwrap();
     assert!(

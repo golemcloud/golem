@@ -201,7 +201,7 @@ When changing SDK code generation, guest bridge generation, canonical ABI wrappe
 
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 
-Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Repository-wide CI remains the final broad safety net; local verification must still cover the affected code and behavior before opening a PR.
+Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Pull requests to `main` do not run full CI; the continuous `Main validation` workflow validates the latest main commit after merge. Maintenance branches retain full CI. Local verification must cover the affected code and behavior before opening a PR; do not assume PR CI will supply missing checks.
 
 ### Writing the PR description
 

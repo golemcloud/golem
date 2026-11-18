@@ -5,7 +5,7 @@ description: "Final checks before submitting a pull request. Use when preparing 
 
 # Pre-PR Checklist
 
-Validate the smallest dependency and behavior scope that fully covers the change. Local checks should find likely failures quickly; repository-wide CI remains the broad safety net.
+Validate the smallest dependency and behavior scope that fully covers the change. Pull requests to `main` do not run full CI. `Main validation` checks the latest main commit after merge; maintenance branches retain full CI. Run the affected checks locally before opening a PR rather than relying on a later main cycle to find regressions.
 
 ## 1. Classify the Change
 

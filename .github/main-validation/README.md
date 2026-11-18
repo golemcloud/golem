@@ -1,8 +1,16 @@
 # Main validation
 
-The replacement is **inactive**. The shared cargo-make prerequisites are a
-separate PR. This workflow and release change remain local until authorized.
-Today's CI triggers, required checks and full release preflight remain active.
+Merging this cutover activates scheduled main validation and the exact-source
+release gate without repository activation variables. Ordinary main pushes and
+PRs no longer run the full platform or heavy built-in Bash workflows. Maintenance
+branches (`N.N.x`) retain full CI. Manual and reusable CI entry points remain.
+Docs, billing, CLA and Vouch workflows remain unchanged; inexpensive path-filtered
+skill-harness build, format and unit checks remain on main PRs. This does not add
+optional full PR validation or paid LLM scenarios.
+
+The merge requires coordinated protection changes, not performed by this code.
+See [OPERATIONS.md](OPERATIONS.md) before merging: main and maintenance currently
+share a ruleset with legacy full-CI requirements.
 
 ## Responsibilities
 
@@ -21,18 +29,18 @@ use `gh` directly in the workflow. The independent reporting observer's prompt,
 helpers and setup instructions live in [observer/](observer/README.md); they do
 not control or execute validation.
 
-## Inactive defaults and acceptance
+## Production and acceptance
 
-`MAIN_VALIDATION_ENABLED=true` permits production sampling on main. With it unset,
-scheduled runs start no workloads. Manual dispatch defaults to acceptance mode,
+The ten-minute schedule samples main as soon as this workflow is on the default
+branch. Manual dispatch defaults to acceptance mode,
 can run from a feature branch, and uses `Main validation (acceptance)`. It does not
 consume request issues or publish production status. Its optional `source` must
 be a full commit SHA; otherwise it validates the workflow commit. Production
-manual wake-ups require the flag and main ref, and accept no source override.
+manual wake-ups require the main ref and accept no source override.
 
-The independent `MAIN_VALIDATION_RELEASE_GATE_ENABLED` flag chooses the release
-preflight. Unless it is `true`, preparation continues to call full reusable CI.
-An acceptance result cannot satisfy the production release gate.
+Release preparation always requires production validation of its exact source.
+There is no activation flag or fallback to full reusable CI. An acceptance result
+cannot satisfy the production release gate.
 
 The Linux target is `blacksmith-32vcpu-ubuntu-2404`. Toolchains use existing setup
 actions. Sticky disks retain the root Cargo target, designated dependency caches
@@ -103,7 +111,8 @@ scheduler. Each fork collects ordinary failures before joining; the final task
 rejects failed or missing branch completion records. Conflicting privileged
 checks follow the join. Set `MAIN_VALIDATION_PARALLEL=false` locally or the manual
 acceptance `parallel` input to false for a serial diagnostic run. Production
-sampling always uses parallel execution. Accept real overlap before cutover.
+sampling always uses parallel execution. Real overlap acceptance remains required;
+local contract tests alone do not establish isolation or resource headroom.
 
 Offsets are 0 for worker tests, 10000 for service tests, and 20000 for CLI tests.
 Preparation creates a unique root in the runner's system temporary directory.
@@ -211,12 +220,12 @@ selection does not duplicate that policy. Do not retag the squash commit, requir
 the frozen head to be a main ancestor, or import newer development. There is no
 current-main rules digest to invalidate an older source's result.
 
-After release-gate acceptance, preparation requires the latest `Main validation`
+Preparation requires the latest `Main validation`
 status from `github-actions[bot]` on the exact tag commit to be `success`. A
 missing, pending or failed result stops it without dispatch or automatic fallback.
 Release-only shared-crate, built-in and six published-SDK checks run on a separate
-Blacksmith runner outside the main-validation concurrency group. Exactly one
-selected preflight path must succeed before protected publication. Signing,
+Blacksmith runner outside the main-validation concurrency group. Both source
+validation and these prerequisites must succeed before protected publication. Signing,
 notarization and human draft review are unchanged.
 
 See [OPERATIONS.md](OPERATIONS.md) for remaining acceptance, reporting and cutover.
