@@ -100,6 +100,7 @@ use golem_common::model::{
 use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
+use crate::command_handler::interactive::Ask;
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::execute;
 use crossterm::queue;
@@ -845,7 +846,9 @@ impl AgentCommandHandler {
         // The REPL writes the accepted invocation ID to stdin once the call returns.
         let invocation_target = connection.invocation_goal().map(|goal| async move {
             use tokio::io::AsyncBufReadExt;
-            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            let stdin =
+                crate::command_handler::interactive::async_stdin("the accepted invocation ID")?;
+            let mut lines = tokio::io::BufReader::new(stdin).lines();
             if let Ok(Some(line)) = lines.next_line().await {
                 goal.set_target(
                     line.trim()
@@ -2863,19 +2866,15 @@ impl AgentCommandHandler {
         error: anyhow::Error,
         agent_id_match: &AgentIdMatch,
     ) -> anyhow::Error {
-        let rendered = if let Some(service_error) = error
+        let previous_invocation_failed = error
             .downcast_ref::<ServiceError>()
-            .filter(|service_error| service_error.is_previous_invocation_failed())
-        {
-            service_error.render()
-        } else if let Some(failure) = error
-            .downcast_ref::<invocation_session::InvocationFailure>()
-            .filter(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed)
-        {
-            failure.to_string()
-        } else {
+            .is_some_and(|service_error| service_error.is_previous_invocation_failed())
+            || error
+                .downcast_ref::<invocation_session::InvocationFailure>()
+                .is_some_and(|failure| failure.code == PublicErrorCode::PreviousInvocationFailed);
+        if !previous_invocation_failed {
             return error;
-        };
+        }
 
         let command = render_revert_command(
             &crate::command_name(),
@@ -2887,11 +2886,11 @@ impl AgentCommandHandler {
             &agent_id_match.agent_id,
         );
 
-        anyhow!(
-            "{}\n\nThe previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.",
-            rendered,
-            command,
-        )
+        // The original error stays the source, so that its code and details reach structured
+        // error reports; `{:#}` prints the hint and then the original error.
+        error.context(format!(
+            "The previous invocation failed and the agent cannot accept new invocations.\n\nTo discard the failed invocation and restore the preceding agent state, run:\n\n  {command}\n\nThis permanently removes the failed invocation and any later recorded agent state.\nExternal side effects already performed by that invocation may not be undone.\n\nThe error of the server"
+        ))
     }
 
     async fn interrupt_agent(
@@ -3210,7 +3209,7 @@ impl AgentCommandHandler {
             output_path.log_color_highlight()
         ))
         .with_default(false)
-        .prompt()?;
+        .ask()?;
 
         Ok(result)
     }
