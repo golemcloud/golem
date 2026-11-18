@@ -814,6 +814,49 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
 }
 
 #[test]
+async fn the_delivered_hook_runs_only_when_the_guest_receives_the_terminal() {
+    // A host call has returned its result and armed the observer. The guest then either
+    // receives the terminal or cancels it unread (`subtask.cancel` on a returned terminal).
+    for (consumption, expected_hook, expected_marker) in [
+        (TerminalConsumption::Delivered, true, "delivered"),
+        (TerminalConsumption::NotDelivered, false, "discarded"),
+    ] {
+        let oplog = Arc::new(InMemoryOplog::new());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let token = live_delivery_token(oplog.clone(), counter.clone(), tx).await;
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hook_ran = ran.clone();
+        let guard = AccessorDeliveryGuard {
+            delivery: Some(token),
+            on_delivered: Some(Box::new(move || hook_ran.store(true, Ordering::Release))),
+        };
+        guard.consume(consumption);
+        assert_eq!(
+            ran.load(Ordering::Acquire),
+            expected_hook,
+            "{expected_marker}"
+        );
+        if let Ok(DropEvent::AwaitCompletionMarker {
+            receipt: Some(mut receipt),
+            ..
+        }) = rx.try_recv()
+        {
+            await_marker_receipt(&mut receipt)
+                .await
+                .expect("marker append must succeed");
+        }
+        let entries = oplog.entries.lock().await;
+        let marker = match entries.as_slice() {
+            [OplogEntry::CompletionDelivered { .. }] => "delivered",
+            [OplogEntry::CompletionDiscarded { .. }] => "discarded",
+            other => panic!("expected one completion marker, got {other:?}"),
+        };
+        assert_eq!(marker, expected_marker);
+    }
+}
+
+#[test]
 async fn completion_delivery_discarded_appends_marker_inline() {
     // `discarded` (caller-detected silent discard) appends exactly one marker inline and
     // returns once it is durable; the permit is released and no drain event is queued.

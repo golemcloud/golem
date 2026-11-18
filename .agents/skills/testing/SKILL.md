@@ -29,13 +29,17 @@ mod tests {
 **Do not run `cargo make test`** — it runs broad root-workspace unit, worker-executor, service, and
 CLI integration suites and takes a very long time.
 
-| Change Type | Test Command |
+Main PRs run no tests. Follow the repository's local verification policy before opening or merging a PR. Start with the smallest affected test, module or package:
+
+| Scope | Test Command |
 |-------------|--------------|
-| Core logic, utilities | `cargo make unit-tests` |
-| Worker executor functionality | `cargo make worker-executor-tests` |
-| Broad service and CLI integration | `cargo make integration-tests` |
-| CLI changes | `cargo make cli-integration-tests` |
+| One Rust test or module | `cargo test -p <crate> -- <test_name> --report-time` |
+| One crate's library tests | `cargo test -p <crate> --lib -- --report-time` |
+| Worker executor behavior | Targeted integration test filter with `RUST_MIN_STACK=33554432`, as below |
+| CLI behavior | `cargo-test-r run --package golem-cli --test integration <filter> -- --report-time` |
 | CLI structured output/schema | `cargo test -p golem-cli cli_output_schema_ --lib` + `cargo make check-cli-output-schema` |
+
+Broad suites are exceptions for a specific affected contract that targeted checks cannot cover, or an explicit user request: `cargo make unit-tests`, `cargo make worker-executor-tests`, `cargo make integration-tests`, and `cargo make cli-integration-tests`. Missing PR tests alone is not a reason to run them.
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 
@@ -145,7 +149,7 @@ Worker executor tests, integration tests, and CLI integration tests can depend o
 Use this workflow:
 
 1. Identify which tagged `PrecompiledComponent` or test component files the selected tests require.
-2. Build those components first by following their `AGENTS.md`, or run `cargo make build-test-components` if a broad rebuild is simpler.
+2. Build only those components first by following their `AGENTS.md` and the targeted fixture build workflow.
 3. Only then run the Rust test command.
 
 Load the `modifying-test-components` skill for targeted rebuilds, or `rebuild-all-test-components` for a full rebuild.

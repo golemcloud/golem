@@ -716,6 +716,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     AccessResultDestination::Host,
                     completed_parent,
                     None,
+                    Box::new(|| {}),
                 )
                 .await?
             {
