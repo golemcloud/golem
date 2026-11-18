@@ -784,11 +784,12 @@ args = [
 
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit", "ensure-builtin-artifacts"]
-description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
+description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests, and the size-analysis retention test"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-size-analysis --test retention -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
@@ -3100,8 +3101,8 @@ echo "validated ${artifact_count} external built-in artifacts"
 
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"
-command = "python3"
-args = ["test-components/size-analysis/report.py", "--out", "tmp/component-size-report"]
+command = "cargo"
+args = ["run", "--package", "golem-size-analysis", "--", "report", "--out", "tmp/component-size-report", "${@}"]
 
 ## ** BUILD TEST COMPONENTS **
 

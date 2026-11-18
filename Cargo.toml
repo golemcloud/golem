@@ -17,6 +17,7 @@ members = [
     "golem-test-framework",
     "golem-js-guest-tests",
     "golem-shard-manager",
+    "golem-size-analysis",
     "golem-worker-executor",
     "golem-worker-executor-test-utils",
     "golem-worker-executor-tests",
@@ -329,6 +330,8 @@ tower = "0.5.2"
 try_match = { version = "0.4.2", default-features = false }
 trybuild = "1.0"
 tryhard = "0.5.1"
+twiggy-ir = "=0.8.0"
+twiggy-parser = { version = "=0.8.0", default-features = false }
 typed-path = { version = "0.10.0", default-features = false }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
