@@ -37,7 +37,12 @@ An acceptance result cannot satisfy the production release gate.
 The Linux target is `blacksmith-32vcpu-ubuntu-2404`. Toolchains use existing setup
 actions. Sticky disks retain the root Cargo target and designated dependency
 caches, not the checkout or exported WASM fixtures. Each job checks out clean
-source. The outer Lima workload VM is parked on the local
+source. Fixture compilation uses `target/main-validation-fixture-target` on the
+same sticky disk, rather than fresh per-application Cargo targets. The build
+script still invalidates each independent Rust root package and rebuilds all
+fixtures, including update v3 and v4; compiled dependencies remain reusable.
+This is compiler-cache reuse, not a cache hit for completed fixture bundles.
+The outer Lima workload VM is parked on the local
 `gol-1971-own-machine-vm` branch; only the existing managed-XFS tests use Lima.
 The own-machine phase must accept its VM and mount controls separately.
 

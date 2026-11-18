@@ -122,6 +122,7 @@ script_runner = "@duckscript"
 script = '''
 set_env GOLEM_CLI ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/dev-release-ci/golem
 set_env GOLEM_TS_PRESET quick
+set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-fixture-target
 root = pwd
 cd sdks/moonbit/golem_sdk_tools
 exec --fail-on-error moon update
