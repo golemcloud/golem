@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The links from addresses to the hostnames that the Store's completed address lookups
-//! returned them for, so that a hostname grant matches a raw-socket connect to the address.
+//! The links from addresses to the hostnames that the Store's completed address lookups and
+//! `golem:network/dns` A and AAAA lookups returned them for, so that a hostname grant matches a
+//! raw-socket connect to the address.
 //!
 //! Every completed lookup of the Store adds its links, live and on replay: a P2 lookup when its
-//! call returns, a P3 lookup when its delivery observer settles its completion as delivered, which
-//! is where the `CompletionDelivered` marker is recorded or, on replay, reached. A P3 completion
-//! that the guest discards, also after the host call returned it, adds no link. A tool entity Store has its
-//! own index. The links are derived from the
+//! call returns, a P3 or `golem:network/dns` lookup when its delivery observer settles its
+//! completion as delivered, which is where the `CompletionDelivered` marker is recorded or, on
+//! replay, reached. Such a completion that the guest discards, also after the host call returned
+//! it, adds no link. A tool entity Store has its own index. The links are derived from the
 //! oplog: a full replay fills the index again, and a start from a snapshot rebuilds it from the
 //! lookups that the snapshot skipped ([`ResolvedNames::rebuild`]). Only the lookups that replay
 //! returns again link, so live execution, replay and the rebuild agree. The decision of a connect is
@@ -30,7 +31,8 @@ use crate::worker::status::regions::unreplayed_regions;
 use golem_common::model::card::network_target::link_hostname;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    HostRequest, HostRequestP3SocketsResolveName, HostRequestSocketsResolveName, HostResponse,
+    HostRequest, HostRequestNetworkDnsResolve, HostRequestP3SocketsResolveName,
+    HostRequestSocketsResolveName, HostResponse, HostResponseNetworkDnsResolve,
     HostResponseP3SocketsResolveName, HostResponseSocketsResolveName, OplogEntry, OplogIndex,
     OplogPayload,
 };
@@ -106,10 +108,10 @@ impl ResolvedNames {
 
     /// The links of the completed lookups of the primary Store in `INITIAL..=through`: the
     /// history that a start from a snapshot at `through` skips. A lookup links where live
-    /// execution and replay link it: a P2 lookup at its `End`, a P3 lookup at its
-    /// `CompletionDelivered` marker, and a P3 lookup whose completion the guest discarded or did
-    /// not receive yet not at all. A lookup that no replay runs links nothing: one in
-    /// `deleted_regions`, in a region that a `Jump` skipped, or in a failed attempt of a
+    /// execution and replay link it: a P2 lookup at its `End`, a P3 or `golem:network/dns`
+    /// lookup at its `CompletionDelivered` marker, and such a lookup whose completion the guest
+    /// discarded or did not receive yet not at all. A lookup that no replay runs links nothing:
+    /// one in `deleted_regions`, in a region that a `Jump` skipped, or in a failed attempt of a
     /// snapshot-based update. The lookups of entity bodies belong to their own Stores, and the
     /// physical calls of a custom durable invocation do not replay, so neither links.
     ///
@@ -191,6 +193,16 @@ impl ResolvedNames {
                     result: Ok(addresses),
                 }),
             ) => (name, addresses),
+            (
+                HostRequest::NetworkDnsResolve(HostRequestNetworkDnsResolve { name, .. }),
+                HostResponse::NetworkDnsResolve(HostResponseNetworkDnsResolve {
+                    result: Ok(records),
+                }),
+            ) => {
+                let addresses = super::dns::linked_addresses(&records).collect::<Vec<_>>();
+                self.insert(&name, addresses);
+                return;
+            }
             _ => return,
         };
         self.insert(&name, addresses.0.into_iter().map(IpAddr::from));
@@ -266,7 +278,8 @@ impl LookupScan {
                 }
                 let p3 = match function_name {
                     HostFunctionName::SocketsIpNameLookupResolveAddresses => false,
-                    HostFunctionName::P3SocketsIpNameLookupResolveAddresses => true,
+                    HostFunctionName::P3SocketsIpNameLookupResolveAddresses
+                    | HostFunctionName::GolemNetworkDnsResolve => true,
                     _ => return,
                 };
                 if !in_entity
@@ -534,6 +547,77 @@ mod tests {
         for unlinked in ["10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5"] {
             assert!(names.hostnames(ip(unlinked)).is_empty(), "{unlinked}");
         }
+        assert_eq!(names.links.len(), 2);
+    }
+
+    #[test]
+    fn the_rebuild_links_the_address_records_of_delivered_dns_record_lookups() {
+        use golem_common::model::oplog::types::{
+            SerializableDnsRecord, SerializableDnsRecordData, SerializableDnsRecordType,
+        };
+        let record_start = |name: &str| {
+            start_entry(
+                HostFunctionName::GolemNetworkDnsResolve,
+                None,
+                false,
+                Some(HostRequest::NetworkDnsResolve(
+                    HostRequestNetworkDnsResolve {
+                        name: name.to_string(),
+                        record_type: SerializableDnsRecordType::A,
+                    },
+                )),
+            )
+        };
+        let record_end = |start: u64, records: Vec<SerializableDnsRecordData>| {
+            end_entry(
+                start,
+                Some(HostResponse::NetworkDnsResolve(
+                    HostResponseNetworkDnsResolve {
+                        result: Ok(records
+                            .into_iter()
+                            .map(|data| SerializableDnsRecord { ttl: 60, data })
+                            .collect()),
+                    },
+                )),
+            )
+        };
+        let names = rebuild_from(vec![
+            // 2..=4: a delivered A/AAAA answer links both addresses.
+            record_start("db.test"),
+            record_end(
+                2,
+                vec![
+                    SerializableDnsRecordData::A(ip("10.0.0.1").into()),
+                    SerializableDnsRecordData::Aaaa(ip("fd00::1").into()),
+                ],
+            ),
+            delivered(2),
+            // 5..=7: an MX answer links nothing, even when its exchange is an address.
+            record_start("mail.test"),
+            record_end(
+                5,
+                vec![SerializableDnsRecordData::Mx {
+                    preference: 10,
+                    exchange: "10.0.0.2".to_string(),
+                }],
+            ),
+            delivered(5),
+            // 8..=10: a discarded answer links nothing.
+            record_start("discarded.test"),
+            record_end(8, vec![SerializableDnsRecordData::A(ip("10.0.0.3").into())]),
+            discarded(8),
+            // 11..=12: an answer the guest has not received links nothing.
+            record_start("undelivered.test"),
+            record_end(
+                11,
+                vec![SerializableDnsRecordData::A(ip("10.0.0.4").into())],
+            ),
+        ]);
+        assert_eq!(names.hostnames(ip("10.0.0.1")), vec!["db.test"]);
+        assert_eq!(names.hostnames(ip("fd00::1")), vec!["db.test"]);
+        assert!(names.hostnames(ip("10.0.0.2")).is_empty());
+        assert!(names.hostnames(ip("10.0.0.3")).is_empty());
+        assert!(names.hostnames(ip("10.0.0.4")).is_empty());
         assert_eq!(names.links.len(), 2);
     }
 
