@@ -869,19 +869,32 @@ pub(crate) fn finish_span_in_memory<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     span_id: &SpanId,
 ) -> Result<(), WorkerExecutorError> {
-    if &ctx.state.current_span_id == span_id {
-        let span = ctx.state.invocation_context.get(span_id).map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "span {span_id} missing during finish_span replay: {err}"
-            ))
-        })?;
-        ctx.state.current_span_id = span
+    if &ctx.state.invocation_state().current_span_id == span_id {
+        let span = ctx
+            .state
+            .invocation_state()
+            .invocation_context
+            .get(span_id)
+            .map_err(|err| {
+                WorkerExecutorError::runtime(format!(
+                    "span {span_id} missing during finish_span replay: {err}"
+                ))
+            })?;
+        ctx.state.invocation_state_mut().current_span_id = span
             .parent()
             .map(|p| p.span_id().clone())
-            .unwrap_or_else(|| ctx.state.invocation_context.root.span_id().clone());
+            .unwrap_or_else(|| {
+                ctx.state
+                    .invocation_state()
+                    .invocation_context
+                    .root
+                    .span_id()
+                    .clone()
+            });
     }
     let _ = ctx
         .state
+        .invocation_state_mut()
         .invocation_context
         .finish_span(span_id)
         .map_err(WorkerExecutorError::runtime);

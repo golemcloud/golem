@@ -664,7 +664,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
             environment_id: ctx.state.owned_agent_id.environment_id,
             default_retry_policy: NamedRetryPolicy::default_from_config(&ctx.state.config.retry),
             agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
-            runtime_retry_policy_mutations: ctx.state.runtime_retry_policy_mutations.clone(),
+            runtime_retry_policy_mutations: ctx.state.retry_policy_mutations(),
             retry_properties,
             max_in_function_retry_delay: ctx.durable_execution_state().max_in_function_retry_delay,
             worker: ctx.public_state.worker(),

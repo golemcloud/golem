@@ -2890,9 +2890,8 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
         )
     };
 
-    // Every internal chunk reads three entries. The 2000 byte log entries do not match and do
-    // not count against the budget, so the first two matches fit, from different chunks, and
-    // the third match ends the page.
+    // The 2000 byte log entries do not match and do not count against the budget, so the first
+    // two matches fit, from different chunks, and the third match ends the page.
     let first = search(OplogIndex::INITIAL).await.unwrap();
     assert_eq!(
         page_indices(&first.entries),
@@ -2902,6 +2901,91 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
 
     let second = search(first.next_oplog_index).await.unwrap();
     assert_eq!(page_indices(&second.entries), vec![(matching[2], true)]);
+}
+
+#[test]
+async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_last() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("search-count").await;
+    let needle = || OplogEntry::Log {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        level: LogLevel::Stderr,
+        context: "context".to_string(),
+        message: "needle".to_string(),
+        trace_context: None,
+    };
+    let first_index = oplog.add(log_entry(0)).await.unwrap();
+    let mut matching = Vec::new();
+    for _ in 0..4 {
+        matching.push(oplog.add(needle()).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(matching[0], first_index.next());
+
+    // A first chunk of two entries finds one match. The search then reads only the one entry
+    // that it still needs, not a full chunk, which would find two more matches.
+    let page = |from: OplogIndex| {
+        search_public_oplog_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            PublicOplogPageLimits {
+                count: 2,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            ScanBudget::default(),
+        )
+    };
+    let first = page(OplogIndex::INITIAL).await.unwrap();
+    assert_eq!(
+        page_indices(&first.entries),
+        vec![(matching[0], true), (matching[1], true)]
+    );
+    assert_eq!(first.next_oplog_index, matching[2]);
+    let second = page(first.next_oplog_index).await.unwrap();
+    assert_eq!(
+        page_indices(&second.entries),
+        vec![(matching[2], true), (matching[3], true)]
+    );
+
+    // A guest search has the same limit, and still reads no entry after its pinned end.
+    let guest = |from: OplogIndex| {
+        search_public_oplog(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            from,
+            Some(matching[2]),
+            2,
+            "needle",
+            ScanBudget::default(),
+        )
+    };
+    let first = guest(OplogIndex::INITIAL).await.unwrap();
+    let indices = |entries: &[PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(indices(&first.entries), vec![matching[0], matching[1]]);
+    assert_eq!(first.next_oplog_index, matching[2]);
+    let second = guest(first.next_oplog_index).await.unwrap();
+    assert_eq!(indices(&second.entries), vec![matching[2]]);
+    assert_eq!(second.last_index, matching[2]);
 }
 
 #[test]

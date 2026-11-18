@@ -18,6 +18,7 @@ use crate::context::Context;
 use crate::error::HintError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
+use crate::error::OutsideEnvironment;
 use crate::error::service::MapServiceError;
 use crate::log::{
     LogColorize, LogIndent, log_action, log_error, log_skipping_up_to_date, log_warn_action, logln,
@@ -109,6 +110,15 @@ impl EnvironmentCommandHandler {
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        if let Some(pinned) = self.ctx.pinned_environment() {
+            if let Some(environment_reference) = self.ctx.environment_reference()
+                && !mode.allowed(environment_reference)
+            {
+                self.environment_is_required_error(mode)?;
+            }
+            return self.current_pinned_environment(pinned).await;
+        }
+
         let resolved = match self.ctx.environment_reference() {
             Some(environment_reference) => {
                 self.resolve_environment_reference(mode, environment_reference)
@@ -306,12 +316,22 @@ impl EnvironmentCommandHandler {
         environment_reference: Option<&EnvironmentReference>,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
         match &environment_reference {
-            Some(environment_reference) => {
-                self.ctx
-                    .environment_handler()
-                    .resolve_environment_reference(mode, environment_reference)
+            Some(environment_reference) => match self.ctx.pinned_environment() {
+                Some(pinned) => {
+                    self.resolve_environment_reference_in_pinned(
+                        mode,
+                        environment_reference,
+                        pinned,
+                    )
                     .await
-            }
+                }
+                None => {
+                    self.ctx
+                        .environment_handler()
+                        .resolve_environment_reference(mode, environment_reference)
+                        .await
+                }
+            },
             None => {
                 self.ctx
                     .environment_handler()
@@ -319,6 +339,81 @@ impl EnvironmentCommandHandler {
                     .await
             }
         }
+    }
+
+    /// Resolves a reference that a command argument names, such as the environment of a qualified
+    /// agent ID, and refuses it unless it is the pinned environment under its current names. A
+    /// reference whose names differ is refused; one whose names match is resolved and compared by
+    /// ID, because the same names can belong to another account.
+    async fn resolve_environment_reference_in_pinned(
+        &self,
+        mode: EnvironmentResolveMode,
+        environment_reference: &EnvironmentReference,
+        pinned: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let current = self.current_pinned_environment(pinned).await?;
+        let outside = || OutsideEnvironment {
+            requested: environment_reference.to_string(),
+            environment: format!(
+                "{}/{}",
+                current.application_name.0, current.environment_name.0
+            ),
+        };
+        let (application_name, environment_name) = match environment_reference {
+            EnvironmentReference::Environment { environment_name } => {
+                if *environment_name != current.environment_name {
+                    bail!(outside());
+                }
+                if !mode.allowed(environment_reference) {
+                    self.environment_is_required_error(mode)?;
+                }
+                return Ok(current);
+            }
+            EnvironmentReference::ApplicationEnvironment {
+                application_name,
+                environment_name,
+            }
+            | EnvironmentReference::AccountApplicationEnvironment {
+                application_name,
+                environment_name,
+                ..
+            } => (application_name, environment_name),
+        };
+        if *application_name != current.application_name
+            || *environment_name != current.environment_name
+        {
+            bail!(outside());
+        }
+        let resolved = self
+            .resolve_environment_reference(mode, environment_reference)
+            .await?;
+        if resolved.environment_id != current.environment_id {
+            bail!(outside());
+        }
+        Ok(current)
+    }
+
+    /// The pinned environment as the server has it now: with its current names and its current
+    /// deployment. The pin is the environment's ID, so a renamed environment is still the same
+    /// one, and a deleted one fails with the server's not-found error.
+    async fn current_pinned_environment(
+        &self,
+        pinned: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let server_environment = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .get_environment(&pinned.environment_id.0)
+            .await
+            .map_service_error()?;
+        self.ensure_diff_model_version_compatible(ResolvedEnvironmentIdentity {
+            application_name: server_environment.application_name.clone(),
+            environment_name: server_environment.name.clone(),
+            server_environment,
+            ..pinned.clone()
+        })
     }
 
     async fn get_server_environment(

@@ -95,6 +95,11 @@ pub trait HttpClient4 {
     /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
     async fn post_with_status_retry_policy(&self) -> String;
 
+    /// Sends the terminal POST from a future spawned inside a retry policy scope that retries
+    /// HTTP 500 responses, then sends it again after the scope ends. Returns both responses and
+    /// whether the scoped policy is visible after the scope, separated by `|`.
+    async fn post_in_and_after_status_retry_scope(&self) -> String;
+
     /// Sends a raw wasip3 POST whose bounded body is terminal before send.
     async fn p3_terminal_post(&self) -> String;
 
@@ -383,15 +388,27 @@ impl HttpClient4 for HttpClient4Impl {
     }
 
     async fn post_with_status_retry_policy(&self) -> String {
-        let policy = NamedPolicy::named(
-            "http-status-retry-test",
-            Policy::immediate().max_retries(10),
-        )
-        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
+        with_named_policy_async(&status_retry_policy(), || async {
+            do_p3_terminal_post().await
+        })
+        .await
+        .unwrap()
+    }
 
-        with_named_policy_async(&policy, || async { do_p3_terminal_post().await })
-            .await
-            .unwrap()
+    async fn post_in_and_after_status_retry_scope(&self) -> String {
+        let inside = with_named_policy_async(&status_retry_policy(), || async {
+            let (sender, receiver) = futures_channel::oneshot::channel();
+            wit_bindgen::spawn_local(async move {
+                let _ = sender.send(do_p3_terminal_post().await);
+            });
+            receiver.await.expect("the spawned post should report")
+        })
+        .await
+        .unwrap();
+        let visible_after =
+            golem_rust::retry::get_retry_policy_by_name(STATUS_RETRY_POLICY).is_some();
+        let after = do_p3_terminal_post().await;
+        format!("{inside}|{visible_after}|{after}")
     }
 
     async fn p3_terminal_post(&self) -> String {
@@ -1778,6 +1795,13 @@ async fn do_put_with_p3_declared_small_body_open_until_response() -> String {
     };
 
     (send, hold_body_open).race().await
+}
+
+const STATUS_RETRY_POLICY: &str = "http-status-retry-test";
+
+fn status_retry_policy() -> NamedPolicy {
+    NamedPolicy::named(STATUS_RETRY_POLICY, Policy::immediate().max_retries(10))
+        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16))
 }
 
 async fn do_p3_terminal_post() -> String {

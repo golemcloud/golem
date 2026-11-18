@@ -334,6 +334,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             published_authority_generation,
         )
         .await?;
+        let attribution = state.attribution.clone();
         if state.is_live() {
             linear_memory.switch_to_live();
         }
@@ -369,12 +370,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             schema_output_tasks: Mutex::new(Some(
                 crate::worker::tasks::NativeReconstructionTasks::new(&worker.tasks)?,
             )),
-            primary_invocation_start_index: None,
-            invocation_caller: None,
-            invocation_id: None,
             owner_execution,
             runtime_suspension: None,
             guest_imports: Default::default(),
+            attribution,
             _owner_resources: owner_resources,
             entity_reconstruction_claim_hook,
             replay_admission_hook,
@@ -447,8 +446,6 @@ impl PrivateDurableWorkerState {
         resource_limit_entry: Arc<AtomicResourceEntry>,
         published_authority_generation: Arc<AtomicU64>,
     ) -> Result<Self, WorkerExecutorError> {
-        let invocation_context = InvocationContext::new(None);
-        let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
         let entity_replay_wallet = match (&runtime, entity_execution_mode) {
             (
@@ -538,11 +535,8 @@ impl PrivateDurableWorkerState {
             oplog_service,
             oplog,
             owner_context,
-            http_call_count: 0,
             per_invocation_http_call_limit,
-            rpc_call_count: 0,
             per_invocation_rpc_call_limit,
-            scope_card_mint_ordinal: 0,
             promise_service,
             scheduler_service,
             worker_service,
@@ -559,7 +553,15 @@ impl PrivateDurableWorkerState {
             agent_webhooks_service,
             agent_config,
             owned_agent_id,
-            current_idempotency_key: None,
+            attribution: Default::default(),
+            invocations: {
+                let mut invocations = execution_state::Invocations::default();
+                invocations
+                    .loop_entry_mut()
+                    .authority
+                    .replace_surface(agent_effective_surface);
+                invocations
+            },
             entity_logical_key_position: None,
             rpc,
             worker_proxy,
@@ -567,7 +569,6 @@ impl PrivateDurableWorkerState {
             last_resource_id: AgentResourceId::INITIAL,
             store_replay_state: StoreReplayState::new(entity_execution_mode),
             active_custom_invocations: HashMap::new(),
-            tool_invocation_attempt_ordinals: HashMap::new(),
             custom_invocation_scopes: HashMap::new(),
             next_custom_invocation_scope_id: 1,
             open_p3_http_responses: HashMap::new(),
@@ -582,8 +583,6 @@ impl PrivateDurableWorkerState {
             p2_timer_deadlines: HashMap::new(),
             socket_entries: sockets::SocketEntries::default(),
             snapshotting_mode: false,
-            invocation_strictness: InvocationStrictness::Normal,
-            read_only_method_name: None,
             last_state_change: None,
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,
@@ -593,23 +592,13 @@ impl PrivateDurableWorkerState {
             replay_applications: VecDeque::new(),
             owner_wallet,
             entity_replay_wallet,
-            agent_effective_surface,
             agent_wallet_cards,
-            invocation_scope_card: None,
-            invocation_scope_root_cards: BTreeMap::new(),
-            invocation_scope_handles: HashMap::new(),
             inherited_invocation_scope: None,
-            scope_interest: None,
             owner_revoked_card_ids: HashSet::new(),
             wallet_id_hash,
             wallet_generation,
             published_authority_generation,
-            processed_authority_generation: 0,
-            authority_initialized: false,
-            next_authority_expiration: None,
             replay_state,
-            invocation_context,
-            current_span_id,
             forward_trace_context_headers: true,
             set_outgoing_http_idempotency_key: true,
             worker_fork,
@@ -620,6 +609,7 @@ impl PrivateDurableWorkerState {
             config,
             cached_agent_config_retry_policies: None,
             runtime_retry_policy_mutations: BTreeMap::new(),
+            next_retry_policy_scope_id: 1,
             rpc_pollable_to_parent: HashMap::new(),
             shard_service,
             automatic_update_unsettled: pending_update.as_ref().is_some_and(|update| {
@@ -630,7 +620,6 @@ impl PrivateDurableWorkerState {
                 )
             }),
             pending_update: tokio::sync::Mutex::new(pending_update),
-            current_retry_point: OplogIndex::INITIAL,
             transaction_protocols: HashMap::new(),
             live_host_calls: Arc::new(AtomicUsize::new(0)),
             tail_work,

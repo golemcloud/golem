@@ -277,6 +277,8 @@ replay tolerance.
 | Durable calls | `durable_host/concurrent/{mod.rs,call.rs,delivery.rs,replay.rs}` | `DurableCallSession` state machine, drop policies, completion delivery tokens |
 | Durability guard | `durable_host/durability.rs` | `begin_durable_function`/`end_durable_function`, `DurableFunctionType`, in-function retry |
 | Host context | `durable_host/mod.rs`, `durable_host/recovery.rs` | `prepare_instance`, `replay`, `switch_to_live`, `PendingReplayToLive`, `IdempotencyKeyPosition`, snapshot boundary checks |
+| Attribution | `durable_host/attribution.rs` | `InvocationKey`, the task-group hook, Golem's scoped value, arming of export calls |
+| Per-invocation state | `durable_host/execution_state.rs` | `Invocations` entries keyed by `InvocationKey`, `InvocationAuthority`, the loop-key fallback |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
 | RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
@@ -1876,7 +1878,7 @@ scheduler that yields through Promise jobs. The default `setImmediate` yield is 
 `monotonic-clock::wait-for` call, which replay of a completed operation does not repeat, so its
 unclaimed `Start` stopped recovery (`tests/durability_effect.rs`).
 
-**Non-Rust SDK limitation:** MoonBit and Go custom combinators support
+**Non-Rust SDK limitation:** MoonBit custom combinators support
 sequential and properly nested execution only. Their scope remains installed across suspension.
 An async/blocking body may wait for host calls when no unrelated guest work runs during the wait.
 Do not overlap it with sibling continuations, including ordinary host calls: their effects can
@@ -1886,7 +1888,7 @@ Stop and join outstanding work before the body exits, including on failure or ca
 fail-fast join does not necessarily wait for surviving siblings, and eventual joining does not
 make concurrent custom scopes supported. This restriction does not apply to ordinary built-in
 durability outside custom operations, to the Rust poll/drop scope integration, to TypeScript's or
-Scala's `durableAsync`, or to Effect's fiber-local scopes. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
+Scala's `durableAsync`, to Effect's fiber-local scopes, or to Go. Scala uses async begin, `enterLive`, `finish-async`, drop and `close` through the
 `wasm-rquickjs:custom-invocation-context` module, and its `GolemExecutionContext` captures the
 scope when a `Future` callback is registered (`ExecutionContext.prepare`), not when its source
 completes. A Scala parent finishes only after its nested operations close and no task that
@@ -1894,6 +1896,23 @@ completes. A Scala parent finishes only after its nested operations close and no
 and an operation started in a sealed scope begins and enters in the nearest admitting ancestor,
 so host and SDK agree on its parent. Callbacks run by
 other execution contexts, and work escaping an outermost operation, are not attributed to it.
+
+**Go custom operations** (`sdks/go/golem/durability.Run`, `internal/cdctx`) use async admission
+like Rust. The golemcloud/go runtime calls a switch hook whenever the goroutine about to run has
+another host context, and `cdctx` exchanges the task's context slot there; each scoped goroutine
+owns one snapshot handle while parked. Goroutines started in a body, and `time.AfterFunc`
+callbacks of its timers, inherit the scope, and `Run` waits for them before `finish-async`. An
+`iter.Pull` coroutine runs as part of the goroutine that switches to it: `coroswitch` hands over
+the switching goroutine's context and domain, whoever created the iterator. Because a completed
+body is skipped on replay, runtime state shared by every goroutine would carry the body's effects
+out of it. The runtime therefore makes no host call for itself on wasip1 (the
+scheduler, GC and scavenger read the latest clock reading the program made; a receive or select
+on a timer channel that is in no heap reads the clock itself), and each operation
+runs in its own runtime domain: its own clock (advanced only by reads in the domain and by the
+domain's recorded `wait-until`), timers heap, and random state seeded from its parent's stream on
+both the live and the replay path. go-pkg arms one clock wait per domain, in the domain's host
+context. Heap addresses are not isolated. Tests:
+`golem-worker-executor-tests/tests/agent_sdk_go/custom_durability_concurrency.rs`.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended. The four function types are `ReadLocal`,
@@ -2069,7 +2088,8 @@ finish; cancellation destroys descendants before the enclosing live resource and
 Closing a resource absent from the current stack is normal and leaves that stack unchanged.
 Finish validates active children and response decoding before removing the resource or scope.
 Nested work must complete or be dropped before its parent finishes. Detached work does not
-automatically acquire the scope. Other SDKs have synchronized bindings but do not yet propagate
+automatically acquire the scope. Go propagates scopes per goroutine through a runtime hook (see
+Go custom operations above). The other SDKs have synchronized bindings but do not yet propagate
 custom scopes across concurrent continuations; do not infer a cross-SDK concurrency fix.
 The synchronous exchange binding (`store | trappable`, not async) is essential: an async import
 would capture host-task context too early for the per-poll switch.
@@ -2347,6 +2367,96 @@ enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an in
 (initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
 `principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
+
+## Invocation attribution and per-invocation state
+
+The host, never the guest, decides which invocation a host call belongs to
+(`durable_host/attribution.rs`). `InvocationKey` is `Invocation(InvocationId)` for an agent or
+entity invocation, or `AgentLevel` for work outside any invocation. An entity invocation has its
+own `InvocationId` (`EntityInvocationScope::idempotency_key`), and each Store holds only its own
+invocations, so one variant covers both. `InvocationAttribution::resolve` reads, in order:
+
+1. **The task group.** The executor enables Wasmtime's `task-group-hook`. Wasmtime starts one task
+   group per host-to-guest export call, and every subtask that call creates joins it. The invocation
+   loop arms the key right before the export call (`InvocationAttribution::armed`, around every
+   bindgen `call_*` in `worker/invocation.rs` and `tool/sidecar.rs`); `handle_start` consumes it in
+   the call's first poll, before guest code runs. `handle_enter` and `handle_exit` track the current
+   group, and `handle_finish` removes it, because group IDs are reused. So `spawn_local` futures,
+   subtasks and work after `task.return` resolve to their export's invocation. Instantiation runs
+   under `instantiating(key)`, so the core initializer's groups belong to the loop's key: the entity
+   invocation in an entity Store, `AgentLevel` in a fresh primary Store.
+2. **Golem's scoped value**, a thread-local tagged with the Store, for host work that runs outside
+   any guest thread: loop-owned host scopes of an invocation (`scoped`), store tasks spawned for a
+   call (`let captured = ctx.attribution.capture(); captured.run(task)`), and host stream producers
+   and consumers after their first poll (`Attributed`, which captures the attribution of the read or
+   write on its first poll, on the guest thread). The Store tag keeps an inner Store polled inline
+   from inheriting the outer Store's answer.
+3. **Nothing**: the call is outside any invocation.
+
+A store task spawned without `capture()` resolves to no invocation and reads the loop's entry
+(`Invocations::key`). The guest-task context slot (`GuestTaskContext`) holds custom-durability scopes and
+retry policy scopes, never the invocation, so a guest cannot carry attribution between tasks.
+
+Missed paths are logged, never denied: `error!` "A guest host call has no attributed invocation"
+(the `CallingHost` call hook, `worker/instance/mod.rs`), "An export call started a task group
+without an armed invocation" (the group then resolves to `AgentLevel`), and "An armed export call
+did not start a task group" (an armed key not consumed while the call runs). An armed call that
+ends in its first poll, such as one Wasmtime refused to enter, ran no guest code and logs `debug!`.
+
+Per-invocation state lives in `InvocationExecutionState` entries of `Invocations`
+(`durable_host/execution_state.rs`): start index, invocation ID, principal, invocation context and
+current span, read-only strictness, retry point, per-invocation call counters, a tail-work count,
+the guest-trap retry scopes, and the invocation's `InvocationAuthority`. The `AgentLevel` entry
+always exists. The loop runs one invocation at a time. `set_current_idempotency_key` calls
+`Invocations::begin`, which carries the previous entry to the new key (it copies the `AgentLevel`
+entry, but moves its authority), clears its tail-work count and trap retry scopes, and resets a
+reached final outcome; other fields persist until the loop overwrites them. Removing an entity
+scope begins `AgentLevel` again (`clear_current_idempotency_key`), which moves the authority back.
+`get_current_idempotency_key` returns the key of the entry the running code reads.
+`Invocations::key` falls back to the loop's key for unattributed work, agent-level work and work of
+a replaced invocation, which keeps the serial loop's behaviour. `own_mut` gives no entry to
+unattributed work or to a replaced invocation, for state only the invocation's own work may write.
+Loop-owned writers write the loop's entry explicitly. Custom-durability maps stay Store-level,
+keyed by start index and scope ID, and each record names its owner key.
+
+- **Tail work.** Settlement and the idle check read only the per-worker `TailWorkTracker`
+  (`tail_work.rs`). Each entry also counts the activities of trackers obtained while it was
+  attributed (`tail_work_tracker()` returns a tracker `counting_on` the entry's count). A retained
+  task keeps counting on the invocation that obtained its tracker.
+- **Retry policy scopes.** `golem:api/retry-scope` `retry-policy-scope` opens a named policy for the
+  calling task (`golem/retry_scope.rs`). It lives in the task's `GuestTaskContext`, so subtasks
+  created while it is open and host calls started while it is open keep it. Policy resolution
+  overlays the calling task's scopes on the agent-wide policies; the innermost open scope with a
+  given name wins (`retry_policy_mutations`). Opening and dropping a scope records nothing; replay re-runs the
+  guest, which opens the same scopes. A guest trap names no task, so its retry decision reads
+  `trap_retry_scopes`, written only through the invocation's own entry.
+- **Authority.** `InvocationAuthority` holds the scope card, its root cards and handles, its card
+  interest and the effective surface with its cache state. Its fields are private. The scope
+  transitions (`install_scope`, `clear_scope`, `remove_scope_for_revoked_roots`,
+  `reach_final_outcome`) keep the card, its handles and its interest consistent; `invalidate` and
+  `synchronize_at` change the cache state. The setters for the surface, its expiry, the root cards
+  and an entity Store's interest leave invalidation to the caller. Wallet-wide changes
+  (re-derivation, root revocation, `interested_card_ids`, invalidation) loop over every entry.
+  Two states are explicit. `ScopeBinding` is `Unscoped`, `Bound(card)` or
+  `FinalOutcome { admitted }`: `reach_final_outcome` enters `FinalOutcome` when the invocation's
+  guest call ends or its failure gives up, so `bound_scope_card()` is none and the invocation has
+  the agent's authority only. Removing the card keeps the reached final outcome. `install_scope`
+  binds a new card; `begin` after a reached final outcome binds the admitted card again, if any,
+  and marks the surface stale. `Synchronization` is `Stale { last_generation }` or
+  `Synchronized { generation }`; a stale surface keeps the generation it was last synchronized at,
+  which a durable call's admission reads. `is_current_at` lets the cached surface authorize only
+  when it is synchronized at the published generation, card authority is open and none of its
+  cards expired.
+- **Card decisions** name the attributed invocation in their request
+  (see "Card authorization decisions").
+
+Tests: the unit tests in `attribution.rs`, `execution_state.rs` and `tail_work.rs`;
+`tests/invocation_context.rs::{a_spawned_guest_future_reads_its_method_invocation_live_and_after_restart,
+background_work_after_the_method_returns_reads_its_invocation_live_and_after_restart}`,
+`tests/http.rs::assert_body_recorders_numbered_under_their_invocations` (store tasks),
+`tests/in_function_retry/http_request.rs::{a_retry_policy_scope_applies_to_a_future_spawned_inside_it_and_ends_with_it,
+a_retry_policy_scope_reopened_by_replay_keeps_retrying_after_a_restart}` and
+`tests/scope_cards.rs::card_decisions_survive_reconstruction`.
 
 ## Invocation queue and results
 `enqueue_worker_invocation_with_effect` (`worker/mod.rs`): dedupe via `lookup_invocation_result`
@@ -3758,21 +3868,24 @@ after `CardDerived` reuses the recorded child instead of creating it again. Test
 
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that
-records nothing therefore sees on replay the card events that live execution applied only to a
-later call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card`
-each make their authorization decision in a `ReadLocal` call
-(`permissions/mod.rs::record_card_decision`): `golem::permissions::inspect::inspect-card-decision`,
-`golem::permissions::derive::{derive-decision, derive-from-wallet-decision,
-derive-scope-decision}` and `golem::permissions::wallet::install-card-decision`. The request holds
-the card ids of the handles. The `End` (`PermissionCardDecision`) records the outcome, allowed or
-the typed permission error, and on success the serialized data the operation continues with: the
-wallet copy of the `derive` parent, the selected `derive-from-wallet` parent, each `derive-scope`
-parent (a valid scope card, the wallet copy of a persistent parent, or the refusal of an unusable
-parent), and the `install-card` target with its holder identity. Replay returns the recorded
-decision; the rest of the operation is deterministic from it and from the recorded `card-liveness`
-answers. Each decision keeps its place relative to the handle's liveness call: `inspect-card`,
-`derive` and `derive-scope` decide first, `install-card` resolves its handle first. A repaired
-incomplete decision decides at its own `Start`. Tests:
+records nothing therefore sees on replay the card events that live execution applied only to a later
+call. So `inspect-card`, `derive`, `derive-from-wallet`, `derive-scope` and `install-card` each make
+their authorization decision in a `ReadLocal` call (`permissions/decisions.rs::record_card_decision`):
+`golem::permissions::inspect::inspect-card-decision`, `golem::permissions::derive::{derive-decision,
+derive-from-wallet-decision, derive-scope-decision}` and
+`golem::permissions::wallet::install-card-decision`. The request holds the ID of the agent or entity
+invocation that the deciding host call is attributed to (`None` for work no invocation is attributed
+to) and the card ids of the handles. It records the attribution itself, not the fallback to the
+loop's invocation, whose key after a snapshot is random; replay and repair trap when the recorded
+invocation differs from the attributed one. The `End` (`PermissionCardDecision`) records the
+outcome, allowed or the typed permission error, and on success the serialized data the operation
+continues with: the wallet copy of the `derive` parent, the selected `derive-from-wallet` parent,
+each `derive-scope` parent (a valid scope card, the wallet copy of a persistent parent, or the
+refusal of an unusable parent), and the `install-card` target with its holder identity. Replay
+returns the recorded decision; the rest of the operation is deterministic from it and from the
+recorded `card-liveness` answers. Each decision keeps its place relative to the handle's liveness
+call: `inspect-card`, `derive` and `derive-scope` decide first, `install-card` resolves its handle
+first. A repaired incomplete decision decides at its own `Start`. Tests:
 `tests/scope_cards.rs::card_decisions_survive_reconstruction` and its cases.
 
 ## Wrong model → right model
@@ -3789,6 +3902,7 @@ incomplete decision decides at its own `Start`. Tests:
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |
 | "A snapshot load is just a fast-forwarded replay, so its host calls are recorded/consumed like any other." | Snapshotting mode (`durability_is_suppressed`) neither appends nor consumes; the loaded state replaces skipped history from a revision-scoped baseline. | `tests/hot_update.rs::{auto_update_invalidates_snapshot_from_previous_revision, automatic_snapshot_invalid_entry_fallback_recreates_replay_context}` |
 | "A start from a snapshot can run the core initializer with durability suppressed, because the snapshot restores the state anyway." | The initializer runs before the load, and the application snapshot does not hold the state that the initializer derived from its durable inputs (seeds, clocks, environment); with durability suppressed, those calls would run unrecorded and get fresh values. Recovery replays the bootstrap range that the restore point names on a bootstrap cursor; a snapshot-based update target records and replays its own block, and a snapshot-assisted one replays the selected record's block. | `tests/durability.rs::automatic_snapshot_every_2nd_invocation`, `tests/hot_update.rs::{a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot, a_snapshot_assisted_update_replays_the_source_initializer_block_for_its_target}` |
+| "The Store has one current invocation, so host code can read the invocation from Store fields." | Host code reads the entry of the invocation its task is attributed to (task group, then Golem's scoped value); only unattributed work, agent-level work and work of a replaced invocation fall back to the loop's entry. The guest never names its invocation. | `invocation_context.rs::a_spawned_guest_future_reads_its_method_invocation_live_and_after_restart`, `scope_cards.rs::card_decisions_survive_reconstruction` |
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |
