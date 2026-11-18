@@ -1181,7 +1181,7 @@ struct PrivateDurableWorkerState {
     tcp_connect_replay: sockets::tcp::TcpConnectReplay,
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
-    resolved_names: sockets::resolved_names::ResolvedNames,
+    resolved_names: sockets::resolved_names::SharedResolvedNames,
     /// The resolver of the Store's `golem:network/dns` lookups, built at the first lookup.
     dns_resolver: Option<hickory_resolver::TokioResolver>,
     open_tcp_input_streams: HashSet<u32>,

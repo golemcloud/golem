@@ -751,12 +751,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &deleted_regions,
         )
         .await?;
-        self.state.resolved_names = sockets::resolved_names::ResolvedNames::after_rebuild(
-            rebuilt,
-            std::mem::take(&mut self.state.resolved_names),
-            self.state.bootstrap_range.as_ref(),
-            through,
-        );
+        let bootstrap_range = self.state.bootstrap_range.clone();
+        self.state.resolved_names.with(|names| {
+            *names = sockets::resolved_names::ResolvedNames::after_rebuild(
+                rebuilt,
+                std::mem::take(names),
+                bootstrap_range.as_ref(),
+                through,
+            )
+        });
         Ok(())
     }
 }

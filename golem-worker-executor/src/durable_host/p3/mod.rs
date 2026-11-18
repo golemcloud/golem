@@ -159,17 +159,22 @@ where
 /// budget is exhausted, are persisted and returned to the guest as before. Recorded failures
 /// replay deterministically to the guest without re-classification (`classify` only runs on the
 /// live path, including incomplete-replay re-execution). A live denied call completes with
-/// [`DeniablePair::denied`] and runs neither `live` nor `classify`.
-pub(crate) async fn run_deniable_access_classified<T, D, Ctx, Pair, F, Fut>(
+/// [`DeniablePair::denied`] and runs neither `live` nor `classify`. `on_delivered` runs when the
+/// guest receives the result, live or at its recorded delivery marker on replay, and never for a
+/// result that the guest discards.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_deniable_access_classified<T, D, Ctx, Pair, F, Fut, H>(
     store: &wasmtime::component::Accessor<T, D>,
     request: Pair::Req,
     function_type: DurableFunctionType,
     targets: Result<Vec<PermissionTarget>, String>,
     classify: impl Fn(&Pair::Resp) -> Option<ClassifiedHostError>,
     retry_properties: RetryProperties,
+    on_delivered: H,
     live: F,
 ) -> wasmtime::Result<Pair::Resp>
 where
+    H: FnOnce() + Clone + Send + 'static,
     T: 'static,
     D: HasData + ?Sized + 'static,
     Ctx: WorkerCtx,
@@ -196,14 +201,23 @@ where
         && let Some(response) = denied
     {
         return handle
-            .complete_access(store, durable_worker_ctx::<Ctx, T>, response)
+            .complete_access_with_delivered(
+                store,
+                durable_worker_ctx::<Ctx, T>,
+                response,
+                Box::new(on_delivered),
+            )
             .await
             .map_err(wasmtime::Error::from);
     }
 
     if !handle.is_live() {
         match handle
-            .replay_access(store, durable_worker_ctx::<Ctx, T>)
+            .replay_access_with_delivered(
+                store,
+                durable_worker_ctx::<Ctx, T>,
+                Box::new(on_delivered.clone()),
+            )
             .await
             .map_err(wasmtime::Error::from)?
         {
@@ -244,7 +258,12 @@ where
     }
 
     handle
-        .complete_access(store, durable_worker_ctx::<Ctx, T>, response)
+        .complete_access_with_delivered(
+            store,
+            durable_worker_ctx::<Ctx, T>,
+            response,
+            Box::new(on_delivered),
+        )
         .await
         .map_err(wasmtime::Error::from)
 }
