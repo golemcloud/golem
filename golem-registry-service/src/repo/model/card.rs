@@ -242,10 +242,7 @@ mod tests {
     fn runtime_derived_provenance() -> CardManagedByRuntimeDerived {
         CardManagedByRuntimeDerived {
             environment_id: golem_common::model::environment::EnvironmentId(Uuid::new_v4()),
-            agent_id: AgentId {
-                component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-                agent_id: "source-agent".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, 1),
             invocation_key: InvocationId(Uuid::from_u128(1)),
             oplog_index: OplogIndex::from_u64(42),
         }

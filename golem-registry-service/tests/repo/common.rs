@@ -497,10 +497,7 @@ fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
 fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
     CardManagedByRuntimeDerived {
         environment_id: EnvironmentId::new(),
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "runtime-card-source".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 3),
         invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(42),
     }
