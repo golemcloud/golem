@@ -1719,7 +1719,7 @@ async fn p2_udp_failed_restream_records_the_state_it_leaves(
     let restreamed: Result<(), String> = session
         .call(
             "p2_udp_restream_to",
-            data_value!("u".to_string(), Some("240.0.0.1:12345".to_string())),
+            data_value!("u".to_string(), Some("8.8.8.8:12345".to_string())),
         )
         .await?;
     assert!(
@@ -1828,8 +1828,10 @@ async fn send_to(
 }
 
 /// A disconnect after an implicit bind releases the native port, so the entry no longer
-/// reports it. The next live send binds again and records that address, and the getter
-/// reports the address the peer sees, live and after replay.
+/// reports it. The next live send binds again on the unspecified address and records that
+/// address, and the getter reports it, live and after replay. The socket address policy allows a
+/// fixed port only on a loopback address, so the rebuild of that unconnected endpoint is refused
+/// and the socket is lost.
 #[test]
 #[timeout("3m")]
 async fn p3_udp_disconnect_after_an_implicit_bind_records_the_next_endpoint(
@@ -1860,16 +1862,17 @@ async fn p3_udp_disconnect_after_an_implicit_bind_records_the_next_endpoint(
     let (data, source) = peer.receive().await?;
     assert_eq!(data, b"live".to_vec());
     let local = local_address(&session, "u").await?;
-    assert_eq!(
-        local.rsplit(':').next(),
-        Some(source.port().to_string().as_str())
-    );
+    assert_eq!(local, format!("0.0.0.0:{}", source.port()));
 
     session.restart_executor().await?;
     assert_eq!(local_address(&session, "u").await?, local);
-    send_to(&session, "u", Some(peer.port()), b"replayed").await?;
-    let (data, source_after) = peer.receive().await?;
-    assert_eq!((data, source_after), (b"replayed".to_vec(), source));
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(peer.port()), b"replayed".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Err("ErrorCode::ConnectionBroken".to_string()));
     session.finish().await
 }
 
@@ -1963,7 +1966,7 @@ async fn p3_udp_failed_connect_that_disconnects_replays_as_disconnected(
     let failed: Result<(), String> = session
         .call(
             "p3_udp_connect_ipv4",
-            data_value!("u".to_string(), "240.0.0.1:9".to_string()),
+            data_value!("u".to_string(), "8.8.8.8:9".to_string()),
         )
         .await?;
     assert_eq!(failed, Err("ErrorCode::InvalidArgument".to_string()));
@@ -2003,10 +2006,10 @@ async fn p3_udp_failed_connect_that_disconnects_replays_as_disconnected(
     session.finish().await
 }
 
-/// The endpoint rebuild binds the native socket on the recorded port, so Linux keeps that port on
-/// a later disconnect, unlike the implicit bind or the bind on port 0 that selected it. The entry
-/// records the rebuild and keeps the port too: the getter reports the address the peer sees after
-/// the disconnect, live and after a second reconstruction.
+/// The endpoint rebuild binds the native socket on the recorded interface address and port, so
+/// Linux keeps both on a later disconnect, unlike the implicit bind or the wildcard bind on port 0
+/// that selected them. The entry records the rebuild and keeps them too: the getter reports the
+/// address the peer sees after the disconnect, live and after a second reconstruction.
 #[test]
 #[timeout("3m")]
 async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
@@ -2060,7 +2063,7 @@ async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
         assert_eq!(disconnected, Ok(()));
         assert_eq!(
             local_address(&session, slot).await?,
-            format!("0.0.0.0:{port}")
+            format!("127.0.0.1:{port}")
         );
         send_to(&session, slot, Some(other.port()), b"live").await?;
         let (_, source) = other.receive().await?;
@@ -2071,7 +2074,7 @@ async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
     for (slot, port) in ["i", "w"].into_iter().zip(&ports) {
         assert_eq!(
             local_address(&session, slot).await?,
-            format!("0.0.0.0:{port}")
+            format!("127.0.0.1:{port}")
         );
         send_to(&session, slot, Some(other.port()), b"replayed").await?;
         let (_, source) = other.receive().await?;
@@ -2081,8 +2084,8 @@ async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
 }
 
 /// P2 disconnects with a live `stream(none)`, which records the native local address it leaves.
-/// After an endpoint rebuild on the recorded port, the native socket keeps that port on the
-/// disconnect, and the entry records it, live and after replay.
+/// After an endpoint rebuild on the recorded interface address and port, the native socket keeps
+/// both on the disconnect, and the entry records them, live and after replay.
 #[test]
 #[timeout("3m")]
 async fn p2_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
@@ -2132,7 +2135,7 @@ async fn p2_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
     let after_disconnect: Result<String, String> = session
         .call("p2_udp_local_address", data_value!("u".to_string()))
         .await?;
-    assert_eq!(after_disconnect, Ok(format!("0.0.0.0:{port}")));
+    assert_eq!(after_disconnect, Ok(format!("127.0.0.1:{port}")));
     let sent: Result<u64, String> = session
         .call(
             "p2_udp_send_to",
@@ -2146,7 +2149,7 @@ async fn p2_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
     let replayed: Result<String, String> = session
         .call("p2_udp_local_address", data_value!("u".to_string()))
         .await?;
-    assert_eq!(replayed, Ok(format!("0.0.0.0:{port}")));
+    assert_eq!(replayed, Ok(format!("127.0.0.1:{port}")));
     let sent: Result<u64, String> = session
         .call(
             "p2_udp_send_to",

@@ -1078,12 +1078,15 @@ and the entry then loses its remote address. Replay updates the entry and touche
 getters are not recorded and use only the entry. `disconnect` resets the local address to the bind
 request, or to the unspecified address with port 0 after an implicit bind, because the native
 socket releases an implicitly bound port. At the first live operation, `ensure_native_endpoint`
-binds the native socket on the bind request's address with the recorded port and connects it again
-when the entry is connected, without sending a packet; an unspecified address with port 0 stays
-unbound until the next send binds it implicitly. A rebuild on a fixed port is recorded as
-`Rebound` in the response of the call that performed it, because Linux then keeps that port on a
-disconnect; the entry takes the rebuilt port into its bind request. Receive records the endpoint
-change of its rebuild too. When that
+binds the native socket on the address that `SocketEntry::udp_rebuild_bind_address` selects and
+connects it again when the entry is connected, without sending a packet. A local address that
+names an interface, such as the one a connect selected, is bound as it is; an unspecified one is
+bound on the bind request's address with the recorded port, and with port 0 it stays unbound until
+the next send binds it implicitly. The socket address policy allows a fixed port only on a loopback
+address, so an unconnected wildcard or implicit endpoint with a fixed port cannot be rebuilt and
+is lost. A rebuild on a fixed port is recorded as `Rebound` in the response of the call that
+performed it, because Linux then keeps that address on a disconnect; the entry takes it as its bind
+request. Receive records the endpoint change of its rebuild too. When the rebuild
 fails, the entry becomes `Lost` and every later operation returns `connection-broken`; the rebuild
 is not checked against grants again, each datagram still is. Send records only the target and the
 result, never the datagram. An incomplete send completes with `connection-broken` and is not sent

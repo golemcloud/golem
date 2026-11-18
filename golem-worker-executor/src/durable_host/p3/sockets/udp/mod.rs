@@ -82,13 +82,7 @@ fn apply_endpoint(entry: &mut SocketEntry, endpoint: &Option<SerializableP3UdpEn
             }
         }
         Some(SerializableP3UdpEndpoint::Rebound(local_address)) => {
-            entry.bind_request = Some(SerializableP3IpSocketAddress {
-                port: local_address.port,
-                ..entry
-                    .bind_request
-                    .clone()
-                    .unwrap_or_else(|| entry.unspecified_address())
-            });
+            entry.bind_request = Some(local_address.clone());
             entry.local_address = Some(local_address.clone());
             if entry.phase == SocketPhase::Created {
                 entry.phase = SocketPhase::Bound;
@@ -125,9 +119,8 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     if entry.native_bound {
         return Ok(true);
     }
-    // The native socket is bound as the guest bound it: on the address of its bind request, or
-    // the unspecified address after an implicit bind, with the recorded port. A connect then
-    // selects the same interface address again.
+    // The native socket is bound on its recorded interface address, or as the guest bound it
+    // when that address is unspecified (see `SocketEntry::udp_rebuild_bind_address`).
     let unspecified = entry.unspecified_address();
     let bind_address = entry.udp_rebuild_bind_address();
     let mut rebound = false;

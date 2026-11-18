@@ -50,7 +50,7 @@ pub(crate) struct SocketEntry {
     pub phase: SocketPhase,
     pub local_address: Option<SerializableP3IpSocketAddress>,
     pub remote_address: Option<SerializableP3IpSocketAddress>,
-    /// The address an explicit UDP bind named, with the port of a recorded endpoint rebuild. A
+    /// The address an explicit UDP bind named, or the address of a recorded endpoint rebuild. A
     /// disconnect resets the local address to it, because Linux keeps only the address and port
     /// that a native bind named.
     pub bind_request: Option<SerializableP3IpSocketAddress>,
@@ -115,20 +115,25 @@ impl SocketEntry {
         self.phase = SocketPhase::Bound;
     }
 
-    /// The address a UDP endpoint rebuild binds the native socket on: the address of the bind
-    /// request, or the unspecified address after an implicit bind, with the recorded port. A
-    /// connect then selects the same interface address again. `None` when the socket has no
-    /// local address.
+    /// The address a UDP endpoint rebuild binds the native socket on. A local address that names
+    /// an interface, such as the one a connect selected, is bound as it is: the socket address
+    /// policy allows a fixed port only on a loopback address, so the unspecified address of the
+    /// bind request cannot carry it. An unspecified local address is bound on the address of the
+    /// bind request, or the unspecified address after an implicit bind, with the recorded port;
+    /// with a fixed port the policy refuses that, and the socket becomes `Lost`. `None` when the
+    /// socket has no local address.
     pub fn udp_rebuild_bind_address(&self) -> Option<SerializableP3IpSocketAddress> {
-        self.local_address
-            .as_ref()
-            .map(|local_address| SerializableP3IpSocketAddress {
-                port: local_address.port,
-                ..self
-                    .bind_request
-                    .clone()
-                    .unwrap_or_else(|| self.unspecified_address())
-            })
+        let unspecified = self.unspecified_address();
+        self.local_address.as_ref().map(|local_address| {
+            if local_address.address == unspecified.address {
+                SerializableP3IpSocketAddress {
+                    port: local_address.port,
+                    ..self.bind_request.clone().unwrap_or(unspecified)
+                }
+            } else {
+                local_address.clone()
+            }
+        })
     }
 
     /// The native UDP local address after a live connect or send when it differs from
