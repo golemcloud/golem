@@ -115,6 +115,24 @@ fn main_validation_slack_preserves_delivery_receipts_with_formatted_alerts() {
 }
 
 #[test]
+fn main_validation_discovers_durable_events_and_preserves_webhook_configuration() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_events.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn main_validation_lists_all_commits_since_the_previous_selected_run() {
     let output = Command::new("python3")
         .args([
