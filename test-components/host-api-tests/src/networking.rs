@@ -486,6 +486,10 @@ pub trait Networking {
     /// Queries `golem:network/dns` for the records of type `record_type` (`a`, `mx`, `txt`, ...)
     /// of `name`, each rendered as `ttl data`.
     async fn dns_resolve(&self, name: String, record_type: String) -> Result<Vec<String>, String>;
+    fn create_promise(&self) -> golem_rust::PromiseId;
+    /// Starts an A lookup of `name`, waits for `cancel`, then drops the lookup without reading
+    /// its answer. Returns false when the answer became ready before the drop.
+    async fn dns_discard_a(&self, name: String, cancel: golem_rust::PromiseId) -> bool;
     /// Connects to `127.0.0.1:port` with a raw wasip3 TCP socket and reads the
     /// receive stream to completion, returning the collected bytes as a string.
     async fn tcp_collect_p3(&self, port: u16) -> Result<String, String>;
@@ -656,6 +660,33 @@ impl Networking for NetworkingImpl {
                     .collect()
             })
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn create_promise(&self) -> golem_rust::PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn dns_discard_a(&self, name: String, cancel: golem_rust::PromiseId) -> bool {
+        use golem_rust::bindings::golem::network::dns::{RecordType, resolve};
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mut lookup = Box::pin(resolve(name, RecordType::A));
+        let mut pending = true;
+        poll_fn(|cx| {
+            pending &= lookup.as_mut().poll(cx).is_pending();
+            Poll::Ready(())
+        })
+        .await;
+        golem_rust::await_promise(&cancel).await;
+        poll_fn(|cx| {
+            pending &= lookup.as_mut().poll(cx).is_pending();
+            Poll::Ready(())
+        })
+        .await;
+        drop(lookup);
+        println!("dns lookup discarded");
+        pending
     }
 
     async fn dns_resolve(&self, name: String, record_type: String) -> Result<Vec<String>, String> {

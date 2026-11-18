@@ -43,8 +43,8 @@ use hickory_resolver::config::{NameServerConfig, ResolveHosts, ResolverConfig};
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::net::{DnsError as HickoryDnsError, NetError};
 use hickory_resolver::proto::op::ResponseCode;
-use hickory_resolver::proto::rr::{Name, RData, RecordType as HickoryRecordType};
-use hickory_resolver::{Resolver, TokioResolver};
+use hickory_resolver::proto::rr::{Name, RData, Record, RecordType as HickoryRecordType};
+use hickory_resolver::{Resolver, ResolverBuilder, TokioResolver};
 use std::net::IpAddr;
 use wasmtime::component::{Accessor, HasSelf};
 
@@ -163,7 +163,7 @@ pub fn linked_addresses(records: &[SerializableDnsRecord]) -> impl Iterator<Item
 /// resolver neither reads the hosts file nor caches answers: every guest query is one query to
 /// the servers, and the oplog keeps its answer.
 fn build_resolver(config: &AgentSocketsConfig) -> Result<TokioResolver, NetError> {
-    let mut builder = if config.dns_servers.is_empty() {
+    let builder = if config.dns_servers.is_empty() {
         TokioResolver::builder_tokio()?
     } else {
         let name_servers = config
@@ -182,6 +182,12 @@ fn build_resolver(config: &AgentSocketsConfig) -> Result<TokioResolver, NetError
             TokioRuntimeProvider::default(),
         )
     };
+    configured_resolver(builder)
+}
+
+fn configured_resolver(
+    mut builder: ResolverBuilder<TokioRuntimeProvider>,
+) -> Result<TokioResolver, NetError> {
     let options = builder.options_mut();
     options.cache_size = 0;
     options.use_hosts_file = ResolveHosts::Never;
@@ -193,21 +199,26 @@ async fn lookup(
     name: &str,
     record_type: SerializableDnsRecordType,
 ) -> Result<Vec<SerializableDnsRecord>, SerializableDnsError> {
-    let Ok(query_name) = Name::from_ascii(name) else {
+    let Ok(mut query_name) = Name::from_ascii(name) else {
         return Err(SerializableDnsError::InvalidName);
     };
+    // The query is for the name as given. A relative name would make the resolver also try the
+    // `search` and `domain` names of the system configuration and return the outcome of the last
+    // one, which can be another name's answer or turn a server failure into `name-not-found`.
+    query_name.set_fqdn(true);
     if name.is_empty() || name.parse::<IpAddr>().is_ok() {
         return Err(SerializableDnsError::InvalidName);
     }
     let hickory_type = hickory_record_type(record_type);
     let answer = resolver
-        .lookup(query_name, hickory_type)
+        .lookup(query_name.clone(), hickory_type)
         .await
         .map_err(dns_error)?;
+    let owners = answer_owners(answer.answers(), query_name);
     let records: Vec<_> = answer
         .answers()
         .iter()
-        .filter(|record| record.record_type() == hickory_type)
+        .filter(|record| record.record_type() == hickory_type && owners.contains(&record.name))
         .filter_map(|record| {
             record_data(&record.data).map(|data| SerializableDnsRecord {
                 ttl: record.ttl,
@@ -220,6 +231,26 @@ async fn lookup(
     } else {
         Ok(records)
     }
+}
+
+/// The names that own the answer for `query_name`: the name itself and the names that the CNAME
+/// records of the answer lead to from it. A record of any other owner in the answer section is
+/// not part of the answer for the name.
+fn answer_owners(answers: &[Record], query_name: Name) -> Vec<Name> {
+    let mut owners = vec![query_name];
+    let mut next = 0;
+    while next < owners.len() {
+        for record in answers {
+            if let RData::CNAME(cname) = &record.data
+                && record.name == owners[next]
+                && !owners.contains(&cname.0)
+            {
+                owners.push(cname.0.clone());
+            }
+        }
+        next += 1;
+    }
+    owners
 }
 
 fn hickory_record_type(record_type: SerializableDnsRecordType) -> HickoryRecordType {
@@ -298,12 +329,12 @@ fn dns_error(error: NetError) -> SerializableDnsError {
                 SerializableDnsError::NoData
             }
         }
-        NetError::Dns(HickoryDnsError::ResponseCode(ResponseCode::ServFail))
-        | NetError::Timeout
-        | NetError::Busy
-        | NetError::NoConnections
-        | NetError::Io(_) => SerializableDnsError::TemporaryResolverFailure,
-        _ => SerializableDnsError::PermanentResolverFailure,
+        NetError::Dns(HickoryDnsError::ResponseCode(
+            ResponseCode::Refused | ResponseCode::NotImp | ResponseCode::FormErr,
+        )) => SerializableDnsError::PermanentResolverFailure,
+        // A failure that a later query can repair, such as a server failure, a timeout, or a
+        // truncated answer whose TCP retry failed, retries under the retry policy.
+        _ => SerializableDnsError::TemporaryResolverFailure,
     }
 }
 
@@ -469,7 +500,19 @@ mod tests {
                 SerializableDnsError::TemporaryResolverFailure,
             ),
             (
+                NetError::Truncated,
+                SerializableDnsError::TemporaryResolverFailure,
+            ),
+            (
+                NetError::Msg("unexpected".to_string()),
+                SerializableDnsError::TemporaryResolverFailure,
+            ),
+            (
                 NetError::Dns(HickoryDnsError::ResponseCode(ResponseCode::Refused)),
+                SerializableDnsError::PermanentResolverFailure,
+            ),
+            (
+                NetError::Dns(HickoryDnsError::ResponseCode(ResponseCode::NotImp)),
                 SerializableDnsError::PermanentResolverFailure,
             ),
         ];
@@ -484,5 +527,106 @@ mod tests {
                 "{description}"
             );
         }
+    }
+
+    /// A UDP DNS server: `flaky.test` fails, `extra.test` answers with a record of another owner,
+    /// `alias.test` is a CNAME of `target.test`, and only the search name
+    /// `missing.test.corp.internal` exists among the others.
+    async fn dns_server() -> std::net::SocketAddr {
+        use hickory_resolver::proto::op::{Message, MessageType};
+        use hickory_resolver::proto::rr::rdata::{A, CNAME};
+
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = socket.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buffer = vec![0u8; 4096];
+            while let Ok((length, from)) = socket.recv_from(&mut buffer).await {
+                let Ok(request) = Message::from_vec(&buffer[..length]) else {
+                    continue;
+                };
+                let Some(query) = request.queries.first().cloned() else {
+                    continue;
+                };
+                let mut response = Message::new(
+                    request.metadata.id,
+                    MessageType::Response,
+                    request.metadata.op_code,
+                );
+                response.metadata.recursion_desired = request.metadata.recursion_desired;
+                response.metadata.recursion_available = true;
+                response.add_query(query.clone());
+                let name = |value: &str| Name::from_ascii(value).unwrap();
+                let a = |owner: &str, address: [u8; 4]| {
+                    Record::from_rdata(
+                        name(owner),
+                        60,
+                        RData::A(A(std::net::Ipv4Addr::from(address))),
+                    )
+                };
+                match query.name().to_ascii().as_str() {
+                    "flaky.test." => response.metadata.response_code = ResponseCode::ServFail,
+                    "missing.test.corp.internal." => {
+                        response.add_answer(a("missing.test.corp.internal.", [10, 1, 2, 3]));
+                    }
+                    "extra.test." => {
+                        response.add_answer(a("extra.test.", [127, 0, 0, 2]));
+                        response.add_answer(a("unrelated.internal.", [10, 9, 9, 9]));
+                    }
+                    "alias.test." => {
+                        response.add_answer(Record::from_rdata(
+                            name("alias.test."),
+                            60,
+                            RData::CNAME(CNAME(name("target.test."))),
+                        ));
+                        response.add_answer(a("target.test.", [10, 0, 0, 8]));
+                    }
+                    _ => response.metadata.response_code = ResponseCode::NXDomain,
+                }
+                if let Ok(bytes) = response.to_vec() {
+                    let _ = socket.send_to(&bytes, from).await;
+                }
+            }
+        });
+        address
+    }
+
+    #[test]
+    async fn lookups_query_the_name_as_given_and_keep_only_its_records() {
+        let server = dns_server().await;
+        let mut name_server = NameServerConfig::udp_and_tcp(server.ip());
+        for connection in &mut name_server.connections {
+            connection.port = server.port();
+        }
+        // A system configuration with a search list, as on Kubernetes or a cloud VM.
+        let resolver = configured_resolver(Resolver::builder_with_config(
+            ResolverConfig::from_parts(
+                Some(Name::from_ascii("local.").unwrap()),
+                vec![Name::from_ascii("corp.internal.").unwrap()],
+                vec![name_server],
+            ),
+            TokioRuntimeProvider::default(),
+        ))
+        .unwrap();
+        let a = |address: [u8; 4]| SerializableDnsRecord {
+            ttl: 60,
+            data: SerializableDnsRecordData::A(IpAddr::from(address).into()),
+        };
+
+        assert_eq!(
+            lookup(&resolver, "flaky.test", SerializableDnsRecordType::A).await,
+            Err(SerializableDnsError::TemporaryResolverFailure)
+        );
+        assert_eq!(
+            lookup(&resolver, "missing.test", SerializableDnsRecordType::A).await,
+            Err(SerializableDnsError::NameNotFound)
+        );
+        assert_eq!(
+            lookup(&resolver, "extra.test", SerializableDnsRecordType::A).await,
+            Ok(vec![a([127, 0, 0, 2])])
+        );
+        assert_eq!(
+            lookup(&resolver, "alias.test", SerializableDnsRecordType::A).await,
+            Ok(vec![a([10, 0, 0, 8])])
+        );
     }
 }
