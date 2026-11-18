@@ -492,8 +492,10 @@ const misplacedCaller = "Principal and Caller cannot appear in a method, constru
 // collection whose clock reads record in the oplog: an invocation that never
 // looks at its caller never pays for it. Once the call has ended the host holds
 // another invocation's caller, so a first read after that panics, and a caller
-// read during the call stays what it was.
-func lazyCaller() (read func() Caller, end func()) {
+// read during the call stays what it was. A call that returned a stream ends
+// with returnedStream set: its producer runs after the return, so the end reads
+// the caller while the call still holds it, and the producer gets that value.
+func lazyCaller() (read func() Caller, end func(returnedStream bool)) {
 	var c Caller
 	var have, ended bool
 	read = func() Caller {
@@ -505,7 +507,12 @@ func lazyCaller() (read func() Caller, end func()) {
 		}
 		return c
 	}
-	return read, func() { ended = true }
+	return read, func(returnedStream bool) {
+		if returnedStream && !have && !ended {
+			c, have = callerFromWit(currentCaller()), true
+		}
+		ended = true
+	}
 }
 
 // callerEnded is the panic of a first read of the caller after the call ended.

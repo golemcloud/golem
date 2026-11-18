@@ -11,7 +11,11 @@ import {
   ToolPrincipal,
   UserPrincipal,
 } from "../src/InvocationContext.js"
-import { callerFromHost, lazyInvocationContext } from "../src/internal/invocationContext.js"
+import {
+  callerFromHost,
+  lazyInvocationContext,
+  returnsStream,
+} from "../src/internal/invocationContext.js"
 import {
   InvocationContextClient,
   provideInvocationContext,
@@ -163,4 +167,29 @@ describe("InvocationContext", () => {
       expect(context.caller.immediate.kind).toBe("anonymous")
     }).pipe(Effect.provideService(InvocationContext, { caller: Caller.anonymous() })),
   )
+
+  it.effect("reads the caller when a call that returns a stream ends, for its producer", () =>
+    Effect.gen(function* () {
+      let kept: { readonly caller: Caller } | undefined
+      let current: typeof host = host
+      const client = InvocationContextClient.of({ caller: () => current })
+      const tree = yield* Effect.gen(function* () {
+        kept = yield* InvocationContext
+        return { root: 0, valueNodes: [{ tag: "stream-value" as const, val: {} }] }
+      }).pipe(provideInvocationContext, Effect.provideService(InvocationContextClient, client))
+      current = { ...host, original: accountPrincipal() }
+      expect(tree.valueNodes[0]!.tag).toBe("stream-value")
+      expect(kept!.caller.original.kind).toBe("user")
+    }),
+  )
+
+  it("finds a stream in a method result and in a tool result, and nothing else", () => {
+    const streamTree = { root: 0, valueNodes: [{ tag: "stream-value", val: {} }] }
+    const plainTree = { root: 0, valueNodes: [{ tag: "string-value", val: "x" }] }
+    expect(returnsStream(streamTree)).toBe(true)
+    expect(returnsStream({ result: { graph: {}, value: streamTree } })).toBe(true)
+    expect(returnsStream(plainTree)).toBe(false)
+    expect(returnsStream({ result: { graph: {}, value: plainTree } })).toBe(false)
+    expect(returnsStream(undefined)).toBe(false)
+  })
 })

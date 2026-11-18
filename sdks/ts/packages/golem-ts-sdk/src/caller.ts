@@ -394,8 +394,12 @@ export function callerFromHost(host: HostCaller): Caller {
 
 /** An invocation context that the SDK ends when its call returns. */
 export interface EndableInvocationContext extends InvocationContext {
-  /** Marks the call as over. A first read of the caller after this throws. */
-  end(): void;
+  /**
+   * Marks the call as over. A first read of the caller after this throws, unless the call
+   * returned a stream: its producer runs after the return, so the caller is read from the host
+   * now, while the call still holds it, and kept for the producer.
+   */
+  end(returnedStream?: boolean): void;
 }
 
 /**
@@ -419,7 +423,10 @@ export function currentInvocationContext(): EndableInvocationContext {
       }
       return caller;
     },
-    end(): void {
+    end(returnedStream = false): void {
+      if (returnedStream && caller === undefined && !ended) {
+        caller = callerFromHost(hostCaller());
+      }
       ended = true;
     },
   };

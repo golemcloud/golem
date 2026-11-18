@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -248,18 +249,57 @@ func TestAContextRefusesAFirstReadAfterItsCallEnded(t *testing.T) {
 	}
 	// A context read during its call keeps the first value, even after the call.
 	current = "B"
-	end()
+	end(false)
 	if got := subject(read()); got != "A" {
 		t.Errorf("read after the call = %q, want the first value", got)
 	}
 
 	// A context first read after its call ended refuses.
 	late, lateEnd := lazyCaller()
-	lateEnd()
+	lateEnd(false)
 	defer func() {
 		if r := recover(); r == nil || !strings.Contains(r.(string), "belongs to a call that has ended") {
 			t.Errorf("a first read after the call ended did not refuse: %v", r)
 		}
 	}()
 	late()
+}
+
+func TestACallThatReturnsAStreamKeepsItsCallerForTheProducer(t *testing.T) {
+	var current = "A"
+	reads := 0
+	prev := currentCaller
+	currentCaller = func() common.Caller {
+		reads++
+		return common.Caller{Original: witUser(current, "{}"), Immediate: witAgent()}
+	}
+	t.Cleanup(func() { currentCaller = prev })
+
+	// The call returned a stream and its producer had not read the caller yet: the end of
+	// the call reads it, while the host still holds it, and the producer gets that value.
+	read, end := lazyCaller()
+	end(true)
+	current = "B"
+	ref, _ := read().Original.Ref()
+	if ref.Subject != "A" || reads != 1 {
+		t.Errorf("producer read %q after %d host reads, want A after 1", ref.Subject, reads)
+	}
+
+	// A call that returned no stream reads nothing at its end.
+	_, plainEnd := lazyCaller()
+	plainEnd(false)
+	if reads != 1 {
+		t.Errorf("the end of a call without a stream read the host")
+	}
+}
+
+func TestAResultHoldsAStreamOnlyWithAStreamNode(t *testing.T) {
+	plain := []types.SchemaValueNode{types.MakeSchemaValueNodeStringValue("x")}
+	if engine.HoldsStream(plain) {
+		t.Error("a tree without a stream node holds a stream")
+	}
+	withStream := append(plain, types.MakeSchemaValueNodeStreamValue(nil))
+	if !engine.HoldsStream(withStream) {
+		t.Error("a tree with a stream node does not hold a stream")
+	}
 }

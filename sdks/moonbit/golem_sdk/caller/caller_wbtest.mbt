@@ -149,6 +149,32 @@ test "a context first read after its call ended refuses" {
 }
 
 ///|
+test "a call that returned a stream reads the caller at its end, for the producer" {
+  let reads : Ref[Int32] = { val: 0, }
+  let context : InvocationContext = {
+    cached: None,
+    ended: false,
+    read: () => {
+      reads.val += 1
+      Caller::anonymous()
+    },
+  }
+  context.end(returned_stream=true)
+  assert_eq(reads.val, 1)
+  match context.caller_or_ended() {
+    Ok(caller) => assert_eq(caller.original.kind(), PrincipalKind::Anonymous)
+    Err(message) => fail(message)
+  }
+  assert_eq(reads.val, 1)
+}
+
+///|
+test "a result holds a stream only when it has a stream node" {
+  let plain : @types.SchemaValueTree = { value_nodes: [StringValue("x")], root: 0 }
+  assert_false(holds_stream(plain))
+}
+
+///|
 test "a context made from a caller never refuses" {
   let context = InvocationContext::anonymous()
   context.end()
