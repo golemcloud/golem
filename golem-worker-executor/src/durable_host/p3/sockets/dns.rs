@@ -14,9 +14,7 @@
 
 use crate::durable_host::authorization::targets::dns_target;
 use crate::durable_host::concurrent::reserve_invocation_id_before_await;
-use crate::durable_host::durability::{
-    ClassifiedHostError, CustomInvocationContext, HostFailureKind,
-};
+use crate::durable_host::durability::{ClassifiedHostError, GuestTaskContext, HostFailureKind};
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, run_deniable_access_classified, wasi_sockets_view,
 };
@@ -38,7 +36,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
         name: String,
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
-        let custom_invocation = store.guest_task_context::<CustomInvocationContext>()?;
+        let custom_invocation = store.guest_task_context::<GuestTaskContext>()?;
         // The link waits for the guest to receive the result, as the rebuild after a snapshot
         // reads it from the delivery marker: a result that the guest discards links nothing.
         let (link, on_delivered) = store.with(|mut access| {
