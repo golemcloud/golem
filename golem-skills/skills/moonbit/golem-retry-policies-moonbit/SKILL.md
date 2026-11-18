@@ -186,7 +186,10 @@ let policy =
 
 ### Scoped Usage with a Policy Guard
 
-Apply a policy for a block of code — the previous policy is restored when the block exits:
+Apply a policy for a block of code. The guard opens a retry policy scope: until the guard is
+dropped, the policy overrides the agent-wide policy with the same name for the host calls of the
+current task. The scope changes no agent-wide policy, applies to no other invocation, and records
+no oplog entry:
 
 ```moonbit
 let guard = @api.use_named_policy(policy)
@@ -298,6 +301,6 @@ When no user-defined retry policies are set, Golem activates a default catch-all
 - Policies are defined **per-environment** — different environments can have different retry behaviors
 - Policy names must be unique within an environment
 - Higher priority policies are evaluated first; the first matching predicate wins
-- Drop the policy guard to restore the previous policy when the block exits
+- Drop the policy guard to end its retry policy scope when the block exits; the agent-wide policies never change
 - Inline transport retries use the semantic policy system; they are not a separate stage before it
 - Changes made via CLI or REST API take effect immediately for running agents

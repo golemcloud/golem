@@ -630,6 +630,8 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
     let output_monitor = store.data().durable_ctx().schema_output_drain_monitor()?;
     let output_watch = tokio_util::sync::CancellationToken::new();
     let output_watch_guard = output_watch.clone().drop_guard();
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     let future = store
         .as_context_mut()
         .run_concurrent(async move |accessor| {
@@ -638,30 +640,33 @@ async fn materialize_streaming_result<Ctx: WorkerCtx>(
             {
                 runtime.certify_root(activity);
             }
-            if let Err(error) = accessor.with(|mut access| {
-                crate::durable_host::stream_outcome::supervise_schema_outputs(
-                    &mut access,
-                    output_monitor,
-                    runtime_for_call.clone(),
-                    output_watch,
-                )
-            }) {
-                return Ok(Err(WorkerExecutorError::runtime(error.to_string())));
-            }
-            tokio::select! {
-                biased;
-                result = worker.materialize_durable_streaming_result(
-                    idempotency_key,
-                    output,
-                    &graph,
-                    &root,
-                    component_revision,
-                    runtime_for_call.as_ref().map(|runtime| runtime.source()),
-                    preparation,
-                    &output_tasks,
-                ) => Ok(result),
-                interrupt_kind = interrupt => Err(interrupt_kind),
-            }
+            let materialize = async move {
+                if let Err(error) = accessor.with(|mut access| {
+                    crate::durable_host::stream_outcome::supervise_schema_outputs(
+                        &mut access,
+                        output_monitor,
+                        runtime_for_call.clone(),
+                        output_watch,
+                    )
+                }) {
+                    return Ok(Err(WorkerExecutorError::runtime(error.to_string())));
+                }
+                tokio::select! {
+                    biased;
+                    result = worker.materialize_durable_streaming_result(
+                        idempotency_key,
+                        output,
+                        &graph,
+                        &root,
+                        component_revision,
+                        runtime_for_call.as_ref().map(|runtime| runtime.source()),
+                        preparation,
+                        &output_tasks,
+                    ) => Ok(result),
+                    interrupt_kind = interrupt => Err(interrupt_kind),
+                }
+            };
+            attribution.scoped(Some(invocation_key), materialize).await
         });
     let materialized = match runtime {
         Some(runtime) => {
@@ -804,47 +809,37 @@ pub(crate) enum GuestCallSettlementError {
     Infrastructure(WorkerExecutorError),
 }
 
-/// Permanent guest instruction failures that a tool boundary can record as its own terminal.
+/// Permanent guest instruction failures and uncaught wasm exceptions that a tool boundary can
+/// record as its own terminal.
 /// Host-call markers take precedence over an underlying Wasmtime trap. A Wasm backtrace alone
-/// does not establish guest origin. Keep the allowlist aligned with `TrapType::from_error`.
+/// does not establish guest origin. Agent and tool classification share the instruction predicate.
 pub(crate) fn permanent_tool_guest_trap(error: &wasmtime::Error) -> Option<String> {
-    if error.chain().any(|cause| {
-        cause.is::<GolemSpecificWasmTrap>()
-            || cause.is::<ClassifiedHostError>()
-            || cause.is::<SemanticTrapRetryOverrideMarker>()
-            || cause.is::<DurableCallTrapContextMarker>()
-            || cause.is::<DurableRecoveryFailure>()
-            || cause.is::<UnreadableOplog>()
-            || cause.is::<WorkerExecutorError>()
-            || cause.is::<InterruptKind>()
-            || cause.is::<wasmtime_wasi::I32Exit>()
-    }) {
+    fn has_cause<T: std::error::Error + Send + Sync + 'static>(error: &wasmtime::Error) -> bool {
+        // Typed anyhow context is downcastable but is not an item in the source chain.
+        error.downcast_ref::<T>().is_some() || error.chain().any(|cause| cause.is::<T>())
+    }
+
+    if has_cause::<GolemSpecificWasmTrap>(error)
+        || has_cause::<ClassifiedHostError>(error)
+        || has_cause::<SemanticTrapRetryOverrideMarker>(error)
+        || has_cause::<DurableCallTrapContextMarker>(error)
+        || has_cause::<DurableRecoveryFailure>(error)
+        || has_cause::<UnreadableOplog>(error)
+        || has_cause::<WorkerExecutorError>(error)
+        || has_cause::<InterruptKind>(error)
+        || has_cause::<wasmtime_wasi::I32Exit>(error)
+    {
         return None;
     }
 
-    match error.root_cause().downcast_ref::<wasmtime::Trap>() {
-        Some(
-            wasmtime::Trap::StackOverflow
-            | wasmtime::Trap::UnreachableCodeReached
-            | wasmtime::Trap::MemoryOutOfBounds
-            | wasmtime::Trap::TableOutOfBounds
-            | wasmtime::Trap::IndirectCallToNull
-            | wasmtime::Trap::BadSignature
-            | wasmtime::Trap::IntegerOverflow
-            | wasmtime::Trap::IntegerDivisionByZero
-            | wasmtime::Trap::BadConversionToInteger
-            | wasmtime::Trap::HeapMisaligned
-            | wasmtime::Trap::NullReference
-            | wasmtime::Trap::AtomicWaitNonSharedMemory,
-        ) => Some(
-            error
-                .chain()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(": "),
-        ),
-        _ => None,
-    }
+    let permanent = crate::model::deterministic_guest_trap(error.root_cause());
+    permanent.then(|| {
+        error
+            .chain()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ")
+    })
 }
 
 fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
@@ -854,6 +849,9 @@ fn is_guest_semantic_trap(error: &wasmtime::Error) -> bool {
 
     if let Some(trap) = error.root_cause().downcast_ref::<wasmtime::Trap>() {
         return !matches!(trap, wasmtime::Trap::AsyncDeadlock);
+    }
+    if error.root_cause().is::<wasmtime::GcHeapOutOfMemory<()>>() {
+        return true;
     }
     if error.is::<ClassifiedHostError>()
         || chain_contains(&|cause| {
@@ -1055,6 +1053,8 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
     let tracker = store.data().durable_ctx().tail_work_tracker();
     let tracker_for_error = tracker.clone();
     let drain_started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     let fun = {
         let drain_started = drain_started.clone();
         let runtime = runtime.clone();
@@ -1063,7 +1063,9 @@ pub(crate) async fn run_guest_call_settled_at<Ctx: WorkerCtx, R>(
             if let (Some(runtime), Some(activity)) = (&runtime, accessor.runtime_activity()) {
                 runtime.certify_root(activity);
             }
-            let result = fun(accessor).await;
+            let result = attribution
+                .scoped(Some(invocation_key), fun(accessor))
+                .await;
             finalization.begin();
             if matches!(deadline, SettlementDeadline::RootReturned) {
                 drain_started.notify_one();
@@ -1121,6 +1123,8 @@ async fn dispatch_call<Ctx: WorkerCtx>(
     call: PreparedCall,
     display_name: &str,
 ) -> Result<InvokeResult, WorkerExecutorError> {
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
     match call {
         PreparedCall::Initialize {
             agent_type, input, ..
@@ -1128,7 +1132,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest.call_initialize(accessor, agent_type, input).await
+                attribution
+                    .armed(
+                        invocation_key,
+                        guest.call_initialize(accessor, agent_type, input),
+                    )
+                    .await
             })
             .await;
             let consumed_fuel =
@@ -1177,7 +1186,11 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                         {
                             runtime.certify_root(activity);
                         }
-                        guest.call_invoke(accessor, method_name, input).await
+                        let call = attribution.armed(
+                            invocation_key,
+                            guest.call_invoke(accessor, method_name, input),
+                        );
+                        attribution.scoped(Some(invocation_key), call).await
                     });
                 let result = match runtime {
                     Some(runtime) => {
@@ -1204,7 +1217,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 }
             } else {
                 run_guest_call_settled(store, async |accessor| {
-                    guest.call_invoke(accessor, method_name, input).await
+                    attribution
+                        .armed(
+                            invocation_key,
+                            guest.call_invoke(accessor, method_name, input),
+                        )
+                        .await
                 })
                 .await
             };
@@ -1245,9 +1263,12 @@ async fn dispatch_call<Ctx: WorkerCtx>(
         PreparedCall::SaveSnapshot => {
             let guest = load_save_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
-            let result =
-                run_guest_call_settled(store, async |accessor| guest.call_save(accessor).await)
-                    .await;
+            let result = run_guest_call_settled(store, async |accessor| {
+                attribution
+                    .armed(invocation_key, guest.call_save(accessor))
+                    .await
+            })
+            .await;
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {
@@ -1269,7 +1290,9 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest.call_load(accessor, snapshot).await
+                attribution
+                    .armed(invocation_key, guest.call_load(accessor, snapshot))
+                    .await
             })
             .await;
             let consumed_fuel =
@@ -1299,16 +1322,19 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_oplog_processor_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
-                guest
-                    .call_process(
-                        accessor,
-                        account_info,
-                        config,
-                        component_id,
-                        agent_id,
-                        metadata,
-                        first_entry_index,
-                        entries,
+                attribution
+                    .armed(
+                        invocation_key,
+                        guest.call_process(
+                            accessor,
+                            account_info,
+                            config,
+                            component_id,
+                            agent_id,
+                            metadata,
+                            first_entry_index,
+                            entries,
+                        ),
                     )
                     .await
             })
@@ -1388,6 +1414,11 @@ pub(crate) async fn prepare_guest_call<Ctx: WorkerCtx>(
     display_name: &str,
 ) {
     rearm_fuel_check(store);
+    store
+        .data()
+        .durable_ctx()
+        .linear_memory_tracker()
+        .clear_memory_growth_failure();
     store.data_mut().reset_invocation_call_counts();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
@@ -1451,6 +1482,11 @@ pub(crate) async fn invoke_result_from_trap<Ctx: WorkerCtx>(
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let retry_from = store.data().get_current_retry_point().await;
     let agent_mode = store.data().agent_mode();
+    let err = store
+        .data()
+        .durable_ctx()
+        .linear_memory_tracker()
+        .annotate_gc_heap_error(err);
     let err: anyhow::Error = err.into();
     if let Some(error) = replay_divergence_from_trap(&err, store.data().is_live()) {
         return Err(error);
@@ -3315,6 +3351,64 @@ mod tests {
     }
 
     #[test]
+    async fn gc_exhaustion_without_backtrace_remains_a_guest_failure() -> anyhow::Result<()> {
+        use wasmtime::{Engine, Instance, Module, Store, StoreLimitsBuilder};
+
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let module = Module::new(
+            &engine,
+            r#"(module
+                (type $bytes (array (mut i8)))
+                (func (export "allocate")
+                    (drop (array.new_default $bytes (i32.const 1048576)))))"#,
+        )?;
+        let mut store = Store::new(
+            &engine,
+            StoreLimitsBuilder::new().memory_size(64 * 1024).build(),
+        );
+        store.limiter(|limits| limits);
+        store.set_fuel(u64::MAX)?;
+        store.set_epoch_deadline(u64::MAX);
+        let instance = Instance::new_async(&mut store, &module, &[]).await?;
+        let allocate = instance.get_typed_func::<(), ()>(&mut store, "allocate")?;
+        for outer_failure in [true, false] {
+            let error = allocate.call_async(&mut store, ()).await.unwrap_err();
+            let error =
+                wasmtime::Error::new(error.downcast::<wasmtime::GcHeapOutOfMemory<()>>().unwrap());
+            assert!(error.downcast_ref::<wasmtime::WasmBacktrace>().is_none());
+            let error = if outer_failure {
+                match classify_guest_call_settlement::<()>(&own_agent_id(), Err(error), None, false)
+                {
+                    Err(GuestCallSettlementError::Trap(error)) => error,
+                    other => panic!("GC exhaustion must remain a resource trap: {other:?}"),
+                }
+            } else {
+                classify_guest_call_settlement(
+                    &own_agent_id(),
+                    Ok::<_, wasmtime::Error>(Err::<(), _>(error)),
+                    None,
+                    false,
+                )
+                .expect("the event loop settled")
+                .expect_err("the nested guest call exhausted GC capacity")
+            };
+            assert!(matches!(
+                TrapType::from_error::<crate::workerctx::default::Context>(
+                    &error.into(),
+                    OplogIndex::INITIAL,
+                    golem_common::model::agent::AgentMode::Durable,
+                ),
+                TrapType::Error {
+                    error: OplogAgentError::OutOfMemory,
+                    ..
+                }
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
         let guest_trap = classify_guest_call_settlement(
             &own_agent_id(),
@@ -3449,6 +3543,9 @@ mod tests {
             Trap::HeapMisaligned,
             Trap::NullReference,
             Trap::AtomicWaitNonSharedMemory,
+            Trap::CastFailure,
+            Trap::ArrayOutOfBounds,
+            Trap::AllocationTooLarge,
         ] {
             let error = wasmtime::Error::from_anyhow(trap.into());
             assert_eq!(
@@ -3516,6 +3613,16 @@ mod tests {
         let instruction_trap = || anyhow::Error::new(wasmtime::Trap::UnreachableCodeReached);
         for failure in [
             anyhow::anyhow!("unclassified host failure"),
+            anyhow::Error::new(wasmtime::Trap::CastFailure)
+                .context(GolemSpecificWasmTrap::WorkerExceededMemoryLimit),
+            anyhow::Error::new(wasmtime::Trap::ArrayOutOfBounds)
+                .context(GolemSpecificWasmTrap::WorkerOutOfMemory),
+            mark_durable_call_trap_context(
+                anyhow::Error::new(wasmtime::Trap::AllocationTooLarge),
+                DurableCallTrapContext {
+                    retry_from: OplogIndex::from_u64(17),
+                },
+            ),
             anyhow::Error::new(ClassifiedHostError {
                 kind: HostFailureKind::Permanent,
                 message: "permanent host failure".into(),

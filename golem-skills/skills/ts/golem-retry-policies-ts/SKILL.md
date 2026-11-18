@@ -194,7 +194,11 @@ const policy = NamedPolicy.named(
 
 ### Scoped Usage with `withRetryPolicy`
 
-Apply a policy for a block of code — the previous policy is restored when the block exits:
+Apply a policy for a block of code. The block runs inside a retry policy scope: the policy
+overrides the agent-wide policy with the same name for host calls until the block exits or its
+Promise settles. The scope changes no agent-wide policy and records no oplog entry. JavaScript
+code of one agent runs on one component-model task, so other async work of the same invocation
+that runs while the scope is open also sees the policy:
 
 ```typescript
 withRetryPolicy(policy, () => {
@@ -310,6 +314,6 @@ When no user-defined retry policies are set, Golem activates a default catch-all
 - Policies are defined **per-environment** — different environments can have different retry behaviors
 - Policy names must be unique within an environment
 - Higher priority policies are evaluated first; the first matching predicate wins
-- `withRetryPolicy` is scoped — the policy is restored when the callback exits
+- `withRetryPolicy` is scoped — the scope ends when the callback exits or its Promise settles, and the agent-wide policies never change
 - Inline retries (automatic transparent retries for transient network errors) already use the semantic retry policy system
 - Changes made via CLI or REST API take effect immediately for running agents

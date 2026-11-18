@@ -3425,6 +3425,22 @@ pub async fn test_component_stage(deps: &Deps) {
     assert!(components.len() == 1);
     assert!(components[0].revision == other_component_revision_0);
 
+    for revision_id in [1, 2] {
+        let exact = deps
+            .component_repo
+            .get_by_id_and_revision(component_id, revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.record.component.revision.revision_id, revision_id);
+        assert_eq!(
+            exact.record.component.revision.audit.deleted,
+            revision_id == 2
+        );
+        assert!(exact.component_deleted_at.is_some());
+        assert_eq!(exact.latest_deletion_revision, Some(2));
+    }
+
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
         ..revision_0.clone()
@@ -3448,6 +3464,38 @@ pub async fn test_component_stage(deps: &Deps) {
     .unwrap();
     let_assert!(created_after_delete = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
+
+    let services = environment_service_deps(deps);
+    for (revision_id, deleted) in [(0, false), (1, false), (2, true), (3, false)] {
+        let exact = deps
+            .component_repo
+            .get_by_id_and_revision(component_id, revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.record.component.revision.revision_id, revision_id);
+        assert_eq!(exact.record.component.revision.audit.deleted, deleted);
+        assert!(exact.component_deleted_at.is_none());
+        assert_eq!(exact.latest_deletion_revision, Some(2));
+
+        let public = services
+            .component_service
+            .get_component_revision(
+                ComponentId(component_id),
+                revision_id.try_into().unwrap(),
+                &AuthCtx::System,
+            )
+            .await;
+        if deleted {
+            assert!(matches!(
+                public,
+                Err(golem_registry_service::services::component::ComponentError::ComponentNotFound(id))
+                    if id == ComponentId(component_id)
+            ));
+        } else {
+            assert_eq!(i64::from(public.unwrap().revision), revision_id);
+        }
+    }
 }
 
 pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps) {

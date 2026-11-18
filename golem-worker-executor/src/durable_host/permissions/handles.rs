@@ -524,7 +524,7 @@ impl<T: Send + 'static, Ctx: WorkerCtx> HostPermissionCardWithStore<T>
         accessor.with(|mut access| {
             let ctx = access.get();
             DurabilityHost::observe_function_call(ctx, "golem::core::permission-card", "drop");
-            ctx.state.invocation_scope_handles.remove(&rep.rep());
+            ctx.state.authority_mut().forget_scope_handle(rep.rep());
             ctx.table().delete(rep)?;
             Ok(())
         })
@@ -538,7 +538,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
         &mut self,
         handle: Resource<PermissionCardHandleRep>,
     ) -> Result<PermissionCardValuePayload, Self::Error> {
-        self.state.invocation_scope_handles.remove(&handle.rep());
+        self.state.authority_mut().forget_scope_handle(handle.rep());
         let rep = self.table().delete(handle).map_err(invalid_handle_error)?;
         match rep.into_payload::<PermissionCardEntry>() {
             Ok(entry) => entry.into_snapshot(),
@@ -582,7 +582,7 @@ impl<Ctx: WorkerCtx> PermissionCardResolver for DurableWorkerCtx<Ctx> {
     }
 
     fn drop_permission_card_handle(&mut self, handle: Resource<PermissionCardHandleRep>) {
-        self.state.invocation_scope_handles.remove(&handle.rep());
+        self.state.authority_mut().forget_scope_handle(handle.rep());
         let _ = self.table().delete(handle);
     }
 }

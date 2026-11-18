@@ -23,12 +23,8 @@ export {
   removeRetryPolicy,
 } from 'golem:api/retry@1.5.0';
 
-import {
-  type NamedRetryPolicy,
-  getRetryPolicyByName,
-  setRetryPolicy as rawSetRetryPolicy,
-  removeRetryPolicy as rawRemoveRetryPolicy,
-} from 'golem:api/retry@1.5.0';
+import { setRetryPolicy as rawSetRetryPolicy } from 'golem:api/retry@1.5.0';
+import { RetryPolicyScope } from 'golem:api/retry-scope@1.5.0';
 import { executeWithDrop } from './guard';
 import {
   Duration,
@@ -71,49 +67,42 @@ export function setRetryPolicy(policy: NamedPolicyInput): void {
 }
 
 /**
- * RetryPolicyGuard is a guard type that restores the previous retry policy on drop.
- * If the policy existed before, it is restored; if it was newly added, it is removed.
+ * RetryPolicyGuard holds an open retry policy scope. While the scope is open, its named policy
+ * overrides the agent-wide policy with the same name for the host calls of the current task.
+ * The scope changes no agent-wide policy and records no oplog entry.
+ *
+ * JavaScript code of one agent runs on one task, so other async work of the same invocation
+ * that runs while the scope is open also sees the policy.
+ *
  * You must call drop on the guard once you are finished using it.
  */
 export class RetryPolicyGuard {
-  constructor(
-    private previous: NamedRetryPolicy | undefined,
-    private name: string,
-  ) {}
+  constructor(private scope: RetryPolicyScope | undefined) {}
   drop() {
-    if (this.previous !== undefined) {
-      rawSetRetryPolicy(this.previous);
-    } else {
-      rawRemoveRetryPolicy(this.name);
-    }
+    const scope = this.scope;
+    this.scope = undefined;
+    (scope as unknown as { [Symbol.dispose](): void } | undefined)?.[Symbol.dispose]();
   }
 }
 
 /**
- * Temporarily sets a named retry policy and returns a guard.
- * When the guard is dropped, the previous policy with the same name is restored
- * (or removed if it didn't exist).
- * @param policy - The named retry policy to set, either as a raw WIT shape or a high-level NamedPolicy.
+ * Opens a retry policy scope and returns its guard. The policy applies until the guard is
+ * dropped.
+ * @param policy - The named retry policy to apply, either as a raw WIT shape or a high-level NamedPolicy.
  * @returns A RetryPolicyGuard instance.
  */
 export function useRetryPolicy(policy: NamedPolicyInput): RetryPolicyGuard {
-  const rawPolicy = toRawNamedPolicy(policy);
-  const previous = getRetryPolicyByName(rawPolicy.name);
-  const name = rawPolicy.name;
-  rawSetRetryPolicy(rawPolicy);
-  return new RetryPolicyGuard(previous, name);
+  return new RetryPolicyGuard(new RetryPolicyScope(toRawNamedPolicy(policy)));
 }
 
 export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => Promise<R>): Promise<R>;
 export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R;
 
 /**
- * Executes a function with a named retry policy temporarily set.
+ * Executes a function inside a retry policy scope for a named retry policy.
  * Supports both sync and async callbacks.
  *
- * On success the named policy is restored to its previous value (or removed if
- * it did not exist before). On failure the policy is also restored and the error
- * propagates normally.
+ * The scope ends when the function returns or its Promise settles, also when it fails.
  *
  * Use {@link retry} to retry guest code. Host HTTP retry remains host-managed.
  *

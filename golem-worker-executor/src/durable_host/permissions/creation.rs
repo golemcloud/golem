@@ -409,7 +409,7 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
         source.expires_at,
         move |ctx| {
             ensure_install_permission_in_surface(
-                &ctx.state.agent_effective_surface,
+                ctx.state.authority().effective_surface(),
                 &ctx.state.created_by_email,
                 source_card_id,
                 &target_recipient,

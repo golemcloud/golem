@@ -490,10 +490,9 @@ impl ToolReleaseService {
         {
             let component = self
                 .component_service
-                .get_component_revision(
+                .get_source_component_revision(
                     *component_id,
                     *component_revision,
-                    false,
                     &AuthCtx::system(),
                 )
                 .await
@@ -572,7 +571,7 @@ impl ToolReleaseService {
         };
         let component = self
             .component_service
-            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .get_source_component_revision(component_id, component_revision, &AuthCtx::system())
             .await
             .map_err(|_| ToolReleaseError::ImmutableReleaseConflict)?;
         let deployed = self

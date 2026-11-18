@@ -66,10 +66,12 @@ impl Fixture {
             GIB,
             AgentMode::Durable,
             true,
+            true,
             entry.clone(),
             Arc::new(Mutex::new(MemoryGrant::inert(GIB))),
             true,
         );
+        memory.grow(GIB, Instant::now());
         let meter = create_unbound_meter(
             ResourceUsageMeteringConfig {
                 compute: false,

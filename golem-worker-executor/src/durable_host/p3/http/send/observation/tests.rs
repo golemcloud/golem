@@ -276,10 +276,12 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
             if name == "http-tail-sentinel")
         );
     }
+    let now = std::time::Instant::now();
     let memory = crate::services::linear_memory::LinearMemoryTracker::new(
         2,
         2,
         golem_common::model::agent::AgentMode::Durable,
+        true,
         true,
         Arc::new(crate::services::resource_limits::AtomicResourceEntry::new(
             0, 10, 0, 0, 0,
@@ -287,8 +289,9 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
         Arc::new(Mutex::new(
             crate::services::active_agents::MemoryGrant::inert(2),
         )),
-        std::time::Instant::now(),
+        now,
     );
+    memory.grow(2, now);
     replay.publish_primary_live(&memory).await.unwrap();
     assert!(replay.is_live_published());
     let mut delivery = if let Some(delivery) = delivery.take() {
