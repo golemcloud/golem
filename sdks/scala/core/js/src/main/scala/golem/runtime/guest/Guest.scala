@@ -128,11 +128,31 @@ object Guest {
 
   /**
    * Ends the context of a call when its future completes, however it completes.
+   * A result that holds a stream keeps the caller for its producer.
    */
-  private def endWhenDone[A](context: golem.InvocationContext, call: Future[A]): Future[A] =
+  private def endWhenDone[A](context: golem.InvocationContext, call: Future[A])(
+    returnedStream: A => Boolean = (_: A) => false
+  ): Future[A] =
     call.transform { result =>
-      context.end()
+      context.end(result.toOption.exists(returnedStream))
       result
+    }
+
+  private def invocationResultHoldsStream(result: JsInvocationResult): Boolean = {
+    val typed = result.asInstanceOf[js.Dynamic].selectDynamic("result")
+    !js.isUndefined(typed) && typed != null && holdsStream(typed.selectDynamic("value"))
+  }
+
+  /**
+   * Whether an encoded value tree holds a stream, whose producer runs after the
+   * call returns.
+   */
+  private[runtime] def holdsStream(tree: js.Any): Boolean =
+    !js.isUndefined(tree) && tree != null && {
+      val nodes = tree.asInstanceOf[js.Dynamic].selectDynamic("valueNodes")
+      !js.isUndefined(nodes) && nodes.asInstanceOf[js.Array[js.Dynamic]].exists { node =>
+        node.selectDynamic("tag").asInstanceOf[Any] == "stream-value"
+      }
     }
 
   private def initialize(agentTypeName: String, input: js.Dynamic): js.Promise[Unit] =
@@ -160,7 +180,7 @@ object Guest {
                 case js.JavaScriptException(err) if isJsAgentError(err) =>
                   Future.failed(scala.scalajs.js.JavaScriptException(err))
               }
-          FutureInterop.toPromise(endWhenDone(context, initFuture)).asInstanceOf[js.Promise[Unit]]
+          FutureInterop.toPromise(endWhenDone(context, initFuture)()).asInstanceOf[js.Promise[Unit]]
       }
     }
 
@@ -188,7 +208,7 @@ object Guest {
         }
       val resultPromise: js.Promise[js.Any] =
         FutureInterop.toPromise(
-          endWhenDone(
+          endWhenDone[js.Any](
             context,
             FutureInterop
               .fromPromise(r.defn.invokeAny(r.instance, mn, input.asInstanceOf[JsSchemaValueTree], context))
@@ -196,7 +216,7 @@ object Guest {
                 case Some(tree) => tree.asInstanceOf[js.Any]
                 case None       => js.undefined
               }
-          )
+          )(holdsStream)
         )
       resultPromise.`catch`[js.Any](onRejected)
     }
@@ -269,16 +289,22 @@ object Guest {
     // wire-encoded `tool-error`; a failed Future (user code error) propagates as
     // an unhandled rejection so it becomes a WASM trap.
     val completed = invoked.transformWith { invocationResult =>
-      toolContext.foreach(_.end())
-      val encoded = Future.fromTry(invocationResult).flatMap {
-        case Right(res) =>
-          res.result match {
-            case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
-            case None        => Future.successful(JsInvocationResult(js.undefined))
-          }
-        case Left(error) =>
-          ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
-      }
+      val encoded = Future
+        .fromTry(invocationResult)
+        .flatMap {
+          case Right(res) =>
+            res.result match {
+              case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
+              case None        => Future.successful(JsInvocationResult(js.undefined))
+            }
+          case Left(error) =>
+            ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
+        }
+        .transform { result =>
+          // A tool result that holds a stream keeps the caller for its producer.
+          toolContext.foreach(_.end(result.toOption.exists(invocationResultHoldsStream)))
+          result
+        }
       val cleanup = List(
         () => inputOwnership.close(),
         () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),

@@ -13,7 +13,10 @@
 // limitations under the License.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { schemaValueToWit, v } from '../src/internal/schema-model';
+import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-model';
+import { compileSchema } from '../src/schema/adapter';
+import { s as markers } from '../src/schema/markers';
+import type { AgentStream } from '../src/schema/agentStream';
 
 const input = schemaValueToWit(v.record([]));
 
@@ -69,6 +72,7 @@ describe('a context whose call has ended', () => {
           readKept: sdk.method({ input: {}, returns: z.void() }),
           keep: sdk.method({ input: {}, returns: z.void() }),
           capture: sdk.method({ input: {}, returns: z.void() }),
+          stream: sdk.method({ input: {}, returns: sdk.s.stream(z.string()) }),
         },
       })
       .implement({
@@ -86,6 +90,13 @@ describe('a context whose call has ended', () => {
           },
           readKept() {
             seen.push(kept.ctx!.caller.original.toString());
+          },
+          stream(_input, ctx) {
+            return sdk.AgentStream.from(
+              (async function* () {
+                yield ctx.caller.original.toString();
+              })(),
+            );
           },
         },
       });
@@ -133,5 +144,19 @@ describe('a context whose call has ended', () => {
     expect(kept.again!()).toBe(
       'account ("https://login.example","account:A")|account ("https://login.example","account:A")',
     );
+  });
+
+  it('gives a returned stream the caller of its call when the producer first reads it later', async () => {
+    const { sdk, caller } = await setup();
+    caller.mockReturnValue(host('account:A'));
+    const tree = await sdk.golemAgent200Guest.invoke('stream', input);
+    caller.mockReturnValue(host('account:B'));
+    const reader = compileSchema(markers.stream(z.string())).fromValue(
+      schemaValueFromWit(tree!),
+    ) as AgentStream<string>;
+    await expect(reader.next()).resolves.toEqual({
+      done: false,
+      value: 'account ("https://login.example","account:A")',
+    });
   });
 });

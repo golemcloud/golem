@@ -162,6 +162,7 @@ pub mod bindings {
     pub mod golem {
         pub mod api {
             pub(crate) use crate::raw_bindings::golem::api::host;
+            pub(crate) use crate::raw_bindings::golem::api::retry_scope;
             pub use crate::raw_bindings::golem::api::{context, oplog, retry};
         }
 
@@ -216,6 +217,7 @@ pub mod load_snapshot {
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
+            "golem:api/retry-scope@1.5.0": crate::bindings::golem::api::retry_scope,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
@@ -265,6 +267,7 @@ pub mod save_snapshot {
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
+            "golem:api/retry-scope@1.5.0": crate::bindings::golem::api::retry_scope,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
@@ -314,6 +317,7 @@ pub mod golem_agentic {
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
+            "golem:api/retry-scope@1.5.0": crate::bindings::golem::api::retry_scope,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,
@@ -382,6 +386,7 @@ pub mod oplog_processor {
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
             "golem:tool/host@0.1.0": crate::bindings::golem::tool::host,
             "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
+            "golem:api/retry-scope@1.5.0": crate::bindings::golem::api::retry_scope,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.6.0": crate::bindings::golem::durability::durability,

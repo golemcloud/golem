@@ -413,13 +413,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 if self.uses_streams {
                     let parent = self.parent.clone();
                     let idempotency_key = *idempotency_key;
+                    let attribution = self.store.data().durable_ctx().attribution.clone();
+                    let invocation_key = self.store.data().durable_ctx().invocation_key();
                     // Host stream operations can retain session locks across a pending poll.
                     // Keep driving the Store while protocol-only completion acquires them.
                     let result = self
                         .store
                         .run_concurrent(async move |_accessor| {
-                            parent
-                                .complete_durable_streaming_session(&idempotency_key)
+                            attribution
+                                .scoped(
+                                    Some(invocation_key),
+                                    parent.complete_durable_streaming_session(&idempotency_key),
+                                )
                                 .await
                         })
                         .await;

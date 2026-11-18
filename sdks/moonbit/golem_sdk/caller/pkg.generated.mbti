@@ -10,6 +10,7 @@ import {
 }
 
 // Values
+pub fn holds_stream(@types.SchemaValueTree) -> Bool
 
 // Errors
 pub suberror PrincipalRefParseError {
@@ -51,7 +52,7 @@ pub fn InvocationContext::anonymous() -> Self
 pub fn InvocationContext::caller(Self) -> Caller
 pub fn InvocationContext::caller_or_ended(Self) -> Result[Caller, String]
 pub fn InvocationContext::current() -> Self
-pub fn InvocationContext::end(Self) -> Unit
+pub fn InvocationContext::end(Self, returned_stream? : Bool) -> Unit
 pub fn InvocationContext::from_caller(Caller) -> Self
 
 pub(all) enum Principal {

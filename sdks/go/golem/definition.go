@@ -76,7 +76,7 @@ func init() {
 	link.TypedValueWit = func(v any) types.TypedSchemaValue { return v.(TypedValue).wit }
 	link.AgentError = agentErrorToGo
 	link.TrapPanic = trapRegionPanic
-	link.Caller = func() (any, func()) {
+	link.Caller = func() (any, func(bool)) {
 		read, end := lazyCaller()
 		return read, end
 	}

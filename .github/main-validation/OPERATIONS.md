@@ -1,9 +1,10 @@
 # Acceptance and operations
 
-Neither production sampling nor the new release gate is enabled. Do not change
-variables, dispatch workflows, create request labels/issues/statuses, post to
-Slack or change rulesets without authorization. Keep today's CI active until
-the real Blacksmith flow and reporting are accepted.
+The cutover code makes production sampling and the exact-source release gate
+permanent when merged. It removes the activation variables and full reusable-CI
+release fallback. Preparing this change does not merge it or change live settings.
+Do not dispatch workflows, create request labels/issues/statuses, post to Slack
+or change rulesets without separate authorization.
 
 ## Blacksmith acceptance
 
@@ -12,7 +13,8 @@ the real Blacksmith flow and reporting are accepted.
    source. Account separately for checks which do not emit CTRF.
 2. Run a warm acceptance cycle with `parallel=true`. Measure duration, peak memory
    and disk. Check ports, Redis, files and containers across all three subflows.
-   Keep production serial if overlap does not pass.
+   Do not call overlap accepted if this fails; production uses the existing
+   parallel flow, so an unresolved isolation failure blocks safe cutover.
 3. Exercise a persistent test failure and a recovered flaky test. Confirm two
    failed-test retries, the final result and retained original failures.
 4. Cancel a genuine run, then verify the next run can use the sticky disks and
@@ -23,12 +25,21 @@ the real Blacksmith flow and reporting are accepted.
 6. Verify APFS succeeds on the same source. Measure the provisional 300-minute
    workload and 330-minute Linux job limits before finalizing them.
 
-Acceptance uses `Main validation (acceptance)`, not the release status. The
-production flags remain independent: `MAIN_VALIDATION_ENABLED` for sampling,
-`MAIN_VALIDATION_RELEASE_GATE_ENABLED` for preparation. Accept the full-CI and
-new release paths, the exact frozen preparation head, both skip results, and
-failed/missing/pending status before switching the release path. One real release
-must pass the new gate before calling release acceptance complete.
+Acceptance uses `Main validation (acceptance)`, not the release status. Feature
+branch acceptance never satisfies release preparation. Replacement acceptance
+run [44267744093](https://github.com/golemcloud/golem/actions/runs/44267744093)
+uses the already-pushed source `dbf3b9cdd`; it is not evidence for later local
+cutover edits. Do not cancel or replace it as part of preparing this change.
+
+Local fixtures execute the real selection, result and release-gate shells with
+offline API responses. They cover missing/pending/failed statuses, wrong creators,
+acceptance-only success and publication after failed or skipped prerequisites.
+They do not establish real Blacksmith test identities, overlap isolation, cold/warm
+resource limits, sticky-disk cancellation recovery or same-source APFS completion.
+Record the real acceptance outcomes separately, including any outstanding cases.
+The exact frozen preparation head must pass the new gate in one real release
+before release acceptance is complete. Signing and publication are not exercised
+by offline fixtures.
 
 ## Requests and reports
 
@@ -45,44 +56,57 @@ failed attempts and recovered tests; checks without CTRF use the job log. An
 interrupted or missing result is never green. The named owner, Daniel Vigovszky,
 reads these manually until the analysis agent is accepted.
 
-## Analysis agent (not configured)
+## Analysis agent
 
-Use a new small Golem orb under Daniel's personal Amp account, separate from the
-daily benchmark orb. Follow that benchmark agent's schedule and Slack webhook
-mechanisms: a 30-minute schedule wakes this same thread; an incoming webhook
-posts to `#golem-dev-internal`. Resolve webhook credentials through Amp secrets,
-never the prompt or CI. No health issue, investigation orbs or reproduction
-builds are needed initially. Obtain authorization before setup or posting.
+[observer/PROMPT.md](observer/PROMPT.md) owns the reusable instructions.
+[observer/README.md](observer/README.md) documents account-independent setup,
+the 30-minute wake-up, credentials, state transfer and prompt updates. The helper
+scripts live beside the prompt. Keep receipts and seen markers in durable local
+state, not Git. Updating these files does not update an existing observer's
+checkout or schedule automatically.
 
-Proposed instructions for that thread:
+The current observer is configured under Daniel's personal Amp account in
+[its own thread](https://ampcode.com/threads/T-01a1e9ca-bfca-772d-aa93-7feaf0270dc1).
+Its existing 30-minute schedule reads the repo-owned prompt from a pinned checkout.
+The schedule holds the operator-specific checkout revision, state path and acceptance
+destination. Generated receipt state is separate from the repo-owned helpers.
+The [public dashboard](https://golem-ci-status--vigoo.onamp.dev/) runs on the
+always-on `vigoo/golem-ci` Box, independently of the observer orb. Slack reports
+link to the corresponding run attempt on that dashboard.
+The observer is not yet accepted on real validation runs.
+Accept one failed and one green run, including a repeated wake-up which must not
+double-post. `.github/tools/flaky-tests` also needs real report-artifact acceptance
+before cutover.
 
-> Read newly finished `main-validation.yaml` runs in `golemcloud/golem` with `gh`,
-> including the exact source in the selection summary, job conclusions and CTRF
-> reports. When nothing is new, end with one short sentence. For each new failure,
-> report the source, failed tests/checks, recovered tests, run link and evidence
-> limits. Read `git log` and relevant `git show` diffs between the last comparable
-> green source and this failure. Rank credible suspect commits with confidence,
-> or say that no commit is a credible cause. Distinguish findings from hypotheses.
-> Analyze in this thread without investigation orbs or reproduction builds.
-> Post once per run through the configured Slack incoming webhook: a new failure
-> with analysis, a repeated failure in one line, or a recovery. Green runs without
-> recovery stay silent. Before posting, exclusively create a receipt named by
-> the run ID under `.amp/in/orb-backup/`; if it exists, inspect thread history and
-> delivery evidence instead of reposting. If delivery is uncertain, report that
-> uncertainty here. Never push, trigger workflows or change infrastructure from
-> this reporting task.
+## Coordinated cutover (live changes not performed)
 
-Accept the agent on one failed and one green real run, including a repeated wake
-which must not double-post. `.github/tools/flaky-tests` still needs adaptation
-for this workflow and in-report retries before cutover.
+Under an approved merge pause, coordinate protection changes with the cutover
+merge. The live ruleset `16972918`, named `main`, currently applies jointly to
+`~DEFAULT_BRANCH`, `release-*` and `N.N.x`. Its 62 required statuses include
+`CLAAssistant` and legacy full-CI jobs. Do not remove the full-CI requirements from
+that shared ruleset wholesale: maintenance branches must retain them.
 
-## Coordinated cutover (not performed)
+Split main protection from release/maintenance protection, or make an equivalent
+scoped ruleset update. Main must no longer require jobs removed by the cutover;
+release and maintenance protection must not lose their existing full-CI checks.
+Preserve reviews, CLA, bypass policy, deletion restrictions and non-force-push
+safeguards. Keep Vouch, docs previews and billing deployment safeguards.
+Do not require `Main validation` on each PR: it samples main after merge and does
+not validate every PR or intermediate main commit. Remove main PR requirements
+for skill-harness, billing tests and Bash oracle checks; those do not run on main PRs.
 
-Under an approved merge pause, enable production sampling, remove main/PR full
-suite triggers from `ci.yaml` and `builtin-bash.yaml`, and retain manual/reusable
-CI and full CI on maintenance branches (`N.N.x`). Extract the cheap path-filtered
-skill-harness PR checks. Split required checks so main keeps CLA while maintenance
-lines keep today's full checks. Update contributor/agent guidance and remove the
-three experiment branches only with authorization. Verify a real main merge,
-PR and Slack report before calling the ticket complete. The own machine and
-parked outer-VM scripts follow later; they are not prerequisites for Blacksmith.
+The merged code activates the ten-minute schedule without a variable update and
+stops automatic full-platform/heavy Bash checks on ordinary main PRs and pushes.
+Main PRs run no tests, including skill-harness, billing and Bash oracle tests.
+It retains manual/reusable CI, maintenance full CI and the existing main-push
+billing and Bash oracle paths. No optional PR tests are introduced.
+Release preparation always requires the exact-source production result and
+release-only prerequisites. Existing activation variables no longer control it.
+
+Verify a real main merge, unrelated PR, skill-only PR, maintenance PR/push and
+Slack report before calling the ticket complete. Confirm there is no duplicate
+automatic full-platform flow and that removed checks no longer block main PRs.
+Daniel Vigovszky owns outages and merge/release pauses; do not automatically
+restore paid full PR CI during an outage. Update contributor/agent guidance with
+the same merge. Branch deletion requires separate authorization. The own machine
+and parked outer-VM scripts follow later; they are not prerequisites for Blacksmith.

@@ -21,7 +21,7 @@ use crate::durable_host::concurrent::{
     LeaveIncompleteOnDrop, import_invocation_id, resolve_current_observational_owner,
 };
 use crate::durable_host::durability::{
-    CustomInvocationContext, DurableCallTrapContext, mark_durable_call_trap_context,
+    DurableCallTrapContext, GuestTaskContext, mark_durable_call_trap_context,
 };
 use crate::durable_host::p3::{
     DurableP3, durable_worker_ctx, observe_function_call_store, wasi_http_view,
@@ -1433,7 +1433,12 @@ where
             activity,
             false,
         );
-        store.spawn(async move |store| task.run(store).await)?;
+        let captured = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .attribution
+                .capture()
+        });
+        store.spawn(async move |store| captured.run(task.run(store)).await)?;
     }
     Ok(())
 }
@@ -1784,7 +1789,7 @@ pub(super) fn finish_transmission<Ctx: WorkerCtx, U: Send + 'static>(
         if host_input {
             let custom_invocation_context = store
                 .as_context_mut()
-                .guest_task_context::<CustomInvocationContext>()?;
+                .guest_task_context::<GuestTaskContext>()?;
             let (observational_owner, invocation_id) = {
                 let mut access = store.as_context_mut();
                 let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
@@ -1799,7 +1804,13 @@ pub(super) fn finish_transmission<Ctx: WorkerCtx, U: Send + 'static>(
                 activity,
                 true,
             );
-            store.spawn(async move |store| task.run(store).await)?;
+            let captured = {
+                let mut store_ctx = store.as_context_mut();
+                durable_worker_ctx::<Ctx, U>(store_ctx.data_mut())
+                    .attribution
+                    .capture()
+            };
+            store.spawn(async move |store| captured.run(task.run(store)).await)?;
         } else {
             let task = HttpRequestTransmissionPassthroughTask::<Ctx>::new(pending, activity);
             store.spawn(async move |store| task.run(store).await)?;

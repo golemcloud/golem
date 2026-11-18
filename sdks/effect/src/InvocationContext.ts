@@ -192,9 +192,17 @@ class TextFormParser {
  */
 export type PrincipalKind = "user" | "account" | "agent" | "tool" | "anonymous"
 
+const liveValueSerialization =
+  "a Caller, a Principal and a TokenProvenance are live values and cannot be serialized; store ctx.caller.original.ref instead"
+
 abstract class BasePrincipal {
   // Prevents structural compatibility between the kinds.
   protected readonly _brand!: void
+
+  /** A principal is a live value: serializing it throws. Store its `ref` instead. */
+  toJSON(): never {
+    throw new Error(liveValueSerialization)
+  }
 
   abstract readonly kind: PrincipalKind
   abstract readonly ref: PrincipalRef | undefined
@@ -364,6 +372,11 @@ export class TokenProvenance {
     this.id = inner.id
     this.maker = inner.maker === undefined ? undefined : refFromHost(inner.maker)
   }
+
+  /** A token provenance is a live value: serializing it throws. */
+  toJSON(): never {
+    throw new Error(liveValueSerialization)
+  }
 }
 
 /**
@@ -376,6 +389,11 @@ export class TokenProvenance {
 export class Caller {
   // Prevents structural compatibility with plain records.
   protected readonly _brand!: void
+
+  /** A caller is a live value: serializing it throws. Store `original.ref` instead. */
+  toJSON(): never {
+    throw new Error(liveValueSerialization)
+  }
 
   readonly original: Principal
   readonly immediate: Principal

@@ -221,10 +221,10 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
         &self,
     ) -> Result<Option<CustomInvocationScope>, WorkerExecutorError> {
         Ok(self
-            .guest_task_context::<CustomInvocationContext>()
+            .guest_task_context::<GuestTaskContext>()
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             .as_deref()
-            .and_then(CustomInvocationContext::current))
+            .and_then(GuestTaskContext::current))
     }
 
     fn call_invocation_id<Ctx: WorkerCtx>(

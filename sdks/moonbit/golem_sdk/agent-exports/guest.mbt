@@ -26,11 +26,16 @@ pub async fn invoke(
 ) -> Result[@types.SchemaValueTree?, @common.AgentError] {
   let context = @agents.InvocationContext::current()
   defer context.end()
-  match @agents.get_agent_instance() {
+  let result = match @agents.get_agent_instance() {
     None =>
       @agents.panic_with_message("invoke", "Agent instance is not initialized")
     Some(instance) => instance.interface.invoke(method_name, input, context)
   }
+  // A result that holds a stream keeps the caller for its producer.
+  context.end(
+    returned_stream=result is Ok(Some(tree)) && @caller.holds_stream(tree),
+  )
+  result
 }
 
 ///|

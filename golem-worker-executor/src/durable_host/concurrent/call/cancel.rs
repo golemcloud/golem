@@ -285,8 +285,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             activity,
         };
+        let captured = store.with(|mut access| get_ctx(access.data_mut()).attribution.capture());
         store
-            .spawn(async move |store| task.run(store).await)
+            .spawn(async move |store| captured.run(task.run(store)).await)
             .map_err(|error| {
                 TerminalCallError::new(WorkerExecutorError::runtime(error.to_string()), context)
             })?;

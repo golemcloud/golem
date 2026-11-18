@@ -172,10 +172,12 @@ func init() {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
 		caller, end := currentCaller()
-		defer end()
-		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
+		defer end(false)
+		result := defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
 			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stderr(stderr))},
 			caller)
+		end(returnsStream(result))
+		return result
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -214,8 +216,8 @@ func init() {
 		// call sent go back to the host however the invocation ends.
 		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
 		caller, end := currentCaller()
-		defer end()
-		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
+		defer end(false)
+		result := defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,
 			parameters:  typedValue(parameters),
@@ -227,7 +229,22 @@ func init() {
 			caller:      caller,
 			under:       newUnderlyingLayer(wrapped),
 		})
+		end(returnsStream(result))
+		return result
 	}
+}
+
+// returnsStream reports whether a tool result returns a stream: a value that
+// holds one, or a standard output stream. Its producer runs after the call.
+func returnsStream(result witTypes.Result[toolCommon.InvocationResult, types.ToolError]) bool {
+	if !result.IsOk() {
+		return false
+	}
+	ok := result.Ok()
+	if ok.Stdout.IsSome() || ok.Stderr.IsSome() {
+		return true
+	}
+	return ok.Result.IsSome() && engine.HoldsStream(ok.Result.Some().Value.ValueNodes)
 }
 
 // Context is the per-invocation context handed to a command handler. The
