@@ -25,7 +25,7 @@ use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
+use golem_common::model::{AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
 
