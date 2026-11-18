@@ -32,7 +32,6 @@ use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store, run_deniable_access, wasi_sockets_view,
 };
-use crate::durable_host::sockets::policy::SocketPolicy;
 use crate::durable_host::sockets::{SocketEntry, SocketPhase, TcpSocketOptions};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{DurableWorkerCtx, TcpSocketStreamDirection};
@@ -116,13 +115,12 @@ fn tcp_options<Ctx: WorkerCtx>(
     }
 }
 
-/// The socket policy of the Store, for the permission target of a connect or datagram.
-pub(super) fn socket_policy<Ctx: WorkerCtx, U: 'static>(
+/// The permission target of a connect or datagram from the Store to `address`.
+pub(super) fn socket_target<Ctx: WorkerCtx, U: 'static>(
     store: &Accessor<U, DurableP3<Ctx>>,
-) -> SocketPolicy {
-    store.with(|mut access| {
-        SocketPolicy::new(&durable_worker_ctx::<Ctx, U>(access.data_mut()).state.config)
-    })
+    address: std::net::SocketAddr,
+) -> Result<golem_common::model::card::PermissionTarget, String> {
+    store.with(|mut access| durable_worker_ctx::<Ctx, U>(access.data_mut()).socket_target(address))
 }
 
 fn serialize_tcp_stream_result(
@@ -1753,9 +1751,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostTcpSocketWithStore<U> for Dur
                 "connect",
             )
         });
-        let targets = socket_policy(store)
-            .target(remote_address.into())
-            .map(|target| vec![target]);
+        let targets = socket_target(store, remote_address.into()).map(|target| vec![target]);
         let request_address = remote_address;
         let rep = socket.rep();
         let mut connected_live = false;
