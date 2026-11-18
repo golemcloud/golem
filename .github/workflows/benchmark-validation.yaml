@@ -1,0 +1,66 @@
+name: Short Benchmark Validation
+on:
+  workflow_call:
+    inputs:
+      deadline:
+        description: Immutable UTC epoch deadline shared with the orb
+        required: true
+        type: string
+      cohort:
+        description: Unique diagnostic cohort, never a production run
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  short-study:
+    timeout-minutes: 40
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    strategy:
+      fail-fast: true
+      matrix:
+        host: ['1', '2', '3', '4']
+    env:
+      STUDY_DEADLINE: ${{ inputs.deadline }}
+      STUDY_COHORT: ${{ inputs.cohort }}
+      STUDY_HOST: ${{ matrix.host }}
+    steps:
+      - name: Check the shared deadline
+        run: |
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          [[ "$STUDY_DEADLINE" =~ ^[0-9]+$ ]]
+          now=$(date +%s)
+          (( STUDY_DEADLINE > now + 120 && STUDY_DEADLINE <= now + 3600 ))
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 44078542455
+          artifact-ids: 14329150891
+          merge-multiple: true
+          path: ${{ runner.temp }}/bundle
+      - uses: shogo82148/actions-setup-redis@v1.49.0
+        with:
+          redis-version: '8.0.2'
+          auto-start: false
+      - name: Install suite parser
+        run: python3 -m pip install PyYAML==6.0.2
+      - name: Run five short invocations without rebuilding
+        run: |
+          python3 .github/scripts/run-benchmark-validation.py \
+            --archive "$RUNNER_TEMP/bundle/benchmark-bundle.tar.gz" \
+            --output "$RUNNER_TEMP/short-results" \
+            --deadline "$STUDY_DEADLINE" --cohort "$STUDY_COHORT" \
+            --runner github-actions-blacksmith-32vcpu --host "$STUDY_HOST"
+      - name: Preserve all available diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: short-study-${{ matrix.host }}-attempt${{ github.run_attempt }}
+          path: ${{ runner.temp }}/short-results
+          if-no-files-found: warn
+          retention-days: 30

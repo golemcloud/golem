@@ -13,6 +13,16 @@ on:
         description: Run overlapping R3 controls on every partition host (requires publish=false)
         type: boolean
         default: false
+      short_validation:
+        description: Run the build-free unpublished diagnostic instead of normal benchmark jobs
+        type: boolean
+        default: false
+      deadline:
+        description: Immutable UTC epoch deadline for the short diagnostic
+        type: string
+      cohort:
+        description: Unique short diagnostic cohort
+        type: string
 
 env:
   WASM_RQUICKJS_VERSION: "0.5.3"
@@ -20,7 +30,18 @@ env:
   WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
+  short-validation:
+    if: github.event_name == 'workflow_dispatch' && inputs.short_validation
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/benchmark-validation.yaml
+    with:
+      deadline: ${{ inputs.deadline }}
+      cohort: ${{ inputs.cohort }}
+
   build-benchmarks:
+    if: ${{ !inputs.short_validation }}
     runs-on: blacksmith-32vcpu-ubuntu-2204
     outputs:
       timestamp: ${{ steps.bundle.outputs.timestamp }}
