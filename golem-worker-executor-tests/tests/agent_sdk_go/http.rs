@@ -284,6 +284,115 @@ async fn go_parallel_http_from_goroutines_replays(
     Ok(())
 }
 
+#[test]
+#[timeout("5m")]
+async fn go_http_write_acknowledgement_repairs_an_incomplete_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::oplog::HostRequestP3HttpRequestBodyWrite;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::oplog::payload::types::SerializableP3HttpWriteOutcome;
+    use golem_common::schema::FromSchema;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let uploads = Arc::new(Mutex::new(Vec::new()));
+    let captured = uploads.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = spawn(async move {
+        let router = Router::new().route(
+            "/post-example",
+            post(move |body: Bytes| {
+                captured.lock().unwrap().push(body.to_vec());
+                async { "repaired response" }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent = agent_id!("HttpAgent", "incomplete-write-ack");
+    let worker = executor
+        .start_agent_with(
+            &component.id,
+            agent.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let (accepted, release) = executor.gate_next_oplog_function_end(
+        &worker,
+        HostFunctionName::P3HttpRequestContentsWrite,
+        true,
+    );
+    let key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(&component, &agent, &key, "run-parallel", data_value!(1u16))
+        .await?;
+    timeout(Duration::from_secs(30), accepted).await??;
+    executor.commit_oplog(&worker).await?;
+    let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let (write_index, recorded) = before
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "http::types::request::contents-write" =>
+            {
+                Some((entry.oplog_index, start.request.clone().unwrap()))
+            }
+            _ => None,
+        })
+        .expect("native acceptance must append its outcome before End");
+    let request = HostRequestP3HttpRequestBodyWrite::from_value(recorded.value())?;
+    assert_eq!(request.sequence, 0);
+    assert_eq!(request.offered, 6);
+    assert_eq!(
+        request.outcome,
+        SerializableP3HttpWriteOutcome::Completed(6)
+    );
+    assert!(!before.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::End(end) if end.start_index == write_index)));
+    let crashed = executor.signal_simulated_crash(&worker).await?;
+    release.send(()).unwrap();
+    timeout(Duration::from_secs(30), crashed).await??;
+    let result = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent,
+            &key,
+            "run-parallel",
+            data_value!(1u16),
+        ),
+    )
+    .await??
+    .into_typed::<Vec<String>>()?;
+    assert_eq!(result, vec!["repaired response"]);
+    let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::End(end) if end.start_index == write_index))
+            .count(),
+        1,
+    );
+    assert!(after.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::CompletionDelivered(delivery) if delivery.start_index == write_index)));
+    let uploads = uploads.lock().unwrap();
+    assert!(!uploads.is_empty());
+    assert!(uploads.iter().all(|body| body == b"body 0"));
+    server.abort();
+    Ok(())
+}
+
 /// Serves one raw HTTP/1.1 exchange per connection on `listener`. `respond`
 /// gets everything the client sent before it closed its side or sent a complete
 /// chunked body, and returns the bytes to write back (or nothing, to close

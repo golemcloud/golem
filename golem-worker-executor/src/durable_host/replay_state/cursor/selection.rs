@@ -537,11 +537,19 @@ impl CursorTx<'_> {
     pub(in crate::durable_host::replay_state) fn unclaimed_start_with_invocation_id(
         &self,
         invocation_id: DurableInvocationId,
+        function: Option<&StartClaim>,
     ) -> bool {
-        self.retained_start_with_invocation_id(invocation_id)
-            || self
-                .unclaimed_start_ahead(invocation_id, |_| true)
-                .is_some()
+        self.st.starts.retained_values().any(|retained| {
+            start_invocation_id(&retained.entry) == Some(invocation_id)
+                && function.is_none_or(|claim| {
+                    matches!(&retained.entry, OplogEntry::Start { function_name, .. }
+                        if claim.matches_function_name(function_name))
+                })
+        }) || self
+            .unclaimed_start_ahead(invocation_id, |recorded| {
+                function.is_none_or(|claim| claim.matches_function_name(&recorded.function_name))
+            })
+            .is_some()
     }
 
     fn retained_start_with_invocation_id(&self, invocation_id: DurableInvocationId) -> bool {

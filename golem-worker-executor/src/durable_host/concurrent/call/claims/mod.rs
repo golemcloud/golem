@@ -212,12 +212,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                 .map(|operation| (operation, Pair::FQFN.to_string()));
             let owned_claim = claim.clone();
             let store_continued_live = self.store_continued_live();
+            let deferred_observation = self.claim_options.deferred_observation;
             let recorded_start_required = self.claim_options.require_recorded_start
                 || (!self.store_replay_state.is_incomplete_entity()
                     && self.replay_to_live_role() != ReplayToLiveRole::PrimaryAgent);
             let outcome = owned_access_claim(access, recorded_start_required, async move {
                 claiming
-                    .claim_start_for_store_with_admission(
+                    .claim_start_for_store_with_observation(
                         owned_claim,
                         store_continued_live,
                         move |index, entry| {
@@ -226,6 +227,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                             }
                         },
                         admission,
+                        deferred_observation,
                     )
                     .await
             })
