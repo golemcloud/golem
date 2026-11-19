@@ -600,7 +600,7 @@ fn serial_recipes_share_preparation_and_ignore_manifest_insertion_order() {
         for name in if reverse { ["b", "a"] } else { ["a", "b"] } {
             std::fs::create_dir(project.path().join(name)).unwrap();
             components.push_str(&format!(
-                "  app:{name}:\n    dir: {name}\n    componentWasm: component.wasm\n    build:\n      - command: node record.cjs {name} first\n        dir: ..\n      - command: node record.cjs {name} second\n        dir: ..\n"
+                "  app:{name}:\n    dir: {name}\n    componentWasm: component.wasm\n    build:\n      - command: node record.cjs {name} first\n        dir: ..\n        env:\n          PLAN_DUMP_PRIVATE: not-for-plan-output\n      - command: node record.cjs {name} second\n        dir: ..\n"
             ));
         }
         std::fs::write(project.path().join("golem.yaml"), format!(
@@ -648,6 +648,32 @@ if (step === 'second') fs.copyFileSync('seed.wasm', `${name}/component.wasm`);
             String::from_utf8_lossy(&check.stderr)
         );
         assert_eq!(snapshot(project.path()), before);
+        let check_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&check.stdout),
+            String::from_utf8_lossy(&check.stderr)
+        );
+        let start = check_text.find("checked host build stages").unwrap();
+        let end = check_text[start..]
+            .find("Preflight checks declared requirements")
+            .unwrap()
+            + start;
+        let dump = &check_text[start..end];
+        let mut remaining = dump;
+        for command in [
+            "node record.cjs a first",
+            "node record.cjs a second",
+            "node record.cjs b first",
+            "node record.cjs b second",
+        ] {
+            let operation = format!("operation: external command {command:?}");
+            remaining = remaining
+                .split_once(&operation)
+                .unwrap_or_else(|| panic!("missing ordered operation {operation} in {dump}"))
+                .1;
+        }
+        assert!(!dump.contains("not-for-plan-output"), "{dump}");
+        assert!(!check_text.contains("Executing external command"));
         let output = cli_command()
             .current_dir(project.path())
             .arg("--config-dir")

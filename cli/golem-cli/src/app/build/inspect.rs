@@ -433,6 +433,26 @@ pub(super) fn log_build_plan(plan: &BuildPlan) {
             logln(format!("    awaits {input:?}"));
         }
         for action in &stage.actions {
+            match &action.operation {
+                BuildOperation::Command(crate::model::app_raw::BuildCommand::External(command)) => {
+                    logln(format!(
+                        "    operation: external command {:?}",
+                        command.command
+                    ));
+                }
+                BuildOperation::Command(crate::model::app_raw::BuildCommand::QuickJSCrate(
+                    command,
+                )) => {
+                    logln(format!(
+                        "    operation: generate QuickJS crate {:?}; WIT: {:?}; world: {:?}; JS modules: {:?}",
+                        command.generate_quickjs_crate,
+                        command.wit,
+                        command.world,
+                        command.js_modules.iter().collect::<BTreeMap<_, _>>()
+                    ));
+                }
+                operation => logln(format!("    operation: {operation:?}")),
+            }
             logln(format!(
                 "    inputs: {:?}; outputs: {:?}; effects: {:?}",
                 action.inputs, action.outputs, action.effects
