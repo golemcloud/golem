@@ -34,11 +34,91 @@ fn encode_static_value(value: SchemaValue) -> crate::proto::golem::schema::Schem
         .expect("static tool values cannot contain live streams")
 }
 
+impl From<ToolHttpMount> for proto::ToolHttpMount {
+    fn from(value: ToolHttpMount) -> Self {
+        Self {
+            path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<proto::ToolHttpMount> for ToolHttpMount {
+    type Error = String;
+
+    fn try_from(value: proto::ToolHttpMount) -> Result<Self, Self::Error> {
+        Ok(Self {
+            path_prefix: value
+                .path_prefix
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+impl From<CommandHttp> for proto::CommandHttp {
+    fn from(value: CommandHttp) -> Self {
+        use proto::command_http::Value;
+        Self {
+            value: Some(match value {
+                CommandHttp::Prefix(value) => Value::Prefix(proto::ToolHttpPrefix {
+                    path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+                }),
+                CommandHttp::Endpoint(value) => Value::Endpoint(proto::ToolHttpEndpoint {
+                    route_id: value.route_id,
+                    http_method: Some(value.http_method.into()),
+                    path_suffix: value.path_suffix.into_iter().map(Into::into).collect(),
+                    query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+                    header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+                    response_headers: value.response_headers.into_iter().map(Into::into).collect(),
+                    mode: value
+                        .mode
+                        .map(|mode| crate::proto::golem::http::HttpRouteMode::from(mode) as i32),
+                    durable_streams: value.durable_streams.map(Into::into),
+                }),
+            }),
+        }
+    }
+}
+
+impl TryFrom<proto::CommandHttp> for CommandHttp {
+    type Error = String;
+
+    fn try_from(value: proto::CommandHttp) -> Result<Self, Self::Error> {
+        use proto::command_http::Value;
+        Ok(match required(value.value, "CommandHttp.value")? {
+            Value::Prefix(value) => Self::Prefix(ToolHttpPrefix {
+                path_suffix: value
+                    .path_suffix
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+            }),
+            Value::Endpoint(value) => Self::Endpoint(ToolHttpEndpoint {
+                route_id: value.route_id,
+                http_method: required(value.http_method, "ToolHttpEndpoint.http_method")?
+                    .try_into()?,
+                path_suffix: value
+                    .path_suffix
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                query_vars: value.query_vars.into_iter().map(Into::into).collect(),
+                header_vars: value.header_vars.into_iter().map(Into::into).collect(),
+                response_headers: value.response_headers.into_iter().map(Into::into).collect(),
+                mode: value.mode.map(TryInto::try_into).transpose()?,
+                durable_streams: value.durable_streams.map(TryInto::try_into).transpose()?,
+            }),
+        })
+    }
+}
+
 impl From<Tool> for proto::Tool {
     fn from(value: Tool) -> Self {
         Self {
             version: value.version,
             requires_filesystem: value.requires_filesystem,
+            http_mount: value.http_mount.map(Into::into),
             commands: Some(value.commands.into()),
             schema: Some(value.schema.into()),
         }
@@ -52,6 +132,7 @@ impl TryFrom<proto::Tool> for Tool {
         Ok(Self {
             version: value.version,
             requires_filesystem: value.requires_filesystem,
+            http_mount: value.http_mount.map(TryInto::try_into).transpose()?,
             commands: required(value.commands, "Tool.commands")?.try_into()?,
             schema: required(value.schema, "Tool.schema")?.try_into()?,
         })
@@ -159,6 +240,7 @@ impl From<CommandNode> for proto::CommandNode {
             name: value.name,
             aliases: value.aliases,
             doc: Some(value.doc.into()),
+            http: value.http.map(Into::into),
             globals: Some(value.globals.into()),
             subcommands: value.subcommands.into_iter().map(|index| index.0).collect(),
             body: value.body.map(Into::into),
@@ -174,6 +256,7 @@ impl TryFrom<proto::CommandNode> for CommandNode {
             name: value.name,
             aliases: value.aliases,
             doc: required(value.doc, "CommandNode.doc")?.into(),
+            http: value.http.map(TryInto::try_into).transpose()?,
             globals: required(value.globals, "CommandNode.globals")?.try_into()?,
             subcommands: value.subcommands.into_iter().map(CommandIndex).collect(),
             body: value.body.map(TryInto::try_into).transpose()?,
@@ -940,6 +1023,7 @@ mod tests {
             let tool = Tool {
                 version: "1".into(),
                 requires_filesystem,
+                http_mount: None,
                 commands: CommandTree { nodes: vec![] },
                 schema: SchemaGraph::empty(),
             };

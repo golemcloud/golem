@@ -36,6 +36,7 @@ import {
   PathSegment as WitPathSegment,
 } from 'golem:agent/common@2.0.0';
 import { DurableStreamRouteOptions as WitDurableStreamRouteOptions } from 'golem:core/http@2.0.0';
+import type { CommandHttp, ToolHttpMount } from 'golem:tool/common@0.1.0';
 import { parsePath } from './internal/http/path';
 import { parseQuery } from './internal/http/query';
 import {
@@ -209,10 +210,10 @@ declare const endpointBoundBrand: unique symbol;
 declare const endpointHeaderNamesBrand: unique symbol;
 
 /**
- * Whether an endpoint's HTTP verb permits a request body. `get` / `head` are
+ * Whether an endpoint's HTTP verb permits a request body. `get` / `head` / `del` are
  * `"bodyless"`; every other verb (and `custom`) is `"bodyful"`. Used as a
- * phantom on {@link HttpEndpointSpec} so `method({...})` can statically reject a
- * bodyless endpoint whose bindings do not cover every method parameter.
+ * phantom on {@link HttpEndpointSpec} so `method({...})` can check the types of
+ * inputs implicitly bound from the query string.
  */
 export type EndpointKind = 'bodyless' | 'bodyful';
 
@@ -296,6 +297,8 @@ export interface HttpEndpointSpec<
   /** Durable streams exposed by this endpoint. Omit to use platform defaults. */
   readonly durableStreams?: DurableStreamRouteOptions;
   readonly mode?: HttpRouteMode;
+  readonly routeId?: string;
+  readonly responseHeaders?: FileResponseHeaders;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +345,8 @@ export interface EndpointOptsFor<
   /** Durable streams exposed by this endpoint. Omit to use platform defaults. */
   readonly durableStreams?: DurableStreamRouteOptions;
   readonly mode?: HttpRouteMode;
+  readonly routeId?: string;
+  readonly responseHeaders?: FileResponseHeaders;
 }
 
 /** Escape-hatch (segment-array) form options: maps un-parameterised. */
@@ -396,8 +401,9 @@ export const head = verbShorthand('head') as unknown as VerbFactory<'bodyless'>;
 export const post = verbShorthand('post') as unknown as VerbFactory<'bodyful'>;
 /** Shorthand for `{ method: 'put', path, ...opts }`. Bodyful. */
 export const put = verbShorthand('put') as unknown as VerbFactory<'bodyful'>;
-/** Shorthand for `{ method: 'delete', path, ...opts }`. Bodyful. */
-export const del = verbShorthand('delete') as unknown as VerbFactory<'bodyful'>;
+/** Shorthand for `{ method: 'delete', path, ...opts }`. Bodyless. */
+export const del = verbShorthand('delete') as unknown as VerbFactory<'bodyless'>;
+export { del as delete };
 /** Shorthand for `{ method: 'patch', path, ...opts }`. Bodyful. */
 export const patch = verbShorthand('patch') as unknown as VerbFactory<'bodyful'>;
 /** Shorthand for `{ method: 'options', path, ...opts }`. Bodyful. */
@@ -484,6 +490,59 @@ export interface MountFactory {
 export const mount = ((path: PathInput, opts: MountSugarOpts = {}): HttpMountSpec =>
   ({ path, ...opts }) as HttpMountSpec) as unknown as MountFactory;
 
+/** A command group suffix that publishes no endpoint. */
+export interface HttpPrefixSpec {
+  readonly prefix: PathInput;
+}
+
+/** Declare the HTTP suffix inherited by a command group's descendants. */
+export const prefix = (path: PathInput): HttpPrefixSpec => ({ prefix: path });
+
+function toolPath(path: readonly PathSegment[]): ToolHttpMount['pathPrefix'] {
+  return path.map((segment) => {
+    if (segment.tag !== 'segment')
+      throw new TypeError('Tool paths cannot use agent system variables');
+    return segment.val;
+  });
+}
+
+/** Compile a tool mount using the shared path grammar. */
+export function compileToolMount(spec: HttpMountSpec): ToolHttpMount {
+  if (Object.keys(spec).some((key) => key !== 'path')) {
+    throw new TypeError('Tool mounts declare only a path; admission belongs to the export');
+  }
+  return { pathPrefix: toolPath(resolvePath(spec.path, 'tool mount')) };
+}
+
+/** Compile a command endpoint or prefix with neutral HTTP route types. */
+export function compileToolHttp(spec: HttpEndpointSpec | HttpPrefixSpec): CommandHttp {
+  if ('prefix' in spec) {
+    return {
+      tag: 'prefix',
+      val: { pathSuffix: toolPath(resolvePath(spec.prefix, 'tool prefix')) },
+    };
+  }
+  if (spec.auth !== undefined || spec.cors !== undefined) {
+    throw new TypeError('Tool endpoint admission and CORS belong to the export');
+  }
+  const endpoint = compileEndpoint({ ...spec, routeId: undefined, responseHeaders: undefined });
+  if (endpoint.httpMethod.tag !== 'method')
+    throw new TypeError('Tools require a concrete HTTP method');
+  return {
+    tag: 'endpoint',
+    val: {
+      routeId: spec.routeId,
+      httpMethod: endpoint.httpMethod.val,
+      pathSuffix: toolPath(endpoint.pathSuffix),
+      queryVars: endpoint.queryVars,
+      headerVars: endpoint.headerVars,
+      responseHeaders: compileFileResponseHeaders(spec.responseHeaders),
+      mode: endpoint.mode,
+      durableStreams: endpoint.durableStreams,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Pipeable-free combinators — additive copies (input never mutated).
 // ---------------------------------------------------------------------------
@@ -559,6 +618,9 @@ function resolveEndpointPath(
 
 /** Compile a single {@link HttpEndpointSpec} to a WIT `http-endpoint-details`. */
 export function compileEndpoint(spec: HttpEndpointSpec): HttpEndpointDetails {
+  if (spec.routeId !== undefined || spec.responseHeaders !== undefined) {
+    throw new TypeError('routeId and responseHeaders are tool endpoint options');
+  }
   if (
     spec.mode !== undefined &&
     spec.mode !== 'durableStreams' &&

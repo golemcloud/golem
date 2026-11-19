@@ -78,6 +78,49 @@ struct PathAndQuery {
     query: Option<String>,
 }
 
+/// Parses a tool mount or prefix with the shared path grammar.
+pub fn parse_tool_http_path(path: &str) -> Result<Vec<golem_schema::http::PathSegment>, String> {
+    if path.contains('?') {
+        return Err("Tool mounts and prefixes cannot contain query parameters".to_string());
+    }
+    tool_path(parse_path(path)?)
+}
+
+fn tool_path(
+    path: Vec<crate::golem_agentic::golem::agent::common::PathSegment>,
+) -> Result<Vec<golem_schema::http::PathSegment>, String> {
+    path.into_iter()
+        .map(|segment| match segment {
+            crate::golem_agentic::golem::agent::common::PathSegment::Segment(segment) => {
+                Ok(segment.into())
+            }
+            _ => Err("Tool HTTP paths cannot use agent system variables".to_string()),
+        })
+        .collect()
+}
+
+/// Compiles a typed tool endpoint without choosing its default route mode.
+pub fn get_tool_http_endpoint(
+    method: &str,
+    path: &str,
+    headers: Vec<(String, String)>,
+) -> Result<golem_schema::schema::tool::ToolHttpEndpoint, String> {
+    let endpoint = get_http_endpoint_details(method, path, None, vec![], headers, None)?;
+    let HttpMethod::Method(method) = endpoint.http_method else {
+        return Err("Tools require a concrete HTTP method".to_string());
+    };
+    Ok(golem_schema::schema::tool::ToolHttpEndpoint {
+        route_id: None,
+        http_method: method.into(),
+        path_suffix: tool_path(endpoint.path_suffix)?,
+        query_vars: endpoint.query_vars.into_iter().map(Into::into).collect(),
+        header_vars: endpoint.header_vars.into_iter().map(Into::into).collect(),
+        response_headers: vec![],
+        mode: None,
+        durable_streams: None,
+    })
+}
+
 fn split_path_and_query(path_with_query: &str) -> PathAndQuery {
     let mut parts = path_with_query.splitn(2, '?');
 

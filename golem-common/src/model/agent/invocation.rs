@@ -842,6 +842,7 @@ mod request_equality_tests {
                     definition: Tool {
                         version: "1.0.0".to_string(),
                         requires_filesystem: false,
+                        http_mount: None,
                         commands: CommandTree { nodes: Vec::new() },
                         schema: SchemaGraph::empty(),
                     },

@@ -1,0 +1,14 @@
+# Migrating from Golem 1.6
+
+This page lists the changes and the kept behaviors that matter when you move an application from Golem 1.6 to Golem 2.0.
+
+## Component presets
+
+### Rust and MoonBit presets can behave differently
+
+Golem 2.0 keeps the toolchain behavior of the Rust and MoonBit presets, as in 1.6. The `debug` and `release` presets build the same source, but the program can behave differently between them:
+
+- **Rust:** `debug` checks integer overflow and runs `debug_assert!`, and `release` does neither. These are Cargo's defaults for the `dev` and `release` profiles, and the generated `Cargo.toml` does not change them. For example, `u8::MAX + 1` on a runtime value panics in `debug` and gives `0` in `release`.
+- **MoonBit:** a file that a package's `targets` option gives a `debug` or `release` condition is compiled only into the matching build, so the two presets can compile different files. Golem does not check or warn about these conditions.
+
+You do not have to change your application. The built-in Rust and MoonBit templates select `debug` for the `local` environment and `release` for the `cloud` environment, so test with `golem build --yes -P release` before you deploy. See [How the presets differ](/next/how-to-guides/common/golem-profiles-and-environments#how-the-presets-differ) for each SDK.

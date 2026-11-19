@@ -1,7 +1,7 @@
 # Local integration-test runbook
 
-For heavy worker-executor integration tests, use thermal protection and CI's
-20-minute test-execution limit.
+For heavy worker-executor integration tests, use thermal protection and a
+20-minute local test-execution limit.
 There are no I/O budgets, rate limits, memory-abort limits or thread-abort limits. Fans and fan control
 are now installed. The user has approved resuming work with this process. The previous broad
 integration command must not be restarted.
@@ -49,24 +49,18 @@ race. Review actual utilization between batches before changing the number of si
 
 ## CI time limits
 
-Checked against the repository workflow and current upstream main:
+Main validation has whole-workload limits rather than per-suite test deadlines:
 
 | CI scope | Configured limit |
 |---|---|
-| `worker-tests` matrix: Worker Executor integration tests | **20 minutes for the test step** in each matrix job. |
-| `unit-tests-and-checks` | 20 minutes for the whole job. |
-| `it-cli` | 30 minutes for the whole job. |
-| `it`: service integration groups | 45 minutes for the test step. |
-| `managed-xfs-tests` | 45 minutes for the whole job, a separate profile. |
+| Linux validation workload | 300 minutes for the validation step. |
+| Linux validation job | 330 minutes, including setup and report collection. |
 
-Source: `.github/workflows/ci.yaml`, especially the `worker-tests` job's
-`Worker Executor integration tests` step. That job has no explicit whole-job timeout; the relevant
-test-execution cutoff is the step's `timeout-minutes: 20`. The workflow's 25-minute setting belongs
-to `build-golem-scala`, not these executor tests.
+Source: the `linux` job in `.github/workflows/main-validation.yaml`.
 
 Use 20 minutes for each local worker-test batch, including a batch that contains only one test.
-Do not borrow the longer service/CLI limit for this binary. This mirrors CI's execution budget;
-it does not establish that an unvalidated local candidate passes CI or needs no original test timeout.
+This local safety limit does not change with the longer whole-workload CI budget.
+It does not establish that an unvalidated local candidate passes CI or needs no original test timeout.
 Compilation remains outside this local test guard and follows the existing build rules.
 
 ## Stop rules
@@ -77,7 +71,7 @@ to the entire batch process tree, including helpers, not just the top-level PID.
 | Measurement | Start condition or stop rule |
 |---|---|
 | NVMe temperature | Monitor both drives. Proposed cutoff: 70 C or a reported alarm, whichever comes first. Start below the cutoff without an alarm; no separate 60 C start requirement or fixed cooldown delay. |
-| Time | Hard maximum of 20 minutes for each worker-test batch process, including startup and cleanup, matching CI's test-step limit. A single-test run has the same maximum, never longer. Existing shorter test timeouts still apply. |
+| Time | Hard maximum of 20 minutes for each local worker-test batch process, including startup and cleanup. A single-test run has the same maximum, never longer. Existing shorter test timeouts still apply. |
 | Correctness | Any failed assertion, timeout, replay mismatch or nonzero exit stops the queue. Zero executed tests is not a pass. |
 
 Do not add read/write caps, bandwidth throttles or I/O-based cancellation. Memory, thread and I/O

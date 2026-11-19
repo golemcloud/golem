@@ -175,6 +175,29 @@ var _ = Upper.Handle(func(ctx *tool.OutputContext, a UpperArgs) (golem.Unit, err
 - Each output is finished independently for returned outcomes, including declared errors, invalid results and SDK rejections. An ordinary panic or unclassified returned error fails each output best effort and traps the component. Implicit cleanup cannot replace the outcome or an explicit output terminal. `ctx.Stdout().Fail(tool.OutputFailed("reason"))` ends one output with a specific cause. Writing to an output the command does not declare is an error.
 - A producer failure on stdin surfaces as a `*tool.OutputError`, never as `io.EOF`. An empty stdin chunk breaks the stream protocol and rejects the invocation as invalid input.
 
+## Declare HTTP Routes
+
+Set `tool.Spec{HTTP: &golem.Mount{Path: "/reports"}}` on the tool, then declare routes in command specs:
+
+```go
+type StatusArgs struct{ ID string }
+
+var Status = Tool.Command[StatusArgs, string]("status", func(a *StatusArgs, s *tool.CommandSpec) {
+	s.Positional(&a.ID).Name("id")
+	s.HTTP(golem.GET("/status/{id}"))
+})
+
+var Admin = Tool.Group("admin", golem.HTTP(golem.Prefix("/admin")))
+```
+
+With that mount, `Status` declares `GET /reports/status/{id}`. `Admin` supplies a prefix but emits no route. Each nonroot ancestor needs an endpoint or prefix. Names and aliases never supply path segments. A parent endpoint also supplies its suffix to descendants.
+
+Endpoint options include `golem.RouteID("status")`, `golem.Header("X-Token", "token")`, `golem.ResponseHeaders(golem.FileResponseHeader{Name: "X-Result", Value: "ready"})`, `golem.WithRouteMode(golem.RoutePlain)`, and `golem.DurableStreams(golem.StreamRoute{...})`. Stream routes carry `Slots` (`Input` or `Output`, `Name`, `ContentType`), `MaxReadersPerStream`, and `MaxAppendsPerSecond`. Query templates such as `?format={format}` bind declared inputs.
+
+Path captures require scalar inputs; query/header sources reject body-only complex values. GET, HEAD and DELETE implicitly bind remaining eligible inputs from query parameters. Mount/prefix captures must name globals in scope. Plain stdin routes cannot leave required inputs in the JSON body. Tool declarations reject agent auth/CORS/system variables and platform-managed response headers.
+
+Omitted mode resolves to Durable Streams for a non-idempotent command with any declared standard stream, otherwise plain. Only the command's own idempotent annotation controls that default; explicit mode wins. Default route IDs use the dot-separated canonical command path. These declarations do not change invocation compatibility or implement serving.
+
 ## Deploy
 
 Declare the tool in `golem.yaml`; agents that call it are bound to it there too (see `golem-call-tool-go`):

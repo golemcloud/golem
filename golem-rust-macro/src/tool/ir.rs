@@ -33,6 +33,8 @@ pub struct ToolDefinitionIr {
     pub version: Option<String>,
     /// Whether invocation requires a filesystem binding.
     pub requires_filesystem: bool,
+    /// Optional HTTP mount template.
+    pub mount: Option<String>,
     /// Aliases for the root command.
     pub aliases: Vec<String>,
     /// Doc comment on the trait.
@@ -54,6 +56,8 @@ pub struct CommandIr {
     pub name_override: Option<String>,
     /// `#[command(annotations(...))]`.
     pub annotations: Option<CommandAnnotationsIr>,
+    /// Optional command HTTP endpoint or prefix declaration.
+    pub http: Option<syn::Attribute>,
     /// `#[command(subtree = path::To::Trait)]`, if this method grafts a subtree.
     pub subtree: Option<SubtreeIr>,
     /// Whether the trait method is async; generated guest dispatch awaits async methods.

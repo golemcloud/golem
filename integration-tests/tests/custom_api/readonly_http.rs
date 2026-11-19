@@ -26,8 +26,8 @@
 //! - `ETag` only when the cache policy supports revalidation
 //! - `If-None-Match` short-circuits to `304 Not Modified` when the ETag
 //!   matches the current `(fingerprint, oplog-index)`
-//! - `Vary` includes `Authorization` (or the configured session header) for
-//!   public responses
+//! - Anonymous responses vary on credential headers independently of principal usage
+//! - Authenticated responses are private and require revalidation
 
 use super::assert_json_content_type;
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
@@ -185,6 +185,15 @@ async fn h2_if_none_match_returns_304(
     let body = revalidate.text().await?;
     assert!(body.is_empty(), "304 response body must be empty");
 
+    let unknown_query = agent
+        .client
+        .get(agent.base_url.join(&format!("{path}?v=3"))?)
+        .header(IF_NONE_MATCH, etag)
+        .send()
+        .await?;
+    assert_eq!(unknown_query.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(unknown_query.text().await?.contains("v"));
+
     Ok(())
 }
 
@@ -243,8 +252,7 @@ async fn h3_etag_invalidates_after_write(
 }
 
 // ---------------------------------------------------------------------------
-// H4 — an anonymous request is `public` and varies on the credential headers; a request that
-// carries a credential is `private`
+// Anonymous reads are public and vary on credentials, regardless of principal usage.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -266,12 +274,11 @@ async fn h4_anonymous_request_without_credentials_is_public_with_vary(
         "an anonymous UntilWrite read must emit `public, no-cache`"
     );
 
-    let vary = header_str(response.headers().get(VARY))
-        .expect("expected Vary header for a public read-only response");
-    for header in ["Authorization", "Cookie", "Golem-Token"] {
+    let vary = header_str(response.headers().get(VARY)).unwrap_or("");
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
         assert!(
-            header_has_token(vary, header),
-            "a public response must add `{header}` to Vary, got: {vary}"
+            header_has_token(vary, credential),
+            "missing {credential}: {vary}"
         );
     }
 
@@ -280,7 +287,44 @@ async fn h4_anonymous_request_without_credentials_is_public_with_vary(
 
 #[test]
 #[tracing::instrument]
-async fn h4_token_bearing_request_is_private_no_cache(
+async fn h4_anonymous_principal_aware_read_is_public_and_varies_on_credentials(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/readonly-agents/h4p-agent/count-for")?,
+        )
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let cache_control =
+        header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
+    assert_eq!(
+        cache_control, "public, no-cache",
+        "anonymous UntilWrite read must emit `public, no-cache`"
+    );
+
+    let vary = header_str(response.headers().get(VARY))
+        .expect("expected Vary header for principal-aware read");
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            header_has_token(vary, credential),
+            "missing {credential}: {vary}"
+        );
+    }
+
+    Ok(())
+}
+
+// A request that carries a credential the route does not verify is still anonymous, so its read
+// stays public; it varies on the credential headers, so no cache gives it to another request.
+#[test]
+#[tracing::instrument]
+async fn h4_an_unverified_credential_leaves_the_read_public_and_varying_on_credentials(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let response = agent
@@ -298,22 +342,17 @@ async fn h4_token_bearing_request_is_private_no_cache(
     let cache_control =
         header_str(response.headers().get(CACHE_CONTROL)).expect("expected Cache-Control header");
     assert_eq!(
-        cache_control, "private, no-cache",
-        "a request that carries a credential must get `private, no-cache`"
+        cache_control, "public, no-cache",
+        "a credential that the route does not verify leaves the caller anonymous: `public, no-cache`"
     );
 
-    let vary = response
-        .headers()
-        .get_all(VARY)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .collect::<Vec<_>>()
-        .join(",")
-        .to_ascii_lowercase();
-    assert!(
-        vary.split(',').any(|name| name.trim() == "authorization"),
-        "a private answer must vary on Authorization, got {vary:?}"
-    );
+    let vary = header_str(response.headers().get(VARY)).expect("expected Vary header");
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            header_has_token(vary, credential),
+            "missing {credential}: {vary}"
+        );
+    }
 
     Ok(())
 }

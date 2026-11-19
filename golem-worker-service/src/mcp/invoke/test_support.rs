@@ -1063,12 +1063,14 @@ impl InvocationHarness {
         let definition = Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "native".to_string(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Default::default(),
                     subcommands: vec![],
                     body: Some(CommandBody {

@@ -30,7 +30,9 @@ import {
   type NoCaseFoldDuplicates,
   type NoDuplicateBindings,
   type PathBindableKeys,
+  type QueryBindableKeys,
   type QueryOrHeaderBindableKeys,
+  type StreamResourceKeys,
 } from "./httpTypes.js"
 import { type RejectLiveValues } from "./liveValues.js"
 import { withPipe } from "./pipeable.js"
@@ -113,11 +115,7 @@ type ValidateBindingSources<B extends EndpointBound, P> =
   UnsupportedBinding<B["path"][number], PathBindableKeys<P>, "path"> extends infer A
     ? A extends Invalid<string>
       ? A
-      : UnsupportedBinding<
-            B["query"][number],
-            QueryOrHeaderBindableKeys<P>,
-            "query"
-          > extends infer Q
+      : UnsupportedBinding<B["query"][number], QueryBindableKeys<P>, "query"> extends infer Q
         ? Q extends Invalid<string>
           ? Q
           : UnsupportedBinding<B["header"][number], QueryOrHeaderBindableKeys<P>, "header">
@@ -146,9 +144,11 @@ type ValidateEndpointsTuple<
 > = {
   readonly [K in keyof E]: E[K] extends EndpointDef<infer V, infer Kind, infer B, infer H>
     ? Kind extends "bodyless"
-      ? [Exclude<keyof MethodInput<P> & string, V>] extends [never]
+      ? [
+          Exclude<keyof MethodInput<P> & string, V | QueryBindableKeys<P> | StreamResourceKeys<P>>,
+        ] extends [never]
         ? ValidateEndpointStructure<E[K], B, H, P>
-        : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<keyof MethodInput<P> & string, V> & string}' (only path / query / header bindings are allowed because there is no request body)`>
+        : Invalid<`GET/HEAD/DELETE endpoint cannot bind implicit query input '${Exclude<keyof MethodInput<P> & string, V | QueryBindableKeys<P> | StreamResourceKeys<P>> & string}' (use a body method for records and rich payloads)`>
       : ValidateEndpointStructure<E[K], B, H, P>
     : E[K]
 }

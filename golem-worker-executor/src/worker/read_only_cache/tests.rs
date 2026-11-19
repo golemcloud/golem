@@ -150,7 +150,7 @@ fn streamed_cache_digest_matches_materialized_bytes() {
         );
     }
     for p in [Caller::anonymous(), caller(17), caller(23)] {
-        assert_eq!(streamed_digest(&p), digest_bytes(&caller_bytes(&p)));
+        assert_eq!(streamed_digest(&p), p.digest());
     }
 }
 
@@ -326,6 +326,8 @@ fn cache_key_always_includes_the_caller_digest() {
     let agent = build_read_only_cache_key("m", &a, &caller(1), rev(1), 1);
     assert_ne!(anonymous, agent);
     assert_ne!(anonymous.caller_digest, agent.caller_digest);
+    // The worker service's HTTP validators use the same digest of the caller.
+    assert_eq!(agent.caller_digest, caller(1).digest());
     // The same caller gives the same key.
     assert_eq!(
         agent,

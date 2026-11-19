@@ -143,6 +143,12 @@ pub enum ToolValidationError {
     /// A command-tree node is referenced as a subcommand by more than one
     /// parent (the command graph is a DAG, not a tree).
     DuplicateCommandParent { index: i32 },
+    /// An HTTP declaration is not valid for its command or input scope.
+    InvalidHttpDeclaration {
+        command: String,
+        input: Option<String>,
+        detail: String,
+    },
 }
 
 impl Display for ToolValidationError {
@@ -256,6 +262,17 @@ impl Display for ToolValidationError {
             ToolValidationError::DuplicateCommandParent { index } => {
                 write!(f, "command node {index} has more than one parent")
             }
+            ToolValidationError::InvalidHttpDeclaration {
+                command,
+                input,
+                detail,
+            } => {
+                write!(f, "invalid HTTP declaration on command {command:?}")?;
+                if let Some(input) = input {
+                    write!(f, " for input {input:?}")?;
+                }
+                write!(f, ": {detail}")
+            }
         }
     }
 }
@@ -269,6 +286,11 @@ pub fn validate_tool(tool: &Tool) -> Result<(), Vec<ToolValidationError>> {
         ctx.errors.push(ToolValidationError::EmptyVersion);
     }
     ctx.run();
+    if super::canonical::check_command_tree_structure(tool).is_ok()
+        && let Err(error) = tool.validate_http()
+    {
+        ctx.errors.push(error);
+    }
     if ctx.errors.is_empty() {
         Ok(())
     } else {

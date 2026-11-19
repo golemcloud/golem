@@ -12,20 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod cache_headers;
+pub(super) mod cache_headers;
 mod parameter_parsing;
 mod response_mapping;
 
 use self::cache_headers::{
-    CacheVisibility, add_vary_header, build_cache_control_value, build_etag_value,
-    headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
+    build_etag_value, headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
     supports_http_revalidation,
 };
-use self::parameter_parsing::{parse_path_segment_value, parse_query_or_header_value};
+pub(super) use self::parameter_parsing::validate_query_parameters;
+use self::parameter_parsing::{
+    parse_path_segment_value, parse_query_or_header_value, parse_query_parameter,
+};
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
+use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
 use super::error::RequestHandlerError;
-use super::model::{ResponseBody, RichRouteSecurity};
+use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
@@ -36,7 +39,10 @@ use golem_common::model::agent::{AgentMode, AgentTarget, ParsedAgentKey, ReadOnl
 use golem_common::model::caller::{Caller, Claims, Pair, Principal, UserPrincipal};
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
-use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
+use golem_common::schema::validation::validate_value;
+use golem_common::schema::{
+    BinaryValuePayload, FieldSource, SchemaType, SchemaValue, TextValuePayload, TypedSchemaValue,
+};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
 };
@@ -61,6 +67,7 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        validate_query_parameters(request, behaviour, &[])?;
         let phantom_id = resolve_phantom_id(
             request,
             resolved_route,
@@ -89,7 +96,7 @@ impl CallAgentHandler {
             && is_cacheable_method(&request_method)
             && supports_http_revalidation(read_only)
             && let Some(not_modified) = self
-                .try_handle_if_none_match(request, behaviour, &agent_id, read_only, resolved_route)
+                .try_handle_if_none_match(request, behaviour, &agent_id, read_only)
                 .await?
         {
             return Ok(not_modified);
@@ -178,9 +185,8 @@ impl CallAgentHandler {
                 agent_fingerprint,
                 read_only,
                 behaviour,
-                resolved_route,
                 &caller,
-                request.headers(),
+                request.authenticated_session().is_some(),
             );
 
             if request_method == Method::HEAD {
@@ -203,7 +209,6 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         read_only: &ReadOnlyConfig,
-        resolved_route: &ResolvedRouteEntry,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         let Some(raw) = request
             .headers()
@@ -224,11 +229,19 @@ impl CallAgentHandler {
             return Ok(None);
         };
 
-        if !if_none_match_hits(&entries, agent_id, current_fingerprint, current_oplog) {
+        // The validator names the caller it was issued to, so only the same caller's request
+        // revalidates: a cache may send the ETag of another caller's stored response.
+        let caller = caller_from_request(request)?;
+        if !if_none_match_hits(
+            &entries,
+            agent_id,
+            current_fingerprint,
+            &caller,
+            current_oplog,
+        ) {
             return Ok(None);
         }
 
-        let caller = caller_from_request(request)?;
         let mut headers = http::HeaderMap::new();
         add_read_only_cache_headers(
             &mut headers,
@@ -237,9 +250,8 @@ impl CallAgentHandler {
             Some(current_fingerprint),
             read_only,
             behaviour,
-            resolved_route,
             &caller,
-            request.headers(),
+            request.authenticated_session().is_some(),
         );
 
         Ok(Some(RouteExecutionResult {
@@ -332,8 +344,27 @@ impl CallAgentHandler {
         // `SchemaValue::Record` the executor validates against (which excludes
         // auto-injected fields like the caller).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
-
+        let mut input_fields = behaviour
+            .method_input
+            .input_schema
+            .fields()
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+            .filter(|field| {
+                !matches!(
+                    behaviour.method_input.graph.resolve_ref(&field.schema),
+                    Ok(SchemaType::Stream { .. })
+                )
+            });
         for param in &behaviour.method_parameters {
+            let field = input_fields.next().ok_or_else(|| {
+                RequestHandlerError::invariant_violated("Method parameter has no input field")
+            })?;
+            let invalid =
+                |error: RequestHandlerError| RequestHandlerError::ParameterParsingFailed {
+                    name: field.name.clone(),
+                    error: Box::new(error),
+                };
             let value = match param {
                 MethodParameter::Path {
                     path_segment_index,
@@ -343,18 +374,14 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    parse_path_segment_value(raw, parameter_type)?
+                    parse_path_segment_value(raw, parameter_type).map_err(&invalid)?
                 }
 
                 MethodParameter::Query {
                     query_parameter_name,
                     parameter_type,
-                } => {
-                    let empty = Vec::new();
-                    let vals = query_params.get(query_parameter_name).unwrap_or(&empty);
-
-                    parse_query_or_header_value(vals, parameter_type)?
-                }
+                } => parse_query_parameter(query_parameter_name, query_params, parameter_type)
+                    .map_err(&invalid)?,
 
                 MethodParameter::Header {
                     header_name,
@@ -372,7 +399,7 @@ impl CallAgentHandler {
                         })
                         .collect::<Result<Vec<_>, _>>()?;
 
-                    parse_query_or_header_value(&vals, parameter_type)?
+                    parse_query_or_header_value(&vals, parameter_type).map_err(&invalid)?
                 }
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
@@ -452,6 +479,23 @@ impl CallAgentHandler {
                     }
                 },
             };
+            if matches!(
+                param,
+                MethodParameter::Path { .. }
+                    | MethodParameter::Query { .. }
+                    | MethodParameter::Header { .. }
+            ) {
+                validate_value(&behaviour.method_input.graph, &field.schema, &value).map_err(
+                    |errors| RequestHandlerError::InvalidParameter {
+                        name: field.name.clone(),
+                        error: errors
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    },
+                )?;
+            }
 
             values.push(value);
         }
@@ -497,10 +541,9 @@ fn is_cacheable_method(method: &Method) -> bool {
 
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
-/// supports HTTP revalidation), and `Vary` for every header that influences
-/// the response (the headers that carry a credential, for public and private
-/// answers alike, plus any header-bound method parameters).
-#[allow(clippy::too_many_arguments)]
+/// supports HTTP revalidation, and specific to `caller`), and `Vary` for
+/// header-bound method parameters. Credential-related Vary headers are also
+/// applied at the response boundary.
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
     agent_id: &AgentId,
@@ -508,21 +551,15 @@ fn add_read_only_cache_headers(
     agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
-    resolved_route: &ResolvedRouteEntry,
     caller: &Caller,
-    request_headers: &http::HeaderMap,
+    request_authenticated: bool,
 ) {
-    let session_header = session_header_name(&resolved_route.route.security);
-    let visibility = CacheVisibility::for_request(caller, request_headers, session_header);
-    let issues_token = headers.contains_key(http::header::SET_COOKIE);
-    headers.insert(
-        cache_header::CACHE_CONTROL,
-        http::HeaderValue::from_str(&build_cache_control_value(
-            read_only,
-            visibility,
-            issues_token,
-        ))
-        .unwrap(),
+    apply_response_cache_headers(
+        CacheRouteKind::Typed(Some(&read_only.cache_policy)),
+        headers,
+        request_authenticated,
+        false,
+        false,
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -539,35 +576,14 @@ fn add_read_only_cache_headers(
     {
         headers.insert(
             cache_header::ETAG,
-            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, idx)).unwrap(),
+            http::HeaderValue::from_str(&build_etag_value(agent_id, fp, caller, idx)).unwrap(),
         );
     }
 
-    // Every answer varies on every header that can carry a credential: a public answer may be
-    // served by a shared cache to any request, and a private answer may be kept by a browser
-    // cache that another session of the same browser then asks, so neither is selected for a
-    // request with a different credential. The headers that method parameters are bound to vary
-    // the response as well.
-    for name in ["Authorization", "Cookie", "Golem-Token"]
-        .into_iter()
-        .chain(session_header)
-    {
-        add_vary_header(headers, name);
-    }
     for param in &behaviour.method_parameters {
         if let MethodParameter::Header { header_name, .. } = param {
-            add_vary_header(headers, header_name);
+            add_vary_headers(headers, &[header_name]);
         }
-    }
-}
-
-/// The header that carries the session of a `SessionFromHeader` route.
-fn session_header_name(security: &RichRouteSecurity) -> Option<&str> {
-    match security {
-        RichRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
-        RichRouteSecurity::None
-        | RichRouteSecurity::SecurityScheme(_)
-        | RichRouteSecurity::Unavailable => None,
     }
 }
 
@@ -702,6 +718,264 @@ mod tests {
         // The claims text is the exact serialization of the session's claims.
         assert_eq!(user.claims.as_json(), claims_text);
         assert!(!format!("{:?}", caller.original.pair()).contains("ana@acme.example"));
+    }
+
+    #[test]
+    async fn query_ownership_rejects_unknown_and_malformed_names_without_requiring_arguments() {
+        use golem_service_base::custom_api::QueryOrHeaderType;
+        let resolver = test_resolver(vec![test_route(1, "/", Some("POST"), "typed")]);
+        let request = poem::Request::builder()
+            .method(Method::POST)
+            .uri("/".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let route = resolver.resolve_matching_route(&request).await.unwrap();
+        let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior else {
+            panic!("not typed")
+        };
+        let mut behaviour = behaviour.clone();
+        behaviour.method_parameters = vec![
+            MethodParameter::Query {
+                query_parameter_name: "q".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+            },
+            MethodParameter::Query {
+                query_parameter_name: "labels".into(),
+                parameter_type: QueryOrHeaderType::Map {
+                    key: PathSegmentType::Str,
+                    value: PathSegmentType::Bool,
+                },
+            },
+        ];
+        behaviour.phantom_selection = PhantomSelection::Query {
+            name: "instance".into(),
+            optional: true,
+        };
+        for (query, valid) in [
+            ("", true),
+            ("q=x&labels%5Benv%5D=true&instance=x", true),
+            ("v=3", false),
+            ("labels=true", false),
+            ("labels[]=true", false),
+            ("labels[env][zone]=true", false),
+            ("labels[env=true", false),
+            ("q[x]=x", false),
+            ("offset=0", false),
+        ] {
+            let request = RichRequest::new(
+                poem::Request::builder()
+                    .uri(format!("/?{query}").parse().unwrap())
+                    .finish(),
+            );
+            assert_eq!(
+                validate_query_parameters(&request, &behaviour, &[]).is_ok(),
+                valid,
+                "{query}"
+            );
+        }
+        let request = RichRequest::new(
+            poem::Request::builder()
+                .uri("/?offset=0&live=sse&cursor=2".parse().unwrap())
+                .finish(),
+        );
+        assert!(
+            validate_query_parameters(&request, &behaviour, &["offset", "live", "cursor"]).is_ok()
+        );
+        for _ in 0..32 {
+            for query in [
+                "z=1&b=2&%61=3&q=x&instance=x&offset=0",
+                "%61=3&offset=0&instance=x&q=x&b=2&z=1",
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/?{query}").parse().unwrap())
+                        .finish(),
+                );
+                let error =
+                    validate_query_parameters(&request, &behaviour, &["offset"]).unwrap_err();
+                assert!(
+                    matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "a"),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    async fn bound_query_constraints_use_original_referenced_collection_schemas() {
+        use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+        use golem_common::schema::{NamedField, SchemaTypeDef, TypeId};
+        use golem_service_base::custom_api::QueryOrHeaderType;
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let resolver = test_resolver(vec![test_route(1, "/", Some("GET"), "typed")]);
+        let request = poem::Request::builder()
+            .uri("/".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let route = resolver.resolve_matching_route(&request).await.unwrap();
+        let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior else {
+            panic!("not typed")
+        };
+        let mut behaviour = behaviour.clone();
+        let bounded = SchemaType::U32 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(2)),
+                max: Some(NumericBound::Unsigned(8)),
+                unit: None,
+            }),
+            metadata: Default::default(),
+        };
+        let reference = SchemaType::ref_to(TypeId::new("bounded"));
+        for (schema, ty, good, bad) in [
+            (
+                reference.clone(),
+                QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                "wire=3",
+                "wire=1",
+            ),
+            (
+                SchemaType::list(reference.clone()),
+                QueryOrHeaderType::List {
+                    name: None,
+                    owner: None,
+                    inner: Box::new(PathSegmentType::U32),
+                },
+                "wire=3&wire=7",
+                "wire=3&wire=9",
+            ),
+            (
+                SchemaType::map(reference.clone(), reference),
+                QueryOrHeaderType::Map {
+                    key: PathSegmentType::U32,
+                    value: PathSegmentType::U32,
+                },
+                "wire[3]=7",
+                "wire[1]=7",
+            ),
+        ] {
+            behaviour.method_input = CompiledInputSchema {
+                graph: SchemaGraph {
+                    root: SchemaType::record(vec![]),
+                    defs: vec![SchemaTypeDef {
+                        id: TypeId::new("bounded"),
+                        name: None,
+                        body: bounded.clone(),
+                    }],
+                },
+                input_schema: InputSchema::parameters([NamedField::user_supplied(
+                    "amount", schema,
+                )]),
+            };
+            behaviour.method_parameters = vec![MethodParameter::Query {
+                query_parameter_name: "wire".into(),
+                parameter_type: ty,
+            }];
+            for (query, valid) in [(good, true), (bad, false)] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/?{query}").parse().unwrap())
+                        .finish(),
+                );
+                let result = handler.resolve_method_arguments(
+                    &route,
+                    &request,
+                    &behaviour,
+                    ParsedRequestBody::Unused,
+                );
+                assert_eq!(result.is_ok(), valid, "{query}");
+                if let Err(error) = result {
+                    assert!(error.to_string().contains("amount"), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    async fn invalid_query_fails_before_cache_metadata_or_body_reads() {
+        use futures::stream;
+        use golem_common::model::agent::CachePolicy;
+        use golem_common::schema::NamedField;
+        use golem_service_base::custom_api::{CompiledSchema, QueryOrHeaderType};
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        for method in ["GET", "HEAD", "DELETE", "POST"] {
+            for query in ["v=3", "lbl=x", "lbl=x&lbl[env]=true"] {
+                let resolver = test_resolver(vec![test_route(1, "/", Some(method), "typed")]);
+                let request = poem::Request::builder()
+                    .uri(format!("/?{query}").parse().unwrap())
+                    .method(method.parse().unwrap())
+                    .header("host", "example.com")
+                    .header("content-type", "application/json")
+                    .header("if-none-match", "*")
+                    .body(poem::Body::from_bytes_stream(stream::poll_fn(
+                        |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                            panic!("query rejection must not read body")
+                        },
+                    )));
+                let route = resolver.resolve_matching_route(&request).await.unwrap();
+                let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+                else {
+                    panic!("not typed")
+                };
+                let mut behaviour = behaviour.clone();
+                behaviour.method_input = CompiledInputSchema {
+                    graph: SchemaGraph::empty(),
+                    input_schema: InputSchema::parameters([NamedField::user_supplied(
+                        "labels",
+                        SchemaType::map(SchemaType::string(), SchemaType::bool()),
+                    )]),
+                };
+                behaviour.method_parameters = vec![MethodParameter::Query {
+                    query_parameter_name: "lbl".into(),
+                    parameter_type: QueryOrHeaderType::Map {
+                        key: PathSegmentType::Str,
+                        value: PathSegmentType::Bool,
+                    },
+                }];
+                if method == "POST" {
+                    behaviour.method_input.input_schema = InputSchema::parameters([
+                        NamedField::user_supplied(
+                            "labels",
+                            SchemaType::map(SchemaType::string(), SchemaType::bool()),
+                        ),
+                        NamedField::user_supplied("payload", SchemaType::string()),
+                    ]);
+                    behaviour
+                        .method_parameters
+                        .push(MethodParameter::JsonObjectBodyField {
+                            field_index: 0.into(),
+                        });
+                    behaviour.body = RequestBodySchema::JsonBody {
+                        expected: CompiledSchema {
+                            graph: SchemaGraph::anonymous(SchemaType::record_from_fields([(
+                                "payload",
+                                SchemaType::string(),
+                            )])),
+                        },
+                    };
+                }
+                behaviour.read_only = Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Default::default()),
+                });
+                let error = handler
+                    .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
+                    .await
+                    .unwrap_err();
+                if query == "v=3" {
+                    assert!(
+                        matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "v")
+                    );
+                } else {
+                    assert!(
+                        matches!(error, RequestHandlerError::InvalidParameter { ref name, ref error } if name == "labels" && error.contains("maps require name[key]")),
+                        "{error:?}"
+                    );
+                }
+                assert!(harness.metadata_reads.lock().unwrap().is_empty());
+                assert!(harness.contexts.lock().unwrap().is_empty());
+            }
+        }
     }
 
     #[test]
@@ -946,10 +1220,12 @@ mod tests {
                 Some(fingerprint),
                 &read_only,
                 behaviour,
-                &resolved,
                 &user("ana"),
-                &ana_request,
+                true,
             );
+            // The response boundary adds the session header of a `SessionFromHeader` route to
+            // `Vary` (`request_handler::finish_selected_response`); do the same here.
+            crate::custom_api::cache_headers::add_vary_headers(&mut ana_response, &["x-session"]);
             let vary = ana_response
                 .get(http::header::VARY)
                 .and_then(|value| value.to_str().ok())
@@ -960,8 +1236,8 @@ mod tests {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .all(|name| ana_request.get(name) == ben_request.get(name));
-            // Ben's conditional request with Ana's ETag: the validator holds no caller, so the
-            // worker service answers 304 without invoking the agent for Ben.
+            // Ben's conditional request with Ana's ETag: the validator names Ana, so the worker
+            // service does not answer 304 for Ben, and the agent runs for him.
             let etag = ana_response
                 .get(http::header::ETAG)
                 .unwrap()
@@ -972,6 +1248,7 @@ mod tests {
                 &parse_if_none_match_entries(&etag),
                 &agent_id,
                 fingerprint,
+                &user("ben"),
                 index,
             );
             println!(
@@ -980,7 +1257,18 @@ mod tests {
                 ana_response.get(http::header::CACHE_CONTROL),
             );
             if reusable_for_ben {
-                failures.push(format!("{:?}", read_only.cache_policy));
+                failures.push(format!(
+                    "{:?}: Ana's stored response",
+                    read_only.cache_policy
+                ));
+            }
+            // A cache may send the ETag of a stored response that Vary does not select, and
+            // reuse that response when the answer is 304.
+            if ben_gets_304 {
+                failures.push(format!(
+                    "{:?}: Ben's revalidation with Ana's ETag",
+                    read_only.cache_policy
+                ));
             }
 
             // A public answer (anonymous, no credential) and a private one name the same
@@ -993,9 +1281,12 @@ mod tests {
                 Some(fingerprint),
                 &read_only,
                 behaviour,
-                &resolved,
                 &Caller::anonymous(),
-                &http::HeaderMap::new(),
+                false,
+            );
+            crate::custom_api::cache_headers::add_vary_headers(
+                &mut public_response,
+                &["x-session"],
             );
             for response in [&ana_response, &public_response] {
                 let vary = response
@@ -1016,5 +1307,139 @@ mod tests {
             failures.is_empty(),
             "Ana's private response can be served to Ben by the browser cache for {failures:?}"
         );
+    }
+
+    /// The route, the agent and the validator inputs of one read-only response, for the ETag
+    /// tests below.
+    async fn read_only_profile_route() -> (
+        crate::custom_api::route_resolver::ResolvedRouteEntry,
+        AgentId,
+        AgentFingerprint,
+        OplogIndex,
+        ReadOnlyConfig,
+    ) {
+        use golem_common::model::agent::{CachePolicy, CachePolicyTtl};
+        use golem_service_base::custom_api::{RouteSecurity, SessionFromHeaderRouteSecurity};
+
+        let mut route = test_route(1, "/profile", Some("GET"), "typed");
+        route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        });
+        let resolver = test_resolver(vec![route]);
+        let request = poem::Request::builder()
+            .uri("/profile".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let resolved = resolver.resolve_matching_route(&request).await.unwrap();
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let agent_id = AgentId {
+            component_id: behaviour.component_id,
+            agent_id: "agent1()".to_string(),
+        };
+        let read_only = ReadOnlyConfig {
+            cache_policy: CachePolicy::Ttl(CachePolicyTtl {
+                duration_nanos: 60_000_000_000,
+            }),
+        };
+        (
+            resolved,
+            agent_id,
+            AgentFingerprint(Uuid::nil()),
+            OplogIndex::from_u64(7),
+            read_only,
+        )
+    }
+
+    fn signed_in_user(subject: &str) -> Caller {
+        Caller::entry(Principal::User(UserPrincipal {
+            pair: Pair::new(
+                "https://login.acme.example/".to_string(),
+                subject.to_string(),
+            ),
+            claims: Claims::from_json("{}".to_string()).unwrap(),
+            authenticated_at: Timestamp::from(0u64),
+        }))
+    }
+
+    /// The ETag that a read-only response to `caller` carries.
+    fn etag_for(
+        resolved: &crate::custom_api::route_resolver::ResolvedRouteEntry,
+        agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
+        index: OplogIndex,
+        read_only: &ReadOnlyConfig,
+        caller: &Caller,
+    ) -> String {
+        let crate::custom_api::model::RichRouteBehaviour::CallAgent(behaviour) =
+            &resolved.route.behavior
+        else {
+            panic!("expected an agent route");
+        };
+        let mut response = http::HeaderMap::new();
+        add_read_only_cache_headers(
+            &mut response,
+            agent_id,
+            Some(index),
+            Some(fingerprint),
+            read_only,
+            behaviour,
+            caller,
+            false,
+        );
+        response[http::header::ETAG].to_str().unwrap().to_string()
+    }
+
+    /// Ana reads a read-only method and gets an ETag. Ben, another session, then sends a
+    /// conditional request with Ana's ETag, as a cache may do for a stored response that `Vary`
+    /// does not select. A read-only call appends nothing to the oplog, so the index is the same:
+    /// the validator must still not match, or the 304 lets the cache show Ana's body to Ben.
+    #[test]
+    async fn another_callers_etag_never_revalidates_a_request() {
+        let (resolved, agent_id, fingerprint, index, read_only) = read_only_profile_route().await;
+        let ana_etag = etag_for(
+            &resolved,
+            &agent_id,
+            fingerprint,
+            index,
+            &read_only,
+            &signed_in_user("ana"),
+        );
+        let ben_gets_304 = if_none_match_hits(
+            &parse_if_none_match_entries(&ana_etag),
+            &agent_id,
+            fingerprint,
+            &signed_in_user("ben"),
+            index,
+        );
+        assert!(
+            !ben_gets_304,
+            "Ana's ETag {ana_etag} revalidates Ben's request: 304 for another caller"
+        );
+    }
+
+    /// The ETag of a response still revalidates the same caller's next request while the agent's
+    /// oplog has not moved.
+    #[test]
+    async fn the_same_callers_etag_still_revalidates() {
+        let (resolved, agent_id, fingerprint, index, read_only) = read_only_profile_route().await;
+        let ana_etag = etag_for(
+            &resolved,
+            &agent_id,
+            fingerprint,
+            index,
+            &read_only,
+            &signed_in_user("ana"),
+        );
+        assert!(if_none_match_hits(
+            &parse_if_none_match_entries(&ana_etag),
+            &agent_id,
+            fingerprint,
+            &signed_in_user("ana"),
+            index,
+        ));
     }
 }

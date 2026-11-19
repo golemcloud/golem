@@ -532,3 +532,25 @@ fn a_serialized_caller_has_no_token_value_cookie_key_or_proof_field() {
         );
     }
 }
+
+#[test]
+fn caller_digest_is_the_same_only_for_the_same_record() {
+    let ana = Caller::entry(user("https://login.acme.example/", "ana"));
+    assert_eq!(ana.digest(), ana.clone().digest());
+    assert_ne!(
+        ana.digest(),
+        Caller::entry(user("https://login.acme.example/", "ben")).digest()
+    );
+    // A new sign-in of the same user has new claims, so it is another record.
+    assert_ne!(
+        ana.digest(),
+        Caller::entry(user_with(
+            "https://login.acme.example/",
+            "ana",
+            r#"{"iat":1794230000}"#,
+            1_794_230_000_000
+        ))
+        .digest()
+    );
+    assert_ne!(ana.digest(), Caller::anonymous().digest());
+}

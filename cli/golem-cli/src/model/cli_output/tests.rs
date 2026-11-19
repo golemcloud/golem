@@ -1220,11 +1220,13 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                 definition: golem_common::schema::tool::Tool {
                     version: "1.0.0".to_string(),
                     requires_filesystem: false,
+                    http_mount: None,
                     commands: golem_common::schema::tool::CommandTree {
                         nodes: vec![golem_common::schema::tool::CommandNode {
                             name: "grep".to_string(),
                             aliases: Vec::new(),
                             doc: golem_common::schema::tool::Doc::default(),
+                            http: None,
                             globals: golem_common::schema::tool::Globals::default(),
                             subcommands: Vec::new(),
                             body: None,
@@ -1886,6 +1888,70 @@ fn cli_output_schema_exact_registered_schemas_reject_extra_fields() {
                 entry.output_type,
             );
         }
+    }
+}
+
+#[test]
+fn cli_output_schema_validates_tool_http_declarations() {
+    use golem_schema::http::{
+        DurableStreamRouteOptions, FileResponseHeader, HeaderVariable, HttpMethod, HttpRouteMode,
+        LiteralSegment, PathSegment, QueryVariable,
+    };
+    use golem_schema::schema::tool::{
+        CommandHttp, ToolHttpEndpoint, ToolHttpMount, ToolHttpPrefix,
+    };
+
+    let mut release = sample_tool_release();
+    release.definition.http_mount = Some(ToolHttpMount {
+        path_prefix: vec![PathSegment::Literal(LiteralSegment {
+            value: "reports".into(),
+        })],
+    });
+    let endpoint = ToolHttpEndpoint {
+        route_id: Some("report".into()),
+        http_method: HttpMethod::Post(golem_schema::Empty {}),
+        path_suffix: Vec::new(),
+        query_vars: vec![QueryVariable {
+            query_param_name: "q".into(),
+            variable_name: "query".into(),
+        }],
+        header_vars: vec![HeaderVariable {
+            header_name: "X-Region".into(),
+            variable_name: "region".into(),
+        }],
+        response_headers: vec![FileResponseHeader {
+            name: "X-Result".into(),
+            value: "ready".into(),
+        }],
+        mode: Some(HttpRouteMode::DurableStreams),
+        durable_streams: Some(DurableStreamRouteOptions {
+            slots: Vec::new(),
+            load: None,
+        }),
+    };
+    let mut default_endpoint = endpoint.clone();
+    default_endpoint.route_id = None;
+    default_endpoint.mode = None;
+    default_endpoint.durable_streams = None;
+    for declaration in [
+        CommandHttp::Endpoint(endpoint),
+        CommandHttp::Endpoint(default_endpoint),
+        CommandHttp::Prefix(ToolHttpPrefix {
+            path_suffix: Vec::new(),
+        }),
+    ] {
+        release.definition.commands.nodes[0].http = Some(declaration);
+        let output = to_structured_output_value(crate::model::tool_release::ToolReleaseView {
+            release: release.clone(),
+        })
+        .unwrap();
+        assert!(
+            COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&output),
+            "schema rejected {output}"
+        );
+        let mut invalid = output;
+        invalid["release"]["definition"]["commands"]["nodes"][0]["http"]["kind"] = json!("unknown");
+        assert!(!COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&invalid));
     }
 }
 
@@ -6970,6 +7036,7 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
         definition: Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: [
                     ("neither", false, false),
@@ -6982,6 +7049,7 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
                     name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: Vec::new(),
                     body: Some(body(stdout, stderr)),
