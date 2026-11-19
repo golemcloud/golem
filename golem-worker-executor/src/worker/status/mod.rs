@@ -20,8 +20,7 @@ use golem_common::model::{
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
     RetryConfig, RetryPolicyState, RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord,
-    Timestamp,
-    UsableAutomaticSnapshot,
+    Timestamp, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
