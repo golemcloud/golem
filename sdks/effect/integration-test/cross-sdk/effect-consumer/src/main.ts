@@ -200,7 +200,7 @@ defineAgent({
     nestedStreamRoundTrip: () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const peer = yield* GeneratedTsPeer.get(name)
+          const peer = yield* GeneratedTsPeer.upsert(name)
           let pulled = 0
           let readerClosed = false
           const source = Stream.fromIterable([
