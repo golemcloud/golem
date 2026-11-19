@@ -34,11 +34,6 @@ use crate::durable_host::input_observation::{
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
-use crate::durable_host::stream_session::{
-    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    encode_recursive_stream_value_with_schema, preflight_proto_recursive_stream_value,
-    preflight_recursive_stream_value, remap_recursive_stream_references,
-};
 use crate::durable_host::stream_transport::{LiveStreamEndpoint, SourceLifecycle};
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, DurableWorkerCtxView};
@@ -79,6 +74,11 @@ use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_common::model::oplog::payload::types::SerializableToolAdmissionRefusal;
+use golem_common::schema::streaming::{
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    encode_recursive_stream_value_with_schema, preflight_proto_recursive_stream_value,
+    preflight_recursive_stream_value, remap_recursive_stream_references,
+};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};

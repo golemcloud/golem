@@ -17,10 +17,6 @@ use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
 use crate::durable_host::durable_stream::{ProducerRegistrationRequest, SessionError};
-use crate::durable_host::stream_session::{
-    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    encode_recursive_stream_value_with_schema,
-};
 use crate::grpc::invocation::from_proto_invocation_context;
 use crate::services::oplog::OplogError;
 use crate::services::{HasAll, HasComponentService, UsesAllDeps};
@@ -64,6 +60,10 @@ use golem_common::model::{
 use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::conversion::{FromSchema, IntoTypedSchemaValue};
+use golem_common::schema::streaming::{
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    encode_recursive_stream_value_with_schema,
+};
 use golem_schema::schema::{
     NamedFieldType, SchemaGraph, SchemaType, SchemaValueStream, schema_fingerprint_v1,
 };

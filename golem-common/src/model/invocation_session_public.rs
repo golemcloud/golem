@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Map, Number, Value};
-use std::collections::BTreeSet;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
@@ -967,18 +967,18 @@ fn validate_message_size(size: usize) -> Result<(), PublicProtocolError> {
 }
 
 pub fn parse_strict_json(bytes: &[u8]) -> Result<Value, PublicProtocolError> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let value = StrictJsonValue::deserialize(&mut deserializer)
-        .map_err(|_| PublicProtocolError::new(PublicErrorCode::MalformedMessage, "invalid JSON"))?
-        .0;
-    deserializer.end().map_err(|_| {
-        PublicProtocolError::new(
-            PublicErrorCode::MalformedMessage,
-            "trailing data after JSON value",
-        )
-    })?;
-    validate_json_limits(&value, 0)?;
-    Ok(value)
+    let canonical = canonicalize_structural_json(bytes)?;
+    serde_json::from_str(&canonical)
+        .map_err(|_| PublicProtocolError::new(PublicErrorCode::MalformedMessage, "invalid JSON"))
+}
+
+/// Checks JSON structure without interpreting number tokens as a numeric type.
+pub fn canonicalize_structural_json(bytes: &[u8]) -> Result<String, PublicProtocolError> {
+    let raw: &serde_json::value::RawValue = serde_json::from_slice(bytes)
+        .map_err(|_| PublicProtocolError::new(PublicErrorCode::MalformedMessage, "invalid JSON"))?;
+    let mut canonical = String::with_capacity(bytes.len());
+    write_structural_json(raw, &mut canonical, 0)?;
+    Ok(canonical)
 }
 
 fn check_version(value: &Value) -> Result<(), PublicProtocolError> {
@@ -1483,129 +1483,99 @@ fn valid_mime_byte(byte: u8) -> bool {
         )
 }
 
-fn validate_json_limits(value: &Value, depth: usize) -> Result<(), PublicProtocolError> {
+fn write_structural_json(
+    raw: &serde_json::value::RawValue,
+    output: &mut String,
+    depth: usize,
+) -> Result<(), PublicProtocolError> {
     if depth > MAX_JSON_DEPTH {
         return Err(PublicProtocolError::new(
             PublicErrorCode::ResourceExhausted,
             "JSON nesting exceeds 64 levels",
         ));
     }
-    match value {
-        Value::Array(values) => {
+    let invalid = |_| PublicProtocolError::new(PublicErrorCode::MalformedMessage, "invalid JSON");
+    let text = raw.get();
+    match text.as_bytes().first() {
+        Some(b'[') => {
+            let values: Vec<&serde_json::value::RawValue> =
+                serde_json::from_str(text).map_err(invalid)?;
             if values.len() > MAX_COLLECTION_SIZE {
                 return Err(PublicProtocolError::new(
                     PublicErrorCode::ResourceExhausted,
                     "JSON collection exceeds 100000 elements",
                 ));
             }
-            for value in values {
-                validate_json_limits(value, depth + 1)?;
+            output.push('[');
+            for (index, value) in values.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_structural_json(value, output, depth + 1)?;
             }
+            output.push(']');
         }
-        Value::Object(values) => {
+        Some(b'{') => {
+            let StrictRawJsonObject(values) = serde_json::from_str(text).map_err(invalid)?;
             if values.len() > MAX_COLLECTION_SIZE {
                 return Err(PublicProtocolError::new(
                     PublicErrorCode::ResourceExhausted,
                     "JSON object exceeds 100000 members",
                 ));
             }
-            for value in values.values() {
-                validate_json_limits(value, depth + 1)?;
+            output.push('{');
+            for (index, (name, value)) in values.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                output.push_str(&serde_json::to_string(&name).map_err(invalid)?);
+                output.push(':');
+                write_structural_json(value, output, depth + 1)?;
             }
+            output.push('}');
         }
-        _ => {}
+        Some(b'"') => {
+            let value: String = serde_json::from_str(text).map_err(invalid)?;
+            output.push_str(&serde_json::to_string(&value).map_err(invalid)?);
+        }
+        _ => output.push_str(text),
     }
     Ok(())
 }
 
-struct StrictJsonValue(Value);
+struct StrictRawJsonObject<'a>(BTreeMap<String, &'a serde_json::value::RawValue>);
 
-impl<'de> Deserialize<'de> for StrictJsonValue {
+impl<'de> Deserialize<'de> for StrictRawJsonObject<'de> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(StrictJsonVisitor)
+        deserializer.deserialize_map(StrictRawJsonObjectVisitor)
     }
 }
 
-struct StrictJsonVisitor;
+struct StrictRawJsonObjectVisitor;
 
-impl<'de> Visitor<'de> for StrictJsonVisitor {
-    type Value = StrictJsonValue;
+impl<'de> Visitor<'de> for StrictRawJsonObjectVisitor {
+    type Value = StrictRawJsonObject<'de>;
 
     fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("a JSON value without duplicate object members")
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Bool(value)))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .map(StrictJsonValue)
-            .ok_or_else(|| E::custom("non-finite JSON number"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::String(value.to_string())))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::String(value)))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Null))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Null))
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        StrictJsonValue::deserialize(deserializer)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element::<StrictJsonValue>()? {
-            values.push(value.0);
-        }
-        Ok(StrictJsonValue(Value::Array(values)))
+        formatter.write_str("a JSON object without duplicate members")
     }
 
     fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
     where
         A: MapAccess<'de>,
     {
-        let mut values = Map::new();
-        while let Some(key) = object.next_key::<String>()? {
-            let value = object.next_value::<StrictJsonValue>()?;
-            if values.insert(key, value.0).is_some() {
+        let mut values = BTreeMap::new();
+        while let Some((key, value)) =
+            object.next_entry::<String, &serde_json::value::RawValue>()?
+        {
+            if values.insert(key, value).is_some() {
                 return Err(serde::de::Error::custom("duplicate JSON object member"));
             }
         }
-        Ok(StrictJsonValue(Value::Object(values)))
+        Ok(StrictRawJsonObject(values))
     }
 }
 

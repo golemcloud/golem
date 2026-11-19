@@ -19,10 +19,6 @@ use super::{
     require_expected_callee_fingerprint,
 };
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
-use crate::durable_host::stream_session::{
-    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
-    encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
-};
 use futures::future;
 use golem_api_grpc::proto::golem::account::PlanId;
 use golem_api_grpc::proto::golem::auth::{AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx};
@@ -45,6 +41,10 @@ use golem_common::schema::SchemaValue;
 use golem_common::schema::agent::{
     AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
     OutputSchema,
+};
+use golem_common::schema::streaming::{
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    encode_recursive_stream_value_with_schema, remap_recursive_stream_references,
 };
 use golem_schema::Empty;
 use golem_schema::proto::golem::common::Uuid;
