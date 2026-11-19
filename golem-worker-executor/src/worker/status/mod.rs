@@ -21,7 +21,7 @@ use golem_common::model::{
     RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
     UsableAutomaticSnapshot,
 };
-use golem_common::serialization::try_deserialize;
+use golem_common::serialization::decode;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};

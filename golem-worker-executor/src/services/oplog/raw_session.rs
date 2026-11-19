@@ -189,11 +189,9 @@ fn record(entry: &OplogEntry) -> Result<Option<Cow<'_, StreamSessionRecord>>, St
         OplogPayload::SerializedInline {
             bytes,
             cached: None,
-        } => {
-            Cow::Owned(golem_common::serialization::try_deserialize(bytes)?.ok_or(
-                "stream session record has an unsupported or missing serialization version",
-            )?)
-        }
+        } => Cow::Owned(
+            golem_common::serialization::decode(bytes).map_err(|error| error.to_string())?,
+        ),
         OplogPayload::External { cached: None, .. } => {
             return Err("uncached external stream session record cannot be folded".into());
         }

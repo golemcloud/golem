@@ -31,6 +31,7 @@ use crate::storage::keyvalue::fault_injecting::{
 };
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
+use futures::StreamExt;
 use golem_common::model::RetryConfig;
 use golem_common::model::Timestamp;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -1144,7 +1145,12 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
     use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::regions::OplogRegion;
 
-    for warm in [false, true] {
+    for (warm, padding, corrupt_suffix) in [
+        (false, 2050, false),
+        (true, 2050, false),
+        (true, 0, true),
+        (true, 2050, true),
+    ] {
         let (service, _, oplog_service) = service_with_oplog().await;
         let id = owned_agent("reverted-session", ComponentId::new());
         let key = test_invocation_id("discarded".into());
@@ -1164,13 +1170,42 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
             )
             .await
             .unwrap();
-        append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
-        for _ in 0..2050 {
+        if corrupt_suffix {
+            assert!(
+                service
+                    .stream_session_index
+                    .lookup_persisted(
+                        &id,
+                        AgentMode::Durable,
+                        fingerprint,
+                        OplogIndex::INITIAL,
+                        &key,
+                    )
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            oplog
+                .add(OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    record: OplogPayload::SerializedInline {
+                        bytes: vec![255],
+                        cached: None,
+                    },
+                    summary: None,
+                })
+                .await
+                .unwrap();
+        } else {
+            append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+        }
+        for _ in 0..padding {
             append_memory_hint(oplog.as_ref()).await;
         }
         oplog.commit(CommitLevel::Always).await.unwrap();
         let end = oplog.current_oplog_index().await;
-        if warm {
+        if warm && !corrupt_suffix {
             assert!(
                 service
                     .stream_session_index
@@ -1210,7 +1245,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
                 .await
                 .unwrap()
                 .is_none(),
-            "deleted session survived (warm={warm})"
+            "deleted session survived (warm={warm}, padding={padding}, corrupt={corrupt_suffix})"
         );
         assert!(
             service
@@ -1350,7 +1385,14 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         .unwrap();
     assert_eq!(
         service
-            .read_durable_stream_consumer_page(&owner, fingerprint, &local_session, reader, 1,)
+            .read_durable_stream_consumer_page(
+                &owner,
+                AgentMode::Durable,
+                fingerprint,
+                &local_session,
+                reader,
+                1,
+            )
             .await
             .unwrap(),
         retained[256..]
@@ -1390,7 +1432,14 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         .unwrap();
     assert_eq!(
         service
-            .read_durable_stream_consumer_page(&owner, fingerprint, &local_session, reader, 1,)
+            .read_durable_stream_consumer_page(
+                &owner,
+                AgentMode::Durable,
+                fingerprint,
+                &local_session,
+                reader,
+                1,
+            )
             .await
             .unwrap(),
         expected_second_page
@@ -1403,9 +1452,16 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         Arc::new(GolemConfig::default()),
     );
     assert_eq!(
-        cold.read_durable_stream_consumer_page(&owner, fingerprint, &local_session, reader, 1,)
-            .await
-            .unwrap(),
+        cold.read_durable_stream_consumer_page(
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+            &local_session,
+            reader,
+            1,
+        )
+        .await
+        .unwrap(),
         expected_second_page
     );
     let replacement = append_session(
@@ -1436,9 +1492,16 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         .await
         .unwrap();
     assert_eq!(
-        cold.read_durable_stream_consumer_page(&owner, fingerprint, &local_session, reader, 1,)
-            .await
-            .unwrap(),
+        cold.read_durable_stream_consumer_page(
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+            &local_session,
+            reader,
+            1,
+        )
+        .await
+        .unwrap(),
         retained[256..]
             .iter()
             .copied()
@@ -1558,7 +1621,14 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         .unwrap();
     assert_eq!(
         first
-            .read_durable_stream_consumer_page(&owner, fingerprint, &session, reader, 1)
+            .read_durable_stream_consumer_page(
+                &owner,
+                AgentMode::Durable,
+                fingerprint,
+                &session,
+                reader,
+                1
+            )
             .await
             .unwrap(),
         retained[256..]
@@ -1608,8 +1678,22 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         Some(&259)
     );
     let (left, right) = tokio::join!(
-        first.read_durable_stream_consumer_page(&owner, fingerprint, &session, reader, 1),
-        second.read_durable_stream_consumer_page(&owner, fingerprint, &session, reader, 1),
+        first.read_durable_stream_consumer_page(
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+            &session,
+            reader,
+            1
+        ),
+        second.read_durable_stream_consumer_page(
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+            &session,
+            reader,
+            1
+        ),
     );
     assert_eq!(left.unwrap(), expected);
     assert_eq!(right.unwrap(), expected);
@@ -1621,9 +1705,16 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         Arc::new(GolemConfig::default()),
     );
     assert_eq!(
-        cold.read_durable_stream_consumer_page(&owner, fingerprint, &session, reader, 1)
-            .await
-            .unwrap(),
+        cold.read_durable_stream_consumer_page(
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+            &session,
+            reader,
+            1
+        )
+        .await
+        .unwrap(),
         expected
     );
 }
@@ -1989,6 +2080,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
             reopened
                 .read_durable_stream_consumer_page(
                     &id,
+                    AgentMode::Durable,
                     test_fingerprint(),
                     &consumer_key,
                     stream,
@@ -3160,6 +3252,161 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
 }
 
 #[test]
+async fn unreadable_stream_index_rows_are_rebuilt_from_the_oplog() {
+    let (_service, kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("unreadable-index", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let key = session_key(&id, &test_invocation_id("cached-session".into()));
+    let result = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+            format_version: 1,
+            session_key: local_registration(&key),
+            result: vec![42],
+            stream_mappings: vec![],
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let index = independent_stream_index(kv.clone(), &oplog_service);
+    let expected = index
+        .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+        .await
+        .unwrap();
+    assert_eq!(expected.result_position(), Some(result));
+    let namespace = StreamSessionIndexService::namespace(&id, test_fingerprint());
+    let control_field = format!("control:{}", hex::encode(serialize(&key).unwrap()));
+    kv.with_entity("test", "corrupt", "control")
+        .set_raw(namespace.clone(), &control_field, &[255])
+        .await
+        .unwrap();
+    let rebuilt = index
+        .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+        .await
+        .unwrap();
+    assert_eq!(rebuilt.result_position(), Some(result));
+    kv.with_entity("test", "corrupt", "metadata")
+        .set_raw(namespace.clone(), METADATA_FIELD, &[])
+        .await
+        .unwrap();
+    let rebuilt = index
+        .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+        .await
+        .unwrap();
+    assert_eq!(rebuilt.result_position(), Some(result));
+
+    let global = ProducerMetadataKey::Global;
+    let expected = index
+        .lookup_producer_metadata(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            vec![global.clone()],
+        )
+        .await
+        .unwrap();
+    kv.with_entity("test", "corrupt", "producer")
+        .set_raw(namespace.clone(), &global.field().unwrap(), &[255])
+        .await
+        .unwrap();
+    let rebuilt = index
+        .lookup_producer_metadata(
+            &id,
+            AgentMode::Durable,
+            test_fingerprint(),
+            vec![global.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(serialize(&rebuilt).unwrap(), serialize(&expected).unwrap());
+
+    kv.with_entity("test", "corrupt", "producer")
+        .set_raw(namespace, &global.field().unwrap(), &[1])
+        .await
+        .unwrap();
+    let suffix = oplog.add(OplogEntry::grow_memory(7)).await.unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let rebuilt = index
+        .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+        .await
+        .unwrap();
+    assert_eq!(rebuilt.result_position(), Some(result));
+    assert_eq!(rebuilt.covered_through(), suffix);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn cache_repair_retries_when_an_independent_writer_advances_coverage() {
+    futures::stream::iter([false, true])
+        .for_each(|writer_wins| async move {
+            let (_service, kv, oplog_service) = service_with_oplog().await;
+            let id = owned_agent("cache-repair-race", ComponentId::new());
+            let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+            let key = session_key(&id, &test_invocation_id("cached-session".into()));
+            let result = append_session(
+                oplog.as_ref(),
+                StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+                    format_version: 1,
+                    session_key: local_registration(&key),
+                    result: vec![42],
+                    stream_mappings: vec![],
+                }),
+            )
+            .await;
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let writer = independent_stream_index(kv.clone(), &oplog_service);
+            writer
+                .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+                .await
+                .unwrap();
+            let namespace = StreamSessionIndexService::namespace(&id, test_fingerprint());
+            let field = format!("control:{}", hex::encode(serialize(&key).unwrap()));
+            kv.with_entity("test", "corrupt", "control")
+                .set_raw(namespace, &field, &[255])
+                .await
+                .unwrap();
+            let faults = KeyValueStorageFaults::default();
+            let faulting = Arc::new(FaultInjectingKeyValueStorage::new(kv, faults.clone()));
+            let reader = independent_stream_index(faulting, &oplog_service);
+            let gate = faults.gate_next_pass("refold_publish");
+            let lookup = tokio::spawn({
+                let id = id.clone();
+                let key = key.clone();
+                async move {
+                    reader
+                        .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+                        .await
+                }
+            });
+            gate.entered().await;
+            let suffix = oplog.add(OplogEntry::grow_memory(7)).await.unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            if writer_wins {
+                writer
+                    .catch_up(&id, AgentMode::Durable, test_fingerprint(), suffix)
+                    .await
+                    .unwrap();
+            }
+            gate.release();
+            let rebuilt = lookup.await.unwrap().unwrap();
+            assert_eq!(rebuilt.result_position(), Some(result));
+            if !writer_wins {
+                writer
+                    .catch_up(&id, AgentMode::Durable, test_fingerprint(), suffix)
+                    .await
+                    .unwrap();
+            }
+            let final_metadata = writer
+                .lookup_control_metadata(&id, AgentMode::Durable, test_fingerprint(), &key)
+                .await
+                .unwrap();
+            assert_eq!(final_metadata.result_position(), Some(result));
+            assert_eq!(final_metadata.covered_through(), suffix);
+        })
+        .await;
+}
+
+#[test]
 async fn covered_physical_index_resolves_evicted_session_and_definitively_misses_absent_key() {
     let (service, kv) = service().await;
     let id = owned_agent("coverage", ComponentId::new());
@@ -3773,6 +4020,7 @@ async fn stream_projection_clear_retries_when_a_writer_advances_its_snapshot() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
 async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
     let id = owned_agent("resume-expiry-race", ComponentId::new());
@@ -3815,7 +4063,7 @@ async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
     );
     let reader = independent_stream_index(faulting, &oplog_service);
     let clearer = independent_stream_index(inner, &oplog_service);
-    let gate = faults.gate_next_pass("lookup_resume");
+    let gate = faults.gate_next_pass("read_cache");
     let lookup = tokio::spawn({
         let reader = reader.clone();
         let id = id.clone();

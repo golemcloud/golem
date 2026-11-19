@@ -68,13 +68,14 @@ impl WorkerService for DefaultWorkerService {
     async fn read_durable_stream_consumer_page(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         key: &StreamSessionKey,
         reader: golem_common::model::durable_stream::LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, SessionError> {
         self.stream_session_index
-            .read_consumer_page(owned_agent_id, fingerprint, key, reader, page)
+            .read_consumer_page(owned_agent_id, agent_mode, fingerprint, key, reader, page)
             .await
     }
 

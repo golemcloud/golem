@@ -303,28 +303,46 @@ impl PrimaryOplogState {
         &mut self,
         previously_committed_through: OplogIndex,
         mut newly_committed: BTreeMap<OplogIndex, OplogEntry>,
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError> {
         let committed_through = self.last_committed_idx;
-        let mut retained: BTreeMap<_, _> = std::mem::take(&mut self.retained_auto_commits)
-            .into_iter()
-            .flatten()
-            .collect();
-        let read_through = retained
-            .first_key_value()
+        let unreadable = |error| {
+            OplogError::Unreadable(UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
+        };
+        let read_through = self
+            .retained_auto_commits
+            .iter()
+            .find_map(|batch| batch.first_key_value())
             .map_or(previously_committed_through, |(first, _)| first.previous());
         let mut entries = if self.last_reported_commit_idx < read_through {
             let start = self.last_reported_commit_idx.next();
             let count = u64::from(read_through) - u64::from(self.last_reported_commit_idx);
-            let entries = self.reader().read_source(start, count).await;
-            exact_from_source(OplogReadSource::Primary, start, count, entries)
-                .unwrap_or_else(|error| panic!("Oplog read failed: {error}"))
+            let entries = self
+                .reader()
+                .read_source(start, count)
+                .await
+                .and_then(|entries| {
+                    exact_from_source(OplogReadSource::Primary, start, count, entries)
+                });
+            match entries {
+                Ok(entries) => entries,
+                Err(error) => {
+                    // The next report must read the whole unreported range, including this
+                    // explicit commit, rather than splice an incomplete retained suffix.
+                    self.retained_auto_commits.clear();
+                    return Err(unreadable(error));
+                }
+            }
         } else {
             BTreeMap::new()
         };
+        let mut retained = std::mem::take(&mut self.retained_auto_commits)
+            .into_iter()
+            .flatten()
+            .collect();
         entries.append(&mut retained);
         entries.append(&mut newly_committed);
         self.last_reported_commit_idx = committed_through;
-        entries
+        Ok(entries)
     }
 
     /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened

@@ -55,7 +55,7 @@ use golem_common::model::{
     ReceivedCardTransferState, ShardEpoch, ShardId, SourceCardTransferIndex,
     SourceCardTransferState, SuccessfulUpdateRecord,
 };
-use golem_common::serialization::{deserialize, serialize, try_deserialize};
+use golem_common::serialization::{decode, deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -313,6 +313,7 @@ pub trait WorkerService: Send + Sync {
     async fn read_durable_stream_consumer_page(
         &self,
         _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
         _fingerprint: AgentFingerprint,
         _key: &StreamSessionKey,
         _reader: golem_common::model::durable_stream::LocalStreamReaderId,

@@ -380,14 +380,9 @@ pub(super) fn calculate_export_fork_admissions(
                 bytes,
                 cached: None,
             } => {
-                decoded = try_deserialize(bytes)
-                    .map_err(|error| {
-                        format!("failed to decode inline durable stream session record: {error}")
-                    })?
-                    .ok_or_else(|| {
-                        "failed to decode inline durable stream session record: unsupported serialization version"
-                            .to_string()
-                    })?;
+                decoded = decode(bytes).map_err(|error| {
+                    format!("failed to decode inline durable stream session record: {error}")
+                })?;
                 &decoded
             }
             OplogPayload::External { cached: None, .. } => {

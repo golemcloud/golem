@@ -16,7 +16,7 @@ use super::*;
 
 /// Runs a storage operation under the retry policy, panicking on anything it cannot retry away.
 ///
-/// Reads, deletions and prefix drops keep this shape: a permanent failure there is a broken
+/// Deletions and prefix drops keep this shape: a permanent failure there is a broken
 /// deployment, and failing fast is the long-standing contract.
 pub(super) async fn retry_storage_op<T, F, Fut>(
     retry_config: &RetryConfig,

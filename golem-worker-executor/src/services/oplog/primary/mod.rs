@@ -21,7 +21,7 @@ use crate::metrics::storage::{
 };
 use crate::model::ExecutionStatus;
 use crate::services::oplog::reader::{
-    OplogReadSource, UnreadableOplog, checked_range_end, exact_from_source,
+    OplogReadError, OplogReadSource, UnreadableOplog, checked_range_end, exact_from_source,
 };
 use crate::services::oplog::{
     AutoCommitListener, CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder,
@@ -73,7 +73,7 @@ mod service;
 mod state;
 mod storage;
 
-use reader::read_persisted_oplog_entries;
+use reader::{primary_read_error, read_persisted_oplog_entries};
 use storage::{
     retry_maintenance_storage_op, retry_oplog_append, retry_storage_op, retry_storage_op_result,
 };

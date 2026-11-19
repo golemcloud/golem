@@ -361,7 +361,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             current,
         )
         .await
-        .map_err(StreamStoreError::CorruptHistory)?;
+        .map_err(StreamStoreError::from)?;
         let mut inspections = readers
             .into_iter()
             .map(|reader_id| {

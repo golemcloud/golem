@@ -45,9 +45,7 @@ impl DefaultWorkerService {
                 ))
             })?;
 
-        Ok(value
-            .as_deref()
-            .and_then(|bytes| try_deserialize(bytes).ok().flatten()))
+        Ok(value.as_deref().and_then(|bytes| decode(bytes).ok()))
     }
 
     /// Publishes the durable mode hint atomically with its expiry. This is best-effort because the
@@ -108,9 +106,8 @@ impl DefaultWorkerService {
         let Some(current) = current else {
             return Ok(());
         };
-        let matches = try_deserialize::<CachedAgentMode>(&current)
+        let matches = decode::<CachedAgentMode>(&current)
             .ok()
-            .flatten()
             .is_some_and(|cached| cached.fingerprint == fingerprint);
         if matches {
             self.key_value_storage

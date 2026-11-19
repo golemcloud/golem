@@ -32,6 +32,7 @@ use crate::worker::status::{
 };
 use crate::worker::status::{RegionFold, fold_regions_from};
 use async_trait::async_trait;
+use futures::StreamExt;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
@@ -6298,6 +6299,58 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
             }
             _ => panic!("unexpected {failure} outcome: {error:?}"),
         }
+
+        use crate::durable_host::durable_stream::SessionError;
+        use crate::durable_host::durable_stream::metadata::ProducerMetadataKey;
+        use crate::services::stream_session_index::StreamSessionIndexService;
+        use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+        use crate::storage::keyvalue::{KeyValueStorageLabelledApi, KeyValueStorageNamespace};
+
+        let kv = Arc::new(InMemoryKeyValueStorage::new());
+        let fingerprint = session_key.callee_fingerprint;
+        kv.with_entity("test", "corrupt", "metadata")
+            .set_raw(
+                KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+                    agent_id: test_case.owned_agent_id.agent_id.clone(),
+                    fingerprint,
+                },
+                "coverage",
+                &[255],
+            )
+            .await
+            .unwrap();
+        let oplog_service = test_case.oplog_service();
+        let index = StreamSessionIndexService::new(kv, Arc::downgrade(&oplog_service));
+        let error = index
+            .lookup_producer_metadata(
+                &test_case.owned_agent_id,
+                AgentMode::Durable,
+                fingerprint,
+                vec![ProducerMetadataKey::Global],
+            )
+            .await
+            .err()
+            .expect("scratch refolding must preserve the authoritative failure");
+        let SessionError::Unreadable(error) = error else {
+            panic!("scratch refolding lost the payload failure type: {error:?}");
+        };
+        assert_eq!(error.agent_id, test_case.owned_agent_id.agent_id);
+        assert!(error.to_string().contains("oplog index 2"), "{error}");
+        if failure == "corrupt" {
+            assert!(
+                error
+                    .to_string()
+                    .contains("unknown serialization version: 255"),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            matches!(
+                WorkerExecutorError::from(error),
+                WorkerExecutorError::RecoveryRequired { .. }
+            ),
+            failure == "unavailable"
+        );
     }
     test_case.payload_unavailable = false;
     test_case
@@ -6382,6 +6435,63 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
 // --------------------------------------------------------------------------
 // U2: Checkpoint state tracking — calculate_oplog_processor_checkpoints
 // --------------------------------------------------------------------------
+
+#[test]
+async fn unreadable_delivery_snapshots_refold_caches_and_fail_authoritative_history() {
+    futures::stream::iter([Vec::new(), vec![255], vec![1], vec![2]])
+        .for_each(|delivery| async move {
+            let mut test_case = TestCase::builder(0).build();
+            let expected = test_case.entries.last().unwrap().expected_status.clone();
+            let grant = EnvironmentPluginGrantId::new();
+            let mut cached = expected.clone();
+            cached.oplog_processor_checkpoints.insert(
+                grant,
+                OplogProcessorCheckpointState {
+                    target_agent_id: Some(test_case.owned_agent_id.agent_id.clone()),
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::INITIAL,
+                    last_batch_start: OplogIndex::INITIAL,
+                    delivery: Some(delivery.clone()),
+                },
+            );
+            let rebuilt = calculate_last_known_status_for_existing_worker(
+                &test_case,
+                &test_case.owned_agent_id,
+                AgentMode::Durable,
+                Some(cached),
+            )
+            .await
+            .unwrap();
+            assert_eq!(rebuilt, expected);
+
+            test_case.entries.push(TestEntry {
+                oplog_entry: OplogEntry::OplogProcessorCheckpoint {
+                    timestamp: Timestamp::now_utc(),
+                    plugin_grant_id: grant,
+                    target_agent_id: test_case.owned_agent_id.agent_id.clone(),
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::INITIAL,
+                    last_batch_start: OplogIndex::INITIAL,
+                    source_component_revision: ComponentRevision::INITIAL,
+                    delivery: Some(delivery),
+                },
+                expected_status: expected,
+            });
+            let error = calculate_last_known_status_for_existing_worker(
+                &test_case,
+                &test_case.owned_agent_id,
+                AgentMode::Durable,
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(&error, super::StatusError::Unreadable(_)));
+            let message = error.to_string();
+            assert!(message.contains("oplog index 2"), "{message}");
+            assert!(message.contains("version"), "{message}");
+        })
+        .await;
+}
 
 #[test]
 fn checkpoint_latest_per_grant_id_wins() {
