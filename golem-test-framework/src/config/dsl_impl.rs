@@ -54,7 +54,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
@@ -663,31 +663,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .worker_service()
             .worker_http_client(&self.token)
             .await;
+        read_full_oplog(&client, agent_id, from, None).await
+    }
 
-        let mut result = Vec::new();
-        let mut cursor: Option<golem_client::model::OplogCursor> = None;
-
-        loop {
-            let response = client
-                .get_oplog(
-                    &agent_id.component_id.0,
-                    &agent_id.agent_id,
-                    Some(from.as_u64()),
-                    100,
-                    cursor.as_ref(),
-                    None,
-                )
-                .await
-                .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
-
-            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
-            match response.next {
-                None => break,
-                Some(next_cursor) => cursor = Some(next_cursor),
-            }
-        }
-
-        Ok(result)
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &AgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        read_full_oplog(&client, agent_id, from, Some(&OplogInclude::Claims)).await
     }
 
     async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
@@ -703,6 +692,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &agent_id.agent_id,
                 Some(OplogIndex::INITIAL.as_u64()),
                 1,
+                None,
                 None,
                 None,
             )
@@ -735,13 +725,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     100,
                     cursor.as_ref(),
                     Some(query),
+                    None,
                 )
                 .await
                 .map_err(|e| {
                     anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
                 })?;
 
-            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
+            result.extend(full_oplog_entries(&client, agent_id, response.entries, None).await?);
             match response.next {
                 None => break,
                 Some(next_cursor) => cursor = Some(next_cursor),
@@ -1288,10 +1279,45 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
 
 /// Reads each entry that an oplog page omitted in full. Tests then see the full oplog, like
 /// `golem agent oplog` without `--omit-payloads`.
+/// Reads the whole oplog from `from` page by page, with each omitted entry read in full.
+async fn read_full_oplog(
+    client: &impl WorkerClient,
+    agent_id: &AgentId,
+    from: OplogIndex,
+    include: Option<&OplogInclude>,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let mut result = Vec::new();
+    let mut cursor: Option<golem_client::model::OplogCursor> = None;
+
+    loop {
+        let response = client
+            .get_oplog(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                Some(from.as_u64()),
+                100,
+                cursor.as_ref(),
+                None,
+                include,
+            )
+            .await
+            .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
+
+        result.extend(full_oplog_entries(client, agent_id, response.entries, include).await?);
+        match response.next {
+            None => break,
+            Some(next_cursor) => cursor = Some(next_cursor),
+        }
+    }
+
+    Ok(result)
+}
+
 async fn full_oplog_entries(
     client: &impl WorkerClient,
     agent_id: &AgentId,
     page_entries: Vec<PublicOplogPageEntry>,
+    include: Option<&OplogInclude>,
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
     let mut result = Vec::with_capacity(page_entries.len());
     for page_entry in page_entries {
@@ -1304,6 +1330,7 @@ async fn full_oplog_entries(
                         &agent_id.agent_id,
                         omitted.oplog_index.as_u64(),
                         Some(omitted.component_revision.into()),
+                        include,
                     )
                     .await
                     .map_err(|e| {

@@ -593,6 +593,7 @@ async fn raw_router_disconnect_stops_private_execution(
                             100,
                             None,
                             None,
+                            None,
                         )
                         .await?;
                     if oplog.entries.iter().any(|entry| {
@@ -747,6 +748,7 @@ async fn wait_for_stopped(
                 &agent.agent_id,
                 Some(OplogIndex::INITIAL.as_u64()),
                 100,
+                None,
                 None,
                 None,
             )

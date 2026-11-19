@@ -54,7 +54,9 @@ use golem_common::model::agent::{
     AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
-use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
+use golem_common::model::caller::{
+    AccountAuthentication, AccountPrincipal, Caller, ClaimVisibility, Principal,
+};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
@@ -1216,12 +1218,15 @@ impl WorkerService {
             .await
     }
 
+    /// Reads an oplog page. `claims` asks for the users' verified claims among the
+    /// callers; it reaches the executor only after the oplog read check.
     pub async fn get_oplog(
         &self,
         agent_id: &AgentId,
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
+        claims: ClaimVisibility,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
@@ -1248,6 +1253,7 @@ impl WorkerService {
                 from_oplog_index,
                 cursor,
                 count,
+                claims,
                 component.environment_id,
                 auth_ctx,
             )
@@ -1258,12 +1264,14 @@ impl WorkerService {
 
     /// Reads one oplog entry in full. Oplog pages omit the entries that are too large for them;
     /// this returns such an entry. `component_revision` is the revision that the page reported
-    /// for the omitted entry; without it, the executor scans the oplog for it.
+    /// for the omitted entry; without it, the executor scans the oplog for it. `claims`
+    /// reaches the executor only after the oplog read check.
     pub async fn get_oplog_entry(
         &self,
         agent_id: &AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
         auth_ctx: AuthCtx,
     ) -> Result<PublicOplogEntryWithIndex, WorkerServiceError> {
         let component = self
@@ -1283,18 +1291,22 @@ impl WorkerService {
                 agent_id,
                 oplog_index,
                 component_revision,
+                claims,
                 component.environment_id,
                 auth_ctx,
             )
             .await
     }
 
+    /// Searches the oplog. `claims` reaches the executor only after the oplog read
+    /// check.
     pub async fn search_oplog(
         &self,
         agent_id: &AgentId,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
+        claims: ClaimVisibility,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let component = self
@@ -1311,6 +1323,7 @@ impl WorkerService {
                 cursor,
                 count,
                 query,
+                claims,
                 component.environment_id,
                 auth_ctx,
             )
@@ -3876,6 +3889,8 @@ impl WorkerService {
 
 #[cfg(test)]
 mod tests {
+    use golem_common::model::caller::ClaimVisibility;
+
     fn test_golem_issuer() -> GolemIssuer {
         "https://golem.test".parse().unwrap()
     }
@@ -4566,7 +4581,7 @@ mod tests {
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
-        oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
+        oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>, ClaimVisibility)>>,
     }
 
     impl RecordingWorkerClient {
@@ -4856,10 +4871,15 @@ mod tests {
             _: OplogIndex,
             _: Option<OplogCursor>,
             _: u64,
+            claims: ClaimVisibility,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<GetOplogResponse, super::WorkerServiceError> {
-            self.effects.lock().unwrap().push("get-oplog");
+            self.effects.lock().unwrap().push(if claims.is_shown() {
+                "get-oplog-with-claims"
+            } else {
+                "get-oplog"
+            });
             Ok(GetOplogResponse {
                 entries: Vec::new(),
                 next: None,
@@ -4873,6 +4893,7 @@ mod tests {
             _: &AgentId,
             oplog_index: OplogIndex,
             component_revision: Option<ComponentRevision>,
+            claims: ClaimVisibility,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<golem_common::model::oplog::PublicOplogEntryWithIndex, super::WorkerServiceError>
@@ -4880,7 +4901,7 @@ mod tests {
             self.oplog_entry_reads
                 .lock()
                 .unwrap()
-                .push((oplog_index, component_revision));
+                .push((oplog_index, component_revision, claims));
             Ok(golem_common::model::oplog::PublicOplogEntryWithIndex {
                 oplog_index,
                 attribution: golem_common::model::oplog::PublicOplogEntryAttribution::agent(),
@@ -4902,10 +4923,15 @@ mod tests {
             _: Option<OplogCursor>,
             _: u64,
             _: String,
+            claims: ClaimVisibility,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> Result<GetOplogResponse, super::WorkerServiceError> {
-            self.effects.lock().unwrap().push("search-oplog");
+            self.effects.lock().unwrap().push(if claims.is_shown() {
+                "search-oplog-with-claims"
+            } else {
+                "search-oplog"
+            });
             Ok(GetOplogResponse {
                 entries: Vec::new(),
                 next: None,
@@ -5962,6 +5988,7 @@ mod tests {
                 OplogIndex::from_u64(5),
                 None,
                 3,
+                ClaimVisibility::Hidden,
                 auth_ctx.clone(),
             )
             .await
@@ -6024,27 +6051,131 @@ mod tests {
                 &agent_id,
                 OplogIndex::from_u64(6),
                 Some(ComponentRevision::new(3).unwrap()),
+                ClaimVisibility::Hidden,
                 auth_ctx.clone(),
             )
             .await
             .unwrap();
         assert_eq!(entry.oplog_index, OplogIndex::from_u64(6));
+        harness
+            .worker_service
+            .get_oplog_entry(
+                &agent_id,
+                OplogIndex::from_u64(6),
+                None,
+                ClaimVisibility::Shown,
+                auth_ctx.clone(),
+            )
+            .await
+            .unwrap();
 
-        assert!(
-            harness
-                .worker_service
-                .get_oplog_entry(&agent_id, OplogIndex::from_u64(7), None, auth_ctx)
-                .await
-                .is_err(),
-            "the permission covers only oplog index 6"
-        );
+        for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+            assert!(
+                harness
+                    .worker_service
+                    .get_oplog_entry(
+                        &agent_id,
+                        OplogIndex::from_u64(7),
+                        None,
+                        claims,
+                        auth_ctx.clone(),
+                    )
+                    .await
+                    .is_err(),
+                "the permission covers only oplog index 6"
+            );
+        }
         assert_eq!(
             *harness.worker_client.oplog_entry_reads.lock().unwrap(),
-            vec![(
-                OplogIndex::from_u64(6),
-                Some(ComponentRevision::new(3).unwrap())
-            )],
-            "a denied oplog entry read reached the worker client"
+            vec![
+                (
+                    OplogIndex::from_u64(6),
+                    Some(ComponentRevision::new(3).unwrap()),
+                    ClaimVisibility::Hidden
+                ),
+                (OplogIndex::from_u64(6), None, ClaimVisibility::Shown),
+            ],
+            "a denied oplog entry read reached the worker client, or the claims request was lost"
+        );
+    }
+
+    #[test]
+    async fn oplog_page_reads_pass_the_claims_request_after_the_permission_check() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let allowed =
+            auth_ctx_with_permissions(vec![oplog_target(&agent_id, OplogResourcePattern::Any)]);
+        let denied = auth_ctx_with_permissions(Vec::new());
+
+        for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+            harness
+                .worker_service
+                .get_oplog(
+                    &agent_id,
+                    OplogIndex::INITIAL,
+                    None,
+                    10,
+                    claims,
+                    allowed.clone(),
+                )
+                .await
+                .unwrap();
+            harness
+                .worker_service
+                .search_oplog(
+                    &agent_id,
+                    None,
+                    10,
+                    "bob".to_string(),
+                    claims,
+                    allowed.clone(),
+                )
+                .await
+                .unwrap();
+        }
+        for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+            assert!(
+                harness
+                    .worker_service
+                    .get_oplog(
+                        &agent_id,
+                        OplogIndex::INITIAL,
+                        None,
+                        10,
+                        claims,
+                        denied.clone(),
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                harness
+                    .worker_service
+                    .search_oplog(
+                        &agent_id,
+                        None,
+                        10,
+                        "bob".to_string(),
+                        claims,
+                        denied.clone(),
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec![
+                "get-oplog",
+                "search-oplog",
+                "get-oplog-with-claims",
+                "search-oplog-with-claims",
+            ],
+            "a denied oplog read reached the worker client, or the claims request was lost"
         );
     }
 

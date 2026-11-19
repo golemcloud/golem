@@ -128,13 +128,14 @@ pub(super) async fn agent_invocation_to_public(
     agent_type_name: Option<&AgentTypeName>,
     component_revision: ComponentRevision,
     invocation: AgentInvocation,
+    claims: ClaimVisibility,
 ) -> Result<PublicAgentInvocation, String> {
     match invocation {
         AgentInvocation::AgentInitialization {
             idempotency_key,
             input,
             invocation_context,
-            ..
+            caller,
         } => {
             let metadata = components
                 .get_metadata(owner_component_id, Some(component_revision))
@@ -163,6 +164,7 @@ pub(super) async fn agent_invocation_to_public(
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
+                    caller: PublicCaller::new(&caller, claims),
                 },
             ))
         }
@@ -171,7 +173,8 @@ pub(super) async fn agent_invocation_to_public(
             method_name,
             input,
             invocation_context,
-            ..
+            caller,
+            scope_card: _,
         } => {
             let metadata = components
                 .get_metadata(owner_component_id, Some(component_revision))
@@ -208,6 +211,7 @@ pub(super) async fn agent_invocation_to_public(
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
+                    caller: PublicCaller::new(&caller, claims),
                 },
             ))
         }
@@ -217,6 +221,7 @@ pub(super) async fn agent_invocation_to_public(
             command_path,
             input,
             invocation_context,
+            caller,
             ..
         } => {
             let span_data = invocation_context.to_oplog_data();
@@ -229,23 +234,34 @@ pub(super) async fn agent_invocation_to_public(
                     trace_id: invocation_context.trace_id.clone(),
                     trace_states: invocation_context.trace_states.clone(),
                     invocation_context: encode_span_data(&span_data),
+                    caller: PublicCaller::new(&caller, claims),
                 },
             ))
         }
         AgentInvocation::ManualUpdate { target_revision } => Ok(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
-        AgentInvocation::SaveSnapshot { .. } => Ok(PublicAgentInvocation::SaveSnapshot(Empty {})),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(PublicAgentInvocation::LoadSnapshot(
+        AgentInvocation::SaveSnapshot { caller, .. } => Ok(PublicAgentInvocation::SaveSnapshot(
+            SaveSnapshotParameters {
+                caller: PublicCaller::new(&caller, claims),
+            },
+        )),
+        AgentInvocation::LoadSnapshot {
+            snapshot, caller, ..
+        } => Ok(PublicAgentInvocation::LoadSnapshot(
             LoadSnapshotParameters {
                 snapshot: raw_snapshot_to_public(snapshot),
+                caller: PublicCaller::new(&caller, claims),
             },
         )),
         AgentInvocation::ProcessOplogEntries {
-            idempotency_key, ..
+            idempotency_key,
+            caller,
+            ..
         } => Ok(PublicAgentInvocation::ProcessOplogEntries(
             ProcessOplogEntriesParameters {
                 invocation_id: idempotency_key,
+                caller: PublicCaller::new(&caller, claims),
             },
         )),
     }

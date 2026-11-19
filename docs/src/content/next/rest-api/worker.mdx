@@ -636,6 +636,10 @@ Path|Method|Protected
 ---|---|---
 `/v1/components/{component_id}/workers/{agent_name}/oplog`|GET|Yes
 
+Each recorded invocation shows its caller: the principal that started the chain, the
+principal that made the call, and the tokens presented at the entry point. With
+`include=claims`, the users among the callers also show their verified claims.
+
 **Query Parameters**
 
 Name|Type|Required|Description
@@ -644,6 +648,7 @@ from|integer|No|-
 count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
+include|#/components/schemas/OplogInclude|No|-
 
 **Example Response JSON**
 
@@ -773,13 +778,15 @@ Path|Method|Protected
 Oplog pages omit entries whose encoded form is larger than a server limit, and describe
 them by their type, timestamp, size and component revision. This endpoint returns such an
 entry in full. Pass the component revision of the description to save the server from
-scanning the oplog for it.
+scanning the oplog for it. With `include=claims`, the users among the callers also show
+their verified claims.
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 component_revision|integer|No|-
+include|#/components/schemas/OplogInclude|No|-
 
 **Example Response JSON**
 

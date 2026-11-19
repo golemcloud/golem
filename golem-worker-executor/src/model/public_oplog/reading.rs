@@ -119,6 +119,7 @@ pub async fn get_public_oplog_chunk(
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
+    claims: ClaimVisibility,
 ) -> Result<PublicOplogChunk, String> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
@@ -132,6 +133,7 @@ pub async fn get_public_oplog_chunk(
         initial_oplog_index,
         count,
         None,
+        claims,
         &mut InProcessChunk,
     )
     .await?;
@@ -140,7 +142,8 @@ pub async fn get_public_oplog_chunk(
 
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
-/// `limits.max_bytes`.
+/// `limits.max_bytes`. The entries hold claims only with `ClaimVisibility::Shown`, so only claims
+/// that the reader asked for count against the limits.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -152,6 +155,7 @@ pub async fn get_public_oplog_page(
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
+    claims: ClaimVisibility,
 ) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
@@ -165,6 +169,7 @@ pub async fn get_public_oplog_page(
         initial_oplog_index,
         limits.count,
         None,
+        claims,
         &mut RemotePage::new(limits),
     )
     .await?;
@@ -184,6 +189,7 @@ pub async fn get_public_oplog_entry(
     agent_type_name: Option<&AgentTypeName>,
     oplog_index: OplogIndex,
     component_revision: Option<ComponentRevision>,
+    claims: ClaimVisibility,
 ) -> Result<PublicOplogEntryWithIndex, WorkerExecutorError> {
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
@@ -216,6 +222,7 @@ pub async fn get_public_oplog_entry(
         component_revision,
         oplog_index,
         1,
+        claims,
     )
     .await
     .map_err(WorkerExecutorError::unknown)?;
@@ -243,6 +250,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     initial_oplog_index: OplogIndex,
     count: usize,
     filter: Option<&Query>,
+    claims: ClaimVisibility,
     builder: &mut B,
 ) -> Result<(PublicOplogChunk<B::Entry>, bool), String> {
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
@@ -296,6 +304,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             owner_kind,
             agent_type_name,
             entry_component_revision,
+            claims,
         )
         .await?;
         if filter.is_none_or(|query| entry.matches(query)) {
@@ -349,6 +358,7 @@ pub async fn search_public_oplog(
     count: usize,
     query: &str,
     budget: ScanBudget,
+    claims: ClaimVisibility,
 ) -> Result<PublicOplogSearchResult, String> {
     search_public_oplog_with(
         component_service,
@@ -364,6 +374,7 @@ pub async fn search_public_oplog(
         count,
         query,
         budget,
+        claims,
         InProcessChunk,
     )
     .await
@@ -385,6 +396,7 @@ pub async fn search_public_oplog_page(
     limits: PublicOplogPageLimits,
     query: &str,
     budget: ScanBudget,
+    claims: ClaimVisibility,
 ) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
     search_public_oplog_with(
         component_service,
@@ -400,6 +412,7 @@ pub async fn search_public_oplog_page(
         limits.count,
         query,
         budget,
+        claims,
         RemotePage::new(limits),
     )
     .await
@@ -426,6 +439,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     count: usize,
     query: &str,
     budget: ScanBudget,
+    claims: ClaimVisibility,
     mut builder: B,
 ) -> Result<PublicOplogSearchResult<B::Entry>, String> {
     let started = Instant::now();
@@ -456,6 +470,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
             current_index,
             chunk_size,
             Some(&query),
+            claims,
             &mut builder,
         )
         .await?;

@@ -428,6 +428,66 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
     } }
 });
 
+/// The WIT form of a public caller. The WIT user record has no claims, so a guest never gets them,
+/// whatever the public caller holds.
+pub(super) fn public_caller_to_wit(caller: PublicCaller) -> oplog::PublicCaller {
+    oplog::PublicCaller {
+        original: public_principal_to_wit(caller.original),
+        immediate: public_principal_to_wit(caller.immediate),
+        tokens: caller
+            .tokens
+            .into_iter()
+            .map(|token| oplog::PublicTokenProvenance {
+                id: token.id.into(),
+                maker: token.maker.map(public_pair_to_wit),
+            })
+            .collect(),
+    }
+}
+
+fn public_pair_to_wit(pair: Pair) -> oplog::PublicPrincipalRef {
+    oplog::PublicPrincipalRef {
+        issuer: pair.issuer,
+        subject: pair.subject,
+    }
+}
+
+fn public_principal_to_wit(principal: PublicPrincipal) -> oplog::PublicPrincipal {
+    match principal {
+        PublicPrincipal::User(user) => oplog::PublicPrincipal::User(oplog::PublicUserPrincipal {
+            pair: public_pair_to_wit(user.pair),
+            authenticated_at: user.authenticated_at.into(),
+        }),
+        PublicPrincipal::Account(account) => {
+            oplog::PublicPrincipal::Account(oplog::PublicAccountPrincipal {
+                pair: public_pair_to_wit(account.pair),
+                account_id: account.account_id.into(),
+                authentication: match account.authentication {
+                    AccountAuthentication::ApiToken => oplog::PublicAccountAuthentication::ApiToken,
+                    AccountAuthentication::BootstrapToken => {
+                        oplog::PublicAccountAuthentication::BootstrapToken
+                    }
+                    AccountAuthentication::SignIn => oplog::PublicAccountAuthentication::SignIn,
+                },
+            })
+        }
+        PublicPrincipal::Agent(agent) => {
+            oplog::PublicPrincipal::Agent(oplog::PublicAgentPrincipal {
+                pair: public_pair_to_wit(agent.pair),
+                agent_id: agent.agent_id.into(),
+                agent_type: agent.agent_type,
+                environment_id: agent.environment_id.into(),
+            })
+        }
+        PublicPrincipal::Tool(tool) => oplog::PublicPrincipal::Tool(oplog::PublicToolPrincipal {
+            pair: public_pair_to_wit(tool.pair),
+            environment_id: tool.environment_id.into(),
+            tool_name: tool.tool_name,
+        }),
+        PublicPrincipal::Anonymous(_) => oplog::PublicPrincipal::Anonymous,
+    }
+}
+
 impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
     type Error = String;
 
@@ -446,6 +506,7 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                         .into_iter()
                         .map(|inner| inner.into_iter().map(|span| span.into()).collect())
                         .collect(),
+                    caller: public_caller_to_wit(params.caller),
                 })
             }
             PublicAgentInvocation::AgentMethodInvocation(params) => {
@@ -460,6 +521,7 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                         .into_iter()
                         .map(|inner| inner.into_iter().map(|span| span.into()).collect())
                         .collect(),
+                    caller: public_caller_to_wit(params.caller),
                 })
             }
             PublicAgentInvocation::ExternalTool(params) => {
@@ -475,9 +537,14 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                         .into_iter()
                         .map(|inner| inner.into_iter().map(|span| span.into()).collect())
                         .collect(),
+                    caller: public_caller_to_wit(params.caller),
                 })
             }
-            PublicAgentInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
+            PublicAgentInvocation::SaveSnapshot(params) => {
+                Self::SaveSnapshot(oplog::SaveSnapshotParameters {
+                    caller: public_caller_to_wit(params.caller),
+                })
+            }
             PublicAgentInvocation::LoadSnapshot(params) => {
                 let (data, mime_type) = match params.snapshot {
                     PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }) => {
@@ -491,11 +558,13 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                 };
                 Self::LoadSnapshot(oplog::LoadSnapshotParameters {
                     snapshot: oplog::SnapshotData { data, mime_type },
+                    caller: public_caller_to_wit(params.caller),
                 })
             }
             PublicAgentInvocation::ProcessOplogEntries(params) => {
                 Self::ProcessOplogEntries(oplog::ProcessOplogEntriesParameters {
                     invocation_id: params.invocation_id.0.into(),
+                    caller: public_caller_to_wit(params.caller),
                 })
             }
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {

@@ -41,6 +41,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
+use golem_common::base_model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentKey};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
@@ -86,7 +87,7 @@ use golem_common::model::oplog::{
     PublicExternalToolResult, PublicFailedSnapshotAssistedUpdateDetails, PublicOplogEntry,
     PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicOplogPageEntry,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData, SaveSnapshotParameters,
     SaveSnapshotResultParameters, SnapshotAssistedAutomaticUpdateParameters,
     SnapshotBasedUpdateParameters, UpdateDescription,
 };
@@ -133,6 +134,8 @@ pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
     pub last_index: OplogIndex,
 }
 
+/// The public form of the raw oplog entries. `claims` says whether the callers of the public
+/// entries hold the users' verified claims.
 #[async_trait]
 pub trait PublicOplogEntryOps: Sized {
     async fn from_oplog_entry(
@@ -146,6 +149,7 @@ pub trait PublicOplogEntryOps: Sized {
         owner_kind: OwnerKind,
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String> {
         Self::from_enrichment_entry(
             oplog_index,
@@ -158,6 +162,7 @@ pub trait PublicOplogEntryOps: Sized {
             owner_kind,
             agent_type,
             component_revision,
+            claims,
         )
         .await
     }
@@ -173,6 +178,7 @@ pub trait PublicOplogEntryOps: Sized {
         owner_kind: OwnerKind,
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
+        claims: ClaimVisibility,
     ) -> Result<Self, String>;
 }
 

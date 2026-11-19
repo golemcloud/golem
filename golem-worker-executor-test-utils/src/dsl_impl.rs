@@ -45,7 +45,7 @@ use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -107,6 +107,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         page_entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+        claims: ClaimVisibility,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let mut result = Vec::with_capacity(page_entries.len());
         for page_entry in page_entries {
@@ -115,11 +116,12 @@ impl TestWorkerExecutor {
             match page_entry {
                 PublicOplogPageEntry::Included(entry) => result.push(entry),
                 PublicOplogPageEntry::Omitted(omitted) => result.push(
-                    self.get_oplog_entry(
+                    self.read_oplog_entry(
                         agent_id,
                         environment_id,
                         omitted.oplog_index,
                         Some(omitted.component_revision),
+                        claims,
                     )
                     .await?,
                 ),
@@ -136,6 +138,24 @@ impl TestWorkerExecutor {
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
     ) -> anyhow::Result<PublicOplogEntryWithIndex> {
+        self.read_oplog_entry(
+            agent_id,
+            environment_id,
+            oplog_index,
+            component_revision,
+            ClaimVisibility::Hidden,
+        )
+        .await
+    }
+
+    async fn read_oplog_entry(
+        &self,
+        agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        oplog_index: OplogIndex,
+        component_revision: Option<ComponentRevision>,
+        claims: ClaimVisibility,
+    ) -> anyhow::Result<PublicOplogEntryWithIndex> {
         let mut stream = self
             .client
             .clone()
@@ -145,6 +165,7 @@ impl TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 oplog_index: oplog_index.into(),
                 component_revision: component_revision.map(Into::into),
+                claims: claims.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -778,54 +799,18 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &AgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let latest_version = self
-            .get_latest_component_revision(&agent_id.component_id)
-            .await?;
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Hidden)
+            .await
+    }
 
-        let mut result = Vec::new();
-        let mut cursor = None;
-
-        loop {
-            let chunk = self
-                .client
-                .clone()
-                .get_oplog(workerexecutor::v1::GetOplogRequest {
-                    agent_id: Some(agent_id.clone().into()),
-                    environment_id: Some(latest_version.environment_id.into()),
-                    from_oplog_index: from.into(),
-                    cursor,
-                    count: 100,
-                    auth_ctx: Some(self.auth_ctx().into()),
-                })
-                .await?
-                .into_inner();
-
-            if let Some(chunk) = chunk.result {
-                match chunk {
-                    get_oplog_response::Result::Success(chunk) => {
-                        result.extend(
-                            self.full_oplog_entries(
-                                agent_id,
-                                latest_version.environment_id,
-                                chunk.entries,
-                            )
-                            .await?,
-                        );
-                        match chunk.next {
-                            Some(next) => cursor = Some(next),
-                            None => break,
-                        }
-                    }
-                    get_oplog_response::Result::Failure(error) => {
-                        return Err(anyhow!("Failed to get oplog: {error:?}"));
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        Ok(result)
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &AgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Shown)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
@@ -844,6 +829,7 @@ impl TestDsl for TestWorkerExecutor {
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
+                claims: ClaimVisibility::Hidden.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -880,6 +866,7 @@ impl TestDsl for TestWorkerExecutor {
                     count: 100,
                     query: query.to_string(),
                     auth_ctx: Some(self.auth_ctx().into()),
+                    claims: ClaimVisibility::Hidden.to_protobuf(),
                 })
                 .await?
                 .into_inner();
@@ -892,6 +879,7 @@ impl TestDsl for TestWorkerExecutor {
                                 agent_id,
                                 latest_version.environment_id,
                                 chunk.entries,
+                                ClaimVisibility::Hidden,
                             )
                             .await?,
                         );
@@ -1537,4 +1525,65 @@ fn parse_provision_config_from_agent_type_schema(
             })
         })
         .collect()
+}
+
+impl TestWorkerExecutor {
+    /// Reads the whole oplog from `from` page by page, with each omitted entry read in full.
+    async fn read_full_oplog(
+        &self,
+        agent_id: &AgentId,
+        from: OplogIndex,
+        claims: ClaimVisibility,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let latest_version = self
+            .get_latest_component_revision(&agent_id.component_id)
+            .await?;
+
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let chunk = self
+                .client
+                .clone()
+                .get_oplog(workerexecutor::v1::GetOplogRequest {
+                    agent_id: Some(agent_id.clone().into()),
+                    environment_id: Some(latest_version.environment_id.into()),
+                    from_oplog_index: from.into(),
+                    cursor,
+                    count: 100,
+                    auth_ctx: Some(self.auth_ctx().into()),
+                    claims: claims.to_protobuf(),
+                })
+                .await?
+                .into_inner();
+
+            if let Some(chunk) = chunk.result {
+                match chunk {
+                    get_oplog_response::Result::Success(chunk) => {
+                        result.extend(
+                            self.full_oplog_entries(
+                                agent_id,
+                                latest_version.environment_id,
+                                chunk.entries,
+                                claims,
+                            )
+                            .await?,
+                        );
+                        match chunk.next {
+                            Some(next) => cursor = Some(next),
+                            None => break,
+                        }
+                    }
+                    get_oplog_response::Result::Failure(error) => {
+                        return Err(anyhow!("Failed to get oplog: {error:?}"));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
 }

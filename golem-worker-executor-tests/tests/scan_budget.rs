@@ -140,6 +140,7 @@ async fn search_page(
             count: 100,
             query: RARE_QUERY.to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
+            claims: golem_common::model::caller::ClaimVisibility::Hidden.to_protobuf(),
         })
         .await?
         .into_inner();
@@ -614,6 +615,7 @@ async fn get_oplog(
             cursor,
             count,
             auth_ctx: Some(executor.auth_ctx().into()),
+            claims: golem_common::model::caller::ClaimVisibility::Hidden.to_protobuf(),
         })
         .await?
         .into_inner()
@@ -638,6 +640,7 @@ async fn search_oplog(
             count,
             query: query.to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
+            claims: golem_common::model::caller::ClaimVisibility::Hidden.to_protobuf(),
         })
         .await?
         .into_inner()

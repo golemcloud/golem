@@ -18,6 +18,7 @@ use crate::model::text_format::*;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
+use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::oplog::{
     MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
@@ -1241,6 +1242,7 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(
                 pad,
@@ -1252,6 +1254,7 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.function_input));
         }
@@ -1265,11 +1268,15 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.push(format!("{pad}input:"));
             lines.push(render_typed_schema_value_line(pad, &params.input));
         }
-        PublicAgentInvocation::SaveSnapshot(_) => {}
+        PublicAgentInvocation::SaveSnapshot(params) => {
+            lines.extend(render_caller_lines(pad, &params.caller));
+        }
         PublicAgentInvocation::LoadSnapshot(params) => {
+            lines.extend(render_caller_lines(pad, &params.caller));
             lines.extend(render_snapshot_data_lines(pad, &params.snapshot));
         }
         PublicAgentInvocation::ProcessOplogEntries(params) => {
@@ -1277,6 +1284,7 @@ fn render_agent_invocation(
                 "{pad}invocation id:     {}",
                 format_id(&params.invocation_id)
             ));
+            lines.extend(render_caller_lines(pad, &params.caller));
         }
         PublicAgentInvocation::ManualUpdate(params) => {
             lines.push(format!(
@@ -1287,6 +1295,50 @@ fn render_agent_invocation(
     }
 
     lines
+}
+
+/// The role lines of a caller, its tokens, and the claims of its users when the entry holds them
+/// (only for a reader that asked for them). The claims of an immediate caller that is the same
+/// principal as the original one show once.
+fn render_caller_lines(pad: &str, caller: &PublicCaller) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{pad}original caller:   {}",
+        format_id(&caller.original)
+    )];
+    lines.extend(render_claims_line(pad, &caller.original));
+    lines.push(format!(
+        "{pad}immediate caller:  {}",
+        format_id(&caller.immediate)
+    ));
+    if caller.immediate == caller.original {
+        if caller.immediate.claims().is_some() {
+            lines.push(format!("{pad}claims:            same as original"));
+        }
+    } else {
+        lines.extend(render_claims_line(pad, &caller.immediate));
+    }
+    if caller.tokens.is_empty() {
+        lines.push(format!("{pad}tokens:            none"));
+    } else {
+        lines.push(format!("{pad}tokens:"));
+        for token in &caller.tokens {
+            match &token.maker {
+                Some(maker) => lines.push(format!(
+                    "{pad}  - {} made by {}",
+                    format_id(&token.id),
+                    format_id(maker)
+                )),
+                None => lines.push(format!("{pad}  - {} (no maker)", format_id(&token.id))),
+            }
+        }
+    }
+    lines
+}
+
+fn render_claims_line(pad: &str, principal: &PublicPrincipal) -> Option<String> {
+    principal
+        .claims()
+        .map(|claims| format!("{pad}claims:            {claims}"))
 }
 
 fn render_agent_invocation_header(
@@ -1454,8 +1506,12 @@ mod tests {
     use super::*;
     use comfy_table::{Cell, Table as ComfyTable};
     use golem_common::model::InvocationId;
+    use golem_common::model::caller::{
+        Pair, PublicAgentPrincipal, PublicTokenProvenance, PublicUserPrincipal,
+    };
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::SaveSnapshotParameters;
     use golem_common::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
     use golem_common::model::oplog::{
         AgentInitializationParameters, AgentMethodInvocationParameters, HostRequestSecretReveal,
@@ -1468,12 +1524,58 @@ mod tests {
         QuotaTokenSpec, QuotaTokenValuePayload, SchemaGraph, SchemaType, SchemaValue, SecretSpec,
         SecretValuePayload,
     };
-    use golem_schema::Empty;
     use test_r::test;
 
     fn timestamp() -> Timestamp {
         Timestamp::from(0)
     }
+
+    fn bob(claims: Option<serde_json::Value>) -> PublicPrincipal {
+        PublicPrincipal::User(PublicUserPrincipal {
+            pair: Pair::new("http://test-idp.com", "bob"),
+            authenticated_at: Timestamp::from(0),
+            claims,
+        })
+    }
+
+    /// A user at the root, an agent as the immediate caller, and two tokens, one without a maker.
+    fn caller() -> PublicCaller {
+        PublicCaller {
+            original: bob(None),
+            immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
+                pair: Pair::new("https://golem.example", "agent:relay"),
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(
+                        uuid::Uuid::from_u128(0xc0),
+                    ),
+                    agent_id: "Relay(\"r\")".to_string(),
+                },
+                agent_type: "Relay".to_string(),
+                environment_id: golem_common::model::environment::EnvironmentId(
+                    uuid::Uuid::from_u128(0xe0),
+                ),
+            }),
+            tokens: vec![
+                PublicTokenProvenance {
+                    id: uuid::Uuid::from_u128(0x70c1),
+                    maker: Some(Pair::new("https://golem.example", "account:1")),
+                },
+                PublicTokenProvenance {
+                    id: uuid::Uuid::from_u128(0x70c2),
+                    maker: None,
+                },
+            ],
+        }
+    }
+
+    /// The role and token lines of [`caller`].
+    const CALLER_LINES: [&str; 5] = [
+        r#"original caller:   user ("http://test-idp.com","bob")"#,
+        r#"immediate caller:  agent ("https://golem.example","agent:relay")"#,
+        "tokens:",
+        r#"- 00000000-0000-0000-0000-0000000070c1 made by ("https://golem.example","account:1")"#,
+        "- 00000000-0000-0000-0000-0000000070c2 (no maker)",
+    ];
 
     fn agent_metadata(agent_id: &str) -> AgentMetadataView {
         AgentMetadataView {
@@ -1587,6 +1689,7 @@ mod tests {
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
             invocation_context: vec![],
+            caller: caller(),
         })
     }
 
@@ -1598,11 +1701,12 @@ mod tests {
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
             invocation_context: vec![],
+            caller: caller(),
         })
     }
 
     fn save_snapshot() -> PublicAgentInvocation {
-        PublicAgentInvocation::SaveSnapshot(Empty {})
+        PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters { caller: caller() })
     }
 
     fn load_snapshot() -> PublicAgentInvocation {
@@ -1611,12 +1715,14 @@ mod tests {
                 data: vec![1, 2, 3],
                 mime_type: "application/octet-stream".to_string(),
             }),
+            caller: caller(),
         })
     }
 
     fn process_oplog_entries() -> PublicAgentInvocation {
         PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
             invocation_id: InvocationId(uuid::Uuid::from_u128(3)),
+            caller: caller(),
         })
     }
 
@@ -1642,6 +1748,17 @@ mod tests {
                 "expected rendered output to contain {expected:?}, got:\n{rendered}"
             );
         }
+    }
+
+    /// Every invocation with a caller shows both roles and the tokens, and no claims line when the
+    /// entry holds no claims. A manual update has no caller.
+    fn assert_caller_lines(invocation: &PublicAgentInvocation, rendered: &str) {
+        if invocation.caller().is_some() {
+            assert_contains_all(rendered, &CALLER_LINES);
+        } else {
+            assert!(!rendered.contains("caller:"), "{rendered}");
+        }
+        assert!(!rendered.contains("claims:"), "{rendered}");
     }
 
     fn assert_debug_noise_absent(rendered: &str) {
@@ -1905,6 +2022,7 @@ mod tests {
         for (invocation, expected) in cases {
             let rendered = render_for_test(AgentInvocationRenderKind::Started, &invocation);
             assert_contains_all(&rendered, &expected);
+            assert_caller_lines(&invocation, &rendered);
             assert_debug_noise_absent(&rendered);
             assert!(
                 !rendered.contains("entries:"),
@@ -1959,11 +2077,55 @@ mod tests {
         for (invocation, expected) in cases {
             let rendered = render_for_test(AgentInvocationRenderKind::Pending, &invocation);
             assert_contains_all(&rendered, &expected);
+            assert_caller_lines(&invocation, &rendered);
             assert_debug_noise_absent(&rendered);
             assert!(
                 !rendered.contains("entries:"),
                 "process-oplog-entry count must not be rendered without a public count field:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn caller_claims_render_only_when_the_entry_holds_them() {
+        let claims = serde_json::json!({"email": "bob@mail.example", "sub": "bob"});
+
+        // An entry caller: both roles are the same user, so the claims show once.
+        let entry_caller = PublicCaller {
+            original: bob(Some(claims.clone())),
+            immediate: bob(Some(claims.clone())),
+            tokens: Vec::new(),
+        };
+        let rendered =
+            strip_ansi_escapes::strip_str(render_caller_lines("    ", &entry_caller).join("\n"));
+        assert_eq!(
+            rendered,
+            [
+                r#"    original caller:   user ("http://test-idp.com","bob")"#,
+                r#"    claims:            {"email":"bob@mail.example","sub":"bob"}"#,
+                r#"    immediate caller:  user ("http://test-idp.com","bob")"#,
+                "    claims:            same as original",
+                "    tokens:            none",
+            ]
+            .join("\n")
+        );
+
+        // Without claims in the entry, there is no claims line.
+        let hidden = PublicCaller {
+            original: bob(None),
+            immediate: bob(None),
+            tokens: Vec::new(),
+        };
+        let rendered = render_caller_lines("    ", &hidden).join("\n");
+        assert!(!rendered.contains("claims:"), "{rendered}");
+
+        // Different roles show their own claims.
+        let mut relayed = caller();
+        relayed.original = bob(Some(claims));
+        let rendered =
+            strip_ansi_escapes::strip_str(render_caller_lines("    ", &relayed).join("\n"));
+        assert_eq!(rendered.matches("claims:").count(), 1, "{rendered}");
+        assert!(rendered.contains("bob@mail.example"), "{rendered}");
+        assert!(!rendered.contains("same as original"), "{rendered}");
     }
 }

@@ -2505,7 +2505,81 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             trace_id: TraceId::generate(),
             trace_states: vec!["trace-state".to_string()],
             invocation_context: span_context(),
+            caller: relayed_caller(),
         })
+    }
+
+    /// A user with claims at the root, an agent as the immediate caller, and two tokens.
+    fn relayed_caller() -> golem_common::model::caller::PublicCaller {
+        use golem_common::model::caller::{
+            Pair, PublicAgentPrincipal, PublicCaller, PublicPrincipal, PublicTokenProvenance,
+            PublicUserPrincipal,
+        };
+        PublicCaller {
+            original: PublicPrincipal::User(PublicUserPrincipal {
+                pair: Pair::new("http://test-idp.com", "bob"),
+                authenticated_at: timestamp(),
+                claims: Some(serde_json::json!({"sub": "bob", "groups": ["auditors"]})),
+            }),
+            immediate: PublicPrincipal::Agent(PublicAgentPrincipal {
+                pair: Pair::new("https://golem.example", "agent:relay"),
+                agent_id: golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(Uuid::from_u128(
+                        0xc0,
+                    )),
+                    agent_id: "Relay(\"r\")".to_string(),
+                },
+                agent_type: "Relay".to_string(),
+                environment_id: golem_common::model::environment::EnvironmentId(Uuid::from_u128(
+                    0xe0,
+                )),
+            }),
+            tokens: vec![
+                PublicTokenProvenance {
+                    id: Uuid::from_u128(0x70c1),
+                    maker: Some(Pair::new("https://golem.example", "account:1")),
+                },
+                PublicTokenProvenance {
+                    id: Uuid::from_u128(0x70c2),
+                    maker: None,
+                },
+            ],
+        }
+    }
+
+    /// An account in both roles, without claims.
+    fn account_caller() -> golem_common::model::caller::PublicCaller {
+        use golem_common::model::caller::{
+            AccountAuthentication, Pair, PublicAccountPrincipal, PublicCaller, PublicPrincipal,
+        };
+        let account = PublicPrincipal::Account(PublicAccountPrincipal {
+            pair: Pair::new("https://golem.example", "account:acc0"),
+            account_id: golem_common::model::account::AccountId(Uuid::from_u128(0xacc0)),
+            authentication: AccountAuthentication::ApiToken,
+        });
+        PublicCaller {
+            original: account.clone(),
+            immediate: account,
+            tokens: Vec::new(),
+        }
+    }
+
+    /// A tool at the root and an anonymous immediate caller, to cover the other kinds.
+    fn tool_caller() -> golem_common::model::caller::PublicCaller {
+        use golem_common::model::caller::{
+            Pair, PublicCaller, PublicPrincipal, PublicToolPrincipal,
+        };
+        PublicCaller {
+            original: PublicPrincipal::Tool(PublicToolPrincipal {
+                pair: Pair::new("https://golem.example", "tool:env/grep"),
+                environment_id: golem_common::model::environment::EnvironmentId(Uuid::from_u128(
+                    0xe0,
+                )),
+                tool_name: "grep".to_string(),
+            }),
+            immediate: PublicPrincipal::Anonymous(golem_schema::Empty {}),
+            tokens: Vec::new(),
+        }
     }
 
     fn raw_snapshot() -> PublicSnapshotData {
@@ -2744,6 +2818,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
                 invocation_context: span_context(),
+                caller: account_caller(),
             }),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
@@ -2948,18 +3023,24 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             not_before: None,
             invocation: PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters {
                 snapshot: multipart_snapshot(),
+                caller: tool_caller(),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
             not_before: None,
-            invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
+            invocation: PublicAgentInvocation::SaveSnapshot(
+                golem_common::model::oplog::SaveSnapshotParameters {
+                    caller: account_caller(),
+                },
+            ),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {
             timestamp: timestamp(),
             not_before: None,
             invocation: PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
                 invocation_id: InvocationId(Uuid::from_u128(3)),
+                caller: account_caller(),
             }),
         }),
         PublicOplogEntry::PendingAgentInvocation(PendingAgentInvocationParams {

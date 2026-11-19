@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use super::PublicOplogEntry;
+use crate::base_model::caller::PublicCaller;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
     PublicAgentInvocation, PublicAttribute, PublicAttributeValue, StringAttributeValue,
@@ -67,6 +68,34 @@ impl PublicOplogEntry {
         } else {
             false
         }
+    }
+
+    /// Matches the kind, the issuer and the subject of both roles of a caller, under the fields
+    /// `caller`, `original`, `immediate`, `caller.original` and `caller.immediate`. Claims never
+    /// take part, so a search cannot reveal them.
+    fn caller_match(caller: &PublicCaller, query_path: &[String], query: &LeafQuery) -> bool {
+        [
+            ("original", &caller.original),
+            ("immediate", &caller.immediate),
+        ]
+        .into_iter()
+        .any(|(role, principal)| {
+            let paths: [Vec<String>; 3] = [
+                vec!["caller".to_string()],
+                vec![role.to_string()],
+                vec!["caller".to_string(), role.to_string()],
+            ];
+            let mut texts = vec![principal.kind().as_str()];
+            if let Some(pair) = principal.pair() {
+                texts.push(&pair.issuer);
+                texts.push(&pair.subject);
+            }
+            paths.iter().any(|path| {
+                texts
+                    .iter()
+                    .any(|text| Self::string_match(text, path, query_path, query))
+            })
+        })
     }
 
     fn span_attribute_match(
@@ -325,6 +354,10 @@ impl PublicOplogEntry {
                             query,
                         ),
                     }
+                    || params
+                        .invocation
+                        .caller()
+                        .is_some_and(|caller| Self::caller_match(caller, query_path, query))
             }
             PublicOplogEntry::AgentInvocationFinished(params) => {
                 Self::string_match("agentinvocationfinished", &[], query_path, query)
@@ -421,6 +454,10 @@ impl PublicOplogEntry {
                             query,
                         ),
                     }
+                    || params
+                        .invocation
+                        .caller()
+                        .is_some_and(|caller| Self::caller_match(caller, query_path, query))
             }
             PublicOplogEntry::PendingUpdate(params) => {
                 Self::string_match("pendingupdate", &[], query_path, query)

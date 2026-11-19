@@ -175,6 +175,42 @@ object OplogApi {
     scopeCardId: Option[UUID]
   )
 
+  /** The (issuer, subject) pair of a principal in an oplog record. */
+  final case class PublicPrincipalRef(issuer: String, subject: String)
+
+  /**
+   * One principal of an invocation's caller, as the oplog shows it to a guest.
+   * It never holds a user's claims.
+   */
+  sealed trait PublicPrincipal extends Product with Serializable
+  object PublicPrincipal {
+    final case class User(pair: PublicPrincipalRef, authenticatedAt: ContextApi.DateTime)       extends PublicPrincipal
+    final case class Account(pair: PublicPrincipalRef, accountId: UUID, authentication: String) extends PublicPrincipal
+    final case class Agent(
+      pair: PublicPrincipalRef,
+      componentId: UUID,
+      agentId: String,
+      agentType: String,
+      environmentId: UUID
+    ) extends PublicPrincipal
+    final case class Tool(pair: PublicPrincipalRef, environmentId: UUID, toolName: String) extends PublicPrincipal
+    case object Anonymous                                                                  extends PublicPrincipal
+  }
+
+  /** A token that the request presented, and the pair of its maker. */
+  final case class PublicTokenProvenance(id: UUID, maker: Option[PublicPrincipalRef])
+
+  /**
+   * The caller of a recorded invocation: the principal that started the chain,
+   * the principal that made the call, and the tokens presented at the entry
+   * point. Both roles are always present.
+   */
+  final case class PublicCaller(
+    original: PublicPrincipal,
+    immediate: PublicPrincipal,
+    tokens: List[PublicTokenProvenance]
+  )
+
   final case class AgentInvocationStartedParameters(
     timestamp: ContextApi.DateTime,
     functionName: String,
@@ -183,7 +219,8 @@ object OplogApi {
     traceId: String,
     traceStates: List[String],
     invocationContext: List[List[SpanData]],
-    walletPin: PublicInvocationWalletPin
+    walletPin: PublicInvocationWalletPin,
+    caller: Option[PublicCaller] = None
   )
 
   final case class AgentInvocationFinishedParameters(
@@ -245,18 +282,19 @@ object OplogApi {
     input: Option[List[TypedSchemaValue]],
     traceId: String,
     traceStates: List[String],
-    invocationContext: List[List[SpanData]]
+    invocationContext: List[List[SpanData]],
+    caller: PublicCaller
   )
 
   sealed trait AgentInvocation extends Product with Serializable
   object AgentInvocation {
-    final case class ExportedFunction(params: AgentMethodInvocationParameters) extends AgentInvocation
-    final case class AgentInitialization(invocationId: UUID)                   extends AgentInvocation
-    final case class ExternalTool(invocationId: UUID)                          extends AgentInvocation
-    case object SaveSnapshot                                                   extends AgentInvocation
-    case object LoadSnapshot                                                   extends AgentInvocation
-    final case class ProcessOplogEntries(invocationId: UUID)                   extends AgentInvocation
-    final case class ManualUpdate(componentRevision: BigInt)                   extends AgentInvocation
+    final case class ExportedFunction(params: AgentMethodInvocationParameters)     extends AgentInvocation
+    final case class AgentInitialization(invocationId: UUID, caller: PublicCaller) extends AgentInvocation
+    final case class ExternalTool(invocationId: UUID, caller: PublicCaller)        extends AgentInvocation
+    final case class SaveSnapshot(caller: PublicCaller)                            extends AgentInvocation
+    final case class LoadSnapshot(caller: PublicCaller)                            extends AgentInvocation
+    final case class ProcessOplogEntries(invocationId: UUID, caller: PublicCaller) extends AgentInvocation
+    final case class ManualUpdate(componentRevision: BigInt)                       extends AgentInvocation
   }
 
   final case class PendingAgentInvocationParameters(
@@ -674,6 +712,49 @@ object OplogApi {
   private def typedFromJs(value: JsTypedSchemaValue): TypedSchemaValue =
     SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value))
 
+  private def parsePublicCaller(raw: JsPublicCaller): PublicCaller =
+    PublicCaller(
+      original = parsePublicPrincipal(raw.original),
+      immediate = parsePublicPrincipal(raw.immediate),
+      tokens = raw.tokens.toList.map { token =>
+        PublicTokenProvenance(
+          id = JsUuid.toUuid(token.id),
+          maker = token.maker.toOption.map(parsePublicPrincipalRef)
+        )
+      }
+    )
+
+  private def parsePublicPrincipalRef(raw: JsPublicPrincipalRef): PublicPrincipalRef =
+    PublicPrincipalRef(raw.issuer, raw.subject)
+
+  private def parsePublicPrincipal(raw: JsPublicPrincipal): PublicPrincipal = {
+    def value[T]: T = raw.asInstanceOf[JsPublicPrincipalWithValue].value.asInstanceOf[T]
+    raw.tag match {
+      case "user" =>
+        val p = value[JsPublicUserPrincipal]
+        PublicPrincipal.User(parsePublicPrincipalRef(p.pair), parseDateTime(p.authenticatedAt))
+      case "account" =>
+        val p = value[JsPublicAccountPrincipal]
+        PublicPrincipal.Account(parsePublicPrincipalRef(p.pair), JsUuid.toUuid(p.accountId.uuid), p.authentication)
+      case "agent" =>
+        val p = value[JsPublicAgentPrincipal]
+        PublicPrincipal.Agent(
+          pair = parsePublicPrincipalRef(p.pair),
+          componentId = JsUuid.toUuid(p.agentId.componentId.uuid),
+          agentId = p.agentId.agentId,
+          agentType = p.agentType,
+          environmentId = JsUuid.toUuid(p.environmentId.uuid)
+        )
+      case "tool" =>
+        val p = value[JsPublicToolPrincipal]
+        PublicPrincipal.Tool(parsePublicPrincipalRef(p.pair), JsUuid.toUuid(p.environmentId.uuid), p.toolName)
+      case "anonymous" =>
+        PublicPrincipal.Anonymous
+      case other =>
+        throw new IllegalArgumentException(s"Unknown PublicPrincipal tag: $other")
+    }
+  }
+
   private def parseDateTime(raw: JsDatetime): ContextApi.DateTime = {
     val secs  = BigInt(raw.seconds.toString)
     val nanos = raw.nanoseconds.toInt
@@ -843,7 +924,8 @@ object OplogApi {
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
           invocationContext = parseSpanDataLists(p.invocationContext),
-          walletPin = walletPin
+          walletPin = walletPin,
+          caller = Some(parsePublicCaller(p.caller))
         )
       case "agent-initialization" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentInitializationParameters]
@@ -855,7 +937,8 @@ object OplogApi {
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
           invocationContext = parseSpanDataLists(p.invocationContext),
-          walletPin = walletPin
+          walletPin = walletPin,
+          caller = Some(parsePublicCaller(p.caller))
         )
       case "external-tool" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsExternalToolInvocationParameters]
@@ -867,9 +950,11 @@ object OplogApi {
           traceId = p.traceId,
           traceStates = p.traceStates.toList,
           invocationContext = parseSpanDataLists(p.invocationContext),
-          walletPin = walletPin
+          walletPin = walletPin,
+          caller = Some(parsePublicCaller(p.caller))
         )
       case "save-snapshot" =>
+        val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsSaveSnapshotParameters]
         AgentInvocationStartedParameters(
           timestamp = parseDateTime(raw.timestamp),
           functionName = "<save-snapshot>",
@@ -878,9 +963,11 @@ object OplogApi {
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
-          walletPin = walletPin
+          walletPin = walletPin,
+          caller = Some(parsePublicCaller(p.caller))
         )
       case "load-snapshot" =>
+        val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsLoadSnapshotParameters]
         AgentInvocationStartedParameters(
           timestamp = parseDateTime(raw.timestamp),
           functionName = "<load-snapshot>",
@@ -889,7 +976,8 @@ object OplogApi {
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
-          walletPin = walletPin
+          walletPin = walletPin,
+          caller = Some(parsePublicCaller(p.caller))
         )
       case "process-oplog-entries" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsProcessOplogEntriesParameters]
@@ -901,7 +989,8 @@ object OplogApi {
           traceId = "",
           traceStates = Nil,
           invocationContext = Nil,
-          walletPin = walletPin
+          walletPin = walletPin,
+          caller = Some(parsePublicCaller(p.caller))
         )
       case other =>
         AgentInvocationStartedParameters(
@@ -999,22 +1088,31 @@ object OplogApi {
             input = Some(List(typedFromJs(p.functionInput))),
             traceId = p.traceId,
             traceStates = p.traceStates.toList,
-            invocationContext = parseSpanDataLists(p.invocationContext)
+            invocationContext = parseSpanDataLists(p.invocationContext),
+            caller = parsePublicCaller(p.caller)
           )
         )
       case "agent-initialization" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsAgentInitializationParameters]
-        AgentInvocation.AgentInitialization(invocationId = JsUuid.toUuid(p.invocationId))
+        AgentInvocation.AgentInitialization(
+          invocationId = JsUuid.toUuid(p.invocationId),
+          caller = parsePublicCaller(p.caller)
+        )
       case "external-tool" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsExternalToolInvocationParameters]
-        AgentInvocation.ExternalTool(JsUuid.toUuid(p.invocationId))
+        AgentInvocation.ExternalTool(JsUuid.toUuid(p.invocationId), parsePublicCaller(p.caller))
       case "save-snapshot" =>
-        AgentInvocation.SaveSnapshot
+        val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsSaveSnapshotParameters]
+        AgentInvocation.SaveSnapshot(parsePublicCaller(p.caller))
       case "load-snapshot" =>
-        AgentInvocation.LoadSnapshot
+        val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsLoadSnapshotParameters]
+        AgentInvocation.LoadSnapshot(parsePublicCaller(p.caller))
       case "process-oplog-entries" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsProcessOplogEntriesParameters]
-        AgentInvocation.ProcessOplogEntries(invocationId = JsUuid.toUuid(p.invocationId))
+        AgentInvocation.ProcessOplogEntries(
+          invocationId = JsUuid.toUuid(p.invocationId),
+          caller = parsePublicCaller(p.caller)
+        )
       case "manual-update" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsManualUpdateParameters]
         AgentInvocation.ManualUpdate(BigInt(p.targetRevision.toString))

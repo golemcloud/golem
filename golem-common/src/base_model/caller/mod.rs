@@ -25,6 +25,7 @@
 mod identity_proof;
 mod pair;
 mod principal;
+mod public;
 mod subject;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -32,6 +33,7 @@ pub(crate) mod test_support;
 pub use identity_proof::*;
 pub use pair::*;
 pub use principal::*;
+pub use public::*;
 pub use subject::*;
 
 #[cfg(test)]
