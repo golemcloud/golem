@@ -20,7 +20,6 @@ use super::{
 };
 use crate::worker::invocations::{
     InvocationFilter, InvocationKind, InvocationListEntry, InvocationPagePosition, InvocationState,
-    page_invocations,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -257,8 +256,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .as_ref()
             .map(|cursor| decode_cursor(&cursor.value, &owned_agent_id, fingerprint))
             .transpose()?;
-        let entries = Self::not_found_if_deleting(&worker, worker.list_invocations().await).await?;
-        let (page, next) = page_invocations(entries, &filter, after, request.page_size as usize);
+        let (page, next) = Self::not_found_if_deleting(
+            &worker,
+            worker
+                .list_invocation_page(&filter, after, request.page_size as usize)
+                .await,
+        )
+        .await?;
         Ok(ListInvocationsSuccess {
             invocations: page.into_iter().map(summary).collect(),
             next_cursor: next

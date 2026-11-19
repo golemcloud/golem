@@ -34,7 +34,9 @@ use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::model::{LookupResult, TrapType};
-use golem_worker_executor::worker::invocations::InvocationState;
+use golem_worker_executor::worker::invocations::{
+    InvocationFilter, InvocationState, MAX_INVOCATION_PAGE_SIZE,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -280,7 +282,10 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         .schedule_invocation(invocation(&scheduled), due)
         .await?;
 
-    let before = worker.list_invocations().await?;
+    let before = worker
+        .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
+        .await?
+        .0;
     let state_of = |key: &InvocationId| {
         before
             .iter()
@@ -313,7 +318,14 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
     );
 
     executor.evict_cached_status(&target).await?;
-    assert_eq!(worker.list_invocations().await?, before, "after eviction");
+    assert_eq!(
+        worker
+            .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
+            .await?
+            .0,
+        before,
+        "after eviction"
+    );
     drop(worker);
     drop(executor);
 
@@ -323,8 +335,9 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         .await?;
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let after: Vec<_> = worker
-        .list_invocations()
+        .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
         .await?
+        .0
         .into_iter()
         .filter(|entry| before.iter().any(|known| known.key == entry.key))
         .collect();
@@ -396,7 +409,12 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
                 .map(|entry| entry.state)
         };
     assert_eq!(
-        state_of(&worker.list_invocations().await?),
+        state_of(
+            &worker
+                .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
+                .await?
+                .0
+        ),
         Some(InvocationState::Completed)
     );
 
@@ -411,7 +429,12 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
         );
     }
     assert_eq!(
-        state_of(&worker.list_invocations().await?),
+        state_of(
+            &worker
+                .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
+                .await?
+                .0
+        ),
         Some(InvocationState::Completed),
         "before the duplicate"
     );
@@ -436,7 +459,10 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
         .add_and_commit_oplog(OplogEntry::cancel_pending_invocation(finished))
         .await?;
 
-    let listed = worker.list_invocations().await?;
+    let listed = worker
+        .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
+        .await?
+        .0;
     let lookup = worker.lookup_invocation_result(&finished).await;
     assert_eq!(
         state_of(&listed),

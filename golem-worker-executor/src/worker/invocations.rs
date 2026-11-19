@@ -120,15 +120,25 @@ impl InvocationListEntry {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
-    /// Every listed invocation of the agent, the latest change first, with the invocation ID as
-    /// the tie-breaker.
+    /// One page of the listed invocations of the agent that match `filter`, in the list order,
+    /// and the position the next page starts after when more may follow.
     ///
     /// This reads the whole result history of the agent: the recent results of the status and,
     /// once they are not the complete history, the persisted result index or the oplog. Each
-    /// call costs O(history).
-    pub async fn list_invocations(&self) -> Result<Vec<InvocationListEntry>, WorkerExecutorError> {
+    /// call costs O(history). Only the entries that reach the page read their missing operation
+    /// from their request entry.
+    pub async fn list_invocation_page(
+        &self,
+        filter: &InvocationFilter,
+        after: Option<InvocationPagePosition>,
+        page_size: usize,
+    ) -> Result<(Vec<InvocationListEntry>, Option<InvocationPagePosition>), WorkerExecutorError>
+    {
         let entries = self.merged_invocations().await?;
-        self.fill_and_keep_listed(entries).await
+        page_invocations(entries, filter, after, page_size, |request| {
+            self.request_operation_at(request)
+        })
+        .await
     }
 
     /// The merged invocations, before their missing operations are read from their requests.
@@ -150,28 +160,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(merge_invocations(&status, results, Timestamp::now_utc()))
     }
 
-    /// Fills the operations that `entries` do not know from their request entries, downloading
-    /// external payloads, and keeps the listed invocations.
-    async fn fill_and_keep_listed(
+    /// Reads the operation of `entry` from its request entry when the entry does not know it,
+    /// downloading an external payload.
+    async fn fill_operation(
         &self,
-        entries: Vec<(InvocationListEntry, Option<OplogIndex>)>,
-    ) -> Result<Vec<InvocationListEntry>, WorkerExecutorError> {
-        let mut listed = Vec::with_capacity(entries.len());
-        for (mut entry, request) in entries {
-            if entry.operation.is_none()
-                && let Some(request) = request
-            {
-                entry.operation = self.request_operation_at(request).await?;
-            }
-            if entry
-                .operation
-                .as_ref()
-                .is_none_or(InvocationOperation::is_listed)
-            {
-                listed.push(entry);
-            }
+        entry: &mut InvocationListEntry,
+        request: Option<OplogIndex>,
+    ) -> Result<(), WorkerExecutorError> {
+        if entry.operation.is_none()
+            && let Some(request) = request
+        {
+            entry.operation = self.request_operation_at(request).await?;
         }
-        Ok(listed)
+        Ok(())
     }
 
     /// The listed invocation with `key`, or `None` when the agent has none.
@@ -179,39 +180,43 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &InvocationId,
     ) -> Result<Option<InvocationListEntry>, WorkerExecutorError> {
-        let entry = self
+        let Some((mut entry, request)) = self
             .merged_invocations()
             .await?
             .into_iter()
-            .find(|(entry, _)| entry.key == *key);
-        Ok(self
-            .fill_and_keep_listed(entry.into_iter().collect())
-            .await?
-            .pop())
+            .find(|(entry, _)| entry.key == *key)
+        else {
+            return Ok(None);
+        };
+        self.fill_operation(&mut entry, request).await?;
+        Ok(entry.is_listed().then_some(entry))
     }
 
     /// The invocations of the agent that `request_key` started, at most one per operation.
     ///
-    /// The candidate operations are the methods of the agent's current type and every operation
-    /// the agent has run, so a key of a method that a later revision removed is still found.
+    /// The candidate operations are `operation` when it is set, otherwise the methods of the
+    /// agent's current type and every operation that the entries already know. So a key of a
+    /// method that a later revision removed is found while one entry of that method keeps its
+    /// operation; when every such entry has its operation only in an external payload, the
+    /// caller names the operation. Only the entries whose ID matches a candidate read their
+    /// missing operation, so a lookup downloads no payload of other invocations.
     pub async fn lookup_invocations(
         &self,
         request_key: &InvocationRequestKey,
         operation: Option<&str>,
     ) -> Result<Vec<InvocationListEntry>, WorkerExecutorError> {
-        let listed = self.list_invocations().await?;
-        let mut operations: Vec<String> = match operation {
-            Some(operation) => vec![operation.to_string()],
-            None => {
-                let mut operations = self.current_method_names().await?;
-                operations.extend(
-                    listed
-                        .iter()
-                        .filter_map(|entry| entry.operation.as_ref()?.name().map(str::to_string)),
-                );
-                operations
-            }
-        };
+        let entries = self.merged_invocations().await?;
+        let mut operations: Vec<String> =
+            match operation {
+                Some(operation) => vec![operation.to_string()],
+                None => {
+                    let mut operations = self.current_method_names().await?;
+                    operations.extend(entries.iter().filter_map(|(entry, _)| {
+                        entry.operation.as_ref()?.name().map(str::to_string)
+                    }));
+                    operations
+                }
+            };
         operations.sort();
         operations.dedup();
         let agent_id = self.agent_id();
@@ -225,15 +230,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 (key, operation)
             })
             .collect();
-        Ok(listed
-            .into_iter()
-            .filter(|entry| {
-                keys.get(&entry.key).is_some_and(|operation| {
-                    entry.operation.as_ref().and_then(InvocationOperation::name)
-                        == Some(operation.as_str())
-                })
-            })
-            .collect())
+        let mut found = Vec::new();
+        for (mut entry, request) in entries {
+            let Some(operation) = keys.get(&entry.key) else {
+                continue;
+            };
+            self.fill_operation(&mut entry, request).await?;
+            if entry.operation.as_ref().and_then(InvocationOperation::name)
+                == Some(operation.as_str())
+            {
+                found.push(entry);
+            }
+        }
+        Ok(found)
     }
 
     /// The method names of the agent type at the agent's current component revision.
@@ -362,6 +371,14 @@ impl InvocationListEntry {
         }
     }
 
+    /// Whether `list` shows the entry: internal operations are not listed. An entry whose
+    /// operation is not known is listed.
+    fn is_listed(&self) -> bool {
+        self.operation
+            .as_ref()
+            .is_none_or(InvocationOperation::is_listed)
+    }
+
     fn position(&self) -> InvocationPagePosition {
         InvocationPagePosition {
             last_change: self.last_change,
@@ -383,13 +400,18 @@ pub struct InvocationFilter {
 }
 
 impl InvocationFilter {
-    fn matches(&self, entry: &InvocationListEntry) -> bool {
-        self.operation.as_deref().is_none_or(|operation| {
-            entry.operation.as_ref().and_then(InvocationOperation::name) == Some(operation)
-        }) && (self.states.is_empty() || self.states.contains(&entry.state))
-            && self.kind.is_none_or(|kind| entry.kind() == Some(kind))
+    /// The fields that do not need the operation of `entry`.
+    fn matches_state_and_time(&self, entry: &InvocationListEntry) -> bool {
+        (self.states.is_empty() || self.states.contains(&entry.state))
             && self.since.is_none_or(|since| entry.changed_at >= since)
             && self.until.is_none_or(|until| entry.changed_at <= until)
+    }
+
+    /// The fields that need the operation of `entry`.
+    fn matches_operation(&self, entry: &InvocationListEntry) -> bool {
+        self.operation.as_deref().is_none_or(|operation| {
+            entry.operation.as_ref().and_then(InvocationOperation::name) == Some(operation)
+        }) && self.kind.is_none_or(|kind| entry.kind() == Some(kind))
     }
 }
 
@@ -415,22 +437,43 @@ impl InvocationPagePosition {
     }
 }
 
-/// One page of `entries`, which are in the list order, and the position the next page starts
-/// after when more invocations may follow.
-pub(crate) fn page_invocations(
-    entries: Vec<InvocationListEntry>,
+/// One page of the listed entries of `entries` that match `filter`, and the position the next
+/// page starts after when more invocations may follow. `entries` are in the list order, each
+/// with the index of its request entry when it is known.
+///
+/// `operation_at` reads the operation of the request entry at an index. It runs only for an entry
+/// without an operation that passes the cursor and the filter fields that need no operation, and
+/// only until the page and the one entry that says whether more follow are found. So a page
+/// costs at most `page_size + 1` reads of a request entry on top of the entries that the
+/// operation filter or the internal operations skip.
+pub(crate) async fn page_invocations<E, F>(
+    entries: Vec<(InvocationListEntry, Option<OplogIndex>)>,
     filter: &InvocationFilter,
     after: Option<InvocationPagePosition>,
     page_size: usize,
-) -> (Vec<InvocationListEntry>, Option<InvocationPagePosition>) {
+    mut operation_at: impl FnMut(OplogIndex) -> F,
+) -> Result<(Vec<InvocationListEntry>, Option<InvocationPagePosition>), E>
+where
+    F: Future<Output = Result<Option<InvocationOperation>, E>>,
+{
     let page_size = match page_size {
         0 => DEFAULT_INVOCATION_PAGE_SIZE,
         page_size => page_size.min(MAX_INVOCATION_PAGE_SIZE),
     };
     let mut page = Vec::with_capacity(page_size.min(entries.len()));
     let mut more = false;
-    for entry in entries {
-        if after.is_some_and(|after| !after.precedes(&entry)) || !filter.matches(&entry) {
+    for (mut entry, request) in entries {
+        if after.is_some_and(|after| !after.precedes(&entry))
+            || !filter.matches_state_and_time(&entry)
+        {
+            continue;
+        }
+        if entry.operation.is_none()
+            && let Some(request) = request
+        {
+            entry.operation = operation_at(request).await?;
+        }
+        if !entry.is_listed() || !filter.matches_operation(&entry) {
             continue;
         }
         if page.len() == page_size {
@@ -444,7 +487,7 @@ pub(crate) fn page_invocations(
     } else {
         None
     };
-    (page, next)
+    Ok((page, next))
 }
 
 /// The invocations of `status` and `results`, the latest change first with the invocation ID as
