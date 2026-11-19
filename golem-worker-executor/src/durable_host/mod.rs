@@ -394,6 +394,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub(crate) entity_body_finalization: crate::worker::entity_invocation::EntityBodyFinalization,
     pub(crate) tool_trap_disposal: Arc<AtomicBool>,
     producer_disposal_tasks: Option<crate::worker::tasks::NativeReconstructionTasks>,
+    pub(crate) tool_frontends: Option<Arc<stream_transport::ToolFrontendScope>>,
+    pub(crate) host_initiations: Option<Arc<concurrent::initiation_owner::InitiationOwner<Ctx>>>,
     pub(crate) schema_producers: stream_outcome::ProducerOutcomeScope,
     schema_output_tasks: Mutex<Option<crate::worker::tasks::NativeReconstructionTasks>>,
     owner_execution: Arc<OwnerExecution>,
@@ -1049,9 +1051,6 @@ pub(crate) struct PendingReplayToLive {
 const TOOL_ATTACHMENT_LIVE_ADMISSION_REJECTED: &str =
     "Tool attachment live-memory admission was exhausted";
 
-const TOOL_ATTACHMENT_LIVE_ADMISSION_CANCELLED: &str =
-    "Tool attachment live-memory admission was cancelled";
-
 /// A failed replay of the recorded invocations of a start.
 struct ReplayFailure {
     error: WorkerExecutorError,
@@ -1184,6 +1183,8 @@ struct PrivateDurableWorkerState {
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
     resolved_names: sockets::resolved_names::SharedResolvedNames,
+    /// The resolver of the Store's `golem:network/dns` lookups, built at the first lookup.
+    dns_resolver: Option<hickory_resolver::TokioResolver>,
     open_tcp_input_streams: HashSet<u32>,
     open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.

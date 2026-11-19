@@ -317,6 +317,27 @@ lazy val middlewareGuestLinkFixture = project
     }
   )
 
+// --- build plugin fixtures shared with the Mill build (JS, not published) --
+// scripts/test-build-plugins.sh builds these sources with both plugins and compares the bundles.
+
+def buildPluginFixture(id: String, dir: String) =
+  Project(id, file(s"test-build-plugins/$dir"))
+    .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+    .settings(
+      scalaVersion                    := "3.3.7",
+      crossScalaVersions              := Seq("3.3.7"),
+      publish / skip                  := true,
+      scalaJSUseMainModuleInitializer := true,
+      scalaJSLinkerConfig ~= { config =>
+        config
+          .withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+          .withOutputPatterns(config.outputPatterns.withSourceMapFile("%s.sourcemap"))
+      }
+    )
+
+lazy val singleModuleFixture  = buildPluginFixture("singleModuleFixture", "single-module")
+lazy val dynamicImportFixture = buildPluginFixture("dynamicImportFixture", "dynamic-import")
+
 // --- integration-tests (JVM, not published) --------------------------------
 
 lazy val integrationTests = project

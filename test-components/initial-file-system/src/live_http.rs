@@ -17,6 +17,22 @@ pub trait LiveFiles {
 
 struct LiveFilesImpl;
 
+#[agent_definition(mount = "/private-files/{name}", auth = true,
+    filesystem_bindings = [("/*", "/public/$1")])]
+pub trait AuthenticatedLiveFiles {
+    fn new(name: String) -> Self;
+}
+
+struct AuthenticatedLiveFilesImpl;
+
+#[agent_implementation]
+impl AuthenticatedLiveFiles for AuthenticatedLiveFilesImpl {
+    fn new(name: String) -> Self {
+        LiveFilesImpl::new(name);
+        Self
+    }
+}
+
 #[agent_implementation]
 impl LiveFiles for LiveFilesImpl {
     fn new(name: String) -> Self {

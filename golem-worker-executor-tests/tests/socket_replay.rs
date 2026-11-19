@@ -22,7 +22,9 @@
 //! the durable sockets plan, the test says so and names the ticket that changes it.
 
 use crate::Tracing;
-use golem_common::model::agent::{ParsedAgentKey, UpdateRecord};
+use golem_common::model::agent::{
+    ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, OplogIndex};
@@ -67,8 +69,17 @@ struct PeerLog {
     connections: Vec<Connection>,
 }
 
-/// A TCP peer on `127.0.0.1`. On each connection it first writes `greeting`. It keeps every byte
-/// it reads per connection, and notes when the agent closes a connection.
+/// How a [`TcpPeer`] answers the first line it reads on a connection.
+#[derive(Clone, Copy, Debug)]
+enum Reply {
+    Silent,
+    /// `"{text}\n"`, the same on every connection.
+    Fixed(&'static str),
+}
+
+/// A TCP peer on `127.0.0.1`. On each connection it first writes `greeting`, answers the first
+/// line it reads as `reply` says and then closes its write side. It keeps every byte it reads
+/// per connection, and notes when the agent closes a connection.
 struct TcpPeer {
     port: u16,
     log: Arc<Mutex<PeerLog>>,
@@ -77,7 +88,7 @@ struct TcpPeer {
 }
 
 impl TcpPeer {
-    async fn start(greeting: &'static [u8]) -> anyhow::Result<Self> {
+    async fn start(greeting: &'static [u8], reply: Reply) -> anyhow::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let log = Arc::new(Mutex::new(PeerLog::default()));
@@ -97,15 +108,31 @@ impl TcpPeer {
                     let changed = changed.clone();
                     tokio::spawn(async move {
                         let _ = stream.write_all(greeting).await;
+                        let mut replied = false;
                         let mut buffer = [0u8; 1024];
                         loop {
                             match stream.read(&mut buffer).await {
                                 Ok(0) | Err(_) => break,
                                 Ok(n) => {
-                                    log.lock().unwrap().connections[index]
-                                        .received
-                                        .extend_from_slice(&buffer[..n]);
+                                    let has_line = {
+                                        let mut log = log.lock().unwrap();
+                                        let received = &mut log.connections[index].received;
+                                        received.extend_from_slice(&buffer[..n]);
+                                        received.contains(&b'\n')
+                                    };
                                     changed.notify_waiters();
+                                    let answer = match reply {
+                                        Reply::Silent => None,
+                                        Reply::Fixed(text) => Some(format!("{text}\n")),
+                                    };
+                                    if let Some(answer) = answer
+                                        && has_line
+                                        && !replied
+                                    {
+                                        replied = true;
+                                        let _ = stream.write_all(answer.as_bytes()).await;
+                                        let _ = stream.shutdown().await;
+                                    }
                                 }
                             }
                         }
@@ -397,7 +424,7 @@ async fn p3_tcp_socket_kept_across_invocations_is_lost_after_replay(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abcdef").await?;
+    let peer = TcpPeer::start(b"abcdef", Reply::Silent).await?;
     let mut session =
         Session::start(deps, &context, host_api_tests, sockets(), "p3-tcp-kept").await?;
 
@@ -458,7 +485,7 @@ async fn g2_send_on_a_replayed_connection_reports_connection_broken(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g2").await?;
     let connected: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
@@ -494,7 +521,7 @@ async fn g3_getters_are_equal_before_and_after_replay(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let mut session = Session::start(deps, &context, host_api_tests, sockets(), "g3").await?;
     let connected: Result<(), String> = session
         .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
@@ -581,7 +608,7 @@ async fn p3_tcp_bind_and_configured_options_replay_without_native_bind(
         .await?;
     assert_eq!(changed, Ok(63));
     assert_eq!(session.starts("sockets::types::tcp-socket::bind").await?, 1);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let connect: Result<(), String> = session
         .call(
             "p3_tcp_connect_existing",
@@ -649,7 +676,7 @@ async fn p3_failed_tcp_connect_preserves_closed_state_after_replay(
             .await?,
         1
     );
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let reconnect: Result<(), String> = session
         .call(
             "p3_tcp_connect_existing",
@@ -673,7 +700,7 @@ async fn p3_tcp_receive_in_flight_at_a_crash_completes_with_connection_broken(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc").await?;
+    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
     let session = Session::start(
         deps,
         &context,
@@ -766,8 +793,8 @@ async fn p3_tcp_interleaved_receives_replay_to_their_own_sockets(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let upper = TcpPeer::start(b"ABC").await?;
-    let lower = TcpPeer::start(b"xyz").await?;
+    let upper = TcpPeer::start(b"ABC", Reply::Silent).await?;
+    let lower = TcpPeer::start(b"xyz", Reply::Silent).await?;
     let mut session = Session::start(
         deps,
         &context,
@@ -894,7 +921,7 @@ async fn p2_tcp_completed_connect_replays_without_connecting_again(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let mut session =
         Session::start(deps, &context, host_api_tests, sockets(), "p2-tcp-replay").await?;
 
@@ -991,7 +1018,7 @@ async fn p2_tcp_sent_bytes_reach_the_peer_once_across_a_restart(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let mut session = Session::start(
         deps,
         &context,
@@ -1051,7 +1078,7 @@ async fn p2_tcp_completed_read_replays_with_the_peer_silent(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc").await?;
+    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
     let port = peer.port;
     let mut session = Session::start(
         deps,
@@ -1177,7 +1204,7 @@ async fn p2_tcp_connect_with_would_block_results_replays(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let mut session = Session::start(
         deps,
         &context,
@@ -1226,7 +1253,7 @@ async fn s10_p2_connect_in_a_read_only_method_is_refused(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"").await?;
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
     let session = Session::start(deps, &context, host_api_tests, sockets(), "s10-p2").await?;
     let result = session
         .executor()
@@ -1263,7 +1290,7 @@ async fn an_open_p3_tcp_receive_stream_blocks_snapshots_and_manual_updates(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc").await?;
+    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
     let session = Session::start(
         deps,
         &context,
@@ -1338,7 +1365,7 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let peer = TcpPeer::start(b"abc").await?;
+    let peer = TcpPeer::start(b"abc", Reply::Silent).await?;
     let mut session = Session::start(
         deps,
         &context,
@@ -1374,6 +1401,568 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
         peer.connections().len(),
         1,
         "recovery from the snapshot does not connect again"
+    );
+    session.finish().await
+}
+
+/// Whether the public oplog shows `bytes`, as text or as a byte list.
+async fn oplog_shows(session: &Session<'_>, bytes: &[u8]) -> anyhow::Result<bool> {
+    let rendered = format!("{:?}", session.oplog().await?);
+    Ok(rendered.contains(std::str::from_utf8(bytes)?) || rendered.contains(&format!("{bytes:?}")))
+}
+
+/// A live P3 TCP send delivers each byte to the peer once and records only byte counts. Replay
+/// of the completed conversation neither connects nor sends again.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_completed_conversation_replays_without_contacting_the_peer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Fixed("pong 1")).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-conversation",
+    )
+    .await?;
+
+    let response: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_conversation",
+            data_value!(peer.port, b"ping-7f3a\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(response, Ok(b"pong 1\n".to_vec()));
+    peer.wait_until("the agent closes its connection", |connections| {
+        connections.iter().all(|connection| connection.closed)
+    })
+    .await?;
+    assert!(
+        !oplog_shows(&session, b"ping-7f3a").await?,
+        "a P3 TCP send records no bytes"
+    );
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::send-chunk")
+            .await?,
+        1
+    );
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(
+        log,
+        vec![received("conversation", b"pong 1\n")],
+        "replay returns the recorded bytes"
+    );
+    assert_eq!(
+        peer.connections(),
+        vec![Connection {
+            received: b"ping-7f3a\n".to_vec(),
+            closed: true,
+        }],
+        "replay neither connects nor sends again"
+    );
+
+    // The next conversation is live and opens the second connection.
+    let response: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_conversation",
+            data_value!(peer.port, b"again\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(response, Ok(b"pong 1\n".to_vec()));
+    assert_eq!(peer.connections().len(), 2);
+    assert_eq!(peer.connections()[1].received, b"again\n".to_vec());
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::connect")
+            .await?,
+        2
+    );
+    session.finish().await
+}
+
+/// G4 and G1 on one pooled connection. A send stream kept open across invocations does not hold
+/// them: the parked send parent leaves the agent idle, so each call returns well before the
+/// tail-work deadline. After a restart, replay drains exactly the recorded writes, the next write
+/// is refused, and the send completes with `connection-broken`. Each byte reaches the peer once.
+#[test]
+#[timeout("5m")]
+async fn p3_tcp_send_kept_across_invocations_is_lost_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-kept",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+
+    let quick = Duration::from_secs(10);
+    let opened = tokio::time::timeout(
+        quick,
+        session.call::<Result<(), String>>("p3_tcp_open_send", data_value!("a".to_string())),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("opening the send stream held the invocation"))??;
+    assert_eq!(opened, Ok(()));
+    for part in [b"one".to_vec(), b"two".to_vec()] {
+        let written = tokio::time::timeout(
+            quick,
+            session.call::<Result<u32, String>>("p3_tcp_write", data_value!("a".to_string(), part)),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("a write held the invocation"))??;
+        assert_eq!(written, Ok(3));
+    }
+    peer.wait_until("both writes arrive", |connections| {
+        connections.len() == 1 && connections[0].received == b"onetwo"
+    })
+    .await?;
+    assert!(!oplog_shows(&session, b"onetwo").await?);
+
+    session.restart_executor().await?;
+    let written: Result<u32, String> = session
+        .call(
+            "p3_tcp_write",
+            data_value!("a".to_string(), b"three".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        written,
+        Ok(0),
+        "the live write after replay is not accepted"
+    );
+    let closed: Result<(), String> = session
+        .call("p3_tcp_close_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(closed, Err("ErrorCode::ConnectionBroken".to_string()));
+    peer.wait_until(
+        "the connection from before the restart closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"onetwo".to_vec());
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::send-chunk")
+            .await?,
+        3,
+        "two replayed writes and the refused one"
+    );
+    session.finish().await
+}
+
+/// G1 across a crash inside an open send. The first part is sent live; the agent crashes during
+/// the pause. Recovery drains the recorded first part without sending it again, and the second
+/// part, written live after replay, is refused instead of being accepted and dropped.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_open_at_a_crash_refuses_live_writes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-crash",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let call = {
+        let executor = session.executor().clone();
+        let component = session.component.clone();
+        let agent_id = session.agent_id.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "p3_tcp_send_with_pause",
+                    data_value!(
+                        "a".to_string(),
+                        b"first".to_vec(),
+                        3000u64,
+                        b"second".to_vec()
+                    ),
+                )
+                .await
+        })
+    };
+    peer.wait_until("the first part arrives", |connections| {
+        connections.len() == 1 && connections[0].received == b"first"
+    })
+    .await?;
+    session
+        .executor()
+        .simulated_crash(&session.worker_id)
+        .await?;
+    let result = call.await??.into_typed::<Result<(), String>>()?;
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("6 bytes were not accepted")),
+        "the live write after replay must not be accepted: {result:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(peer.connections().len(), 1, "no new connection");
+    assert_eq!(peer.connections()[0].received, b"first".to_vec());
+    session.finish().await
+}
+
+/// A guest that drops its socket right after opening the send stream. The stream owns the
+/// connection, so the bytes written afterwards reach the peer. The `send` import takes the native
+/// stream before it returns, while the task commits the parent `Start` later. Replay of the
+/// completed send neither reconnects nor needs the dropped socket.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_survives_dropping_the_socket(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-dropped-socket",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let sent: Result<(), String> = session
+        .call(
+            "p3_tcp_send_after_dropping_socket",
+            data_value!("a".to_string(), b"after-drop-9c1e".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()));
+    peer.wait_until(
+        "the bytes arrive and the connection closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"after-drop-9c1e".to_vec());
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the send after the socket drop failed"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not reconnect");
+    session.finish().await
+}
+
+/// A peer that does not read holds back the send, so a guest write stays pending. The guest
+/// cancels it: the native write stops without a partial effect, its `send-chunk` child records
+/// no accepted bytes, and the cancel completes instead of waiting for the peer. The peer later
+/// reads exactly the accepted bytes, and the send replays after a restart without reconnecting.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_cancels_a_write_the_peer_holds_back(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let listener = tokio::net::TcpSocket::new_v4()?;
+    listener.set_recv_buffer_size(4096)?;
+    listener.bind("127.0.0.1:0".parse()?)?;
+    let listener = listener.listen(1)?;
+    let port = listener.local_addr()?.port();
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-held-back",
+    )
+    .await?;
+    let connect =
+        session.call::<Result<(), String>>("p3_tcp_connect", data_value!("a".to_string(), port));
+    let ((mut peer, _), connected) = tokio::try_join!(
+        async { Ok::<_, anyhow::Error>(listener.accept().await?) },
+        connect
+    )?;
+    assert_eq!(connected, Ok(()));
+
+    let sent: Result<(u64, String, Result<(), String>), String> = tokio::time::timeout(
+        Duration::from_secs(60),
+        session.call(
+            "p3_tcp_send_until_held_back",
+            data_value!("a".to_string(), 65536u32, 500u64),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the cancelled write waited for the peer"))??;
+    let (accepted, ending, result) = sent.map_err(anyhow::Error::msg)?;
+    assert_eq!(ending, "cancelled");
+    assert_eq!(result, Ok(()));
+    assert!(accepted > 0, "the peer's buffers take the first writes");
+
+    let mut received = Vec::new();
+    tokio::time::timeout(Duration::from_secs(30), peer.read_to_end(&mut received)).await??;
+    assert_eq!(
+        received.len() as u64,
+        accepted,
+        "the peer gets exactly the accepted bytes"
+    );
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let chunks = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "sockets::types::tcp-socket::send-chunk")
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert!(
+        chunks.len() >= 2,
+        "the accepted writes and the cancelled one are recorded"
+    );
+    for start in &chunks {
+        assert!(
+            oplog.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == *start)),
+            "the send-chunk child at {start} has a terminal"
+        );
+    }
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the cancelled write failed"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .is_err(),
+        "replay does not reconnect"
+    );
+    session.finish().await
+}
+
+/// The guest drops a P3 TCP socket right after it opens the receive stream, before the receive
+/// task runs. The stream owns the connection, so it still delivers the peer's bytes, and the
+/// completed receive replays without the dropped socket.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_receive_survives_dropping_the_socket(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"drop-7a3f", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-receive-dropped-socket",
+    )
+    .await?;
+    let received: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_receive_after_dropping_socket",
+            data_value!(peer.port, 9u32),
+        )
+        .await?;
+    assert_eq!(received, Ok(b"drop-7a3f".to_vec()));
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the receive after the socket drop failed"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not reconnect");
+    session.finish().await
+}
+
+/// A revert cut inside an open send parent. The cut keeps the send `Start` and its first write,
+/// and deletes the invocation of the second write. Recovery replays the retained write, the
+/// next write after the cut is refused instead of being sent, and the send parent completes
+/// with `connection-broken` under its original `Start`. The revert does not undo bytes that
+/// already reached the peer, and Golem does not reconnect.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_revert_inside_an_open_send_recovers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-revert",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let opened: Result<(), String> = session
+        .call("p3_tcp_open_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(opened, Ok(()));
+    for part in [b"one".to_vec(), b"two".to_vec()] {
+        let written: Result<u32, String> = session
+            .call("p3_tcp_write", data_value!("a".to_string(), part))
+            .await?;
+        assert_eq!(written, Ok(3));
+    }
+    peer.wait_until("both writes arrive", |connections| {
+        connections.len() == 1 && connections[0].received == b"onetwo"
+    })
+    .await?;
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let start_of = |name: &str| {
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == name)
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let parent = start_of("sockets::types::tcp-socket::send");
+    let chunks = start_of("sockets::types::tcp-socket::send-chunk");
+    assert_eq!((parent.len(), chunks.len()), (1, 2));
+    let parent = parent[0];
+    // The last entry of the invocation that made the first write.
+    let cut = oplog
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > chunks[0]
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .expect("the first write finishes");
+    assert!(cut < chunks[1], "the cut deletes the second write");
+
+    session
+        .executor()
+        .revert(
+            &session.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: cut,
+            }),
+        )
+        .await?;
+
+    let written: Result<u32, String> = session
+        .call(
+            "p3_tcp_write",
+            data_value!("a".to_string(), b"three".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        written,
+        Ok(0),
+        "the live write after the cut is not accepted"
+    );
+    let closed: Result<(), String> = session
+        .call("p3_tcp_close_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(closed, Err("ErrorCode::ConnectionBroken".to_string()));
+    peer.wait_until(
+        "the connection from before the revert closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"onetwo".to_vec());
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "recovery after the cut failed: {oplog:?}"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == parent))
+            .count(),
+        1,
+        "the send parent completes once under its original Start"
+    );
+    let revert = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
+        .map(|entry| entry.oplog_index)
+        .expect("the revert is recorded");
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > revert
+                && matches!(&entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "sockets::types::tcp-socket::send-chunk"))
+            .count(),
+        1,
+        "only the refused write records a chunk after the revert"
     );
     session.finish().await
 }

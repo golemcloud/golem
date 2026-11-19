@@ -13,6 +13,7 @@ use crate::services::environment_state::ToolDiscoveryError;
 use crate::services::oplog::CommitLevel;
 use crate::services::{HasMcpTransport, HasWorker};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::RetryProperties;
 use golem_common::model::entity::{EntityActivationPolicy, McpImportActivation};
 use golem_common::model::mcp_import::McpImportCredential;
 use golem_common::model::oplog::host_functions::{McpToolCall, McpToolPresence};
@@ -152,6 +153,7 @@ async fn invoke_inner<Ctx: WorkerCtx>(
                     |ctx| ctx.durable_ctx_mut(),
                     &result,
                     classify_error,
+                    RetryProperties::new(),
                 )
                 .await?
             {
@@ -294,6 +296,7 @@ async fn tool_presence<Ctx: WorkerCtx>(
                 |ctx| ctx.durable_ctx_mut(),
                 &result,
                 classify_registry_error,
+                RetryProperties::new(),
             )
             .await?
         {

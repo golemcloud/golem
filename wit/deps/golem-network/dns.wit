@@ -1,0 +1,121 @@
+package golem:network@0.1.0;
+
+/// DNS record lookups.
+///
+/// `wasi:sockets/ip-name-lookup` resolves names to addresses only. This interface queries one
+/// record type of one name and returns the typed records of the answer with their TTLs.
+///
+/// Each call is one durable operation of the agent: the host records the answer, and a replay
+/// returns the recorded answer, including a negative answer or an error, without a query. A
+/// transient resolver failure retries under the agent's retry policy. A lookup needs the same
+/// `network` grant on the name as an address lookup, and the operator must enable agent sockets.
+/// The A and AAAA answers link their addresses to the queried name, so a grant on the name also
+/// allows a socket connect to those addresses.
+///
+/// The host uses the upstream servers of the executor configuration, by default the system
+/// resolver configuration. It does not read the hosts file and does not cache answers.
+interface dns {
+  /// The record type to query.
+  enum record-type {
+    a,
+    aaaa,
+    cname,
+    mx,
+    ns,
+    ptr,
+    srv,
+    txt,
+    caa,
+    soa,
+    naptr,
+  }
+
+  type ipv4-address = tuple<u8, u8, u8, u8>;
+  type ipv6-address = tuple<u16, u16, u16, u16, u16, u16, u16, u16>;
+
+  /// A mail exchange (RFC 1035).
+  record mx-record {
+    preference: u16,
+    exchange: string,
+  }
+
+  /// A service location (RFC 2782).
+  record srv-record {
+    priority: u16,
+    weight: u16,
+    port: u16,
+    target: string,
+  }
+
+  /// A certification authority authorization (RFC 8659). `issuer-critical` is the high bit of
+  /// the flags; `value` holds the raw value octets.
+  record caa-record {
+    issuer-critical: bool,
+    tag: string,
+    value: list<u8>,
+  }
+
+  /// The start of a zone of authority (RFC 1035).
+  record soa-record {
+    mname: string,
+    rname: string,
+    serial: u32,
+    refresh: u32,
+    retry: u32,
+    expire: u32,
+    minimum: u32,
+  }
+
+  /// A naming authority pointer (RFC 3403).
+  record naptr-record {
+    order: u16,
+    preference: u16,
+    naptr-flags: string,
+    services: string,
+    regexp: string,
+    replacement: string,
+  }
+
+  /// The data of one record. Domain names are in ASCII presentation form without the final dot.
+  variant record-data {
+    a(ipv4-address),
+    aaaa(ipv6-address),
+    cname(string),
+    mx(mx-record),
+    ns(string),
+    ptr(string),
+    srv(srv-record),
+    /// The character strings of the record, as raw octets.
+    txt(list<list<u8>>),
+    caa(caa-record),
+    soa(soa-record),
+    naptr(naptr-record),
+  }
+
+  /// One record of an answer, with its time to live in seconds as the answer gave it.
+  record dns-record {
+    ttl: u32,
+    data: record-data,
+  }
+
+  variant dns-error {
+    /// No grant allows a lookup of the name.
+    access-denied,
+    /// The name is not a valid domain name.
+    invalid-name,
+    /// The name does not exist (`NXDOMAIN`).
+    name-not-found,
+    /// The name exists but has no records of the queried type.
+    no-data,
+    /// The lookup can succeed later: the servers timed out, were unreachable or answered
+    /// `SERVFAIL`.
+    temporary-resolver-failure,
+    /// The servers refused the query or failed in a way that a retry does not repair, or the
+    /// operator did not enable agent sockets.
+    permanent-resolver-failure,
+  }
+
+  /// Queries the records of type `record-type` of `name`. The answer holds only records of that
+  /// type; the CNAME records of a followed alias chain are left out.
+  resolve: async func(name: string, record-type: record-type) -> result<list<dns-record>, dns-error>;
+}

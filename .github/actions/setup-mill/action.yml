@@ -1,0 +1,15 @@
+name: Setup Mill
+description: Install the Mill launcher at the version that sdks/scala/mill/build.mill pins
+runs:
+  using: composite
+  steps:
+    - name: Install Mill
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="$(sed -n 's#^//| mill-version: ##p' sdks/scala/mill/build.mill)"
+        test -n "$version"
+        sudo curl -fsSL \
+          "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/$version/mill-dist-$version-mill.sh" \
+          -o /usr/local/bin/mill
+        sudo chmod +x /usr/local/bin/mill

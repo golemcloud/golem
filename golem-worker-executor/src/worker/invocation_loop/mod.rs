@@ -696,7 +696,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         deferred_wakeups: &mut deferred_wakeups,
                     };
 
-                    let result = inner_loop.run().await;
+                    // Separate the resident loop's layout from the outer lifecycle future.
+                    // This allocation is per resident turn, not per invocation.
+                    let result = Box::pin(inner_loop.run()).await;
                     if let Some(update) = result.filesystem_limit_update {
                         let RunningAgent {
                             runtime,

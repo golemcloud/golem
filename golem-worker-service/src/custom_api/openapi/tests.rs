@@ -278,6 +278,24 @@ fn call_agent_route(
     response: CompiledOutputSchema,
     method_description: Option<String>,
 ) -> RichCompiledRoute {
+    let method_input = CompiledInputSchema {
+        graph: SchemaGraph::empty(),
+        input_schema: InputSchema::parameters(method_parameters.iter().enumerate().map(
+            |(index, parameter)| {
+                let schema = match parameter {
+                    MethodParameter::Path { parameter_type, .. } => {
+                        SchemaType::from(parameter_type)
+                    }
+                    MethodParameter::Query { parameter_type, .. }
+                    | MethodParameter::Header { parameter_type, .. } => {
+                        SchemaType::from(parameter_type.clone())
+                    }
+                    _ => str(),
+                };
+                golem_common::schema::NamedField::user_supplied(format!("input{index}"), schema)
+            },
+        )),
+    };
     RichCompiledRoute {
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
@@ -303,10 +321,7 @@ fn call_agent_route(
                 phantom: false,
             },
             method_name: "test_method".to_string(),
-            method_input: CompiledInputSchema {
-                graph: SchemaGraph::empty(),
-                input_schema: InputSchema::Parameters(vec![]),
-            },
+            method_input,
             body,
             method_parameters,
             expected_agent_response: response,
@@ -1546,10 +1561,12 @@ fn durable_stream_method_bindings_are_operation_specific() {
         };
         call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
         call.base_path_variables = 1;
-        call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+        let mut fields = call.method_input.input_schema.fields().to_vec();
+        fields.push(NamedField::user_supplied(
             "input",
             SchemaType::stream(Some(str())),
-        )]);
+        ));
+        call.method_input.input_schema = InputSchema::parameters(fields);
         let spec = spec_for(vec![route]);
         let paths = &spec["paths"];
         let session = "/bound/{session}/invocations/{ds_session}";
@@ -2895,7 +2912,7 @@ fn optional_query_parameter_is_not_required() {
                     parameter_type: QueryOrHeaderType::Option {
                         name: None,
                         owner: None,
-                        inner: Box::new(PathSegmentType::Str),
+                        inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::Str)),
                     },
                 },
             ],
@@ -2910,6 +2927,7 @@ fn optional_query_parameter_is_not_required() {
     assert_eq!(limit["in"], json!("query"));
     assert_eq!(limit["required"], json!(true));
     assert_eq!(limit["style"], json!("form"));
+    assert_eq!(limit["explode"], json!(true));
     assert_eq!(limit["allowEmptyValue"], json!(false));
 
     let cursor = params
@@ -2917,6 +2935,226 @@ fn optional_query_parameter_is_not_required() {
         .find(|p| p["name"] == json!("cursor"))
         .unwrap();
     assert_eq!(cursor["required"], json!(false));
+    assert_eq!(cursor["schema"]["type"], "string");
+}
+
+#[test]
+fn query_schemas_preserve_constraints_and_describe_wire_collections() {
+    use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+    use golem_common::schema::{AutoInjectedKind, NamedField};
+    use golem_service_base::custom_api::{AgentRouteMode, PhantomSelection};
+
+    let bounded = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(2)),
+            max: Some(NumericBound::Unsigned(8)),
+            unit: None,
+        }),
+        metadata: MetadataEnvelope {
+            doc: Some("Bounded value".into()),
+            ..Default::default()
+        },
+    };
+    let reference = SchemaType::ref_to(TypeId::new("bounded"));
+    let scalar = QueryOrHeaderType::Primitive(PathSegmentType::U32);
+    let list = QueryOrHeaderType::List {
+        name: None,
+        owner: None,
+        inner: Box::new(PathSegmentType::U32),
+    };
+    let map = QueryOrHeaderType::Map {
+        key: PathSegmentType::U32,
+        value: PathSegmentType::U32,
+    };
+    let enum_keys = vec!["active".into(), "pending".into()];
+    for (shape, schema, parameter_type) in [
+        ("scalar", reference.clone(), scalar),
+        ("list", SchemaType::list(reference.clone()), list),
+        (
+            "map",
+            SchemaType::map(reference.clone(), reference.clone()),
+            map,
+        ),
+        (
+            "enum-map",
+            SchemaType::map(SchemaType::r#enum(enum_keys.clone()), reference.clone()),
+            QueryOrHeaderType::Map {
+                key: PathSegmentType::Enum(enum_keys),
+                value: PathSegmentType::U32,
+            },
+        ),
+    ] {
+        for optional in [false, true] {
+            for method in [
+                Method::GET,
+                Method::HEAD,
+                Method::DELETE,
+                Method::POST,
+                Method::PUT,
+            ] {
+                for mode in [AgentRouteMode::Plain, AgentRouteMode::DurableStreams] {
+                    // The compiler expands every DurableStreams declaration to
+                    // a family whose OpenAPI representative is the base PUT.
+                    if mode == AgentRouteMode::DurableStreams && method != Method::PUT {
+                        continue;
+                    }
+                    let (mut schema, mut parameter_type) = (schema.clone(), parameter_type.clone());
+                    if optional {
+                        schema = SchemaType::option(SchemaType::option(schema));
+                        parameter_type = QueryOrHeaderType::Option {
+                            name: None,
+                            owner: None,
+                            inner: Box::new(QueryOrHeaderType::Option {
+                                name: None,
+                                owner: None,
+                                inner: Box::new(parameter_type),
+                            }),
+                        };
+                    }
+                    // A named container exercises reference resolution as well as
+                    // references to constrained scalar collection elements.
+                    let original = SchemaType::ref_to(TypeId::new("query"));
+                    let mut route = call_agent_route(
+                        method.clone(),
+                        vec![PathSegment::Literal { value: "q".into() }],
+                        RequestBodySchema::Unused,
+                        vec![
+                            MethodParameter::Header {
+                                header_name: "x-first".into(),
+                                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+                            },
+                            MethodParameter::Query {
+                                query_parameter_name: "wire".into(),
+                                parameter_type,
+                            },
+                        ],
+                        cm_response(SchemaType::map(SchemaType::string(), SchemaType::u32())),
+                        None,
+                    );
+                    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                        unreachable!()
+                    };
+                    call.route_mode = mode;
+                    call.phantom_selection = PhantomSelection::Query {
+                        name: "instance".into(),
+                        optional: true,
+                    };
+                    let mut input = NamedField::user_supplied("source_name", original);
+                    input.metadata.doc = Some("Search values".into());
+                    input.metadata.deprecated = Some("Use the next endpoint".into());
+                    call.method_input.input_schema = InputSchema::parameters([
+                        NamedField::auto_injected(
+                            "principal",
+                            AutoInjectedKind::Principal,
+                            SchemaType::string(),
+                        ),
+                        NamedField::user_supplied("header", SchemaType::string()),
+                        NamedField::user_supplied(
+                            "events",
+                            SchemaType::stream(Some(SchemaType::string())),
+                        ),
+                        input,
+                    ]);
+                    call.method_input.graph = SchemaGraph {
+                        root: SchemaType::record(vec![]),
+                        defs: vec![
+                            SchemaTypeDef {
+                                id: TypeId::new("bounded"),
+                                name: None,
+                                body: bounded.clone(),
+                            },
+                            SchemaTypeDef {
+                                id: TypeId::new("query"),
+                                name: None,
+                                body: schema,
+                            },
+                        ],
+                    };
+                    let spec = spec_for(vec![route]);
+                    super::provider_document::parse("generated", &spec.to_string())
+                        .expect("valid OpenAPI 3.1");
+                    let verb = if mode == AgentRouteMode::DurableStreams {
+                        "put".to_string()
+                    } else {
+                        method.as_str().to_ascii_lowercase()
+                    };
+                    let op = &spec["paths"]["/q"][verb];
+                    let parameters = op["parameters"].as_array().unwrap_or_else(|| {
+                        panic!(
+                            "Missing parameters for {shape} {method} {mode:?}: {:?}",
+                            spec["paths"]
+                                .as_object()
+                                .unwrap()
+                                .keys()
+                                .collect::<Vec<_>>()
+                        )
+                    });
+                    let query = parameters.iter().find(|p| p["name"] == "wire").unwrap();
+                    assert_eq!(query["required"], !optional);
+                    assert_eq!(query["explode"], true);
+                    assert_eq!(
+                        query["style"],
+                        if shape.contains("map") {
+                            "deepObject"
+                        } else {
+                            "form"
+                        }
+                    );
+                    let schema = &query["schema"];
+                    assert_eq!(schema["description"], "Search values");
+                    assert_eq!(schema["deprecated"], true);
+                    assert!(schema.get("oneOf").is_none());
+                    let value = match shape {
+                        "list" => {
+                            assert_eq!(schema["minItems"], 1);
+                            &schema["items"]
+                        }
+                        "map" | "enum-map" => {
+                            assert_eq!(schema["type"], "object");
+                            assert_eq!(schema["minProperties"], 1);
+                            assert_eq!(schema["propertyNames"]["minLength"], 1);
+                            if shape == "map" {
+                                assert_eq!(schema["propertyNames"]["type"], "string");
+                                assert!(schema["x-golem-key-schema"].is_object());
+                            } else {
+                                assert_eq!(
+                                    schema["propertyNames"]["enum"],
+                                    json!(["active", "pending"])
+                                );
+                            }
+                            &schema["additionalProperties"]
+                        }
+                        _ => schema,
+                    };
+                    let resolve = |schema: &Value| {
+                        schema
+                            .get("$ref")
+                            .map(|r| {
+                                spec.pointer(r.as_str().unwrap().strip_prefix('#').unwrap())
+                                    .unwrap()
+                                    .clone()
+                            })
+                            .unwrap_or_else(|| schema.clone())
+                    };
+                    let value = resolve(value);
+                    assert_eq!(value["minimum"], 2);
+                    assert_eq!(value["maximum"], 8);
+                    if shape == "map" {
+                        assert_eq!(resolve(&schema["x-golem-key-schema"])["maximum"], 8);
+                    }
+                    let selector = parameters.iter().find(|p| p["name"] == "instance").unwrap();
+                    assert_eq!(selector["schema"]["format"], "uuid");
+                    assert_eq!(selector["required"], false);
+                    if mode == AgentRouteMode::Plain {
+                        assert_eq!(
+                            op["responses"]["200"]["content"]["application/json"]["schema"]["type"],
+                            "array"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -3207,7 +3445,7 @@ fn optional_header_parameter_is_not_required() {
                     parameter_type: QueryOrHeaderType::Option {
                         name: None,
                         owner: None,
-                        inner: Box::new(PathSegmentType::Str),
+                        inner: Box::new(QueryOrHeaderType::Primitive(PathSegmentType::Str)),
                     },
                 },
             ],

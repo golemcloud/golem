@@ -35,6 +35,7 @@ Tests use ZIO Test framework.
 sbt "++3.8.2; core/test"                 # One affected project
 sbt "++3.8.2; modelJVM/test; modelJS/test" # Shared model on both platforms
 sbt "++2.12.21!; sbtPlugin/test"         # sbt plugin
+./scripts/test-build-plugins.sh          # sbt and Mill golemBuildComponent (needs Mill and the guest WASMs)
 sbt golemTestAll                            # Broad Scala 3 SDK checks
 ```
 

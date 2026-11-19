@@ -17,14 +17,18 @@ mod parameter_parsing;
 mod response_mapping;
 
 use self::cache_headers::{
-    add_vary_header, build_cache_control_value, build_etag_value, headers as cache_header,
-    if_none_match_hits, parse_if_none_match_entries, supports_http_revalidation,
+    build_etag_value, headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
+    supports_http_revalidation,
 };
-use self::parameter_parsing::{parse_path_segment_value, parse_query_or_header_value};
+pub(super) use self::parameter_parsing::validate_query_parameters;
+use self::parameter_parsing::{
+    parse_path_segment_value, parse_query_or_header_value, parse_query_parameter,
+};
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
+use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
 use super::error::RequestHandlerError;
-use super::model::{ResponseBody, RichRouteSecurity};
+use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
@@ -35,7 +39,10 @@ use golem_common::model::agent::{
 };
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
-use golem_common::schema::{BinaryValuePayload, SchemaValue, TextValuePayload, TypedSchemaValue};
+use golem_common::schema::validation::validate_value;
+use golem_common::schema::{
+    BinaryValuePayload, FieldSource, SchemaType, SchemaValue, TextValuePayload, TypedSchemaValue,
+};
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
 };
@@ -60,6 +67,7 @@ impl CallAgentHandler {
         resolved_route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        validate_query_parameters(request, behaviour, &[])?;
         let phantom_id = resolve_phantom_id(
             request,
             resolved_route,
@@ -88,7 +96,7 @@ impl CallAgentHandler {
             && is_cacheable_method(&request_method)
             && supports_http_revalidation(read_only)
             && let Some(not_modified) = self
-                .try_handle_if_none_match(request, behaviour, &agent_id, read_only, resolved_route)
+                .try_handle_if_none_match(request, behaviour, &agent_id, read_only)
                 .await?
         {
             return Ok(not_modified);
@@ -177,7 +185,7 @@ impl CallAgentHandler {
                 agent_fingerprint,
                 read_only,
                 behaviour,
-                resolved_route,
+                request.authenticated_session().is_some(),
             );
 
             if request_method == Method::HEAD {
@@ -200,7 +208,6 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         read_only: &ReadOnlyConfig,
-        resolved_route: &ResolvedRouteEntry,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         let Some(raw) = request
             .headers()
@@ -233,7 +240,7 @@ impl CallAgentHandler {
             Some(current_fingerprint),
             read_only,
             behaviour,
-            resolved_route,
+            request.authenticated_session().is_some(),
         );
 
         Ok(Some(RouteExecutionResult {
@@ -326,8 +333,27 @@ impl CallAgentHandler {
         // `SchemaValue::Record` the executor validates against (which excludes
         // auto-injected fields like the principal).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
-
+        let mut input_fields = behaviour
+            .method_input
+            .input_schema
+            .fields()
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+            .filter(|field| {
+                !matches!(
+                    behaviour.method_input.graph.resolve_ref(&field.schema),
+                    Ok(SchemaType::Stream { .. })
+                )
+            });
         for param in &behaviour.method_parameters {
+            let field = input_fields.next().ok_or_else(|| {
+                RequestHandlerError::invariant_violated("Method parameter has no input field")
+            })?;
+            let invalid =
+                |error: RequestHandlerError| RequestHandlerError::ParameterParsingFailed {
+                    name: field.name.clone(),
+                    error: Box::new(error),
+                };
             let value = match param {
                 MethodParameter::Path {
                     path_segment_index,
@@ -337,18 +363,14 @@ impl CallAgentHandler {
                         [usize::from(*path_segment_index)]
                     .clone();
 
-                    parse_path_segment_value(raw, parameter_type)?
+                    parse_path_segment_value(raw, parameter_type).map_err(&invalid)?
                 }
 
                 MethodParameter::Query {
                     query_parameter_name,
                     parameter_type,
-                } => {
-                    let empty = Vec::new();
-                    let vals = query_params.get(query_parameter_name).unwrap_or(&empty);
-
-                    parse_query_or_header_value(vals, parameter_type)?
-                }
+                } => parse_query_parameter(query_parameter_name, query_params, parameter_type)
+                    .map_err(&invalid)?,
 
                 MethodParameter::Header {
                     header_name,
@@ -366,7 +388,7 @@ impl CallAgentHandler {
                         })
                         .collect::<Result<Vec<_>, _>>()?;
 
-                    parse_query_or_header_value(&vals, parameter_type)?
+                    parse_query_or_header_value(&vals, parameter_type).map_err(&invalid)?
                 }
 
                 MethodParameter::JsonObjectBodyField { field_index } => match &body {
@@ -446,6 +468,23 @@ impl CallAgentHandler {
                     }
                 },
             };
+            if matches!(
+                param,
+                MethodParameter::Path { .. }
+                    | MethodParameter::Query { .. }
+                    | MethodParameter::Header { .. }
+            ) {
+                validate_value(&behaviour.method_input.graph, &field.schema, &value).map_err(
+                    |errors| RequestHandlerError::InvalidParameter {
+                        name: field.name.clone(),
+                        error: errors
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    },
+                )?;
+            }
 
             values.push(value);
         }
@@ -491,9 +530,8 @@ fn is_cacheable_method(method: &Method) -> bool {
 
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
-/// supports HTTP revalidation), and `Vary` for every header that influences
-/// the response (`Authorization` / session-header for principal-aware
-/// methods, plus any header-bound method parameters).
+/// supports HTTP revalidation), and `Vary` for header-bound method parameters.
+/// Credential-related Vary headers are also applied at the response boundary.
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
     agent_id: &AgentId,
@@ -501,11 +539,14 @@ fn add_read_only_cache_headers(
     agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
-    resolved_route: &ResolvedRouteEntry,
+    request_authenticated: bool,
 ) {
-    headers.insert(
-        cache_header::CACHE_CONTROL,
-        http::HeaderValue::from_str(&build_cache_control_value(read_only)).unwrap(),
+    apply_response_cache_headers(
+        CacheRouteKind::Typed(Some(&read_only.cache_policy)),
+        headers,
+        request_authenticated,
+        false,
+        false,
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -526,32 +567,10 @@ fn add_read_only_cache_headers(
         );
     }
 
-    // Vary on every request header that may influence the response: the
-    // principal-bound header for principal-aware methods, and any header-bound
-    // method parameters bound by the route.
-    if read_only.uses_principal {
-        add_vary_header(
-            headers,
-            principal_vary_header_name(&resolved_route.route.security),
-        );
-    }
     for param in &behaviour.method_parameters {
         if let MethodParameter::Header { header_name, .. } = param {
-            add_vary_header(headers, header_name);
+            add_vary_headers(headers, &[header_name]);
         }
-    }
-}
-
-/// Return the request header used to derive the caller's principal for the
-/// route's security configuration. Defaults to `Authorization` for OIDC /
-/// session-based security; uses the configured header name for
-/// `SessionFromHeader` security.
-fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
-    match security {
-        RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
-        RichRouteSecurity::None
-        | RichRouteSecurity::SecurityScheme(_)
-        | RichRouteSecurity::Unavailable => "Authorization",
     }
 }
 
@@ -620,6 +639,265 @@ mod tests {
     use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
     use golem_service_base::custom_api::{CompiledInputSchema, PathSegmentType};
     use test_r::test;
+
+    #[test]
+    async fn query_ownership_rejects_unknown_and_malformed_names_without_requiring_arguments() {
+        use golem_service_base::custom_api::QueryOrHeaderType;
+        let resolver = test_resolver(vec![test_route(1, "/", Some("POST"), "typed")]);
+        let request = poem::Request::builder()
+            .method(Method::POST)
+            .uri("/".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let route = resolver.resolve_matching_route(&request).await.unwrap();
+        let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior else {
+            panic!("not typed")
+        };
+        let mut behaviour = behaviour.clone();
+        behaviour.method_parameters = vec![
+            MethodParameter::Query {
+                query_parameter_name: "q".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+            },
+            MethodParameter::Query {
+                query_parameter_name: "labels".into(),
+                parameter_type: QueryOrHeaderType::Map {
+                    key: PathSegmentType::Str,
+                    value: PathSegmentType::Bool,
+                },
+            },
+        ];
+        behaviour.phantom_selection = PhantomSelection::Query {
+            name: "instance".into(),
+            optional: true,
+        };
+        for (query, valid) in [
+            ("", true),
+            ("q=x&labels%5Benv%5D=true&instance=x", true),
+            ("v=3", false),
+            ("labels=true", false),
+            ("labels[]=true", false),
+            ("labels[env][zone]=true", false),
+            ("labels[env=true", false),
+            ("q[x]=x", false),
+            ("offset=0", false),
+        ] {
+            let request = RichRequest::new(
+                poem::Request::builder()
+                    .uri(format!("/?{query}").parse().unwrap())
+                    .finish(),
+            );
+            assert_eq!(
+                validate_query_parameters(&request, &behaviour, &[]).is_ok(),
+                valid,
+                "{query}"
+            );
+        }
+        let request = RichRequest::new(
+            poem::Request::builder()
+                .uri("/?offset=0&live=sse&cursor=2".parse().unwrap())
+                .finish(),
+        );
+        assert!(
+            validate_query_parameters(&request, &behaviour, &["offset", "live", "cursor"]).is_ok()
+        );
+        for _ in 0..32 {
+            for query in [
+                "z=1&b=2&%61=3&q=x&instance=x&offset=0",
+                "%61=3&offset=0&instance=x&q=x&b=2&z=1",
+            ] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/?{query}").parse().unwrap())
+                        .finish(),
+                );
+                let error =
+                    validate_query_parameters(&request, &behaviour, &["offset"]).unwrap_err();
+                assert!(
+                    matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "a"),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    async fn bound_query_constraints_use_original_referenced_collection_schemas() {
+        use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+        use golem_common::schema::{NamedField, SchemaTypeDef, TypeId};
+        use golem_service_base::custom_api::QueryOrHeaderType;
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let resolver = test_resolver(vec![test_route(1, "/", Some("GET"), "typed")]);
+        let request = poem::Request::builder()
+            .uri("/".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let route = resolver.resolve_matching_route(&request).await.unwrap();
+        let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior else {
+            panic!("not typed")
+        };
+        let mut behaviour = behaviour.clone();
+        let bounded = SchemaType::U32 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(2)),
+                max: Some(NumericBound::Unsigned(8)),
+                unit: None,
+            }),
+            metadata: Default::default(),
+        };
+        let reference = SchemaType::ref_to(TypeId::new("bounded"));
+        for (schema, ty, good, bad) in [
+            (
+                reference.clone(),
+                QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                "wire=3",
+                "wire=1",
+            ),
+            (
+                SchemaType::list(reference.clone()),
+                QueryOrHeaderType::List {
+                    name: None,
+                    owner: None,
+                    inner: Box::new(PathSegmentType::U32),
+                },
+                "wire=3&wire=7",
+                "wire=3&wire=9",
+            ),
+            (
+                SchemaType::map(reference.clone(), reference),
+                QueryOrHeaderType::Map {
+                    key: PathSegmentType::U32,
+                    value: PathSegmentType::U32,
+                },
+                "wire[3]=7",
+                "wire[1]=7",
+            ),
+        ] {
+            behaviour.method_input = CompiledInputSchema {
+                graph: SchemaGraph {
+                    root: SchemaType::record(vec![]),
+                    defs: vec![SchemaTypeDef {
+                        id: TypeId::new("bounded"),
+                        name: None,
+                        body: bounded.clone(),
+                    }],
+                },
+                input_schema: InputSchema::parameters([NamedField::user_supplied(
+                    "amount", schema,
+                )]),
+            };
+            behaviour.method_parameters = vec![MethodParameter::Query {
+                query_parameter_name: "wire".into(),
+                parameter_type: ty,
+            }];
+            for (query, valid) in [(good, true), (bad, false)] {
+                let request = RichRequest::new(
+                    poem::Request::builder()
+                        .uri(format!("/?{query}").parse().unwrap())
+                        .finish(),
+                );
+                let result = handler.resolve_method_arguments(
+                    &route,
+                    &request,
+                    &behaviour,
+                    ParsedRequestBody::Unused,
+                );
+                assert_eq!(result.is_ok(), valid, "{query}");
+                if let Err(error) = result {
+                    assert!(error.to_string().contains("amount"), "{error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    async fn invalid_query_fails_before_cache_metadata_or_body_reads() {
+        use futures::stream;
+        use golem_common::model::agent::CachePolicy;
+        use golem_common::schema::NamedField;
+        use golem_service_base::custom_api::{CompiledSchema, QueryOrHeaderType};
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        for method in ["GET", "HEAD", "DELETE", "POST"] {
+            for query in ["v=3", "lbl=x", "lbl=x&lbl[env]=true"] {
+                let resolver = test_resolver(vec![test_route(1, "/", Some(method), "typed")]);
+                let request = poem::Request::builder()
+                    .uri(format!("/?{query}").parse().unwrap())
+                    .method(method.parse().unwrap())
+                    .header("host", "example.com")
+                    .header("content-type", "application/json")
+                    .header("if-none-match", "*")
+                    .body(poem::Body::from_bytes_stream(stream::poll_fn(
+                        |_| -> std::task::Poll<Option<Result<bytes::Bytes, std::io::Error>>> {
+                            panic!("query rejection must not read body")
+                        },
+                    )));
+                let route = resolver.resolve_matching_route(&request).await.unwrap();
+                let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+                else {
+                    panic!("not typed")
+                };
+                let mut behaviour = behaviour.clone();
+                behaviour.method_input = CompiledInputSchema {
+                    graph: SchemaGraph::empty(),
+                    input_schema: InputSchema::parameters([NamedField::user_supplied(
+                        "labels",
+                        SchemaType::map(SchemaType::string(), SchemaType::bool()),
+                    )]),
+                };
+                behaviour.method_parameters = vec![MethodParameter::Query {
+                    query_parameter_name: "lbl".into(),
+                    parameter_type: QueryOrHeaderType::Map {
+                        key: PathSegmentType::Str,
+                        value: PathSegmentType::Bool,
+                    },
+                }];
+                if method == "POST" {
+                    behaviour.method_input.input_schema = InputSchema::parameters([
+                        NamedField::user_supplied(
+                            "labels",
+                            SchemaType::map(SchemaType::string(), SchemaType::bool()),
+                        ),
+                        NamedField::user_supplied("payload", SchemaType::string()),
+                    ]);
+                    behaviour
+                        .method_parameters
+                        .push(MethodParameter::JsonObjectBodyField {
+                            field_index: 0.into(),
+                        });
+                    behaviour.body = RequestBodySchema::JsonBody {
+                        expected: CompiledSchema {
+                            graph: SchemaGraph::anonymous(SchemaType::record_from_fields([(
+                                "payload",
+                                SchemaType::string(),
+                            )])),
+                        },
+                    };
+                }
+                behaviour.read_only = Some(ReadOnlyConfig {
+                    cache_policy: CachePolicy::UntilWrite(Default::default()),
+                    uses_principal: false,
+                });
+                let error = handler
+                    .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
+                    .await
+                    .unwrap_err();
+                if query == "v=3" {
+                    assert!(
+                        matches!(error, RequestHandlerError::UnknownQueryParameter { ref name } if name == "v")
+                    );
+                } else {
+                    assert!(
+                        matches!(error, RequestHandlerError::InvalidParameter { ref name, ref error } if name == "labels" && error.contains("maps require name[key]")),
+                        "{error:?}"
+                    );
+                }
+                assert!(harness.metadata_reads.lock().unwrap().is_empty());
+                assert!(harness.contexts.lock().unwrap().is_empty());
+            }
+        }
+    }
 
     #[test]
     async fn explicit_phantom_selection_validates_decoded_queries_and_capture_ordinals() {

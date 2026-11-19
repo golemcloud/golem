@@ -551,6 +551,22 @@ pub trait Networking {
         data: Vec<u8>,
     ) -> Result<String, String>;
     async fn resolve_p3(&self, name: String) -> Result<Vec<String>, String>;
+    /// Queries `golem:network/dns` for the records of type `record_type` (`a`, `mx`, `txt`, ...)
+    /// of `name`, each rendered as `ttl data`.
+    async fn dns_resolve(&self, name: String, record_type: String) -> Result<Vec<String>, String>;
+    fn create_promise(&self) -> golem_rust::PromiseId;
+    /// Starts an A lookup of `name`, waits for `cancel`, then drops the lookup without reading
+    /// its answer. Returns false when the answer became ready before the drop.
+    async fn dns_discard_a(&self, name: String, cancel: golem_rust::PromiseId) -> bool;
+    /// Reads the A records of `name`, waits for `proceed`, then connects a P3 TCP socket to
+    /// `address`. A crash during the wait recovers with the lookup delivered and the connect not
+    /// started yet.
+    async fn dns_then_connect_p3(
+        &self,
+        name: String,
+        proceed: golem_rust::PromiseId,
+        address: String,
+    ) -> Result<String, String>;
     /// Connects to `127.0.0.1:port` with a raw wasip3 TCP socket and reads the
     /// receive stream to completion, returning the collected bytes as a string.
     async fn tcp_collect_p3(&self, port: u16) -> Result<String, String>;
@@ -722,6 +738,123 @@ impl Networking for NetworkingImpl {
                 addresses
                     .into_iter()
                     .map(|address| format!("{address:?}"))
+                    .collect()
+            })
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn create_promise(&self) -> golem_rust::PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn dns_discard_a(&self, name: String, cancel: golem_rust::PromiseId) -> bool {
+        use golem_rust::bindings::golem::network::dns::{RecordType, resolve};
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let mut lookup = Box::pin(resolve(name, RecordType::A));
+        let mut pending = true;
+        poll_fn(|cx| {
+            pending &= lookup.as_mut().poll(cx).is_pending();
+            Poll::Ready(())
+        })
+        .await;
+        golem_rust::await_promise(&cancel).await;
+        poll_fn(|cx| {
+            pending &= lookup.as_mut().poll(cx).is_pending();
+            Poll::Ready(())
+        })
+        .await;
+        drop(lookup);
+        println!("dns lookup discarded");
+        pending
+    }
+
+    async fn dns_then_connect_p3(
+        &self,
+        name: String,
+        proceed: golem_rust::PromiseId,
+        address: String,
+    ) -> Result<String, String> {
+        use golem_rust::bindings::golem::network::dns::{RecordType, resolve};
+
+        let records = resolve(name, RecordType::A)
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        println!("dns answer received: {}", records.len());
+        golem_rust::await_promise(&proceed).await;
+        socket_policy_p3("tcp-connect", &address).await
+    }
+
+    async fn dns_resolve(&self, name: String, record_type: String) -> Result<Vec<String>, String> {
+        use golem_rust::bindings::golem::network::dns::{RecordData, RecordType, resolve};
+
+        let record_type = match record_type.as_str() {
+            "a" => RecordType::A,
+            "aaaa" => RecordType::Aaaa,
+            "cname" => RecordType::Cname,
+            "mx" => RecordType::Mx,
+            "ns" => RecordType::Ns,
+            "ptr" => RecordType::Ptr,
+            "srv" => RecordType::Srv,
+            "txt" => RecordType::Txt,
+            "caa" => RecordType::Caa,
+            "soa" => RecordType::Soa,
+            "naptr" => RecordType::Naptr,
+            other => return Err(format!("unknown record type {other}")),
+        };
+        resolve(name, record_type)
+            .await
+            .map(|records| {
+                records
+                    .into_iter()
+                    .map(|record| {
+                        let data = match record.data {
+                            RecordData::A((a, b, c, d)) => format!("{a}.{b}.{c}.{d}"),
+                            RecordData::Aaaa((a, b, c, d, e, f, g, h)) => {
+                                std::net::Ipv6Addr::new(a, b, c, d, e, f, g, h).to_string()
+                            }
+                            RecordData::Cname(name)
+                            | RecordData::Ns(name)
+                            | RecordData::Ptr(name) => name,
+                            RecordData::Mx(mx) => format!("{} {}", mx.preference, mx.exchange),
+                            RecordData::Srv(srv) => format!(
+                                "{} {} {} {}",
+                                srv.priority, srv.weight, srv.port, srv.target
+                            ),
+                            RecordData::Txt(strings) => strings
+                                .iter()
+                                .map(|s| String::from_utf8_lossy(s).into_owned())
+                                .collect::<Vec<_>>()
+                                .join(""),
+                            RecordData::Caa(caa) => format!(
+                                "{} {} {}",
+                                caa.issuer_critical,
+                                caa.tag,
+                                String::from_utf8_lossy(&caa.value)
+                            ),
+                            RecordData::Soa(soa) => format!(
+                                "{} {} {} {} {} {} {}",
+                                soa.mname,
+                                soa.rname,
+                                soa.serial,
+                                soa.refresh,
+                                soa.retry,
+                                soa.expire,
+                                soa.minimum
+                            ),
+                            RecordData::Naptr(naptr) => format!(
+                                "{} {} {} {} {} {}",
+                                naptr.order,
+                                naptr.preference,
+                                naptr.naptr_flags,
+                                naptr.services,
+                                naptr.regexp,
+                                naptr.replacement
+                            ),
+                        };
+                        format!("{} {data}", record.ttl)
+                    })
                     .collect()
             })
             .map_err(|error| format!("{error:?}"))

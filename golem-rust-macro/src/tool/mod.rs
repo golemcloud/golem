@@ -29,6 +29,7 @@ mod definition;
 mod descriptor;
 mod doc;
 mod helpers;
+mod http;
 mod implementation;
 pub mod ir;
 mod middleware_authoring;

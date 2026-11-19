@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::oplog::payload::types::SerializableSocketError;
+use crate::model::oplog::payload::types::{SerializableDnsError, SerializableSocketError};
 use crate::model::oplog::payload::{
-    HostResponseP3SocketsConnect, HostResponseP3SocketsResolveName, HostResponseP3SocketsUdpSend,
-    HostResponseSocketsResolveName,
+    HostResponseNetworkDnsResolve, HostResponseP3SocketsConnect, HostResponseP3SocketsResolveName,
+    HostResponseP3SocketsUdpSend, HostResponseSocketsResolveName,
 };
 use crate::model::oplog::types::{SerializableP3IpNameLookupError, SerializableP3SocketErrorCode};
 use wasmtime_wasi::p2::SocketError;
@@ -32,6 +32,12 @@ pub fn resolve_name<R>(_request: &R, _denial: &str) -> HostResponseSocketsResolv
 pub fn p3_resolve_name<R>(_request: &R, _denial: &str) -> HostResponseP3SocketsResolveName {
     HostResponseP3SocketsResolveName {
         result: Err(SerializableP3IpNameLookupError::AccessDenied),
+    }
+}
+
+pub fn dns_resolve<R>(_request: &R, _denial: &str) -> HostResponseNetworkDnsResolve {
+    HostResponseNetworkDnsResolve {
+        result: Err(SerializableDnsError::AccessDenied),
     }
 }
 

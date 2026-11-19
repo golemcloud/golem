@@ -14,6 +14,6 @@ cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.
 The tests require a Unix environment with Rust, cargo-make, Git, Bash, jq,
 Node.js, and Python 3.11 or newer. CI installs Python 3.14 explicitly; the
 fixtures use standard-library TOML parsing and working-directory contexts.
-CI runs them in the **Test release tooling** step, alongside the Node.js
+Main validation runs them in the **main-validation-schema** task, alongside the Node.js
 release-channel tests. This workspace uses the standard Rust test harness and
 does not participate in the root workspace or CLI integration shards.

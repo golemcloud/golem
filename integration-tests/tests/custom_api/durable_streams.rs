@@ -80,10 +80,12 @@ async fn test_context_sqlite(
 
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
-fn stream_path(method: &str, session: &str, slot: &str, delay_ms: u64) -> String {
-    format!(
-        "/durable-stream-agents/ds3-{session}/{method}/invocations/{session}/streams/{slot}?delay_ms={delay_ms}"
-    )
+fn stream_path(method: &str, session: &str, slot: &str) -> String {
+    format!("/durable-stream-agents/ds3-{session}/{method}/invocations/{session}/streams/{slot}")
+}
+
+fn delayed_stream_path(method: &str, session: &str, slot: &str, delay_ms: u64) -> String {
+    format!("{}?delay_ms={delay_ms}", stream_path(method, session, slot))
 }
 
 fn native_string(value: impl Into<String>) -> Value {
@@ -1517,7 +1519,7 @@ async fn lifecycle_json_binary_head_and_methods(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let json = stream_path("json/3", &session, "$result", 0);
+    let json = delayed_stream_path("json/3", &session, "$result", 0);
 
     let absent = agent
         .client
@@ -1646,7 +1648,7 @@ async fn lifecycle_json_binary_head_and_methods(
     }
 
     let bytes_session = Uuid::new_v4().to_string();
-    let bytes_path = stream_path("bytes/260", &bytes_session, "$result", 0);
+    let bytes_path = delayed_stream_path("bytes/260", &bytes_session, "$result", 0);
     assert_eq!(
         create(agent, &bytes_path).await?.status(),
         StatusCode::CREATED
@@ -1692,13 +1694,13 @@ async fn lifecycle_json_binary_head_and_methods(
     assert_eq!(bytes, (0..260).map(|i| (i % 251) as u8).collect::<Vec<_>>());
 
     let echo_session = Uuid::new_v4().to_string();
-    let echo_input = stream_path("echo", &echo_session, "input", 0);
+    let echo_input = stream_path("echo", &echo_session, "input");
     assert_eq!(
         create(agent, &echo_input).await?.status(),
         StatusCode::CREATED
     );
     for slot in ["input", "output"] {
-        let path = stream_path("echo", &echo_session, slot, 0);
+        let path = stream_path("echo", &echo_session, slot);
         let response = agent
             .client
             .head(agent.base_url.join(&path)?)
@@ -1784,7 +1786,7 @@ async fn expiry_headers_are_validated_and_reported(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let zero_session = Uuid::new_v4().to_string();
-    let zero_path = stream_path("echo", &zero_session, "input", 0);
+    let zero_path = stream_path("echo", &zero_session, "input");
     let zero = agent
         .client
         .put(agent.base_url.join(&zero_path)?)
@@ -1802,7 +1804,7 @@ async fn expiry_headers_are_validated_and_reported(
     assert_eq!(header(&expired, CACHE_CONTROL.as_str()), "no-store");
 
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("echo", &session, "input", 0);
+    let path = stream_path("echo", &session, "input");
     let created = agent
         .client
         .put(agent.base_url.join(&path)?)
@@ -1842,7 +1844,7 @@ async fn expiry_headers_are_validated_and_reported(
     );
 
     for invalid in ["01", "-1", "+1", "1 0"] {
-        let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+        let path = stream_path("echo", &Uuid::new_v4().to_string(), "input");
         assert_eq!(
             agent
                 .client
@@ -1855,7 +1857,7 @@ async fn expiry_headers_are_validated_and_reported(
             "{invalid:?}"
         );
     }
-    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input");
     assert_eq!(
         agent
             .client
@@ -1868,7 +1870,7 @@ async fn expiry_headers_are_validated_and_reported(
         StatusCode::BAD_REQUEST
     );
     let absolute = "2099-01-01T00:00:00Z";
-    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input");
     let created = agent
         .client
         .put(agent.base_url.join(&path)?)
@@ -1877,7 +1879,7 @@ async fn expiry_headers_are_validated_and_reported(
         .await?;
     assert_eq!(created.status(), StatusCode::CREATED);
     assert_eq!(header(&created, "stream-expires-at"), absolute);
-    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input");
     assert_eq!(
         agent
             .client
@@ -1981,6 +1983,11 @@ async fn session_put_binds_body_query_header_and_path(
     for request in [
         agent
             .client
+            .put(agent.base_url.join(&format!("{base}?count=3&v=3"))?)
+            .header("x-label", "header-value")
+            .json(&serde_json::json!({"message": "body-value"})),
+        agent
+            .client
             .put(session_url.clone())
             .json(&serde_json::json!({"message": "body-value"})),
         agent
@@ -2030,6 +2037,29 @@ async fn session_put_binds_body_query_header_and_path(
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
+    for (method, path) in [
+        (reqwest::Method::PUT, format!("{base}?count=3&v=3")),
+        (reqwest::Method::HEAD, format!("{base}?v=3")),
+        (reqwest::Method::DELETE, format!("{base}?v=3")),
+        (
+            reqwest::Method::GET,
+            format!("{base}/streams/$result?offset=now&v=3"),
+        ),
+        (
+            reqwest::Method::DELETE,
+            format!("{base}/streams/$result?v=3"),
+        ),
+    ] {
+        let response = agent
+            .client
+            .request(method, agent.base_url.join(&path)?)
+            .header("x-label", "header-value")
+            .json(&serde_json::json!({"message": "body-value"}))
+            .send()
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+
     assert_eq!(create(agent, &stream).await?.status(), StatusCode::OK);
     wait_for_closed(agent, &stream).await?;
     let response = agent
@@ -2046,6 +2076,20 @@ async fn session_put_binds_body_query_header_and_path(
             "route-value|header-value|2|body-value"
         ])
     );
+    let read_without_arguments = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join(&format!("{base}/streams/$result?offset=now"))?,
+        )
+        .send()
+        .await?;
+    assert_eq!(read_without_arguments.status(), StatusCode::OK);
+    assert_eq!(
+        read_without_arguments.json::<Value>().await?,
+        serde_json::json!([])
+    );
     Ok(())
 }
 
@@ -2055,15 +2099,15 @@ async fn session_conflicts_unknown_slots_and_offsets(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("isolated-a/2", &session, "$result", 0);
+    let path = stream_path("isolated-a/2", &session, "$result");
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
 
-    let changed_args = stream_path("isolated-a/3", &session, "$result", 0);
+    let changed_args = stream_path("isolated-a/3", &session, "$result");
     assert_eq!(
         create(agent, &changed_args).await?.status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    let other_method = stream_path("isolated-b/2", &session, "$result", 0);
+    let other_method = stream_path("isolated-b/2", &session, "$result");
     assert_eq!(
         create(agent, &other_method).await?.status(),
         StatusCode::CREATED
@@ -2083,7 +2127,7 @@ async fn session_conflicts_unknown_slots_and_offsets(
         assert_eq!(response.json::<Value>().await?, expected);
     }
 
-    let unknown = stream_path("isolated-a/2", &session, "missing", 0);
+    let unknown = stream_path("isolated-a/2", &session, "missing");
     assert_eq!(
         agent
             .client
@@ -2093,7 +2137,7 @@ async fn session_conflicts_unknown_slots_and_offsets(
             .status(),
         StatusCode::NOT_FOUND
     );
-    let fresh_unknown = stream_path("isolated-a/2", &Uuid::new_v4().to_string(), "missing", 0);
+    let fresh_unknown = stream_path("isolated-a/2", &Uuid::new_v4().to_string(), "missing");
     assert_eq!(
         agent
             .client
@@ -2104,7 +2148,7 @@ async fn session_conflicts_unknown_slots_and_offsets(
         StatusCode::NOT_FOUND
     );
 
-    let malformed = format!("{path}&offset=not-an-offset");
+    let malformed = format!("{path}?offset=not-an-offset");
     assert_eq!(
         agent
             .client
@@ -2114,12 +2158,12 @@ async fn session_conflicts_unknown_slots_and_offsets(
             .status(),
         StatusCode::BAD_REQUEST
     );
-    let now = format!("{path}&offset=now");
+    let now = format!("{path}?offset=now");
     let now_response = agent.client.get(agent.base_url.join(&now)?).send().await?;
     assert_eq!(now_response.status(), StatusCode::OK);
     assert_eq!(now_response.json::<Value>().await?, serde_json::json!([]));
 
-    let beyond = format!("{path}&offset=0100000000000000ffffffffffffffff0000000000000000");
+    let beyond = format!("{path}?offset=0100000000000000ffffffffffffffff0000000000000000");
     let beyond = agent
         .client
         .get(agent.base_url.join(&beyond)?)
@@ -2249,7 +2293,7 @@ async fn websocket_and_http_sessions_have_isolated_identities(
     assert_eq!(serde_json::json!(output), public_values);
     let values = serde_json::json!(["http-only"]);
     for slot in ["input", "output"] {
-        let path = stream_path("echo", &session, slot, 0);
+        let path = stream_path("echo", &session, slot);
         wait_for_closed(agent, &path).await?;
         let head = agent
             .client
@@ -2277,7 +2321,7 @@ async fn session_delete_is_cooperative_and_survives_reconstruction(
 
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
-    let path = stream_path("cancellation-output/5", &session, "$result", 5000);
+    let path = delayed_stream_path("cancellation-output/5", &session, "$result", 5000);
     let session_path = format!(
         "/durable-stream-agents/{id}/cancellation-output/5/invocations/{session}?delay_ms=5000"
     );
@@ -2377,8 +2421,8 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
-    let input = stream_path("echo", &session, "input", 0);
-    let output = stream_path("echo", &session, "output", 0);
+    let input = stream_path("echo", &session, "input");
+    let output = stream_path("echo", &session, "output");
     assert_eq!(create(agent, &input).await?.status(), StatusCode::CREATED);
     assert_eq!(
         append_json(agent, &input, serde_json::json!("kept"), false)
@@ -2476,7 +2520,7 @@ async fn output_slot_delete_is_guest_observable_and_tombstoned(
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
     let id = format!("ds3-{session}");
-    let output = stream_path("cancellation-output/5", &session, "$result", 5000);
+    let output = delayed_stream_path("cancellation-output/5", &session, "$result", 5000);
     assert_eq!(create(agent, &output).await?.status(), StatusCode::CREATED);
     let first = loop {
         let response = agent
@@ -2567,11 +2611,11 @@ async fn live_reader_limit_and_disconnect_release(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("echo", &session, "input", 0);
+    let path = stream_path("echo", &session, "input");
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
     let url = agent
         .base_url
-        .join(&format!("{path}&offset=now&live=sse"))?;
+        .join(&format!("{path}?offset=now&live=sse"))?;
     let mut readers = Vec::new();
     for _ in 0..15 {
         let mut response = agent.client.get(url.clone()).send().await?;
@@ -2626,7 +2670,7 @@ async fn catch_up_burst_is_rate_limited_and_recovers(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("json/1", &session, "$result", 0);
+    let path = delayed_stream_path("json/1", &session, "$result", 0);
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
     wait_for_closed(agent, &path).await?;
     let url = agent.base_url.join(&path)?;
@@ -2665,7 +2709,7 @@ async fn long_poll_wakes_and_times_out(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("json/2", &session, "$result", 300);
+    let path = delayed_stream_path("json/2", &session, "$result", 300);
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
 
     let started = Instant::now();
@@ -2683,7 +2727,7 @@ async fn long_poll_wakes_and_times_out(
     assert!(!wake.json::<Value>().await?.as_array().unwrap().is_empty());
 
     let timeout_session = Uuid::new_v4().to_string();
-    let timeout_path = stream_path("echo", &timeout_session, "input", 0);
+    let timeout_path = stream_path("echo", &timeout_session, "input");
     assert_eq!(
         create(agent, &timeout_path).await?.status(),
         StatusCode::CREATED
@@ -2700,7 +2744,7 @@ async fn long_poll_wakes_and_times_out(
         .get(
             agent
                 .base_url
-                .join(&format!("{timeout_path}&offset={offset}&live=long-poll"))?,
+                .join(&format!("{timeout_path}?offset={offset}&live=long-poll"))?,
         )
         .send()
         .await?;
@@ -2718,7 +2762,7 @@ async fn output_stream_survives_guest_sleep_suspension(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("json/1", &session, "$result", 15000);
+    let path = delayed_stream_path("json/1", &session, "$result", 15000);
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
     wait_for_closed(agent, &path).await?;
     let result = agent.client.get(agent.base_url.join(&path)?).send().await?;
@@ -2743,11 +2787,11 @@ async fn trapped_output_closes_without_the_cancelled_header(
     };
 
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("trapped-output", &session, "$result", 0);
+    let path = stream_path("trapped-output", &session, "$result");
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
     let prefix = agent
         .client
-        .get(agent.base_url.join(&format!("{path}&live=long-poll"))?)
+        .get(agent.base_url.join(&format!("{path}?live=long-poll"))?)
         .send()
         .await?;
     assert_eq!(prefix.status(), StatusCode::OK);
@@ -2755,7 +2799,7 @@ async fn trapped_output_closes_without_the_cancelled_header(
         prefix.json::<Value>().await?,
         serde_json::json!(["before-trap"])
     );
-    let input = stream_path("trapped-output", &session, "input", 0);
+    let input = stream_path("trapped-output", &session, "input");
     assert_eq!(
         append_json(agent, &input, serde_json::json!("trap"), true)
             .await?
@@ -2836,7 +2880,7 @@ async fn cancellation_closes_pending_output_without_waiting_for_guest(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("delayed-output/10000", &session, "$result", 0);
+    let path = delayed_stream_path("delayed-output/10000", &session, "$result", 0);
     let session_path =
         format!("/durable-stream-agents/ds3-{session}/delayed-output/10000/invocations/{session}");
     assert_eq!(
@@ -2899,7 +2943,7 @@ async fn pending_output_and_data_share_long_poll_wait_budget(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("delayed-output/10000", &session, "$result", 60000);
+    let path = delayed_stream_path("delayed-output/10000", &session, "$result", 60000);
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
     let started = Instant::now();
     let result = agent
@@ -2925,7 +2969,7 @@ async fn sse_reconnect_etag_and_binary_encoding(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
     let session = Uuid::new_v4().to_string();
-    let path = stream_path("json/1000", &session, "$result", 1);
+    let path = delayed_stream_path("json/1000", &session, "$result", 1);
     assert_eq!(create(agent, &path).await?.status(), StatusCode::CREATED);
     let mut first = agent
         .client
@@ -3017,7 +3061,7 @@ async fn sse_reconnect_etag_and_binary_encoding(
     assert!(conditional.bytes().await?.is_empty());
 
     let binary_session = Uuid::new_v4().to_string();
-    let binary = stream_path("bytes/8", &binary_session, "$result", 0);
+    let binary = delayed_stream_path("bytes/8", &binary_session, "$result", 0);
     assert_eq!(create(agent, &binary).await?.status(), StatusCode::CREATED);
     let response = agent
         .client

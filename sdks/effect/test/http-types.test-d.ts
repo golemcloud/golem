@@ -23,6 +23,7 @@ import type {
 } from "../src/internal/httpTypes.js"
 import { multimodal } from "../src/Multimodal.js"
 import { UnstructuredText } from "../src/Unstructured.js"
+import * as Wit from "../src/WitTypes.js"
 
 const selectedMount: Http.MountDef<"name"> = Http.mount("/c/{name}/{instance}", {
   phantomId: Http.phantomId.path("instance", { optional: true }),
@@ -901,6 +902,70 @@ void method({
 
 // Injected principals do not require client bindings on bodyless endpoints.
 void method({
+  input: {
+    first: Schema.Union([Schema.Null, Schema.String]),
+    second: Schema.Union([Schema.Undefined, Schema.Array(Schema.Number)]),
+  },
+  success: Schema.String,
+  http: [Http.get("/optional-order"), Http.post("/optional-order?a={first}&b={second}")],
+})
+void method({
+  input: {
+    tags: Schema.UndefinedOr(Schema.Array(Schema.String)),
+    labels: Wit.Map(Schema.String, Schema.Number),
+    optionalLabels: Schema.NullOr(Wit.Map(Schema.String, Schema.Boolean)),
+  },
+  success: Schema.String,
+  http: [Http.get("/collections"), Http.del("/collections")],
+})
+void method({
+  input: { events: Wit.AgentStream(Schema.String), limit: Schema.Number },
+  success: Schema.String,
+  http: [Http.get("/stream")],
+})
+void method({
+  input: { values: Schema.Tuple([Schema.String, Schema.Number]) },
+  success: Schema.String,
+  // @ts-expect-error tuples are not lists
+  http: [Http.get("/tuple")],
+})
+void method({
+  input: { value: Schema.Union([Schema.String, Schema.Number]) },
+  success: Schema.String,
+  // @ts-expect-error a heterogeneous union is a variant, not a scalar
+  http: [Http.post("/union?value={value}")],
+})
+void method({
+  input: { value: Wit.Text() },
+  success: Schema.String,
+  // @ts-expect-error rich text retains its wire kind despite its string value type
+  http: [Http.get("/rich")],
+})
+void method({
+  input: { value: Wit.Flags(["read", "write"]) },
+  success: Schema.String,
+  // @ts-expect-error flags have a rich wire kind, not a scalar list
+  http: [Http.get("/flags")],
+})
+void method({
+  input: { value: Schema.Struct({ count: Schema.Number }) },
+  success: Schema.String,
+  // @ts-expect-error a declared literal GET has the same schema check as Http.get
+  http: [Http.endpoint("GET", "/record")],
+})
+void method({
+  input: { labels: Schema.NullOr(Wit.Map(Schema.String, Schema.Number)) },
+  success: Schema.String,
+  // @ts-expect-error maps are query-only, including through optional wrappers
+  http: [Http.post("/headers", { headers: { "X-Labels": "labels" } })],
+})
+void method({
+  input: { events: Wit.AgentStream(Schema.String) },
+  success: Schema.String,
+  // @ts-expect-error stream slots cannot bind explicitly from query
+  http: [Http.get("/stream?events={events}")],
+})
+void method({
   input: { principal: Principal.PrincipalSchema },
   success: Schema.Struct({ secret: Schema.String }),
   http: [Http.get("/admin", { auth: true }), Http.head("/admin", { auth: true })],
@@ -923,21 +988,18 @@ void method({
 void method({
   input: { principal: Principal.PrincipalSchema, payload: Schema.String },
   success: Schema.String,
-  // @ts-expect-error injected principal does not exempt unbound client input on GET
   http: [Http.get("/admin", { auth: true })],
 })
 
 void method({
   input: { principal: Principal.PrincipalSchema, payload: Schema.String },
   success: Schema.String,
-  // @ts-expect-error injected principal does not exempt unbound client input on HEAD
   http: [Http.head("/admin", { auth: true })],
 })
 
 void method({
   input: { principal: Schema.String },
   success: Schema.String,
-  // @ts-expect-error a client input named principal is not injected
   http: [Http.get("/admin")],
 })
 
@@ -999,30 +1061,30 @@ void method({
 // Negative — `Http.get` with an unbound method parameter (no path /
 // query / header binding for `payload`).
 void method({
-  input: { payload: Schema.String },
+  input: { payload: Schema.Struct({ value: Schema.String }) },
   success: Schema.String,
   http: [
-    // @ts-expect-error — bodyless GET cannot have unbound 'payload'
+    // @ts-expect-error a record cannot bind implicitly from query
     Http.get("/op"),
   ],
 })
 
 // Negative — `Http.head` with an unbound method parameter.
 void method({
-  input: { payload: Schema.String },
+  input: { payload: Schema.Array(Schema.Array(Schema.String)) },
   success: Schema.String,
   http: [
-    // @ts-expect-error — bodyless HEAD cannot have unbound 'payload'
+    // @ts-expect-error nested collections cannot bind implicitly from query
     Http.head("/op"),
   ],
 })
 
 // Negative — bodyless endpoint binds SOME but not all parameters.
 void method({
-  input: { id: Schema.String, name: Schema.String },
+  input: { id: Schema.String, name: Schema.Struct({ first: Schema.String }) },
   success: Schema.String,
   http: [
-    // @ts-expect-error — bodyless GET only binds 'id', leaves 'name' unbound
+    // @ts-expect-error path binding does not make the remaining record query-bindable
     Http.get("/items/{id}"),
   ],
 })
@@ -1031,11 +1093,11 @@ void method({
 // AND a bodyless endpoint with an unbound parameter (which is not).
 // The error fires on the bodyless element only.
 void method({
-  input: { payload: Schema.String },
+  input: { payload: Schema.Struct({ value: Schema.String }) },
   success: Schema.String,
   http: [
     Http.post("/op"),
-    // @ts-expect-error — bodyless GET cannot have unbound 'payload'
+    // @ts-expect-error a record can use POST but cannot bind from query on GET
     Http.get("/op"),
   ],
 })

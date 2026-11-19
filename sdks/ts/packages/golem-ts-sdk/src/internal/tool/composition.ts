@@ -15,6 +15,7 @@
 import { CodecShapeMismatchError, type SchemaCodec } from '../../schema/codec';
 import { cloneSchemaValue, schemaShapesMatch } from '../schema-model';
 import { toolBuildError } from './errors';
+import type { CommandHttp } from 'golem:tool/common@0.1.0';
 import {
   type Doc,
   type EffectiveCommandField,
@@ -42,6 +43,7 @@ interface ValueIsScopeEntry {
 
 export interface GraftSubtreeOptions {
   readonly expectedName: string;
+  readonly http?: CommandHttp;
   readonly parentGlobals?: ExtendedGlobals;
   readonly name?: string;
   readonly aliases?: readonly string[];
@@ -71,6 +73,7 @@ export function graftSubtree(
     name: options.name ?? root.name,
     aliases: options.aliases ? [...options.aliases] : root.aliases,
     doc: options.doc ?? root.doc,
+    http: options.http ?? root.http,
   };
   root = reconcileCommand(root, effectiveGlobals(parentGlobals));
   return {
@@ -101,7 +104,12 @@ export function appendGraftedSubtree(
 export function normalizeExtendedTool(tool: ExtendedToolType): ExtendedToolType {
   const root = cloneCommandTree(tool.root);
   normalizeCommand(root, new Map(), [], new Set(), new Set());
-  const normalized = new ExtendedToolType(tool.version, root, tool.requiresFilesystem);
+  const normalized = new ExtendedToolType(
+    tool.version,
+    root,
+    tool.requiresFilesystem,
+    tool.httpMount,
+  );
   validateExtendedTool(normalized);
   return normalized;
 }
@@ -385,6 +393,7 @@ interface MutableCommandNode {
   name: string;
   aliases: readonly string[];
   doc: Doc;
+  http?: CommandHttp;
   globals: ExtendedGlobals;
   subcommands: MutableCommandNode[];
   body?: ExtendedCommandBody;
@@ -400,6 +409,7 @@ function cloneCommandTree(root: ExtendedCommandNode): MutableCommandNode {
       name: node.name,
       aliases: [...node.aliases],
       doc: node.doc,
+      http: node.http,
       globals: {
         options: [...node.globals.options],
         flags: [...node.globals.flags],

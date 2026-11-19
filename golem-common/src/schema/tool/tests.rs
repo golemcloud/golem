@@ -119,6 +119,7 @@ fn root(name: &str) -> CommandNode {
         name: name.to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        http: None,
         globals: Globals::default(),
         subcommands: Vec::new(),
         body: None,
@@ -190,6 +191,7 @@ fn tool_with_root(node: CommandNode) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![node] },
         schema: SchemaGraph::empty(),
     }
@@ -369,6 +371,7 @@ fn kitchen_sink_tool() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![node, child],
         },
@@ -610,6 +613,7 @@ fn empty_command_tree_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     };
@@ -638,6 +642,7 @@ fn duplicate_subcommand_alias_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![parent, a, b],
         },
@@ -809,6 +814,7 @@ fn tool_with_error_exit_code(exit_code: u8) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![parent, fail],
         },
@@ -955,6 +961,7 @@ fn variant_reachable_through_named_ref_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1672,6 +1679,7 @@ fn dangling_ref_in_definition_does_not_hide_independent_definition_schema_error(
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1775,6 +1783,7 @@ fn duplicate_type_ids_in_tool_schema_are_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1800,6 +1809,7 @@ fn dangling_ref_in_definition_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1843,6 +1853,7 @@ fn constructor_def_nested_alias_dangling_ref_is_reported_once_at_constructor_def
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1888,6 +1899,7 @@ fn repeated_alias_dangling_ref_in_one_constructor_def_is_reported_once() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1945,6 +1957,7 @@ fn covered_alias_id_does_not_skip_later_duplicate_def_body_validation() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1999,6 +2012,7 @@ fn covered_alias_id_does_not_skip_later_duplicate_pure_alias_body_validation() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -2039,6 +2053,7 @@ fn unused_dangling_def_is_not_suppressed_by_same_missing_ref_at_input_position()
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -2096,6 +2111,7 @@ fn duplicate_global_short_across_levels_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![parent, child],
         },
@@ -2116,6 +2132,7 @@ fn orphan_command_node_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![parent, orphan],
         },
@@ -2139,6 +2156,7 @@ fn command_tree_cycle_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![a, b] },
         schema: SchemaGraph::empty(),
     };
@@ -2163,6 +2181,7 @@ fn shared_subcommand_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![r, a, b, c],
         },
@@ -2592,6 +2611,7 @@ fn arb_command_node() -> impl Strategy<Value = CommandNode> {
                 name,
                 aliases,
                 doc,
+                http: None,
                 globals,
                 subcommands,
                 body,
@@ -2607,6 +2627,7 @@ fn arb_tool() -> impl Strategy<Value = Tool> {
     (arb_text(), arb_command_tree()).prop_map(|(version, commands)| Tool {
         version,
         requires_filesystem: false,
+        http_mount: None,
         commands,
         schema: SchemaGraph::empty(),
     })
@@ -2791,6 +2812,7 @@ proptest! {
         let tool = Tool {
             version: "1.0.0".to_string(),
         requires_filesystem: false,
+            http_mount: None,
             commands: ct,
             schema: SchemaGraph::empty(),
         };
@@ -2828,6 +2850,7 @@ proptest! {
         let tool = Tool {
             version: "1.0.0".to_string(),
         requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![node] },
             schema,
         };

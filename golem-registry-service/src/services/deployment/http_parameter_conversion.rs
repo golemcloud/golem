@@ -26,7 +26,9 @@
 //! runtime reconstructs the full positional record by iterating the
 //! [`InputSchema`] and inserting auto-injected fields in declaration order.
 
-use golem_common::model::agent::{HttpEndpointDetails, HttpMountDetails, PathSegment};
+use golem_common::model::agent::{
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
+};
 use golem_common::schema::unstructured::{UnstructuredPayloadKind, unstructured_or_raw_kind};
 use golem_common::schema::{
     FieldSource, InputSchema, NamedField, NamedFieldType, SchemaGraph, SchemaType,
@@ -113,6 +115,14 @@ pub fn build_http_agent_method_parameters<E>(
     )?;
     let query_bindings = collect_query_bindings(endpoint);
     let header_bindings = collect_header_bindings(endpoint);
+    let implicit_query = matches!(
+        endpoint.http_method,
+        HttpMethod::Method(
+            schema_http::HttpMethod::Get(_)
+                | schema_http::HttpMethod::Head(_)
+                | schema_http::HttpMethod::Delete(_)
+        )
+    );
 
     // Per-field binding slot. `None` for auto-injected fields (excluded from the
     // invocation record) and for fields that still need body classification.
@@ -140,6 +150,23 @@ pub fn build_http_agent_method_parameters<E>(
             continue;
         }
 
+        let bindings = usize::from(path_bindings.contains_key(name))
+            + endpoint
+                .query_vars
+                .iter()
+                .filter(|binding| binding.variable_name == *name)
+                .count()
+            + endpoint
+                .header_vars
+                .iter()
+                .filter(|binding| binding.variable_name == *name)
+                .count();
+        if bindings > 1 {
+            return Err(make_error(format!(
+                "Input '{name}' has multiple HTTP bindings"
+            )));
+        }
+
         // 1. Path
         if let Some((path_index, segment_kind)) = path_bindings.get(name) {
             let ty = schema_type_to_path_segment_type(graph, &field.schema, make_error)?;
@@ -155,7 +182,9 @@ pub fn build_http_agent_method_parameters<E>(
 
         // 2. Query
         if let Some(query_var) = query_bindings.get(name) {
-            let ty = schema_type_to_query_or_header_type(graph, &field.schema, make_error)?;
+            let ty = schema_type_to_query_or_header_type(graph, &field.schema, &|error| {
+                make_error(format!("Invalid query input '{name}': {error}"))
+            })?;
 
             per_field[idx] = Some(MethodParameter::Query {
                 query_parameter_name: query_var.query_param_name.clone(),
@@ -168,6 +197,11 @@ pub fn build_http_agent_method_parameters<E>(
         // 3. Header
         if let Some(header_var) = header_bindings.get(name) {
             let ty = schema_type_to_query_or_header_type(graph, &field.schema, make_error)?;
+            if ty.is_map() {
+                return Err(make_error(format!(
+                    "Map input '{name}' cannot bind to a header"
+                )));
+            }
 
             per_field[idx] = Some(MethodParameter::Header {
                 header_name: header_var.header_name.clone(),
@@ -175,6 +209,17 @@ pub fn build_http_agent_method_parameters<E>(
             });
             consumed[idx] = true;
             continue;
+        }
+
+        if implicit_query {
+            let ty = schema_type_to_query_or_header_type(graph, &field.schema, &|error| {
+                make_error(format!("Invalid implicit query input '{name}': {error}"))
+            })?;
+            per_field[idx] = Some(MethodParameter::Query {
+                query_parameter_name: name.clone(),
+                parameter_type: ty,
+            });
+            consumed[idx] = true;
         }
     }
 
@@ -187,6 +232,36 @@ pub fn build_http_agent_method_parameters<E>(
     // the record positionally against the user-supplied fields in declaration
     // order).
     let method_parameters: Vec<MethodParameter> = per_field.into_iter().flatten().collect();
+
+    let mut query_names: Vec<(&str, bool)> = Vec::new();
+    if let Some(PhantomIdBinding::Query(selector)) = &mount.phantom_id_binding {
+        query_names.push((&selector.name, false));
+    }
+    for parameter in &method_parameters {
+        if let MethodParameter::Query {
+            query_parameter_name: name,
+            parameter_type,
+        } = parameter
+        {
+            let map = parameter_type.is_map();
+            if query_names.iter().any(|(other, other_map)| {
+                *other == name
+                    || (map
+                        && other
+                            .strip_prefix(name.as_str())
+                            .is_some_and(|tail| tail.starts_with('[')))
+                    || (*other_map
+                        && name
+                            .strip_prefix(other)
+                            .is_some_and(|tail| tail.starts_with('[')))
+            }) {
+                return Err(make_error(format!(
+                    "Query parameter '{name}' has conflicting bindings"
+                )));
+            }
+            query_names.push((name, map));
+        }
+    }
 
     Ok((body_schema, method_parameters))
 }
@@ -388,7 +463,7 @@ fn schema_type_to_path_segment_type<E>(
 }
 
 /// Classify a (possibly `Ref`) [`SchemaType`] as a query/header parameter
-/// type: a scalar, or an `option`/`list` of a scalar. Refs are resolved
+/// type: a scalar, scalar collection, or optional wrapper. Refs are resolved
 /// against `graph` first.
 fn schema_type_to_query_or_header_type<E>(
     graph: &SchemaGraph,
@@ -402,7 +477,9 @@ fn schema_type_to_query_or_header_type<E>(
         SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
             name: None,
             owner: None,
-            inner: Box::new(schema_type_to_path_segment_type(graph, inner, make_error)?),
+            inner: Box::new(schema_type_to_query_or_header_type(
+                graph, inner, make_error,
+            )?),
         }),
         SchemaType::List { element, .. } => Ok(QueryOrHeaderType::List {
             name: None,
@@ -410,6 +487,10 @@ fn schema_type_to_query_or_header_type<E>(
             inner: Box::new(schema_type_to_path_segment_type(
                 graph, element, make_error,
             )?),
+        }),
+        SchemaType::Map { key, value, .. } => Ok(QueryOrHeaderType::Map {
+            key: schema_type_to_path_segment_type(graph, key, make_error)?,
+            value: schema_type_to_path_segment_type(graph, value, make_error)?,
         }),
         other => Ok(QueryOrHeaderType::Primitive(
             schema_type_to_path_segment_type(graph, other, make_error)?,
@@ -465,6 +546,215 @@ mod test {
 
     fn str_field(name: &str) -> NamedField {
         NamedField::user_supplied(name, SchemaType::string())
+    }
+
+    #[test]
+    fn implicit_query_binding_follows_declared_method_and_keeps_input_order() {
+        use golem_service_base::custom_api::QueryOrHeaderType;
+
+        let mount = empty_mount();
+        let schema = input(vec![
+            NamedField::user_supplied(
+                "tags",
+                SchemaType::option(SchemaType::list(SchemaType::u32())),
+            ),
+            str_field("search"),
+            NamedField::user_supplied(
+                "labels",
+                SchemaType::map(SchemaType::string(), SchemaType::bool()),
+            ),
+        ]);
+        for method in [
+            schema_http::HttpMethod::Get(Empty {}),
+            schema_http::HttpMethod::Head(Empty {}),
+            schema_http::HttpMethod::Delete(Empty {}),
+            schema_http::HttpMethod::Post(Empty {}),
+        ] {
+            let bodiless = !matches!(method, schema_http::HttpMethod::Post(_));
+            let mut endpoint = empty_post_endpoint();
+            endpoint.http_method = HttpMethod::Method(method);
+            endpoint.query_vars = vec![QueryVariable {
+                query_param_name: "q".into(),
+                variable_name: "search".into(),
+            }];
+            let (body, parameters) = build_http_agent_method_parameters(
+                &mount,
+                &endpoint,
+                &empty_graph(),
+                &schema,
+                &|error| error,
+            )
+            .unwrap();
+            if bodiless {
+                assert!(matches!(body, RequestBodySchema::Unused));
+                assert!(
+                    matches!(&parameters[0], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Option { .. } } if query_parameter_name == "tags")
+                );
+                assert!(
+                    matches!(&parameters[2], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Map { .. } } if query_parameter_name == "labels")
+                );
+            } else {
+                assert!(matches!(body, RequestBodySchema::JsonBody { .. }));
+                assert!(matches!(
+                    parameters[0],
+                    MethodParameter::JsonObjectBodyField { .. }
+                ));
+                assert!(matches!(
+                    parameters[2],
+                    MethodParameter::JsonObjectBodyField { .. }
+                ));
+            }
+            assert!(
+                matches!(&parameters[1], MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == "q")
+            );
+        }
+    }
+
+    #[test]
+    fn query_binding_rejects_unsupported_shapes_and_header_maps() {
+        let mut endpoint = empty_post_endpoint();
+        endpoint.http_method = HttpMethod::Method(schema_http::HttpMethod::Get(Empty {}));
+        for ty in [
+            SchemaType::record(vec![]),
+            SchemaType::list(SchemaType::record(vec![])),
+            SchemaType::map(SchemaType::string(), SchemaType::list(SchemaType::string())),
+        ] {
+            let error = build_http_agent_method_parameters(
+                &empty_mount(),
+                &endpoint,
+                &empty_graph(),
+                &input(vec![NamedField::user_supplied("payload", ty)]),
+                &|error| error,
+            )
+            .unwrap_err();
+            assert!(error.contains("payload"));
+        }
+        endpoint.header_vars = vec![HeaderVariable {
+            header_name: "x-labels".into(),
+            variable_name: "labels".into(),
+        }];
+        let error = build_http_agent_method_parameters(
+            &empty_mount(),
+            &endpoint,
+            &empty_graph(),
+            &input(vec![NamedField::user_supplied(
+                "labels",
+                SchemaType::map(SchemaType::string(), SchemaType::string()),
+            )]),
+            &|error| error,
+        )
+        .unwrap_err();
+        assert!(error.contains("labels") && error.contains("header"));
+    }
+
+    #[test]
+    fn query_bindings_have_one_owner_per_wire_key_and_map_namespace() {
+        use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+
+        for (wire_name, extra_field) in [
+            ("q", str_field("q")),
+            (
+                "label[env]",
+                NamedField::user_supplied(
+                    "label",
+                    SchemaType::map(SchemaType::string(), SchemaType::string()),
+                ),
+            ),
+        ] {
+            let mut endpoint = empty_post_endpoint();
+            endpoint.http_method = HttpMethod::Method(schema_http::HttpMethod::Get(Empty {}));
+            endpoint.query_vars = vec![QueryVariable {
+                query_param_name: wire_name.into(),
+                variable_name: "search".into(),
+            }];
+            let error = build_http_agent_method_parameters(
+                &empty_mount(),
+                &endpoint,
+                &empty_graph(),
+                &input(vec![str_field("search"), extra_field]),
+                &|error| error,
+            )
+            .unwrap_err();
+            assert!(error.contains("conflicting bindings"));
+        }
+        let mut mount = empty_mount();
+        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: true,
+        }));
+        let mut endpoint = empty_post_endpoint();
+        endpoint.http_method = HttpMethod::Method(schema_http::HttpMethod::Delete(Empty {}));
+        let error = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &input(vec![str_field("instance")]),
+            &|error| error,
+        )
+        .unwrap_err();
+        assert!(error.contains("instance") && error.contains("conflicting bindings"));
+    }
+
+    #[test]
+    fn query_selector_conflicts_use_wire_names_not_input_names() {
+        use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+
+        let mut mount = empty_mount();
+        mount.phantom_id_binding = Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: true,
+        }));
+        for method in [
+            schema_http::HttpMethod::Post(Empty {}),
+            schema_http::HttpMethod::Put(Empty {}),
+        ] {
+            let mut endpoint = empty_post_endpoint();
+            endpoint.http_method = HttpMethod::Method(method);
+            let (body, parameters) = build_http_agent_method_parameters(
+                &mount,
+                &endpoint,
+                &empty_graph(),
+                &input(vec![str_field("instance")]),
+                &|error| error,
+            )
+            .unwrap();
+            assert!(matches!(body, RequestBodySchema::JsonBody { .. }));
+            assert!(matches!(
+                parameters[0],
+                MethodParameter::JsonObjectBodyField { .. }
+            ));
+        }
+
+        let mut endpoint = empty_post_endpoint();
+        endpoint.http_method = HttpMethod::Method(schema_http::HttpMethod::Get(Empty {}));
+        endpoint.query_vars = vec![QueryVariable {
+            query_param_name: "q".into(),
+            variable_name: "instance".into(),
+        }];
+        let (_, parameters) = build_http_agent_method_parameters(
+            &mount,
+            &endpoint,
+            &empty_graph(),
+            &input(vec![str_field("instance")]),
+            &|error| error,
+        )
+        .unwrap();
+        assert!(
+            matches!(&parameters[0], MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == "q")
+        );
+
+        endpoint.query_vars[0].query_param_name = "instance".into();
+        endpoint.query_vars[0].variable_name = "search".into();
+        assert!(
+            build_http_agent_method_parameters(
+                &mount,
+                &endpoint,
+                &empty_graph(),
+                &input(vec![str_field("search")]),
+                &|error| error,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -629,7 +919,7 @@ mod test {
     #[test]
     fn method_infers_json_body_from_component_model_parameters() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![
             str_field("a"),
@@ -658,7 +948,7 @@ mod test {
     #[test]
     fn method_accepts_unstructured_binary_body_unrestricted() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![NamedField::user_supplied(
             "return-type",
@@ -681,7 +971,7 @@ mod test {
     #[test]
     fn method_accepts_unstructured_binary_body_restricted() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![NamedField::user_supplied(
             "return-type",
@@ -711,7 +1001,7 @@ mod test {
     #[test]
     fn method_rejects_mixed_body_parameters() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![
             str_field("a"),
@@ -918,7 +1208,7 @@ mod test {
     #[test]
     fn method_json_body_preserves_snake_case_field_names() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![str_field("first_name"), str_field("last_name")]);
 
@@ -942,7 +1232,7 @@ mod test {
     #[test]
     fn method_json_body_preserves_camel_case_field_names() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![str_field("firstName"), str_field("lastName")]);
 
@@ -980,9 +1270,9 @@ mod test {
         }
     }
 
-    fn empty_get_endpoint() -> HttpEndpointDetails {
+    fn empty_post_endpoint() -> HttpEndpointDetails {
         HttpEndpointDetails {
-            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Get(Empty {})),
+            http_method: HttpMethod::Method(golem_schema::http::HttpMethod::Post(Empty {})),
             auth_details: None,
             cors_options: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -998,7 +1288,7 @@ mod test {
     #[test]
     fn method_accepts_unstructured_text_body_unrestricted() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![NamedField::user_supplied(
             "body",
@@ -1021,7 +1311,7 @@ mod test {
     #[test]
     fn method_accepts_unstructured_text_body_restricted() {
         let mount = empty_mount();
-        let endpoint = empty_get_endpoint();
+        let endpoint = empty_post_endpoint();
 
         let schema = input(vec![NamedField::user_supplied(
             "body",

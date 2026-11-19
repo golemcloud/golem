@@ -146,6 +146,8 @@ fn emit_wire_tool_node(
           args,
           wire_fields=direct_input_args(plans[command_index], inherited),
         ) +
+        ", http: " +
+        tool_http_str(command.http) +
         " }",
       )
     }
@@ -175,6 +177,10 @@ fn emit_wire_tool_node(
       )
     })
     .unwrap_or("None")
+  let http = match mount {
+    Some(command) if command.http is Some(_) => command.http
+    _ => root.map(i => tool.commands[i].http).flatten()
+  }
   nodes[index] = "{ name: \"" +
     escape_string_lit(name) +
     "\", aliases: " +
@@ -187,6 +193,8 @@ fn emit_wire_tool_node(
     children.join(", ") +
     "], body: " +
     body +
+    ", http: " +
+    tool_http_str(http) +
     " }"
   index
 }
@@ -208,6 +216,8 @@ fn emit_wire_tool_descriptor(
     escape_string_lit(tool.version.unwrap_or("0.0.0")) +
     "\", requires_filesystem: " +
     tool.requires_filesystem.to_string() +
+    ", http_mount: " +
+    tool_mount_str(tool.http_mount) +
     ", commands: { nodes }, schema: { type_nodes: __golem_schema.nodes, defs: __golem_schema.defs, root } }\n  } catch { error => abort(\"invalid generated tool descriptor: \" + repr(error)) }\n}\n",
   )
 }

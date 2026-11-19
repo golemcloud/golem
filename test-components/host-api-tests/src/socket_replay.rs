@@ -193,6 +193,8 @@ pub trait SocketSession {
     /// Writes `data` to the send stream kept in `slot`. Returns the number of bytes the host
     /// accepted.
     async fn p3_tcp_write(&self, slot: String, data: Vec<u8>) -> Result<u32, String>;
+    /// Closes the send stream kept in `slot` and returns the result of the send.
+    async fn p3_tcp_close_send(&self, slot: String) -> Result<(), String>;
     /// Sends `first`, waits `pause_ms` on the monotonic clock, sends `second`, closes the send
     /// stream and returns its result.
     async fn p3_tcp_send_with_pause(
@@ -202,6 +204,30 @@ pub trait SocketSession {
         pause_ms: u64,
         second: Vec<u8>,
     ) -> Result<(), String>;
+    /// Opens the send stream of the P3 TCP socket in `slot` and writes `chunk` bytes at a time
+    /// until a write does not complete within `wait_ms`, then cancels that write and closes the
+    /// stream. Returns the bytes the host accepted, how the cancelled write ended, and the
+    /// result of the send.
+    async fn p3_tcp_send_until_held_back(
+        &self,
+        slot: String,
+        chunk: u32,
+        wait_ms: u64,
+    ) -> Result<(u64, String, Result<(), String>), String>;
+    /// Opens the send stream of the P3 TCP socket in `slot`, drops the socket before the first
+    /// write, then sends `data` on the stream, closes it and returns its result.
+    async fn p3_tcp_send_after_dropping_socket(
+        &self,
+        slot: String,
+        data: Vec<u8>,
+    ) -> Result<(), String>;
+    /// Connects a P3 TCP socket, opens its receive stream, drops the socket and then reads up
+    /// to `len` bytes from the stream.
+    async fn p3_tcp_receive_after_dropping_socket(
+        &self,
+        port: u16,
+        len: u32,
+    ) -> Result<Vec<u8>, String>;
     /// Connects a P3 TCP socket and drops it, in a read-only method.
     #[read_only]
     async fn p3_tcp_connect_read_only(&self, port: u16) -> Result<(), String>;
@@ -412,6 +438,20 @@ impl SocketSession for SocketSessionImpl {
         Ok((len - remaining.len()) as u32)
     }
 
+    async fn p3_tcp_close_send(&self, slot: String) -> Result<(), String> {
+        let (send, send_result) = match self.slots.borrow_mut().get_mut(&slot) {
+            Some(Slot::P3Tcp {
+                send, send_result, ..
+            }) => (send.take(), send_result.take()),
+            _ => return Err(format!("slot {slot} holds no P3 TCP socket")),
+        };
+        drop(send);
+        match send_result {
+            Some(result) => result.await.map_err(error),
+            None => Err(format!("slot {slot} has no send stream")),
+        }
+    }
+
     async fn p3_tcp_send_with_pause(
         &self,
         slot: String,
@@ -446,6 +486,104 @@ impl SocketSession for SocketSessionImpl {
         };
         self.insert(slot, value);
         result
+    }
+
+    async fn p3_tcp_send_until_held_back(
+        &self,
+        slot: String,
+        chunk: u32,
+        wait_ms: u64,
+    ) -> Result<(u64, String, Result<(), String>), String> {
+        use std::future::{Future, poll_fn};
+        use std::pin::pin;
+        use std::task::Poll;
+
+        let value = self
+            .slots
+            .borrow_mut()
+            .remove(&slot)
+            .ok_or_else(|| format!("slot {slot} is empty"))?;
+        let Slot::P3Tcp { socket, .. } = &value else {
+            self.insert(slot.clone(), value);
+            return Err(format!("slot {slot} holds no P3 TCP socket"));
+        };
+        let (mut writer, reader) = p3::wit_stream::new::<u8>();
+        let result = socket.send(reader);
+        let mut accepted = 0u64;
+        let ending = loop {
+            let mut write = pin!(writer.write(vec![b'x'; chunk as usize]));
+            let mut timer = pin!(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                wait_ms * 1_000_000
+            ));
+            let written = poll_fn(|cx| {
+                if let Poll::Ready((result, _)) = write.as_mut().poll(cx) {
+                    return Poll::Ready(Some(result));
+                }
+                timer.as_mut().poll(cx).map(|_| None)
+            })
+            .await;
+            match written {
+                Some(p3::StreamResult::Complete(count)) => accepted += count as u64,
+                Some(other) => break format!("write ended with {other:?}"),
+                None => {
+                    let (result, _) = write.as_mut().cancel();
+                    break match result {
+                        p3::StreamResult::Complete(count) => {
+                            accepted += count as u64;
+                            format!("cancel lost the race: {count} bytes")
+                        }
+                        p3::StreamResult::Cancelled => "cancelled".to_string(),
+                        p3::StreamResult::Dropped => "dropped".to_string(),
+                    };
+                }
+            }
+        };
+        drop(writer);
+        let sent = result.await.map_err(error);
+        self.insert(slot, value);
+        Ok((accepted, ending, sent))
+    }
+
+    async fn p3_tcp_send_after_dropping_socket(
+        &self,
+        slot: String,
+        data: Vec<u8>,
+    ) -> Result<(), String> {
+        let Some(Slot::P3Tcp { socket, .. }) = self.slots.borrow_mut().remove(&slot) else {
+            return Err(format!("slot {slot} holds no P3 TCP socket"));
+        };
+        let (mut writer, reader) = p3::wit_stream::new::<u8>();
+        let result = socket.send(reader);
+        // The stream owns the connection: dropping the socket does not end it.
+        drop(socket);
+        let remaining = writer.write_all(data).await;
+        drop(writer);
+        let sent = result.await.map_err(error);
+        if remaining.is_empty() {
+            sent
+        } else {
+            Err(format!(
+                "{} bytes were not accepted: {sent:?}",
+                remaining.len()
+            ))
+        }
+    }
+
+    async fn p3_tcp_receive_after_dropping_socket(
+        &self,
+        port: u16,
+        len: u32,
+    ) -> Result<Vec<u8>, String> {
+        let socket = p3::TcpSocket::create(p3::IpAddressFamily::Ipv4).map_err(error)?;
+        socket.connect(p3_loopback(port)).await.map_err(error)?;
+        let (mut stream, result) = socket.receive();
+        // The stream owns the connection: dropping the socket does not end it.
+        drop(socket);
+        let (data, ended) = p3_read(&mut stream, len as usize).await?;
+        if ended {
+            result.await.map_err(error)?;
+        }
+        Ok(data)
     }
 
     async fn p3_tcp_connect_read_only(&self, port: u16) -> Result<(), String> {

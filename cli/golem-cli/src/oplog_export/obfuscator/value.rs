@@ -28,12 +28,13 @@ use crate::oplog_export::model::{
 use golem_common::model::AgentId;
 use golem_common::model::oplog::types::{
     FileSystemError, PermissionCardDeriveError, PermissionCardRevokeError, SecretRevealError,
-    SerializableHostFailureKind, SerializableHttpErrorCode, SerializableHttpMethod,
-    SerializableInvokeResult, SerializableP3FileSystemError, SerializableP3HttpClientSendResult,
-    SerializableP3IpNameLookupError, SerializableP3SocketErrorCode, SerializablePermissionError,
-    SerializableRdbmsError, SerializableResponseHeaders, SerializableRpcError,
-    SerializableSocketError, SerializableStreamError, SerializableTcpStreamError,
-    SerializableToolRpcError, SerializableWebsocketError,
+    SerializableDnsError, SerializableHostFailureKind, SerializableHttpErrorCode,
+    SerializableHttpMethod, SerializableInvokeResult, SerializableP3FileSystemError,
+    SerializableP3HttpClientSendResult, SerializableP3IpNameLookupError,
+    SerializableP3SocketErrorCode, SerializablePermissionError, SerializableRdbmsError,
+    SerializableResponseHeaders, SerializableRpcError, SerializableSocketError,
+    SerializableStreamError, SerializableTcpStreamError, SerializableToolRpcError,
+    SerializableWebsocketError,
 };
 use golem_common::schema::{
     FromSchema, IntoSchema, NamedFieldType, RegisteredAgentTypeSchema, ResultSpec,
@@ -93,6 +94,7 @@ pub(super) static KNOWN_IDS: LazyLock<KnownIds> = LazyLock::new(|| KnownIds {
         <SerializableSocketError as IntoSchema>::type_id(),
         <SerializableP3SocketErrorCode as IntoSchema>::type_id(),
         <SerializableP3IpNameLookupError as IntoSchema>::type_id(),
+        <SerializableDnsError as IntoSchema>::type_id(),
         <SerializableStreamError as IntoSchema>::type_id(),
         <SerializableTcpStreamError as IntoSchema>::type_id(),
         <SerializableWebsocketError as IntoSchema>::type_id(),

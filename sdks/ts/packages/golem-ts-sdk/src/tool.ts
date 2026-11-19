@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import type {
+  ToolHttpMount,
   CommandAnnotations,
   Doc,
   DuplicateKeyPolicy,
@@ -26,6 +27,13 @@ import type {
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import {
+  compileToolHttp,
+  compileToolMount,
+  type HttpEndpointSpec,
+  type HttpMountSpec,
+  type HttpPrefixSpec,
+} from './http';
 import type { SchemaValueStream } from 'golem:core/types@2.0.0';
 import { unwrapSchemaValueStream } from './internal/schema-model/schemaValueStreamHandle';
 import {
@@ -1412,6 +1420,7 @@ export class CommandBuilder<
     private readonly commandAnnotations?: CommandAnnotations,
     private readonly subtreeForwards: readonly SubtreeForward[] = [],
     private readonly requiresFilesystem = false,
+    private readonly httpMount?: ToolHttpMount,
   ) {}
 
   static root<const Name extends string>(
@@ -1445,6 +1454,25 @@ export class CommandBuilder<
       this.commandAnnotations,
       this.subtreeForwards,
       this.requiresFilesystem,
+      this.httpMount,
+    );
+  }
+
+  /** Declare the tool mount or this command's endpoint/prefix. */
+  http(
+    spec: HttpEndpointSpec | HttpPrefixSpec | (Root extends true ? HttpMountSpec : never),
+  ): CommandBuilder<Name, Globals, Body, Children, Root> {
+    if ('method' in spec || 'prefix' in spec) {
+      return this.next({ ...this.node, http: compileToolHttp(spec) });
+    }
+    return new CommandBuilder(
+      this.name,
+      this.node,
+      this.toolVersion,
+      this.commandAnnotations,
+      this.subtreeForwards,
+      this.requiresFilesystem,
+      compileToolMount(spec),
     );
   }
 
@@ -1466,6 +1494,7 @@ export class CommandBuilder<
       normalizeAnnotations(annotations),
       this.subtreeForwards,
       this.requiresFilesystem,
+      this.httpMount,
     );
   }
 
@@ -1736,6 +1765,7 @@ export class CommandBuilder<
       this.commandAnnotations,
       subtreeForwards,
       this.requiresFilesystem,
+      this.httpMount,
     );
   }
 
@@ -1754,7 +1784,12 @@ export class CommandBuilder<
   [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
     if (this.compiled) return this.compiled;
     const tool = normalizeExtendedTool(
-      new ExtendedToolType(this.toolVersion, this.finalizeNode(), this.requiresFilesystem),
+      new ExtendedToolType(
+        this.toolVersion,
+        this.finalizeNode(),
+        this.requiresFilesystem,
+        this.httpMount,
+      ),
     );
     validateTypeScriptProjection(tool);
     this.compiled = tool;

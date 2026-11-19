@@ -24,7 +24,7 @@ pub(super) fn matching_admission_refusal(
                     WorkerExecutorError::runtime(format!(
                         "invalid recorded admission claim: {error}"
                     ))
-                })? == *claim
+                })? == claim.clone().with_abandoned_host_internal_calls(false)
         }
         SerializableToolAdmissionRefusal::AtRecordedOplogEntry { .. }
         | SerializableToolAdmissionRefusal::BeforePositional { .. }
@@ -74,6 +74,10 @@ pub(crate) struct StartClaim {
     /// `Cancelled` without a partial result, the guest never observed the call, and the records
     /// of those host-internal calls are drained instead of claimed.
     host_internal_calls: bool,
+    /// Replay policy, not recorded admission identity: a completed tool abandoned this
+    /// guest call at return, so its host-internal records need no reconstruction.
+    #[transient(false)]
+    abandon_incomplete_host_internal_calls: bool,
 }
 
 impl StartClaim {
@@ -92,6 +96,7 @@ impl StartClaim {
             invocation_id: None,
             custom_invocation: false,
             host_internal_calls: false,
+            abandon_incomplete_host_internal_calls: false,
         }
     }
 
@@ -174,6 +179,15 @@ impl StartClaim {
 
     pub(super) fn makes_host_internal_calls(&self) -> bool {
         self.host_internal_calls
+    }
+
+    pub(crate) fn with_abandoned_host_internal_calls(mut self, abandoned: bool) -> Self {
+        self.abandon_incomplete_host_internal_calls = abandoned;
+        self
+    }
+
+    pub(super) fn abandons_incomplete_host_internal_calls(&self) -> bool {
+        self.abandon_incomplete_host_internal_calls
     }
 
     pub(super) fn matches_function_name(&self, actual: &HostFunctionName) -> bool {

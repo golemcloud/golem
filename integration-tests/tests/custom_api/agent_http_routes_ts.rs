@@ -79,6 +79,31 @@ async fn test_context_sqlite(
 define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
 #[test]
+#[test_r::timeout("120s")]
+async fn query_binding_forms(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
+    super::assert_query_bindings(agent).await?;
+    for (query, expected) in [
+        ("?value=23", reqwest::StatusCode::OK),
+        ("", reqwest::StatusCode::BAD_REQUEST),
+        ("?value=23&value=24", reqwest::StatusCode::BAD_REQUEST),
+        ("?value=23&v=3", reqwest::StatusCode::BAD_REQUEST),
+    ] {
+        let response = agent
+            .client
+            .head(
+                agent
+                    .base_url
+                    .join(&format!("/http-agents/query-agent/query-head{query}"))?,
+            )
+            .send()
+            .await?;
+        assert_eq!(response.status(), expected);
+        assert!(response.bytes().await?.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn string_path_var(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<()> {
     let response = agent
@@ -818,7 +843,7 @@ async fn cors_get_with_origin_header(
     assert_eq!(allow_origin, "https://mount.example.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(vary, "Origin, Authorization, Cookie, Golem-Token");
 
     Ok(())
 }
@@ -867,7 +892,7 @@ async fn cors_get_wildcard_origin(#[dimension(db)] agent: &HttpTestContext) -> a
     assert_eq!(allow_origin, "https://random-origin.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(vary, "Origin, Authorization, Cookie, Golem-Token");
 
     Ok(())
 }
