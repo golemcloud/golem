@@ -60,6 +60,7 @@ pub(super) use reconstruction::fold_committed_status;
 #[cfg(test)]
 use reconstruction::hydrate_initial_pending_evidence;
 pub(crate) use reconstruction::hydrate_lookup_payloads;
+pub(crate) use reconstruction::hydrate_stream_session_payloads;
 pub(crate) use reconstruction::skipped_regions_at;
 pub use reconstruction::try_fold_status_from;
 #[cfg(test)]

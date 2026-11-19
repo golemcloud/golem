@@ -491,7 +491,7 @@ where
     Ok(Some(baseline))
 }
 
-pub(super) async fn hydrate_stream_session_payloads<T>(
+pub(crate) async fn hydrate_stream_session_payloads<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,

@@ -1312,6 +1312,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ..Default::default()
             };
             // The entries come from storage, where an external payload keeps no decoded value.
+            crate::worker::status::hydrate_stream_session_payloads(
+                self,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &last_known_status.deleted_regions,
+                &mut prospective_entries,
+            )
+            .await?;
             crate::worker::status::hydrate_lookup_payloads(
                 self,
                 &self.owned_agent_id,
