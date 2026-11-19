@@ -725,8 +725,9 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
 /// Hold the email response after the peer applies the effect. Arrival of
 /// this sequential request proves inventory/payment/shipment completed.
 /// Crash with the response still withheld, then release it and verify
-/// recovery without repeating the completed prefix. The email effect can
-/// repeat: this peer does not deduplicate the ambiguous HTTP request.
+/// recovery without repeating the completed prefix. Recovery sends the
+/// interrupted email request once more, and this peer applies it again
+/// because it does not deduplicate requests.
 /// ---------------------------------------------------------------------------
 #[test]
 #[tracing::instrument]
@@ -834,18 +835,13 @@ async fn ts_v2_s3_process_crash_mid_workflow(
         (1, 1, 1),
         "S3: completed prefix must not even be requested again"
     );
-    assert!(
-        (1..=2).contains(&mail),
-        "S3: ambiguous email may apply once more during recovery, observed {mail}"
-    );
-
-    // Hard upper bound on /email attempts: the user observed thousands
-    // of in-flight POSTs to /email after a mid-call crash because every
-    // replay re-issued the in-flight request. With the bug fixed, the
-    // total /email attempt count must stay bounded.
-    assert!(
-        mail_a <= 32,
-        "S3: /email attempt count must be bounded (tight retry loop bug), observed {mail_a}"
+    // The crash drops the held email request, and recovery repairs it with
+    // exactly one new request. A single attempt means the crash interrupted
+    // nothing; more attempts mean recovery repeats the in-flight request.
+    assert_eq!(
+        (mail, mail_a),
+        (2, 2),
+        "S3: recovery must re-issue the interrupted email exactly once"
     );
 
     let recovered = executor

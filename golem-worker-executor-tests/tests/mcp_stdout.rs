@@ -427,6 +427,7 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
     let call_count = calls.lock().unwrap().len();
     let credential_request_count = service.mcp_credential_requests().len();
     let observation_request_count = service.mcp_observation_requests().len();
+    let refresh_count = service.mcp_observation_refreshes().len();
     service.clear_mcp_observations();
     service.clear_mcp_credentials();
     drop(executor);
@@ -465,8 +466,8 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                  upstream calls: {replay_calls:?} (expected {call_count}); \
                  credential requests: {credentials} (expected {credential_request_count}); \
                  observation requests: {observations} (expected {observation_request_count}); \
-                 metadata refreshes: {:?}; unexpected checkpoint: {checkpoint:?}",
-                service.mcp_observation_refreshes(),
+                 metadata refreshes after restart: {:?}; unexpected checkpoint: {checkpoint:?}",
+                &service.mcp_observation_refreshes()[refresh_count..],
             );
         }
     };

@@ -302,6 +302,11 @@ async fn effect_stream_runtime_middleware_replay_and_cleanup(
         });
         assert!(std::panic::catch_unwind(|| assert_every_start_settled(&invalid)).is_err());
     }
+    let mut unsettled = final_oplog.clone();
+    unsettled.retain(
+        |entry| !matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start),
+    );
+    assert!(std::panic::catch_unwind(|| assert_every_start_settled(&unsettled)).is_err());
 
     executor.simulated_crash(&worker_id).await?;
     let replay_probe: ChunkMEffectRuntimeObservation = executor
