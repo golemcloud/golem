@@ -49,7 +49,7 @@ fn redis_is_rejected_for_durable_storage_but_accepted_for_the_cache() {
         .try_for_each(|settings| {
             jail.create_file(
                 "config/worker-executor.toml",
-                toml::to_string(&settings).unwrap(),
+                &toml::to_string(&settings).unwrap(),
             )?;
             assert!(
                 super::make_config_loader().load().is_err(),
@@ -80,7 +80,7 @@ fn redis_is_rejected_for_durable_storage_but_accepted_for_the_cache() {
         .try_for_each(|cache| {
             jail.create_file(
                 "config/worker-executor.toml",
-                toml::to_string(&json!({"key_value_storage": {
+                &toml::to_string(&json!({"key_value_storage": {
                     "type": "NamespaceRouted", "config": {"cache": cache},
                 }}))
                 .unwrap(),
