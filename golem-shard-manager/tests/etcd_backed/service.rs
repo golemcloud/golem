@@ -30,7 +30,9 @@ use crate::etcd_backed::persistence::{
     GetRoutingTablePersistence, LEASE_TTL, NUMBER_OF_SHARDS, PersistenceStore,
 };
 use crate::shard_management::{TestHealthCheck, TestWorkerExecutors, executor, pod, shard_ids};
-use golem_common::model::ShardId;
+use futures::StreamExt;
+use golem_common::base_model::shard_lease;
+use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
     ExecutorAddr, ExecutorId, RoutingTablePersistence, ShardEpoch, ShardLeaseState,
     ShardManagement, ShardManagerError,
@@ -42,6 +44,7 @@ use std::time::Duration;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
+use tokio_stream::wrappers::IntervalStream;
 
 inherit_test_dep!(Arc<DockerEtcd>);
 inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn GetRoutingTablePersistence>);
@@ -122,6 +125,29 @@ fn holds_every_shard(shard_state: &ShardLeaseState) -> bool {
     shard_state.shards_for_executor(executor(1)) == Some(all_shards())
 }
 
+async fn wait_for_pushed_count(executors: Arc<TestWorkerExecutors>, pod: Pod, expected: usize) {
+    let reported = IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
+        .then(move |_| {
+            let executors = executors.clone();
+            async move { executors.pushes_to(pod).await }
+        })
+        .filter(|pushes| {
+            std::future::ready(
+                pushes
+                    .last()
+                    .is_some_and(|push| push.executor_count == expected),
+            )
+        });
+    tokio::pin!(reported);
+    tokio::time::timeout(
+        shard_lease::renewal_interval(LEASE_TTL) + Duration::from_secs(10),
+        reported.next(),
+    )
+    .await
+    .expect("each executor must receive the current count")
+    .unwrap();
+}
+
 /// Executors 1 and 2 both hold shards, and none is unassigned or waiting to move.
 fn split_between_both(shard_state: &ShardLeaseState) -> bool {
     let holds_some = |id| {
@@ -174,6 +200,7 @@ async fn a_registration_is_durable(
         .await
         .expect("the registration should have been persisted");
     assert_eq!(ack.number_of_shards, NUMBER_OF_SHARDS);
+    assert_eq!(ack.grant.executor_count, 1);
 
     // The whole cluster is one executor, so the rebalance that follows gives it every shard.
     let shard_state = wait_for_stored(
@@ -230,6 +257,7 @@ async fn a_renewal_extends_the_stored_lease(
         .await
         .expect("a claim matching the manager's set should have been renewed");
 
+    assert_eq!(grant.executor_count, 1);
     assert_eq!(
         grant.shard_epochs, claimed,
         "the renewal moved an epoch for a shard the executor still owns"
@@ -241,6 +269,30 @@ async fn a_renewal_extends_the_stored_lease(
         "the renewal extended the returned grant but not the stored lease"
     );
     assert_eq!(after.shards_for_executor(executor(1)), Some(all_shards()));
+
+    let joined = shard_management
+        .register_executor(executor(2), ExecutorAddr::from(pod(2, 9000)), None)
+        .await
+        .unwrap();
+    assert_eq!(joined.grant.executor_count, 2);
+    wait_for_pushed_count(worker_executors.clone(), pod(1, 9000), 2).await;
+    wait_for_pushed_count(worker_executors.clone(), pod(2, 9000), 2).await;
+    let renewed = shard_management
+        .renew_shard_lease(executor(1), claimed)
+        .await
+        .unwrap();
+    assert_eq!(renewed.executor_count, 2);
+
+    shard_management
+        .deregister_executor(executor(2), BTreeMap::new())
+        .await
+        .unwrap();
+    wait_for_pushed_count(worker_executors, pod(1, 9000), 1).await;
+    let renewed = shard_management
+        .renew_shard_lease(executor(1), renewed.shard_epochs)
+        .await
+        .unwrap();
+    assert_eq!(renewed.executor_count, 1);
 
     join_set.abort_all();
 }

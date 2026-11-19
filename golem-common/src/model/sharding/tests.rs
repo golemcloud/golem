@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 use test_r::test;
 use uuid::Uuid;
 
-use super::{ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision};
+use super::{
+    ShardAssignment, ShardAssignmentEvent as E, ShardDeliveryOutcome, ShardEpoch, ShardId,
+    ShardLeaseRevision, transition_shard_assignment,
+};
 
 test_r::enable!();
 
@@ -32,6 +35,12 @@ fn in_secs(seconds: u64) -> Instant {
     Instant::now() + Duration::from_secs(seconds)
 }
 
+fn deliver(assignment: &mut ShardAssignment, event: E<'_>) -> ShardDeliveryOutcome {
+    let (next, outcome) = transition_shard_assignment(Some(std::mem::take(assignment)), event);
+    *assignment = next.expect("an installed assignment remains installed");
+    outcome.expect("a delivery to an installed assignment has an outcome")
+}
+
 /// The manager process behind every delivery in the tests that do not care which one sent it.
 const MANAGER: Uuid = Uuid::from_u128(0x5eed);
 
@@ -40,7 +49,15 @@ const MANAGER: Uuid = Uuid::from_u128(0x5eed);
 fn set_shards_replaces_the_set_rather_than_merging_into_it() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
 
-    let outcome = assignment.set_shards(8, &epochs([(1, 4)]), revision_of(MANAGER, 1));
+    let outcome = deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(1, 4)]),
+            revision: revision_of(MANAGER, 1),
+            executor_count: 1,
+        },
+    );
 
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
     assert!(!assignment.contains(&ShardId::new(0)));
@@ -58,10 +75,26 @@ fn set_shards_replaces_the_set_rather_than_merging_into_it() {
 #[test]
 fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-    assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), revision_of(MANAGER, 7));
+    deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1), (5, 2)]),
+            revision: revision_of(MANAGER, 7),
+            executor_count: 3,
+        },
+    );
 
     let granted = in_secs(60);
-    let outcome = assignment.adopt_grant(None, &epochs([(0, 1)]), granted, revision_of(MANAGER, 6));
+    let outcome = deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([(0, 1)]),
+            expires_at: granted,
+            revision: revision_of(MANAGER, 6),
+            executor_count: 2,
+        },
+    );
 
     assert_eq!(
         outcome,
@@ -76,6 +109,7 @@ fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
         "the older delivery narrowed the set the newer one had just widened"
     );
     assert_eq!(assignment.revision, Some(revision_of(MANAGER, 7)));
+    assert_eq!(assignment.executor_count, 3);
     assert_eq!(
         assignment.expires_at,
         Some(granted),
@@ -89,17 +123,33 @@ fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
 #[test]
 fn a_delivery_at_the_same_revision_is_applied() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-    assignment.set_shards(8, &epochs([(0, 1)]), revision_of(MANAGER, 7));
+    deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1)]),
+            revision: revision_of(MANAGER, 7),
+            executor_count: 1,
+        },
+    );
 
     let refreshed = in_secs(60);
-    let outcome =
-        assignment.adopt_grant(None, &epochs([(0, 1)]), refreshed, revision_of(MANAGER, 7));
+    let outcome = deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([(0, 1)]),
+            expires_at: refreshed,
+            revision: revision_of(MANAGER, 7),
+            executor_count: 2,
+        },
+    );
 
     assert_eq!(
         outcome,
         ShardDeliveryOutcome::Applied { set_changed: false }
     );
     assert_eq!(assignment.expires_at, Some(refreshed));
+    assert_eq!(assignment.executor_count, 2);
 }
 
 /// A push has no request of this executor's to anchor a lease to, so it
@@ -109,17 +159,25 @@ fn a_delivery_at_the_same_revision_is_applied() {
 fn a_push_never_moves_the_lease_clock() {
     let mut assignment = ShardAssignment::default();
     let granted = in_secs(60);
-    assignment.adopt_grant(
-        Some(8),
-        &epochs([(0, 1), (1, 1)]),
-        granted,
-        revision_of(MANAGER, 1),
+    deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1), (1, 1)]),
+            expires_at: Some(granted),
+            revision: revision_of(MANAGER, 1),
+            executor_count: 1,
+        },
     );
 
-    assignment.set_shards(
-        8,
-        &epochs([(0, 1), (1, 1), (2, 1)]),
-        revision_of(MANAGER, 2),
+    deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1), (1, 1), (2, 1)]),
+            revision: revision_of(MANAGER, 2),
+            executor_count: 1,
+        },
     );
     assert_eq!(
         assignment.expires_at,
@@ -127,7 +185,13 @@ fn a_push_never_moves_the_lease_clock() {
         "a full-replace push must leave the lease where the grant put it"
     );
 
-    assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), revision_of(MANAGER, 3));
+    deliver(
+        &mut assignment,
+        E::Revoke {
+            shard_ids: &HashSet::from([ShardId::new(2)]),
+            revision: revision_of(MANAGER, 3),
+        },
+    );
     assert_eq!(
         assignment.expires_at,
         Some(granted),
@@ -143,21 +207,46 @@ fn a_push_never_moves_the_lease_clock() {
 fn a_grant_with_a_shorter_lease_shortens_it() {
     let mut assignment = ShardAssignment::default();
     let now = Instant::now();
-    assignment.adopt_grant(
-        Some(8),
-        &epochs([(0, 1)]),
-        now + Duration::from_secs(60),
-        revision_of(MANAGER, 1),
+    deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1)]),
+            expires_at: Some(now + Duration::from_secs(60)),
+            revision: revision_of(MANAGER, 2),
+            executor_count: 3,
+        },
     );
 
-    assignment.adopt_grant(
-        None,
-        &epochs([(0, 1)]),
-        now + Duration::from_secs(30),
-        revision_of(MANAGER, 2),
+    let outcome = deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([]),
+            expires_at: now + Duration::from_secs(30),
+            revision: revision_of(MANAGER, 1),
+            executor_count: 9,
+        },
     );
 
     assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(30)));
+    assert!(matches!(outcome, ShardDeliveryOutcome::Stale { .. }));
+    assert_eq!(assignment.executor_count, 3);
+    assert_eq!(assignment.shard_epochs, epochs([(0, 1)]));
+    let accepted = deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([(0, 1)]),
+            expires_at: now + Duration::from_secs(15),
+            revision: revision_of(MANAGER, 3),
+            executor_count: 2,
+        },
+    );
+    assert_eq!(
+        accepted,
+        ShardDeliveryOutcome::Applied { set_changed: false }
+    );
+    assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(15)));
+    assert_eq!(assignment.executor_count, 2);
 }
 
 /// A revoke is a delta rather than a full set, but it is gated the same
@@ -167,15 +256,25 @@ fn a_grant_with_a_shorter_lease_shortens_it() {
 fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
     let expiry = in_secs(60);
-    assignment.adopt_grant(
-        Some(8),
-        &epochs([(0, 1), (1, 1)]),
-        expiry,
-        revision_of(MANAGER, 3),
+    deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1), (1, 1)]),
+            expires_at: Some(expiry),
+            revision: revision_of(MANAGER, 3),
+            executor_count: 3,
+        },
     );
     let revoked = HashSet::from([ShardId::new(0)]);
 
-    let stale = assignment.revoke_shards(&revoked, revision_of(MANAGER, 2));
+    let stale = deliver(
+        &mut assignment,
+        E::Revoke {
+            shard_ids: &revoked,
+            revision: revision_of(MANAGER, 2),
+        },
+    );
     assert_eq!(
         stale,
         ShardDeliveryOutcome::Stale {
@@ -188,7 +287,13 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         "a revoke older than the last delivery applied must be ignored"
     );
 
-    let applied = assignment.revoke_shards(&revoked, revision_of(MANAGER, 5));
+    let applied = deliver(
+        &mut assignment,
+        E::Revoke {
+            shard_ids: &revoked,
+            revision: revision_of(MANAGER, 5),
+        },
+    );
     assert_eq!(applied, ShardDeliveryOutcome::Applied { set_changed: true });
     assert!(!assignment.contains(&ShardId::new(0)));
     assert_eq!(
@@ -202,17 +307,33 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         "a revoke drops shards; it does not touch the lease"
     );
 
-    let late_grant = assignment.adopt_grant(
-        None,
-        &epochs([(0, 1), (1, 1)]),
-        in_secs(60),
-        revision_of(MANAGER, 4),
+    let late_grant = deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([(0, 1), (1, 1)]),
+            expires_at: in_secs(60),
+            revision: revision_of(MANAGER, 4),
+            executor_count: 2,
+        },
     );
     assert!(matches!(late_grant, ShardDeliveryOutcome::Stale { .. }));
     assert!(
         !assignment.contains(&ShardId::new(0)),
         "a grant read before the shard moved, arriving after the revoke, must not restore it"
     );
+    assert_eq!(assignment.executor_count, 3);
+    let full = deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(1, 1), (2, 4)]),
+            revision: revision_of(MANAGER, 5),
+            executor_count: 4,
+        },
+    );
+    assert_eq!(full, ShardDeliveryOutcome::Applied { set_changed: true });
+    assert_eq!(assignment.shard_epochs, epochs([(1, 1), (2, 4)]));
+    assert_eq!(assignment.executor_count, 4);
 }
 
 /// The corrective delivery: a renewal that answers with a different set
@@ -221,13 +342,24 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
 #[test]
 fn a_renewal_that_changes_the_set_reports_it() {
     let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
-    assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), revision_of(MANAGER, 3));
+    deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 1), (1, 1)]),
+            revision: revision_of(MANAGER, 3),
+            executor_count: 1,
+        },
+    );
 
-    let outcome = assignment.adopt_grant(
-        None,
-        &epochs([(1, 1), (2, 5)]),
-        in_secs(60),
-        revision_of(MANAGER, 4),
+    let outcome = deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([(1, 1), (2, 5)]),
+            expires_at: in_secs(60),
+            revision: revision_of(MANAGER, 4),
+            executor_count: 1,
+        },
     );
 
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
@@ -252,25 +384,41 @@ fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
 fn a_reply_from_another_manager_process_starts_the_revisions_over() {
     let (old_manager, new_manager) = (Uuid::new_v4(), Uuid::new_v4());
     let mut assignment = ShardAssignment::default();
-    assignment.adopt_grant(
-        Some(8),
-        &epochs([(0, 4)]),
-        in_secs(60),
-        revision_of(old_manager, 10_000),
+    deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 4)]),
+            expires_at: Some(in_secs(60)),
+            revision: revision_of(old_manager, 10_000),
+            executor_count: 3,
+        },
     );
     // what a lost lease does before the re-registration
-    assignment.clear(Instant::now());
+    let (cleared, outcome) = transition_shard_assignment(
+        Some(assignment),
+        E::Clear {
+            now: Instant::now(),
+        },
+    );
+    assert_eq!(outcome, None);
+    assignment = cleared.unwrap();
 
-    let outcome = assignment.adopt_grant(
-        Some(8),
-        &epochs([(0, 5)]),
-        in_secs(60),
-        revision_of(new_manager, 3),
+    let outcome = deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 5)]),
+            expires_at: Some(in_secs(60)),
+            revision: revision_of(new_manager, 3),
+            executor_count: 2,
+        },
     );
 
     assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
     assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(5)));
     assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
+    assert_eq!(assignment.executor_count, 2);
 }
 
 /// Starting the revisions over must not be a way back in for the manager that was left: its
@@ -279,16 +427,28 @@ fn a_reply_from_another_manager_process_starts_the_revisions_over() {
 fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
     let (old_manager, new_manager) = (Uuid::new_v4(), Uuid::new_v4());
     let mut assignment = ShardAssignment::default();
-    assignment.adopt_grant(
-        Some(8),
-        &epochs([(0, 4)]),
-        in_secs(60),
-        revision_of(old_manager, 10_000),
+    deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 4)]),
+            expires_at: Some(in_secs(60)),
+            revision: revision_of(old_manager, 10_000),
+            executor_count: 1,
+        },
     );
 
     // The new manager's push arrives before any reply from it: nothing says yet that it is
     // the one in charge.
-    let early = assignment.set_shards(8, &epochs([(1, 1)]), revision_of(new_manager, 2));
+    let early = deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(1, 1)]),
+            revision: revision_of(new_manager, 2),
+            executor_count: 1,
+        },
+    );
     assert_eq!(
         early,
         ShardDeliveryOutcome::FromAnotherManager {
@@ -298,33 +458,53 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
     );
     assert_eq!(assignment.shard_epochs, epochs([(0, 4)]));
 
-    assignment.adopt_grant(
-        None,
-        &epochs([(0, 5)]),
-        in_secs(60),
-        revision_of(new_manager, 3),
+    deliver(
+        &mut assignment,
+        E::Renew {
+            shard_epochs: &epochs([(0, 5)]),
+            expires_at: in_secs(60),
+            revision: revision_of(new_manager, 3),
+            executor_count: 1,
+        },
     );
 
-    let delayed_push = assignment.set_shards(
-        8,
-        &epochs([(0, 4), (1, 4)]),
-        revision_of(old_manager, 10_001),
+    let delayed_push = deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 4), (1, 4)]),
+            revision: revision_of(old_manager, 10_001),
+            executor_count: 1,
+        },
     );
-    let delayed_revoke = assignment.revoke_shards(
-        &HashSet::from([ShardId::new(0)]),
-        revision_of(old_manager, 10_002),
+    let delayed_revoke = deliver(
+        &mut assignment,
+        E::Revoke {
+            shard_ids: &HashSet::from([ShardId::new(0)]),
+            revision: revision_of(old_manager, 10_002),
+        },
     );
-    for delayed in [delayed_push, delayed_revoke] {
-        assert!(
-            matches!(delayed, ShardDeliveryOutcome::FromAnotherManager { .. }),
-            "got {delayed:?}"
-        );
-    }
+    [delayed_push, delayed_revoke]
+        .into_iter()
+        .for_each(|delayed| {
+            assert!(
+                matches!(delayed, ShardDeliveryOutcome::FromAnotherManager { .. }),
+                "got {delayed:?}"
+            );
+        });
     assert_eq!(assignment.shard_epochs, epochs([(0, 5)]));
     assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
 
     // The followed manager's own pushes are ordered by number as ever.
-    let push = assignment.set_shards(8, &epochs([(0, 5), (2, 1)]), revision_of(new_manager, 4));
+    let push = deliver(
+        &mut assignment,
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 5), (2, 1)]),
+            revision: revision_of(new_manager, 4),
+            executor_count: 1,
+        },
+    );
     assert_eq!(push, ShardDeliveryOutcome::Applied { set_changed: true });
 }
 
@@ -345,15 +525,17 @@ fn a_delivery_must_name_its_manager_process() {
     }
 }
 
-/// `clear()` lapses the lease as of `now`. `None` would mean
+/// Clear lapses the lease as of `now`. `None` would mean
 /// "never expires", which would leave a fenced executor reading as ready.
 #[test]
 fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
-    let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+    let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
     let now = Instant::now();
     assert!(assignment.lease_is_live(now));
 
-    assignment.clear(now);
+    let (next, outcome) = transition_shard_assignment(Some(assignment), E::Clear { now });
+    let assignment = next.unwrap();
+    assert_eq!(outcome, None);
 
     assert!(assignment.is_empty());
     assert_eq!(assignment.expires_at, Some(now));
@@ -362,6 +544,89 @@ fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
         "a cleared assignment is lapsed, not never-expiring"
     );
     assert!(!assignment.lease_is_live(now + Duration::from_secs(1)));
+    assert_eq!(assignment.executor_count, 1);
+    assert_eq!(assignment.number_of_shards, 8);
+}
+
+#[test]
+fn only_registration_and_standalone_install_an_assignment() {
+    let empty = epochs([]);
+    let revoked = HashSet::from([ShardId::new(0)]);
+    let now = Instant::now();
+    let revision = revision_of(MANAGER, 1);
+    [
+        E::Assign {
+            number_of_shards: 8,
+            shard_epochs: &empty,
+            revision,
+            executor_count: 2,
+        },
+        E::Renew {
+            shard_epochs: &empty,
+            expires_at: now,
+            revision,
+            executor_count: 2,
+        },
+        E::Revoke {
+            shard_ids: &revoked,
+            revision,
+        },
+        E::Clear { now },
+    ]
+    .into_iter()
+    .for_each(|event| {
+        let (next, outcome) = transition_shard_assignment(None, event);
+        assert!(next.is_none());
+        assert_eq!(outcome, None);
+    });
+    let (registered, outcome) = transition_shard_assignment(
+        None,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &empty,
+            expires_at: Some(now),
+            revision,
+            executor_count: 2,
+        },
+    );
+    assert_eq!(
+        outcome,
+        Some(ShardDeliveryOutcome::Applied { set_changed: false })
+    );
+    let registered = registered.unwrap();
+    assert_eq!(registered.executor_count, 2);
+    assert_eq!(registered.number_of_shards, 8);
+    assert_eq!(registered.revision, Some(revision));
+    assert_eq!(registered.expires_at, Some(now));
+
+    let (standalone, outcome) = transition_shard_assignment(
+        None,
+        E::InstallUnexpiring {
+            number_of_shards: 8,
+            shard_epochs: &empty,
+        },
+    );
+    assert_eq!(
+        outcome,
+        Some(ShardDeliveryOutcome::Applied { set_changed: true })
+    );
+    let standalone = standalone.unwrap();
+    assert_eq!(standalone.executor_count, 1);
+    assert_eq!(standalone.revision, None);
+    assert_eq!(standalone.expires_at, None);
+
+    let (standalone, outcome) = transition_shard_assignment(
+        Some(standalone),
+        E::InstallUnexpiring {
+            number_of_shards: 8,
+            shard_epochs: &empty,
+        },
+    );
+    assert_eq!(
+        outcome,
+        Some(ShardDeliveryOutcome::Applied { set_changed: false })
+    );
+    assert!(standalone.unwrap().is_empty());
 }
 
 /// The single-shard implementations run with no expiry at all and must

@@ -181,6 +181,8 @@ pub struct ShardRegistration {
 #[derive(Debug, Clone)]
 pub struct ShardLease {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
+    /// The number of executors with a lease in the state at `revision`.
+    pub executor_count: usize,
     /// On this executor's own monotonic clock, anchored at the moment the
     /// request this lease answers was sent - see [`shard_lease_from_wire`].
     pub expires_at: Instant,
@@ -202,6 +204,7 @@ fn shard_lease_from_wire(
 ) -> Result<ShardLease, String> {
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
+        executor_count: lease.executor_count as usize,
         expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
         revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision)
             .map_err(|error| format!("ShardLease.{error}"))?,
@@ -365,6 +368,7 @@ impl ShardManager for GrpcShardManager {
                                 lease: ShardLease {
                                     shard_epochs: shard_epochs_from_proto(success.shard_epochs)
                                         .map_err(ShardManagerError::ConversionError)?,
+                                    executor_count: success.executor_count as usize,
                                     expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
                                     revision: ShardLeaseRevision::from_wire(
@@ -879,6 +883,7 @@ mod tests {
         let incarnation = Uuid::new_v4();
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
+            executor_count: 7,
             lease_ttl: Some(prost_types::Duration {
                 seconds: 60,
                 nanos: 0,
@@ -892,6 +897,7 @@ mod tests {
 
         let lease = shard_lease_from_wire(on_the_wire, sent_at).unwrap();
 
+        assert_eq!(lease.executor_count, 7);
         assert_eq!(lease.expires_at, sent_at + Duration::from_secs(60));
         assert!(
             lease.expires_at < Instant::now() + Duration::from_secs(60),
@@ -911,6 +917,7 @@ mod tests {
     fn a_lease_without_its_manager_process_does_not_decode() {
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
+            executor_count: 3,
             lease_ttl: Some(prost_types::Duration {
                 seconds: 60,
                 nanos: 0,

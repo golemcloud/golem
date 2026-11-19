@@ -269,7 +269,7 @@ impl TestWorkerExecutors {
             .collect()
     }
 
-    async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
+    pub(crate) async fn pushes_to(&self, pod: Pod) -> Vec<ShardAssignmentPush> {
         self.pushes
             .lock()
             .await
@@ -610,6 +610,100 @@ async fn wait_for_writes(persistence: &TestPersistence, count: usize) {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[test]
+async fn a_third_executor_needs_no_push_to_the_two_existing_shard_owners() {
+    const SHARDS: &[i64] = &[0, 1, 2, 3];
+    let first = pod(1, 9000);
+    let second = pod(2, 9001);
+    let third = pod(3, 9002);
+    let persistence = TestPersistence::new(shard_state_with_executors(
+        SHARDS.len(),
+        vec![(executor(1), first, "worker-executor-0", SHARDS)],
+    ));
+    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let mut join_set = JoinSet::new();
+    let shard_management = ShardManagement::new(
+        Arc::new(persistence.clone()),
+        worker_executors.clone(),
+        Arc::new(TestHealthCheck::all_healthy()),
+        0.1,
+        LEASE_TTL,
+        SHARDS.len(),
+        &mut join_set,
+    )
+    .await
+    .unwrap();
+
+    // Compaction follows the fan-out, including the full assignment owed at startup.
+    wait_for_compactions_beyond(&persistence, 0).await;
+    assert_eq!(
+        worker_executors.local_assignment(first).await,
+        shard_ids(SHARDS)
+    );
+    let passes = persistence.compactions().await.len();
+    shard_management
+        .register_executor(executor(2), second.into(), None)
+        .await
+        .unwrap();
+    wait_for_compactions_beyond(&persistence, passes).await;
+    let before = shard_management.current_snapshot().await;
+    assert!(!shards_at(&before, first).is_empty());
+    assert!(
+        !shards_at(&before, second).is_empty(),
+        "the sequential cluster setup must give the second executor a shard"
+    );
+    assert_eq!(
+        worker_executors.local_assignment(first).await,
+        shards_at(&before, first)
+    );
+    assert_eq!(
+        worker_executors.local_assignment(second).await,
+        shards_at(&before, second)
+    );
+    let commands = worker_executors.commands_sent().await;
+    let pushes = worker_executors.pushes.lock().await.len();
+    let revokes = worker_executors.revokes.lock().await.len();
+    let passes = persistence.compactions().await.len();
+
+    let joined = shard_management
+        .register_executor(executor(3), third.into(), None)
+        .await
+        .unwrap();
+    assert_eq!(joined.grant.executor_count, 3);
+    wait_for_compactions_beyond(&persistence, passes).await;
+    let after = shard_management.current_snapshot().await;
+    assert_eq!(after.shard_assignments, before.shard_assignments);
+    assert!(shards_at(&after, third).is_empty());
+    assert_eq!(
+        shard_management
+            .renew_shard_lease(executor(1), claim_of(&before, executor(1)))
+            .await
+            .unwrap()
+            .executor_count,
+        3
+    );
+    assert_eq!(
+        shard_management
+            .renew_shard_lease(executor(2), claim_of(&before, executor(2)))
+            .await
+            .unwrap()
+            .executor_count,
+        3
+    );
+    assert_eq!(worker_executors.commands_sent().await, commands);
+    assert_eq!(worker_executors.pushes.lock().await.len(), pushes);
+    assert_eq!(worker_executors.revokes.lock().await.len(), revokes);
+    assert_eq!(
+        worker_executors.local_assignment(first).await,
+        shards_at(&before, first)
+    );
+    assert_eq!(
+        worker_executors.local_assignment(second).await,
+        shards_at(&before, second)
+    );
+    join_set.abort_all();
 }
 
 #[test]
