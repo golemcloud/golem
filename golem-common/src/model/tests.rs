@@ -2041,6 +2041,7 @@ fn agent_status_record_agent_mode_is_not_serialized() {
             updated_millis: 1200,
             credit_millis: Some(900),
         },
+        settling_invocation: Some(invocation_id(11)),
         agent_mode: AgentMode::Ephemeral,
         ..AgentStatusRecord::default()
     };

@@ -5288,6 +5288,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
+            false,
         )
         .await
         .unwrap();
@@ -6325,6 +6326,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             Some("f2".to_string()),
             42,
             ComponentRevision::INITIAL,
+            false,
         )
         .await
         .unwrap();

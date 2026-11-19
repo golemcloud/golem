@@ -1304,6 +1304,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 key,
                 error.clone(),
                 anchor,
+                at_return,
             ))
             .await?;
         let commit_level = match worker.agent_mode() {
@@ -1469,6 +1470,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     method_name,
                     consumed_fuel,
                     component_revision,
+                    at_return,
                 )
                 .await
                 .map_err(|err| match err.into_refusal() {

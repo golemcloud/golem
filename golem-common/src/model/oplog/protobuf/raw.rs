@@ -634,6 +634,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 method_name,
                 consumed_fuel,
                 component_revision,
+                awaits_settlement,
                 ..
             } => Entry::AgentInvocationFinished(RawAgentInvocationFinishedParameters {
                 invocation_id: Some(invocation_id.into()),
@@ -641,16 +642,19 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 method_name,
                 consumed_fuel,
                 component_revision: component_revision.into(),
+                awaits_settlement,
             }),
             OplogEntry::AgentInvocationFailed {
                 invocation_id,
                 error,
                 start_index,
+                awaits_settlement,
                 ..
             } => Entry::AgentInvocationFailed(RawAgentInvocationFailedParameters {
                 invocation_id: Some(invocation_id.into()),
                 error: Some(error.into()),
                 start_index: start_index.into(),
+                awaits_settlement,
             }),
             OplogEntry::AgentInvocationSettled {
                 invocation_id,
@@ -1320,6 +1324,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     method_name: p.method_name,
                     consumed_fuel: p.consumed_fuel,
                     component_revision,
+                    awaits_settlement: p.awaits_settlement,
                 })
             }
             Entry::AgentInvocationFailed(p) => Ok(OplogEntry::AgentInvocationFailed {
@@ -1328,6 +1333,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 invocation_id: p.invocation_id.ok_or("Missing invocation_id")?.into(),
                 error: p.error.ok_or("Missing error")?.try_into()?,
                 start_index: OplogIndex::from_u64(p.start_index),
+                awaits_settlement: p.awaits_settlement,
             }),
             Entry::AgentInvocationSettled(p) => Ok(OplogEntry::AgentInvocationSettled {
                 timestamp,

@@ -3837,6 +3837,7 @@ fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> 
         method_name: None,
         consumed_fuel: 0,
         component_revision: ComponentRevision::INITIAL,
+        awaits_settlement: false,
     }
 }
 
@@ -3851,7 +3852,13 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         unpinned_invocation_started(),
         start_now(),
         end_for(3, 42),
-        OplogEntry::agent_invocation_failed(None, replayed_invocation_id(), error.clone(), anchor),
+        OplogEntry::agent_invocation_failed(
+            None,
+            replayed_invocation_id(),
+            error.clone(),
+            anchor,
+            false,
+        ),
         unpinned_invocation_started(),
         invocation_finished(),
     ])
@@ -3924,24 +3931,28 @@ async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_p
             golem_common::model::InvocationId(uuid::Uuid::from_u128(99)),
             error.clone(),
             anchor,
+            false,
         ),
         OplogEntry::agent_invocation_failed(
             Some(OplogIndex::INITIAL),
             replayed_invocation_id(),
             error.clone(),
             anchor,
+            false,
         ),
         OplogEntry::agent_invocation_failed(
             None,
             replayed_invocation_id(),
             error.clone(),
             anchor.next(),
+            false,
         ),
         OplogEntry::agent_invocation_failed(
             None,
             replayed_invocation_id(),
             AgentError::InternalError("other".into()),
             anchor,
+            false,
         ),
     ] {
         let rs = replay_state_over(vec![
@@ -3974,6 +3985,7 @@ async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_p
                 replayed_invocation_id(),
                 error.clone(),
                 anchor,
+                false,
             ),
         ])
         .await;

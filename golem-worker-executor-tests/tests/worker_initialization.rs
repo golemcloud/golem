@@ -3058,6 +3058,7 @@ async fn prepare_session(
                 method_name: Some("increment".into()),
                 consumed_fuel: 0,
                 component_revision: metadata.last_known_status.component_revision,
+                awaits_settlement: false,
             })
             .await
             .unwrap();
@@ -3130,6 +3131,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
             method_name: Some("increment".into()),
             consumed_fuel: 0,
             component_revision: metadata.last_known_status.component_revision,
+            awaits_settlement: false,
         })
         .await
         .unwrap();
@@ -3288,6 +3290,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 .get_initial_worker_metadata()
                 .last_known_status
                 .component_revision,
+            awaits_settlement: false,
         })
         .await?;
     // Actor-owned reconstruction must reach the checkpoint before publishing the repaired status.

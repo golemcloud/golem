@@ -269,6 +269,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 method_name,
                 consumed_fuel,
                 component_revision: entry_component_revision,
+                awaits_settlement: _,
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
                     .download_payload(owned_agent_id, agent_mode, result)

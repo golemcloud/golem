@@ -357,6 +357,7 @@ fn invocation_pair(
             method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
         },
     );
 }

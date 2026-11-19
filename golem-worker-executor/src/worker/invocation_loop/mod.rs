@@ -898,16 +898,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = true;
             }
 
-            // Whether the Store stopped in the drain of an invocation that recorded its result
-            // at the export's return, as `on_invocation_failure` decides for its own failures.
-            let recorded_at_return;
-            (retry_was_live, recorded_at_return) = {
+            retry_was_live = {
                 let store = prepared.runtime().store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
-                (
-                    store.data().is_live(),
-                    store.data().durable_ctx().result_recorded_at_return(),
-                )
+                store.data().is_live()
             };
             self.suspend_worker(&prepared.runtime().store).await;
 
@@ -1124,12 +1118,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
                                     if !matches!(kind, InterruptKind::Restart) {
-                                        let current_idempotency_key = self
-                                            .parent
-                                            .get_last_known_status()
-                                            .await
-                                            .current_idempotency_key()
-                                            .copied();
+                                        let status = self.parent.get_last_known_status().await;
                                         let recorded = match kind {
                                             InterruptKind::EntityCancellation => unreachable!("entity cancellation cannot interrupt the owner"),
                                             InterruptKind::Suspend(_) => {
@@ -1149,7 +1138,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                             break 'outer;
                                         }
                                         if matches!(kind, InterruptKind::Interrupt(_))
-                                            && let Some(key) = current_idempotency_key
+                                            && let Some(key) = status.current_idempotency_key().copied()
                                         {
                                             self.parent
                                                 .store_invocation_failure(
@@ -1163,14 +1152,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 retry_was_live,
                                             );
                                         } else if matches!(kind, InterruptKind::Interrupt(_))
-                                            && recorded_at_return
+                                            && status.settling_invocation.is_some()
                                         {
                                             // Like an interrupt of the running drain, this fails
                                             // the queued invocations and keeps the recorded
                                             // result, which is no longer the current invocation.
                                             self.parent
                                                 .store_queued_invocation_failures(
-                                                    None,
+                                                    status.settling_invocation.as_ref(),
                                                     &TrapType::Interrupt(kind),
                                                 )
                                                 .await;

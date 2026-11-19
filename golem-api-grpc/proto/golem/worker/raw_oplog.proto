@@ -325,12 +325,14 @@ message RawAgentInvocationFinishedParameters {
   uint64 component_revision = 3;
   optional string method_name = 4;
   golem.common.UUID invocation_id = 5;
+  bool awaits_settlement = 6;
 }
 
 message RawAgentInvocationFailedParameters {
   golem.common.UUID invocation_id = 1;
   AgentError error = 2;
   uint64 start_index = 3;
+  bool awaits_settlement = 4;
 }
 
 message RawAgentInvocationSettledParameters {

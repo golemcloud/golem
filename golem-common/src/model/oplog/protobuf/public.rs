@@ -2044,6 +2044,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     method_name: finished.method_name,
                     consumed_fuel: finished.consumed_fuel,
                     component_revision: finished.component_revision,
+                    awaits_settlement: false,
                 })
             }
             PublicOplogEntry::AgentInvocationFailed(p) => Ok(OplogEntry::AgentInvocationFailed {
@@ -2052,6 +2053,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 invocation_id: p.invocation_id,
                 error: AgentError::Unknown(p.error),
                 start_index: p.start_index,
+                awaits_settlement: false,
             }),
             PublicOplogEntry::AgentInvocationSettled(p) => Ok(OplogEntry::AgentInvocationSettled {
                 timestamp: p.timestamp,

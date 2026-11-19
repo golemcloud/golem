@@ -1656,6 +1656,7 @@ fn agent_invocation_failed_contract_roundtrips() {
         invocation_id,
         AgentError::InternalError("method gave up".to_string()),
         OplogIndex::from_u64(17),
+        true,
     )
     .rounded();
     assert!(!entry.is_hint());
@@ -1677,6 +1678,7 @@ fn agent_invocation_failed_contract_roundtrips() {
         panic!("expected an invocation-failed entry");
     };
     assert_eq!(parameters.start_index, 17);
+    assert!(parameters.awaits_settlement);
     assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
     let bytes = crate::serialization::serialize(&entry).unwrap();
     assert_eq!(
@@ -2278,6 +2280,7 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         method_name: None,
         consumed_fuel: 7,
         component_revision: ComponentRevision::INITIAL,
+        awaits_settlement: true,
     };
     let invocation_error = OplogEntry::Error {
         timestamp: Timestamp::from(2_000),

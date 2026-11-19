@@ -209,6 +209,10 @@ oplog_entry! {
         }
     },
     /// The agent has completed an invocation
+    ///
+    /// `awaits_settlement` is set when the result was recorded at the export's return: the
+    /// invocation's background work drains after this entry, and `AgentInvocationSettled`
+    /// closes the invocation.
     AgentInvocationFinished {
         hint: false
         wit_raw_type: "raw-agent-invocation-finished-parameters"
@@ -219,6 +223,7 @@ oplog_entry! {
             method_name: Option<String>,
             consumed_fuel: i64,
             component_revision: ComponentRevision,
+            awaits_settlement: bool,
         }
         public {
             invocation_id: InvocationId,
@@ -229,6 +234,10 @@ oplog_entry! {
         }
     },
     /// A method returned an error, completing only this invocation.
+    ///
+    /// `awaits_settlement` is set when the error was recorded at the export's return: the
+    /// invocation's background work drains after this entry, and `AgentInvocationSettled`
+    /// closes the invocation.
     AgentInvocationFailed {
         hint: false
         wit_raw_type: "raw-agent-invocation-failed-parameters"
@@ -238,6 +247,7 @@ oplog_entry! {
             invocation_id: InvocationId,
             error: AgentError,
             start_index: OplogIndex,
+            awaits_settlement: bool,
         }
         public {
             invocation_id: InvocationId,

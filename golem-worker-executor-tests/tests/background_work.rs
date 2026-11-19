@@ -357,6 +357,28 @@ impl Agents {
         Ok(())
     }
 
+    /// Checks that `method` recorded its result and did not settle, and that the committed oplog
+    /// ends with that result: the background work waits, and its first call is not committed.
+    async fn assert_nothing_committed_after_result(
+        &self,
+        executor: &(impl TestDsl + Sync),
+        method: &str,
+    ) -> anyhow::Result<()> {
+        let oplog = executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?;
+        let started = method_starts(&oplog, method);
+        assert_eq!(started.len(), 1, "{method} is started once");
+        let finished = finished_of(&oplog, &started[0]);
+        assert!(finished.is_some(), "the result of {method} is recorded");
+        assert_eq!(
+            oplog.last().map(|entry| entry.oplog_index),
+            finished,
+            "nothing is committed after the result of {method}"
+        );
+        Ok(())
+    }
+
     /// Checks the oplog of the worker before a restart in a window after the result of
     /// `method`: the result is recorded, the invocation is not settled, and a durable call whose
     /// function name contains `open_call` has no terminal. With `open_after_result`, that call
@@ -712,6 +734,171 @@ async fn a_restart_after_the_result_completes_the_pending_background_work(
     Ok(())
 }
 
+/// Executor overrides under which an agent whose work waits stays in memory and running, instead
+/// of suspending.
+fn never_suspending() -> TestExecutorOverrides {
+    TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.suspend_after = Duration::from_secs(600);
+            config.suspend.rpc_suspend_after = Duration::from_secs(600);
+            config.suspend.wait_suspend_grace = Duration::from_secs(600);
+        })),
+        ..Default::default()
+    }
+}
+
+/// Checks that `queued`, an invocation queued behind the drain, failed because of the operator's
+/// interrupt.
+fn assert_failed_by_interrupt(queued: Result<anyhow::Result<u64>, tokio::time::error::Elapsed>) {
+    match queued {
+        Ok(Err(error)) => assert!(
+            format!("{error:#}").contains("Interrupted via the Golem API"),
+            "the interrupt fails the invocation queued behind the drain: {error:#}"
+        ),
+        other => panic!("the interrupt fails the invocation queued behind the drain: {other:?}"),
+    }
+}
+
+/// Crash window: the result is recorded and the background work waits for its release, with no
+/// oplog entry after the result. The agent is running until the invocation settles, so the
+/// restarted executor recovers it by itself, and the completed release reaches the background
+/// work, which completes without any invocation of the agent.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn a_restart_while_the_drain_waits_recovers_the_agent_by_itself(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, never_suspending()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "drain-recovery").await?;
+    let owned_agent_id = agents.worker_id.clone();
+    let release = agents.create_release(&executor, &agents.worker).await?;
+    let key = IdempotencyKey::fresh();
+
+    assert_eq!(
+        agents
+            .add_after_release(&executor, &key, &release, None, 6)
+            .await?,
+        "returned"
+    );
+    agents
+        .assert_nothing_committed_after_result(&executor, "add_after_release")
+        .await?;
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Running,
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, never_suspending()).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the restarted executor does not recover the draining agent"))?;
+    agents.complete(&executor, &release).await?;
+    agents.await_settled(&executor, "add_after_release").await?;
+    assert_eq!(agents.total(&executor).await?, 6);
+    assert_eq!(agents.completions(&executor).await?, 1);
+    agents
+        .assert_executed_once(&executor, "add_after_release")
+        .await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// An operator interrupt while the background work only waits for its release, with nothing
+/// committed after the result, reaches the agent: the agent runs until the invocation settles.
+/// The background work completes once after the agent resumes.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn an_interrupt_while_the_drain_only_waits_is_not_ignored(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, never_suspending()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "interrupt-waiting-drain").await?;
+    let release = agents.create_release(&executor, &agents.worker).await?;
+    let key = IdempotencyKey::fresh();
+
+    assert_eq!(
+        agents
+            .add_after_release(&executor, &key, &release, None, 2)
+            .await?,
+        "returned"
+    );
+    agents
+        .assert_nothing_committed_after_result(&executor, "add_after_release")
+        .await?;
+    executor.interrupt(&agents.worker_id).await?;
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    agents
+        .assert_result_kept(&executor, "add_after_release")
+        .await?;
+
+    executor.resume(&agents.worker_id, false).await?;
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Running,
+            Duration::from_secs(10),
+        )
+        .await?;
+    executor.interrupt(&agents.worker_id).await?;
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    executor.resume(&agents.worker_id, false).await?;
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Running,
+            Duration::from_secs(10),
+        )
+        .await?;
+    agents.complete(&executor, &release).await?;
+    agents.await_settled(&executor, "add_after_release").await?;
+    assert_eq!(agents.total(&executor).await?, 2);
+    agents
+        .assert_executed_once(&executor, "add_after_release")
+        .await?;
+
+    drop(executor);
+    Ok(())
+}
+
 /// Crash window: the background work's call to the tally is started and not completed, because
 /// the tally waits for its own release.
 #[test]
@@ -937,8 +1124,9 @@ async fn a_trap_after_the_result_keeps_the_result(
 /// An interrupt while the background work drains is not the outcome of the invocation: the
 /// caller keeps the recorded success, before and after a reconstruction, and the background
 /// work completes once after the agent resumes. The interrupt fails the invocation queued behind
-/// the drain. The background call to the tally is open when
-/// the interrupt arrives, so the agent is running its drain.
+/// the drain. The background work only waits for its release when the interrupt arrives, and
+/// nothing follows the result in the oplog: the agent runs until the invocation settles, so the
+/// interrupt is not ignored.
 #[test]
 #[timeout("180s")]
 #[tracing::instrument]
@@ -949,36 +1137,23 @@ async fn an_interrupt_during_the_drain_keeps_the_result(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    // The worker keeps running while its background call waits, so the interrupt reaches the
-    // drain instead of a suspended agent.
-    let running = || TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.suspend.suspend_after = Duration::from_secs(600);
-            config.suspend.rpc_suspend_after = Duration::from_secs(600);
-            config.suspend.wait_suspend_grace = Duration::from_secs(600);
-        })),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, running()).await?;
+    let executor = start_with_overrides(deps, &context, never_suspending()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_rust)
         .store()
         .await?;
     let agents = Agents::new(&executor, component, &context, "interrupt-drain").await?;
     let release = agents.create_release(&executor, &agents.worker).await?;
-    let tally_release = agents.create_release(&executor, &agents.tally).await?;
     let key = IdempotencyKey::fresh();
 
     assert_eq!(
         agents
-            .add_after_release(&executor, &key, &release, Some(tally_release.clone()), 7)
+            .add_after_release(&executor, &key, &release, None, 7)
             .await?,
         "returned"
     );
-    agents.complete(&executor, &release).await?;
-    await_method_start(&executor, &agents.tally_id, "add_when_released").await?;
     agents
-        .assert_unsettled_after_result(&executor, "add_after_release", "rpc", true)
+        .assert_nothing_committed_after_result(&executor, "add_after_release")
         .await?;
     let queued = tokio::time::timeout(RESULT_WAIT, agents.completions(&executor));
     let (queued, interrupted) = tokio::join!(queued, async {
@@ -986,10 +1161,7 @@ async fn an_interrupt_during_the_drain_keeps_the_result(
         executor.interrupt(&agents.worker_id).await
     });
     interrupted?;
-    assert!(
-        matches!(queued, Ok(Err(_))),
-        "the interrupt fails the invocation queued behind the drain: {queued:?}"
-    );
+    assert_failed_by_interrupt(queued);
     executor
         .wait_for_status(
             &agents.worker_id,
@@ -1002,23 +1174,23 @@ async fn an_interrupt_during_the_drain_keeps_the_result(
         .await?;
     assert_eq!(
         agents
-            .add_after_release(&executor, &key, &release, Some(tally_release.clone()), 7)
+            .add_after_release(&executor, &key, &release, None, 7)
             .await?,
         "returned",
         "the same key returns the recorded success after the interrupt"
     );
 
     drop(executor);
-    let executor = start_with_overrides(deps, &context, running()).await?;
+    let executor = start_with_overrides(deps, &context, never_suspending()).await?;
     assert_eq!(
         agents
-            .add_after_release(&executor, &key, &release, Some(tally_release.clone()), 7)
+            .add_after_release(&executor, &key, &release, None, 7)
             .await?,
         "returned",
         "the same key returns the recorded success after a reconstruction"
     );
     executor.resume(&agents.worker_id, false).await?;
-    agents.complete(&executor, &tally_release).await?;
+    agents.complete(&executor, &release).await?;
     assert_eq!(
         agents.completions(&executor).await?,
         1,
@@ -1260,10 +1432,14 @@ async fn an_interrupt_while_the_drain_waits_to_retry_fails_the_queued_invocation
         executor.interrupt(&agents.worker_id).await
     });
     interrupted?;
-    assert!(
-        matches!(queued, Ok(Err(_))),
-        "the interrupt fails the invocation queued behind the drain: {queued:?}"
-    );
+    assert_failed_by_interrupt(queued);
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(30),
+        )
+        .await?;
     assert_eq!(
         server.connections.load(Ordering::SeqCst),
         1,

@@ -423,6 +423,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
+        awaits_settlement: bool,
     ) -> Result<OplogIndex, OplogError> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
@@ -438,6 +439,7 @@ pub trait OplogOps: Oplog {
             method_name,
             consumed_fuel,
             component_revision,
+            awaits_settlement,
         };
         self.add(entry).await
     }

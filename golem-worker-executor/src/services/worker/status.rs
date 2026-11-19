@@ -96,6 +96,7 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         never_live: status.never_live,
         running: status.running.clone(),
         withdrawn_again: status.withdrawn_again,
+        settling_invocation: status.settling_invocation,
         component_revision: status.component_revision,
         component_size: status.component_size,
         total_linear_memory_size: status.total_linear_memory_size,

@@ -718,6 +718,10 @@ pub struct AgentStatusRecord {
     /// The last invocation cancelled again while it was neither pending nor running. A rejection
     /// `Error` that follows it in a later fold does not replace its earlier cancellation.
     pub withdrawn_again: Option<InvocationId>,
+    /// The invocation whose result was recorded at the export's return and whose background work
+    /// has not settled: its `AgentInvocationFinished` or `AgentInvocationFailed` awaits settlement
+    /// and no `AgentInvocationSettled` followed it. The agent runs while this is set.
+    pub settling_invocation: Option<InvocationId>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
@@ -792,6 +796,7 @@ impl Default for AgentStatusRecord {
             pending_durable_stream_cancellations: HashMap::new(),
             running: None,
             withdrawn_again: None,
+            settling_invocation: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
