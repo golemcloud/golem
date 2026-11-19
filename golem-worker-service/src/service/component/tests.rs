@@ -431,6 +431,72 @@ async fn invalidation_fences_pending_successes_and_errors() {
 
 #[test]
 #[test_r::timeout("10s")]
+async fn current_lookup_survives_a_burst_of_deployment_invalidations() {
+    let a = component();
+    let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+    let service = Arc::new(RemoteComponentService::new(
+        registry.clone(),
+        &ComponentServiceConfig::default(),
+    ));
+    let mut gate = LookupGate::new();
+    *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+    let mut caller = tokio::spawn({
+        let service = service.clone();
+        async move { service.get_current_by_id(a.id).await }
+    });
+    for _ in 0..4 {
+        tokio::select! {
+            started = gate.started.acquire() => started.unwrap().forget(),
+            result = &mut caller => panic!("lookup stopped during deployment invalidation: {result:?}"),
+        }
+        service.invalidate_current().await;
+        let next = LookupGate::new();
+        *registry.next_lookup.lock().unwrap() = Some(next.clone());
+        gate.release.add_permits(1);
+        gate = next;
+    }
+    gate.started.acquire().await.unwrap().forget();
+    let mut latest = a.clone();
+    latest.revision = ComponentRevision::new(3).unwrap();
+    *registry.deployed.lock().unwrap() = Some(latest.clone());
+    service.invalidate_current().await;
+    gate.release.add_permits(1);
+    assert_eq!(caller.await.unwrap().unwrap().revision, latest.revision);
+}
+
+#[test]
+fn current_lookup_invalidation_retries_have_a_time_bound() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let a = component();
+            let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+            let gate = LookupGate::new();
+            *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+            let service = Arc::new(RemoteComponentService::new(
+                registry,
+                &ComponentServiceConfig::default(),
+            ));
+            let caller = tokio::spawn({
+                let service = service.clone();
+                async move { service.get_current_by_id(a.id).await }
+            });
+            gate.started.acquire().await.unwrap().forget();
+            service.invalidate_current().await;
+            tokio::time::advance(Duration::from_secs(31)).await;
+            gate.release.add_permits(1);
+            assert!(matches!(
+                caller.await.unwrap(),
+                Err(ComponentServiceError::InternalError(_))
+            ));
+        });
+}
+
+#[test]
+#[test_r::timeout("10s")]
 async fn cancelled_caller_does_not_strand_current_lookup() {
     let a = component();
     let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
