@@ -943,6 +943,42 @@ fn sample_status() -> AgentStatusRecord {
         pending_update: None,
         snapshot_assisted_details: None,
         snapshot_fault: Some(golem_common::model::oplog::SnapshotFault::Unavailable),
+        failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+        divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+            oplog_index: OplogIndex::from_u64(4),
+            expected: golem_common::model::oplog::ReplayStep::HostCall(
+                golem_common::model::oplog::ReplayHostCall {
+                    function_name: "golem_random::get_random_bytes".to_string(),
+                    durable_function_type:
+                        golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                            golem_schema::Empty {},
+                        ),
+                    parent_start_index: None,
+                    invocation_id: None,
+                    observational_owner: None,
+                    carries_request: true,
+                    request: None,
+                },
+            ),
+            actual: golem_common::model::oplog::ReplayStep::HostCall(
+                golem_common::model::oplog::ReplayHostCall {
+                    function_name: "golem_random::get_random_u64".to_string(),
+                    durable_function_type:
+                        golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                            golem_schema::Empty {},
+                        ),
+                    parent_start_index: None,
+                    invocation_id: None,
+                    observational_owner: None,
+                    carries_request: false,
+                    request: None,
+                },
+            ),
+            mismatched: vec![
+                golem_common::model::oplog::StartIdentityField::FunctionName,
+                golem_common::model::oplog::StartIdentityField::RequestPresence,
+            ],
+        })),
     });
     status.successful_updates.push(SuccessfulUpdateRecord {
         timestamp: Timestamp::from(1_700_000_001_000u64),

@@ -1480,6 +1480,7 @@ impl ForkUpdates {
                         admission.target_revision,
                         admission.index,
                         CANCELLED_BY_FORK.into(),
+                        golem_common::model::oplog::UpdateFailureClass::Other,
                     )
                 })),
             self.baseline,
@@ -1789,7 +1790,15 @@ mod tests {
         let (cancelled, _) = fork_updates(
             &[
                 automatic_admission(2),
-                OplogEntry::failed_update(revision(2), None, None, Some(index(3)), None),
+                OplogEntry::failed_update(
+                    revision(2),
+                    None,
+                    None,
+                    Some(index(3)),
+                    None,
+                    golem_common::model::oplog::UpdateFailureClass::Other,
+                    None,
+                ),
             ],
             &[],
         );
@@ -1913,7 +1922,15 @@ mod tests {
             invocation,
             succeeded(3),
             manual_invocation(5),
-            OplogEntry::failed_update(revision(5), None, None, Some(index(9)), None),
+            OplogEntry::failed_update(
+                revision(5),
+                None,
+                None,
+                Some(index(9)),
+                None,
+                golem_common::model::oplog::UpdateFailureClass::Other,
+                None,
+            ),
             manual_pending_update(6, Some(FilesystemSnapshotName::update())),
             manual_invocation(7),
         ];

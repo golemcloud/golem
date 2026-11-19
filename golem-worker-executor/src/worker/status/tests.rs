@@ -2666,6 +2666,8 @@ fn failed_update_to_revision_two() -> OplogEntry {
         None,
         None,
         None,
+        golem_common::model::oplog::UpdateFailureClass::Other,
+        None,
     )
 }
 
@@ -5534,6 +5536,8 @@ impl TestCaseBuilder {
             None,
             update_attempt_index,
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -5575,6 +5579,8 @@ impl TestCaseBuilder {
                 pending_update: applied_update,
                 snapshot_assisted_details: None,
                 snapshot_fault: None,
+                failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+                divergence: None,
             });
 
             if status.skipped_regions.is_overridden() {
@@ -5611,6 +5617,8 @@ impl TestCaseBuilder {
             Some(details.clone()),
             Some(pending.admission_index),
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -5622,6 +5630,8 @@ impl TestCaseBuilder {
                 pending_update: applied_update,
                 snapshot_assisted_details: Some(details.clone()),
                 snapshot_fault: None,
+                failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+                divergence: None,
             });
             status
         })
@@ -8385,7 +8395,15 @@ mod region_fold {
     }
 
     pub(super) fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
-        OplogEntry::failed_update(revision(target), None, None, attempt.map(idx), None)
+        OplogEntry::failed_update(
+            revision(target),
+            None,
+            None,
+            attempt.map(idx),
+            None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
+        )
     }
 
     pub(super) fn succeeded(target: u64) -> OplogEntry {
@@ -8752,6 +8770,8 @@ mod region_fold {
                         ),
                         Some(idx(4)),
                         fault,
+                        golem_common::model::oplog::UpdateFailureClass::Other,
+                        None,
                     ),
                 ),
                 (7, automatic_admission(2)),
@@ -8808,6 +8828,8 @@ mod region_fold {
                     None,
                     Some(idx(3)),
                     Some(SnapshotFault::Incompatible),
+                    golem_common::model::oplog::UpdateFailureClass::Other,
+                    None,
                 ),
             ),
         ]));

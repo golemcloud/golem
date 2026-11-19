@@ -125,10 +125,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .await?;
                     return Ok(Some((handle.start_idx(), handle)));
                 }
-                ReplayStartClaimOutcome::DeletedRegion => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        expected,
-                        "matching Start belongs to a deleted replay region".to_string(),
+                ReplayStartClaimOutcome::DeletedRegion { start_index } => {
+                    return Err(WorkerExecutorError::replay_divergence(
+                        claim.divergence_in_deleted_region(start_index),
                     ));
                 }
                 outcome @ (ReplayStartClaimOutcome::ReplayEnded

@@ -181,7 +181,7 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, HydratedUpdate, InvocationContext, LastError,
+    AgentConfig, ExecutionStatus, FailureProvenance, HydratedUpdate, InvocationContext, LastError,
     SnapshotReplayPurpose, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
@@ -958,6 +958,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Whether the worker is currently being interrupted through the Golem API
     /// (`ExecutionStatus::Interrupting`), independent of the invocation-deadline latch.
+    /// The index of the oplog entry that replay consumed last.
+    pub fn last_replayed_index(&self) -> OplogIndex {
+        self.state.replay_state.last_replayed_index()
+    }
+
     pub fn is_interrupting(&self) -> bool {
         matches!(
             &*self.execution_status.read().unwrap(),
@@ -1055,6 +1060,8 @@ struct ReplayFailure {
     /// Whether the replay after an application snapshot diverged from the oplog with a typed
     /// divergence while the start still replayed it.
     diverged: bool,
+    /// Where the failure of the replayed invocation came from, when an invocation failed.
+    provenance: Option<FailureProvenance>,
 }
 
 /// Why a pending automatic update did not reach the end of its replay.
@@ -1635,6 +1642,7 @@ impl PrivateDurableWorkerState {
             .is_some_and(|phase| phase.main.is_some())
         {
             Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.replay_state.last_replayed_index().next(),
                 "a direct read call of the core initializer",
                 format!(
                     "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
@@ -1928,9 +1936,7 @@ macro_rules! get_oplog_entry {
                 })+
                 _ => {
                     tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
-                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                        stringify!($($cases |)+),
-                        format!("{:?}", oplog_entry),
+                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(oplog_index, format!("{:?}", oplog_entry), stringify!($($cases |)+),
                     ));
                 }
             }

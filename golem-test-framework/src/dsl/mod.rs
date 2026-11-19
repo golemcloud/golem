@@ -1350,10 +1350,7 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::ValueMismatch { details } => {
             format!("Value mismatch: {}", details)
         }
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => format!(
-            "Unexpected oplog entry; Expected: {}, got: {}",
-            expected, got
-        ),
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => divergence.to_string(),
         WorkerExecutorError::Runtime { details } => {
             format!("Runtime error: {}", details)
         }

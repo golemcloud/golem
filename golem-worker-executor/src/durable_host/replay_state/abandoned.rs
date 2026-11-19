@@ -78,6 +78,7 @@ impl AbandonedStarts {
         })?;
         if let Some((prior_kind, prior_idx)) = &start.terminal {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                terminal_idx,
                 "at most one terminal per abandoned Start",
                 format!(
                     "{kind} at {terminal_idx} closing abandoned Start {start_index} ({:?}) \
@@ -98,14 +99,20 @@ impl AbandonedStarts {
             return Ok(());
         }
 
-        let open: Vec<_> = self
+        let mut open: Vec<_> = self
             .starts
             .iter()
             .filter(|(_, start)| start.terminal.is_none())
-            .map(|(idx, start)| format!("{idx} ({:?})", start.function_name))
             .collect();
-        if !open.is_empty() {
+        open.sort_by_key(|(idx, _)| **idx);
+        if let Some((first_open, _)) = open.first() {
+            let first_open = **first_open;
+            let open: Vec<_> = open
+                .iter()
+                .map(|(idx, start)| format!("{idx} ({:?})", start.function_name))
+                .collect();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                first_open,
                 "an End/Cancelled closing every abandoned Start before AgentInvocationFinished",
                 format!(
                     "AgentInvocationFinished with unclosed abandoned Start(s) at {}",

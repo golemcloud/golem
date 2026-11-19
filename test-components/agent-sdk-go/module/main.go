@@ -12,6 +12,7 @@ import (
 	_ "agent-sdk-go/agents/configecho/impl"
 	_ "agent-sdk-go/agents/counter/impl"
 	_ "agent-sdk-go/agents/customdur/impl"
+	_ "agent-sdk-go/agents/divergence/impl"
 	_ "agent-sdk-go/agents/httpcall/impl"
 	_ "agent-sdk-go/agents/jsonsnap/impl"
 	_ "agent-sdk-go/agents/kvstore/impl"

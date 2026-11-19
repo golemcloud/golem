@@ -40,7 +40,7 @@ use crate::model::oplog::raw_types::{
 };
 use crate::model::oplog::{
     AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
-    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails,
+    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails, UpdateFailureClass,
 };
 use crate::resource_runtime::ResourceTypeId;
 
@@ -678,6 +678,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 snapshot_assisted_details,
                 update_attempt_index,
                 snapshot_fault,
+                failure_class,
+                divergence,
                 ..
             } => Entry::FailedUpdate(RawFailedUpdateParameters {
                 target_revision: target_revision.into(),
@@ -693,6 +695,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 update_attempt_index: update_attempt_index.map(Into::into),
                 snapshot_fault: snapshot_fault
                     .map(|fault| raw_snapshot_fault_to_proto(fault) as i32),
+                failure_class: failure_class.proto_number(),
+                divergence: divergence
+                    .map(|divergence| (*divergence).try_into())
+                    .transpose()?,
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
@@ -1382,6 +1388,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     snapshot_fault: p
                         .snapshot_fault
                         .map(raw_snapshot_fault_from_proto)
+                        .transpose()?,
+                    failure_class: UpdateFailureClass::from_proto_number(p.failure_class)?,
+                    divergence: p
+                        .divergence
+                        .map(|divergence| {
+                            crate::model::oplog::ReplayDivergence::try_from(divergence)
+                                .map(Box::new)
+                        })
                         .transpose()?,
                 })
             }
