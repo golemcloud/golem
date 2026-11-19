@@ -18,8 +18,6 @@ jobs:
         with:
           fetch-depth: 1
       - name: Check benchmark publisher access
-        id: publisher_access
-        continue-on-error: true
         timeout-minutes: 3
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
@@ -94,7 +92,6 @@ jobs:
             spawned
 
       - name: Validate and publish results
-        if: steps.publisher_access.outcome == 'success'
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
           GOLEM_BENCHMARK_RESULTS_INPUT: ${{ runner.temp }}/github-actions-benchmark-results.json
@@ -118,10 +115,4 @@ jobs:
         if: steps.benchmark.outcome != 'success'
         run: |
           echo "The benchmark suite exited with status ${{ steps.benchmark.outcome }}; see its FAILURES output above."
-          exit 1
-
-      - name: Fail on publisher access failure
-        if: steps.publisher_access.outcome == 'failure'
-        run: |
-          echo "::error::Publisher access check failed. Benchmark results remain available in the uploaded artifacts."
           exit 1
