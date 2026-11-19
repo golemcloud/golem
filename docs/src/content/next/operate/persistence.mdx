@@ -26,7 +26,7 @@ Currently Golem provides the following implementations, configurable through the
 
 ## Blob storage on S3
 
-With S3, the blob storage keeps each kind of blob in the bucket that one setting of the `[blob_storage.config]` section names:
+With S3, the blob storage keeps each kind of blob in the bucket that one setting of the `[advanced.worker_executor.blob_storage.config]` section names:
 
 | Setting | Blobs |
 | --- | --- |
@@ -44,13 +44,13 @@ The key of each object starts with `object_prefix`, when it is set. All services
 
 By default (`namespace_prefixes = false`), the bucket keeps the blobs of one kind apart from the blobs of other kinds. So each bucket setting, and each entry of `compressed_oplog_buckets`, must name a different bucket: the keys of two kinds can be the same, and so can the keys of two archive layers. Every service refuses to start when two of these settings name the same bucket, and the error names both settings.
 
-Set `namespace_prefixes = true` to use one bucket for all blobs, for example on a platform that gives one S3-compatible bucket. Then each key starts with a segment for the kind of the blob, after `object_prefix`, and the key of the compressed oplog also holds its layer. No key of one kind is below the prefix of another kind, so all bucket settings can name the same bucket. These settings of the `[blob_storage.config]` section put all blobs into the bucket `golem`. The other S3 settings, such as `region`, `object_prefix` and `retries`, stay as they are:
+Set `namespace_prefixes = true` to use one bucket for all blobs, for example on a platform that gives one S3-compatible bucket. Then each key starts with a segment for the kind of the blob, after `object_prefix`, and the key of the compressed oplog also holds its layer. No key of one kind is below the prefix of another kind, so all bucket settings can name the same bucket. These settings of the `[advanced.worker_executor.blob_storage.config]` section put all blobs into the bucket `golem`. The other S3 settings, such as `region`, `object_prefix` and `retries`, stay as they are:
 
 ```toml
-[blob_storage]
+[advanced.worker_executor.blob_storage]
 type = "S3"
 
-[blob_storage.config]
+[advanced.worker_executor.blob_storage.config]
 namespace_prefixes = true
 compilation_cache_bucket = "golem"
 custom_data_bucket = "golem"
@@ -61,7 +61,7 @@ components_bucket = "golem"
 filesystem_snapshots_bucket = "golem"
 ```
 
-`compressed_oplog_buckets` must still have one entry for each archive layer in the blob storage (`blob_storage_layers` in the `[oplog]` section).
+`compressed_oplog_buckets` must still have one entry for each archive layer in the blob storage (`blob_storage_layers` in the `[advanced.worker_executor.oplog]` section).
 
 With `namespace_prefixes = true`, the keys have these prefixes:
 
@@ -110,12 +110,12 @@ In addition to the above, there are oplog entries holding user-defined data (suc
 
 ### Configuration
 
-The `[oplog]` section of the worker executor configuration allows customizing the above described behavior.
+The `[advanced.worker_executor.oplog]` section of the worker executor configuration allows customizing the above described behavior.
 
 The default configuration is the following:
 
 ```toml
-[oplog]
+[advanced.worker_executor.oplog]
 archive_interval = "1day"
 blob_storage_layers = 1
 entry_count_limit = 1024

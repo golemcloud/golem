@@ -105,6 +105,7 @@ pub trait CommandHandlerHooks: Sync + Send {
         &self,
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
+        verbosity: Verbosity,
     ) -> impl std::future::Future<Output = anyhow::Result<()>>;
 
     // Used for auto starting the default server
@@ -204,7 +205,18 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 #[cfg(not(feature = "server-commands"))]
                 let pretty_mode = false;
 
-                init_tracing(verbosity, pretty_mode);
+                #[cfg(feature = "server-commands")]
+                let server_run = matches!(
+                    command.subcommand,
+                    GolemCliSubcommand::Server {
+                        subcommand: ServerSubcommand::Run { .. }
+                    }
+                );
+                #[cfg(not(feature = "server-commands"))]
+                let server_run = false;
+                if !server_run {
+                    init_tracing(verbosity, pretty_mode);
+                }
 
                 if !is_server && !is_mcp_server {
                     watch_for_closed_stdout();
@@ -535,8 +547,11 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 }
                 #[cfg(feature = "server-commands")]
                 GolemCliSubcommand::Server { subcommand } => {
+                    let verbosity = Hooks::override_verbosity(ctx.global_flags.verbosity());
                     let (context, hooks) = ctx.get_or_init_with_hooks().await?;
-                    hooks.handler_server_commands(context, subcommand).await
+                    hooks
+                        .handler_server_commands(context, subcommand, verbosity)
+                        .await
                 }
                 GolemCliSubcommand::Account { subcommand } => {
                     ctx.get_or_init()

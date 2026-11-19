@@ -41,6 +41,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         &self,
         ctx: Arc<Context>,
         subcommand: ServerSubcommand,
+        verbosity: Verbosity,
     ) -> anyhow::Result<()> {
         match subcommand {
             ServerSubcommand::Run { args } => {
@@ -60,6 +61,20 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     &args,
                     SnapshotRepositoryKeySource::ValidationOnly,
                 )?;
+                let directives = std::iter::once(
+                    verbosity
+                        .tracing_level()
+                        .map_or("off", |level| level.as_str())
+                        .parse()
+                        .expect("tracing levels are valid directives"),
+                )
+                .collect();
+                let _tracer = golem_common::tracing::init_tracing(
+                    &config.logging,
+                    golem_common::tracing::filter::for_all_outputs::info_env_with_directives(
+                        directives,
+                    ),
+                );
                 check_exposure(&config)?;
                 if args.clean && tokio::fs::metadata(&config.data_dir).await.is_ok() {
                     clean_server_data_dir(&ctx, &config).await?;

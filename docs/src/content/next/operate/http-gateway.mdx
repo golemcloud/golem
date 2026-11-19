@@ -15,15 +15,15 @@ For local filesystem storage, mount the **same volume** into all services. Ident
 paths in isolated containers are not shared storage:
 
 ```toml
-[blob_storage]
+[advanced.worker_service.blob_storage]
 type = "LocalFileSystem"
 
-[blob_storage.config]
+[advanced.worker_service.blob_storage.config]
 root = "/blob_storage"
 ```
 
-The environment variables are `GOLEM__BLOB_STORAGE__TYPE=LocalFileSystem` and
-`GOLEM__BLOB_STORAGE__CONFIG__ROOT=/blob_storage`. The
+The environment variables are `GOLEM_ADVANCED__WORKER_SERVICE__BLOB_STORAGE__TYPE=LocalFileSystem` and
+`GOLEM_ADVANCED__WORKER_SERVICE__BLOB_STORAGE__CONFIG__ROOT=/blob_storage`. The
 [PostgreSQL compose example](https://github.com/golemcloud/golem/blob/main/docker-examples/published-postgres/compose.yaml)
 shows shared volume wiring.
 
@@ -51,7 +51,7 @@ and IPv4-mapped ranges `::ffff:a.b.c.d/n` with `n` of 96 or more. Other IPv6 ran
 such as `::/0`, do not cover IPv4 peers.
 
 ```toml
-[route_resolver]
+[advanced.worker_service.route_resolver]
 trusted_ingress_addresses = ["10.0.0.10/32"]
 ```
 
@@ -66,7 +66,7 @@ address at every restart, rollout and scale-up. List the pod address range of th
 cluster instead, for example its pod subnets:
 
 ```toml
-[route_resolver]
+[advanced.worker_service.route_resolver]
 trusted_ingress_addresses = ["172.18.128.0/19", "172.18.160.0/19", "172.18.192.0/19"]
 ```
 
@@ -107,7 +107,7 @@ management API and every other host to the custom request port. Point every name
 at the same address in DNS. Reserve the management host in the registry:
 
 ```toml
-[domain_registration]
+[advanced.registry_service.domain_registration]
 reserved_domains = ["api.golem.example.com"]
 ```
 
@@ -115,7 +115,7 @@ Reserved domains match by host, ignoring case, port, and a trailing dot. Reserva
 checks apply to new registrations; existing registrations remain in place.
 
 The single `golem` executable has this router built in. Set `router.management_host`
-(`GOLEM__ROUTER__MANAGEMENT_HOST`); it reserves that host itself. For the separate
+(`GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`); it reserves that host itself. For the separate
 Envoy image, see [Golem Router](/next/deploy#golem-router).
 
 Pass the original host in `Host` (or `:authority`), or in `X-Forwarded-Host` from a
@@ -131,14 +131,14 @@ maximum connection lifetime can still close a connection that has traffic.
 Worker-service defaults are:
 
 ```toml
-[invocation_session]
+[advanced.worker_service.invocation_session]
 keep_alive_interval = "30s"
 max_pong_timeout = "0s"
 
-[mcp]
+[advanced.worker_service.mcp]
 sse_keep_alive_interval = "15s"
 
-[durable_streams]
+[advanced.worker_service.durable_streams]
 long_poll_timeout = "30s"
 ```
 
@@ -162,9 +162,9 @@ event after each read, including empty reads. An idle read waits at most
 `long_poll_timeout`, capped at 30 seconds by the executor, so it needs no separate
 SSE heartbeat.
 
-Environment variables are `GOLEM__INVOCATION_SESSION__KEEP_ALIVE_INTERVAL`,
-`GOLEM__INVOCATION_SESSION__MAX_PONG_TIMEOUT`, `GOLEM__MCP__SSE_KEEP_ALIVE_INTERVAL`,
-and `GOLEM__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
+Environment variables are `GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION__KEEP_ALIVE_INTERVAL`,
+`GOLEM_ADVANCED__WORKER_SERVICE__INVOCATION_SESSION__MAX_PONG_TIMEOUT`, `GOLEM_ADVANCED__WORKER_SERVICE__MCP__SSE_KEEP_ALIVE_INTERVAL`,
+and `GOLEM_ADVANCED__WORKER_SERVICE__DURABLE_STREAMS__LONG_POLL_TIMEOUT`.
 
 ## MCP sessions
 
@@ -173,7 +173,7 @@ The MCP endpoint keeps no session: `initialize` issues no `Mcp-Session-Id`. See
 settings. Worker-service defaults are:
 
 ```toml
-[mcp]
+[advanced.worker_service.mcp]
 session_idle_timeout = "5m"
 ```
 
@@ -188,16 +188,16 @@ the fields of `gateway_session_storage.config` without `pending_login_expiration
 The Redis store needs Redis 6.2 or later. With several worker-service replicas, use
 Redis or Postgres; see [MCP with several replicas](/next/deploy#mcp-with-several-replicas).
 
-Environment variables are `GOLEM__MCP__SESSION_IDLE_TIMEOUT`,
-`GOLEM__MCP__SESSION_STORAGE__TYPE`, and `GOLEM__MCP__SESSION_STORAGE__CONFIG__<FIELD>`,
-for example `GOLEM__MCP__SESSION_STORAGE__CONFIG__DATABASE`.
+Environment variables are `GOLEM_ADVANCED__WORKER_SERVICE__MCP__SESSION_IDLE_TIMEOUT`,
+`GOLEM_ADVANCED__WORKER_SERVICE__MCP__SESSION_STORAGE__TYPE`, and `GOLEM_ADVANCED__WORKER_SERVICE__MCP__SESSION_STORAGE__CONFIG__<FIELD>`,
+for example `GOLEM_ADVANCED__WORKER_SERVICE__MCP__SESSION_STORAGE__CONFIG__DATABASE`.
 
 ## Setting timeouts and resource budgets
 
 Worker-service defaults are:
 
 ```toml
-[http_session]
+[advanced.worker_service.http_session]
 request_body_idle_timeout = "1m"
 file_lookup_timeout = "5m"
 retry_deadline = "10s"
@@ -253,9 +253,9 @@ Byte and frame settings bound encoded session buffering, **not total upload size
 Input encoding includes schema and frame overhead. Queued output is bounded by
 `event_queue_frames × max_event_bytes`, not all per-request allocations.
 
-For `golem server run`, nest worker-service sections under `worker_service`, for
-example `[worker_service.http_session]`. Environment variable paths also include
-`WORKER_SERVICE`, for example `GOLEM__WORKER_SERVICE__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT`.
+For `golem server run`, use the same `advanced.worker_service` sections, for
+example `[advanced.worker_service.http_session]`. Environment variable paths also include
+`WORKER_SERVICE`, for example `GOLEM_ADVANCED__WORKER_SERVICE__HTTP_SESSION__REQUEST_BODY_IDLE_TIMEOUT`.
 
 ## OpenAPI and route caches
 

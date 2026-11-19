@@ -1,4 +1,11 @@
 ## Generated from default config
+blob_store = "data_disk"
+data_dir = "/var/lib/golem"
+outbound_sockets = false
+retained_update_snapshots = 2
+state_store = "sqlite"
+
+[advanced.worker_service]
 bind_address = "0.0.0.0"
 cors_origin_regex = "https://*.golem.cloud"
 custom_request_port = 9006
@@ -8,12 +15,12 @@ port = 9005
 runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
-[agent_resolution_cache]
+[advanced.worker_service.agent_resolution_cache]
 eviction_period = "1m"
 max_capacity = 10000
 ttl = "1h"
 
-[auth_service]
+[advanced.worker_service.auth_service]
 auth_ctx_cache_eviction_period = "1m"
 auth_ctx_cache_max_capacity = 1024
 auth_ctx_cache_ttl = "10m"
@@ -21,71 +28,40 @@ environment_auth_details_cache_eviction_period = "1m"
 environment_auth_details_cache_max_capacity = 1024
 environment_auth_details_cache_ttl = "10m"
 
-[blob_storage]
-type = "LocalFileSystem"
-
-[blob_storage.config]
-root = "../data/blob_storage"
-
-[body_limits]
+[advanced.worker_service.body_limits]
 api = 33554432
 http_api = 33554432
 mcp = 33554432
 
-[component_service]
+[advanced.worker_service.component_service]
 component_cache_max_capacity = 1024
 current_component_cache_ttl = "1m"
 
-[connect_websocket]
+[advanced.worker_service.connect_websocket]
 max_frame_size = 33554432
 max_message_size = 33554432
 max_write_buffer_size = 67108864
 
-[durable_streams]
+[advanced.worker_service.durable_streams]
 long_poll_timeout = "30s"
 max_append_body_bytes = 1048576
 
-[durable_streams.forks]
+[advanced.worker_service.durable_streams.forks]
 max_copied_bytes = 67108864
 max_forks_per_second = 4
 max_forks_per_session = 128
 
-[durable_streams.load]
+[advanced.worker_service.durable_streams.load]
 max_append_requests_per_second_per_stream = 100
 max_catch_up_requests_per_second_per_stream = 100
 max_concurrent_readers_per_node = 4096
 max_concurrent_readers_per_stream = 16
 
-[gateway_session_storage]
-type = "Redis"
-
-[gateway_session_storage.config]
-database = 0
-host = "localhost"
-key_prefix = ""
-pending_login_expiration = "1h"
-pool_size = 8
-port = 6380
-tls = false
-tracing = false
-
-[gateway_session_storage.config.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[grpc]
+[advanced.worker_service.grpc]
 max_message_size = 33554432
 port = 9094
 
-[grpc.tls]
-type = "Disabled"
-
-[grpc.tls.config]
-
-[http_server]
+[advanced.worker_service.http_server]
 http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
@@ -93,7 +69,7 @@ http2_max_header_list_size = 65536
 http2_max_local_error_reset_streams = 1024
 http2_max_pending_accept_reset_streams = 20
 
-[http_session]
+[advanced.worker_service.http_session]
 cleanup_timeout = "2s"
 command_queue_frames = 16
 event_queue_frames = 2
@@ -106,28 +82,28 @@ retained_input_frames = 32
 retry_deadline = "10s"
 retry_delay = "100ms"
 
-[invocation_session]
+[advanced.worker_service.invocation_session]
 keep_alive_interval = "30s"
 max_pong_timeout = "0s"
 
-[invocation_session.websocket]
+[advanced.worker_service.invocation_session.websocket]
 max_frame_size = 33554432
 max_message_size = 33554432
 max_write_buffer_size = 67108864
 
-[invocation_session_tokens]
+[advanced.worker_service.invocation_session_tokens]
 issuer = "local-worker-service"
 verify_only_keys = []
 
-[invocation_session_tokens.active_key]
+[advanced.worker_service.invocation_session_tokens.active_key]
 id = "local-development"
 key = "0udALeSRcimBmmLXm6iKY1jg4+IZNXv6LaFkdIQ4hLA="
 
-[mcp]
+[advanced.worker_service.mcp]
 session_idle_timeout = "5m"
 sse_keep_alive_interval = "15s"
 
-[registry_service]
+[advanced.worker_service.registry_service]
 connect_timeout = "10s"
 connection_pool_size = 4
 host = "localhost"
@@ -138,32 +114,27 @@ max_connection_age = "1m"
 max_message_size = 52428800
 port = 8080
 
-[registry_service.invalidation_event_subscriber]
+[advanced.worker_service.registry_service.invalidation_event_subscriber]
 initial_backoff = "100ms"
 max_backoff = "30s"
 
-[registry_service.retries_on_unavailable]
+[advanced.worker_service.registry_service.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[registry_service.tls]
-type = "Disabled"
-
-[registry_service.tls.config]
-
-[route_resolver]
+[advanced.worker_service.route_resolver]
 router_cache_eviction_period = "1m"
 router_cache_max_capacity = 1024
 router_cache_ttl = "10m"
 trusted_ingress_addresses = []
 
-[routing_table]
+[advanced.worker_service.routing_table]
 invalidation_min_delay = "500ms"
 
-[shard_manager]
+[advanced.worker_service.shard_manager]
 connect_timeout = "10s"
 connection_pool_size = 4
 host = "localhost"
@@ -174,32 +145,62 @@ max_connection_age = "1m"
 max_message_size = 33554432
 port = 9002
 
-[shard_manager.retries]
+[advanced.worker_service.shard_manager.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[shard_manager.retries_on_unavailable]
+[advanced.worker_service.shard_manager.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[shard_manager.tls]
+[advanced.worker_service.webhook_callback_handler]
+hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+
+[advanced.worker_service.worker_executor]
+connect_timeout = "10s"
+connection_pool_size = 4
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_concurrent_oplog_entry_reads = 4
+max_connection_age = "1m"
+max_message_size = 33554432
+
+[advanced.worker_service.worker_executor.retries]
+max_attempts = 5
+max_delay = "3s"
+max_jitter_factor = 0.15
+min_delay = "10ms"
+multiplier = 10.0
+
+[advanced.worker_service.worker_executor.retries_on_unavailable]
+max_attempts = 0
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[cache]
 type = "Disabled"
 
-[shard_manager.tls.config]
+[cache.config]
 
-[tracing]
+[internal_grpc_tls]
+enabled = false
+
+[logging]
 console = false
 dtor_friendly = false
 file_name = "worker-service.log"
 file_truncate = true
 
-[tracing.file]
+[logging.file]
 ansi = false
 compact = false
 enabled = false
@@ -212,13 +213,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.otlp]
-enabled = false
-host = "localhost"
-port = 4318
-service_name = "golem"
-
-[tracing.stderr]
+[logging.stderr]
 ansi = false
 compact = false
 enabled = false
@@ -231,7 +226,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.stdout]
+[logging.stdout]
 ansi = true
 compact = false
 enabled = true
@@ -244,34 +239,23 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[webhook_callback_handler]
-hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
+[object_storage]
+artifacts_bucket = "golem-artifacts"
+components_bucket = "golem-components"
+data_bucket = "golem-data"
+object_prefix = ""
+region = "us-east-1"
 
-[worker_executor]
-connect_timeout = "10s"
-connection_pool_size = 4
-http2_keep_alive_interval = "10s"
-http2_keep_alive_timeout = "10s"
-http2_keep_alive_while_idle = true
-max_concurrent_oplog_entry_reads = 4
-max_connection_age = "1m"
-max_message_size = 33554432
+[otlp]
+enabled = false
+host = "localhost"
+port = 4318
+service_name = "golem"
 
-[worker_executor.retries]
-max_attempts = 5
-max_delay = "3s"
-max_jitter_factor = 0.15
-min_delay = "10ms"
-multiplier = 10.0
-
-[worker_executor.retries_on_unavailable]
-max_attempts = 0
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[worker_executor.tls]
-type = "Disabled"
-
-[worker_executor.tls.config]
+[postgres]
+database = "golem"
+host = "localhost"
+max_connections = 10
+password = ""
+port = 5432
+username = "golem"

@@ -37,6 +37,8 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceConfig {
+    #[serde(default)]
+    pub installation: golem_common::config::self_host::InstallationConfig,
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
@@ -253,6 +255,7 @@ impl Default for WorkerServiceConfig {
             environment: "local".to_string(),
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             blob_storage: BlobStorageConfig::default(),
+            installation: Default::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 9005,
@@ -1107,7 +1110,7 @@ pub struct InvocationSessionTokenKeyConfig {
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";
 
 pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> {
-    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME))
+    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME)).for_service("worker_service")
 }
 
 #[cfg(test)]
@@ -1423,7 +1426,7 @@ mod tests {
         Jail::expect_with(|jail| {
             with_worker_service_config_file(jail)?;
             jail.set_env(
-                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                "GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
                 r#"["172.18.128.0/19","172.18.160.0/19","172.18.192.0/19"]"#,
             );
 
@@ -1447,7 +1450,7 @@ mod tests {
         Jail::expect_with(|jail| {
             with_worker_service_config_file(jail)?;
             jail.set_env(
-                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                "GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
                 r#"["10.0.0.1"]"#,
             );
 

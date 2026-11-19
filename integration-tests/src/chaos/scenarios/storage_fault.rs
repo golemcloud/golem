@@ -63,7 +63,7 @@
 //!   one layer down. That costs the run the routing check the other two delays
 //!   get for free, and the evidence has to come from the `svc`-labelled storage
 //!   series instead. It also meets the one concurrency gate the suite has:
-//!   `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS`, a semaphore tighter
+//!   `GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS`, a semaphore tighter
 //!   than the pool behind it.
 //!
 //! * **MF1** is the odd one out and the only code here that injects
@@ -167,7 +167,7 @@
 //! The first three scenarios are sized against a platform budget: S16 and S14
 //! stay inside one, S22 deliberately runs past it. S18 has no budget to run
 //! past. golem-dev sets
-//! `GOLEM__KEY_VALUE_STORAGE__CONFIG__CACHE__CONFIG__RETRIES__MAX_ATTEMPTS` to
+//! `GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__CACHE__CONFIG__RETRIES__MAX_ATTEMPTS` to
 //! `0`, which `RedisPool::configured` hands to fred as a `ReconnectPolicy` with
 //! unlimited attempts, and it passes no performance or connection config, so
 //! fred's defaults apply: no command timeout and an unbounded command buffer.

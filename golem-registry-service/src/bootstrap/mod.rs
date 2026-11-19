@@ -858,8 +858,11 @@ async fn make_blob_storage(
 ) -> anyhow::Result<Arc<dyn BlobStorage>> {
     match blob_storage_config {
         BlobStorageConfig::S3(config) => {
-            let blob_storage =
-                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await;
+            let blob_storage = golem_service_base::storage::blob::s3::S3BlobStorage::new(
+                config.clone(),
+                &config.components_bucket,
+            )
+            .await?;
             Ok(Arc::new(blob_storage))
         }
         BlobStorageConfig::LocalFileSystem(config) => {

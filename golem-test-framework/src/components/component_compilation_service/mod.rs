@@ -57,23 +57,38 @@ async fn env_vars(
     otlp: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
-        .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
-        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str(
+            "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__COMPILED_COMPONENT_SERVICE__TYPE",
+            "Enabled",
+        )
+        .with_str("GOLEM__BLOB_STORE", "data_disk")
         .with(
-            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "GOLEM__DATA_DISK__BLOB_ROOT",
             std::env::temp_dir()
                 .join("ittest-local-object-store/golem")
                 .to_string_lossy()
                 .to_string(),
         )
-        .with_str("GOLEM__REGISTRY_SERVICE__TYPE", "Dynamic")
-        .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
+        .with_str(
+            "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__REGISTRY_SERVICE__TYPE",
+            "Dynamic",
+        )
         .with(
-            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__ENGINE__ENABLE_FS_CACHE",
+            "true".to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__ENGINE__ENABLE_FS_CACHE",
             enable_fs_cache.to_string(),
         )
-        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with(
+            "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__GRPC__PORT",
+            grpc_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__HTTP_PORT",
+            http_port.to_string(),
+        )
         .with_optional_otlp("component_compilation_service", otlp)
         .build()
 }
@@ -88,11 +103,11 @@ mod tests {
     async fn blob_root_uses_process_temp_directory() {
         let env = env_vars(8083, 9094, Level::INFO, false, false).await;
         assert_eq!(
-            env["GOLEM__BLOB_STORAGE__CONFIG__ROOT"],
+            env["GOLEM__DATA_DISK__BLOB_ROOT"],
             std::env::temp_dir()
                 .join("ittest-local-object-store/golem")
                 .to_string_lossy()
         );
-        assert_eq!(env["GOLEM__BLOB_STORAGE__TYPE"], "LocalFileSystem");
+        assert_eq!(env["GOLEM__BLOB_STORE"], "data_disk");
     }
 }

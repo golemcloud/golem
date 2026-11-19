@@ -9,12 +9,12 @@ x-aliases:
   # certificate.
   shard-manager-tls: &shard-manager-tls
     environment:
-      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
-      GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
-      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
-      GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
-      GOLEM__PERSISTENCE__CONFIG__USERNAME: golem-shard-manager
-      GOLEM__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
+      GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS: '["https://etcd:2379"]'
+      GOLEM__ETCD__TLS__CA_CERT_FILE: /etc/etcd-tls/ca.pem
+      GOLEM__ETCD__TLS__CLIENT_CERT_FILE: /etc/etcd-tls/client.pem
+      GOLEM__ETCD__TLS__CLIENT_KEY_FILE: /etc/etcd-tls/client-key.pem
+      GOLEM__POSTGRES__USERNAME: golem-shard-manager
+      GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__PASSWORD_FILE: /run/secrets/etcd-password
     volumes:
       - ./etcd-tls:/etc/etcd-tls:ro
     secrets:

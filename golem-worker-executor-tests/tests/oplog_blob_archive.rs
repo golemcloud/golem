@@ -129,7 +129,9 @@ impl S3Test {
         }
         config.validate().unwrap();
         create_buckets(&s3_server, &config).await;
-        let storage = s3::S3BlobStorage::new(config).await;
+        let storage = s3::S3BlobStorage::new(config.clone(), &config.oplog_payload_bucket)
+            .await
+            .unwrap();
 
         self.s3_servers.lock().await.push(s3_server);
         storage

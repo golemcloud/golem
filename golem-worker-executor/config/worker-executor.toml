@@ -1,4 +1,11 @@
 ## Generated from default config
+blob_store = "data_disk"
+data_dir = "/var/lib/golem"
+outbound_sockets = false
+retained_update_snapshots = 2
+state_store = "sqlite"
+
+[advanced.worker_executor]
 bind_address = "0.0.0.0"
 http_port = 8082
 max_in_function_retry_delay = "20s"
@@ -7,95 +14,83 @@ runtime_metrics_sampling_interval = "5s"
 standalone_tool_invocation_retention = "7days"
 tracing_file_name_with_port = true
 
-[active_agents]
+[advanced.worker_executor.active_agents]
 drop_when_full = 0.25
 ttl = "8h"
 
-[agent_sockets]
+[advanced.worker_executor.agent_sockets]
 dns_servers = []
-enabled = false
 refused_ports = []
 
-[agent_status_checkpoint]
+[advanced.worker_executor.agent_status_checkpoint]
 enabled = true
 min_oplog_delta = 1000
 
-[agent_status_flush]
+[advanced.worker_executor.agent_status_flush]
 enabled = true
 interval = "1s"
 max_concurrency = 128
 
-[agent_types_service]
+[advanced.worker_executor.agent_types_service]
 type = "Grpc"
 
-[agent_types_service.config]
+[advanced.worker_executor.agent_types_service.config]
 cache_time_to_idle = "1m"
 
-[agent_webhooks_service]
+[advanced.worker_executor.agent_webhooks_service]
 hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 use_https_for_webhook_url = true
 
-[blob_storage]
-type = "LocalFileSystem"
-
-[blob_storage.config]
-root = "../data/blob_storage"
-
-[compiled_component_service]
+[advanced.worker_executor.compiled_component_service]
 type = "Enabled"
 
-[compiled_component_service.config]
+[advanced.worker_executor.compiled_component_service.config]
 
-[component_cache]
+[advanced.worker_executor.component_cache]
 max_capacity = 32
 max_concurrent_compilations = 16
 max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
 
-[direct_invocation_auth_cache]
+[advanced.worker_executor.direct_invocation_auth_cache]
 cache_capacity = 1024
 cache_eviction_interval = "1m"
 cache_ttl = "5m"
 
-[durable_stream]
+[advanced.worker_executor.durable_stream]
 abandoned_prepare_after = "5m"
 external_batch_max_size = "8388608 B"
 lease_ttl = "1m"
 reconciliation_batch_size = 256
 reconciliation_interval = "30s"
 
-[engine]
+[advanced.worker_executor.engine]
 enable_fs_cache = false
 
-[environment_state_service]
+[advanced.worker_executor.environment_state_service]
 cache_capacity = 1000
 cache_eviction_interval = "1m"
 
-[environment_state_service.cache_ttl]
+[advanced.worker_executor.environment_state_service.cache_ttl]
 nanos = 0
 secs = 300
 
-[filesystem_snapshots]
-type = "Disabled"
-
-[filesystem_snapshots.config]
-
-[filesystem_storage.cleanup_retry]
+[advanced.worker_executor.filesystem_storage.cleanup_retry]
 max_attempts = 4
 max_delay = "250ms"
 min_delay = "25ms"
 multiplier = 4.0
 
-[filesystem_storage.filesystem_object_limit_policy]
+[advanced.worker_executor.filesystem_storage.filesystem_object_limit_policy]
 maximum_objects = 131072
 minimum_objects = 8192
 objects_per_gib = 32768
 
-[filesystem_storage.mode]
+[advanced.worker_executor.filesystem_storage.mode]
 type = "Temporary"
 
-[filesystem_storage.pressure]
+[advanced.worker_executor.filesystem_storage.pressure]
 minimum_available_bytes = 67108864
 minimum_available_filesystem_objects = 8192
 reclamation_observation_attempts = 4
@@ -103,19 +98,14 @@ reclamation_observation_delay = "25ms"
 target_available_bytes = 134217728
 target_available_filesystem_objects = 16384
 
-[grpc]
+[advanced.worker_executor.grpc]
 max_message_size = 33554432
 port = 9093
 
-[grpc.tls]
-type = "Disabled"
-
-[grpc.tls.config]
-
-[http_client]
+[advanced.worker_executor.http_client]
 type = "Enabled"
 
-[http_client.config]
+[advanced.worker_executor.http_client.config]
 connect_timeout = "30s"
 idle_timeout = "1m 30s"
 max_connections_per_host = 20
@@ -123,66 +113,28 @@ max_host_entries = 1024
 max_idle_per_host = 8
 max_total_connections = 200
 
-[indexed_storage]
-type = "Sqlite"
-
-[indexed_storage.config]
-database = "../data/worker-executor-indexed-storage.db"
-foreign_keys = false
-max_connections = 10
-
-[indexed_storage_retry]
+[advanced.worker_executor.indexed_storage_retry]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[invocation_results]
+[advanced.worker_executor.invocation_results]
 bloom_bits = 1048576
 bloom_hashes = 4
 hydrated_cache_capacity = 1024
 physical_index_catch_up_chunk_size = 1024
 recent_capacity = 1024
 
-[key_value_storage]
-type = "NamespaceRouted"
-
-[key_value_storage.config.cache]
-type = "Redis"
-
-[key_value_storage.config.cache.config]
-database = 0
-host = "localhost"
-key_prefix = ""
-pool_size = 8
-port = 6380
-tls = false
-tracing = false
-
-[key_value_storage.config.cache.config.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[key_value_storage.config.persistent]
-type = "Sqlite"
-
-[key_value_storage.config.persistent.config]
-database = "../data/worker-executor-key-value-storage.db"
-foreign_keys = false
-max_connections = 10
-
-[key_value_storage_retry]
+[advanced.worker_executor.key_value_storage_retry]
 max_attempts = 15
 max_delay = "10s"
 max_jitter_factor = 0.15
 min_delay = "200ms"
 multiplier = 2.0
 
-[limits]
+[advanced.worker_executor.limits]
 agent_scan_batch_size = 100
 ephemeral_fuel_overdraft_multiplier = 100
 epoch_interval = "10ms"
@@ -202,11 +154,11 @@ max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
 
-[limits.scan_budget]
+[advanced.worker_executor.limits.scan_budget]
 entries = 100000
 time = "5s"
 
-[mcp_transport]
+[advanced.worker_executor.mcp_transport]
 concurrency = 16
 json_depth = 512
 listing_bytes = 16777216
@@ -217,19 +169,19 @@ response_bytes = 16777216
 timeout = "1m"
 tools = 1024
 
-[memory]
+[advanced.worker_executor.memory]
 acquire_retry_delay = "500ms"
 component_size_coefficient = 2.0
 enable_measured_admission = true
 worker_memory_ratio = 0.8
 
-[memory.oom_retry_config]
+[advanced.worker_executor.memory.oom_retry_config]
 max_attempts = 4294967295
 max_delay = "5s"
 min_delay = "100ms"
 multiplier = 2.0
 
-[oplog]
+[advanced.worker_executor.oplog]
 archive_interval = "1day"
 blob_storage_layers = 1
 entry_count_limit = 1024
@@ -242,16 +194,16 @@ oplog_rate_limit_enabled = false
 plugin_max_commit_count = 3
 plugin_max_elapsed_time = "5s"
 
-[oplog.default_snapshotting]
+[advanced.worker_executor.oplog.default_snapshotting]
 type = "Disabled"
 
-[oplog.oplog_processor_snapshotting]
+[advanced.worker_executor.oplog.oplog_processor_snapshotting]
 type = "EveryNInvocation"
 
-[oplog.oplog_processor_snapshotting.config]
+[advanced.worker_executor.oplog.oplog_processor_snapshotting.config]
 count = 10
 
-[oplog.sweep]
+[advanced.worker_executor.oplog.sweep]
 enabled = true
 interval = "1m"
 max_archives_per_tick = 256
@@ -262,7 +214,7 @@ max_tick_duration = "30s"
 max_tracked_agents = 100000
 page_size = 128
 
-[public_worker_api]
+[advanced.worker_executor.public_worker_api]
 connect_timeout = "10s"
 connection_pool_size = 4
 host = "localhost"
@@ -273,38 +225,33 @@ max_connection_age = "1m"
 max_message_size = 33554432
 port = 9007
 
-[public_worker_api.retries_on_unavailable]
+[advanced.worker_executor.public_worker_api.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[public_worker_api.tls]
-type = "Disabled"
-
-[public_worker_api.tls.config]
-
-[quota_service]
+[advanced.worker_executor.quota_service]
 inline_wait_threshold = "1m"
 renewal_interval = "10s"
 renewal_threshold = "20s"
 
-[rdbms.pool]
+[advanced.worker_executor.rdbms.pool]
 acquire_timeout = "3s"
 eviction_period = "2m"
 eviction_ttl = "10m"
 max_connections = 20
 
-[rdbms.query]
+[advanced.worker_executor.rdbms.query]
 query_batch = 50
 
-[read_only_cache]
+[advanced.worker_executor.read_only_cache]
 cache_capacity = 256
 cache_eviction_interval = "1m"
 max_entry_age = "2h"
 
-[registry_service]
+[advanced.worker_executor.registry_service]
 connect_timeout = "10s"
 connection_pool_size = 4
 host = "localhost"
@@ -316,64 +263,51 @@ max_message_size = 52428800
 port = 8080
 request_timeout = "30s"
 
-[registry_service.invalidation_event_subscriber]
+[advanced.worker_executor.registry_service.invalidation_event_subscriber]
 initial_backoff = "100ms"
 max_backoff = "30s"
 
-[registry_service.retries_on_unavailable]
+[advanced.worker_executor.registry_service.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[registry_service.tls]
-type = "Disabled"
-
-[registry_service.tls.config]
-
-[resource_limits]
+[advanced.worker_executor.resource_limits]
 type = "Grpc"
 
-[resource_limits.config]
+[advanced.worker_executor.resource_limits.config]
 batch_update_interval = "1m"
 limit_refresh_interval = "5m"
 
-[resource_usage_metering]
+[advanced.worker_executor.resource_usage_metering]
 compute = false
 filesystem = false
 memory = false
 
-[retry]
+[advanced.worker_executor.retry]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[scheduler]
+[advanced.worker_executor.scheduler]
 claim_batch_size = 100
 lease_ttl = "30s"
 max_batches_per_tick = 10
 max_concurrent_action_processing = 64
 refresh_interval = "2s"
 
-[scheduler_storage]
-type = "Sqlite"
-
-[scheduler_storage.config]
-database = "../data/worker-executor-scheduler-storage.db"
-foreign_keys = false
-max_connections = 10
-
-[scheduler_storage_retry]
+[advanced.worker_executor.scheduler_storage_retry]
 max_attempts = 3
 max_delay = "1s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
-[shard_manager]
+[advanced.worker_executor.shard_manager]
 connect_timeout = "10s"
 connection_pool_size = 4
 host = "localhost"
@@ -384,26 +318,21 @@ max_connection_age = "1m"
 max_message_size = 33554432
 port = 9002
 
-[shard_manager.retries]
+[advanced.worker_executor.shard_manager.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[shard_manager.retries_on_unavailable]
+[advanced.worker_executor.shard_manager.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[shard_manager.tls]
-type = "Disabled"
-
-[shard_manager.tls.config]
-
-[suspend]
+[advanced.worker_executor.suspend]
 ephemeral_max_sleep = "1m"
 rpc_resume_after = "5s"
 rpc_suspend_after = "30s"
@@ -411,13 +340,26 @@ suspend_after = "10s"
 wait_suspend_check_interval = "10s"
 wait_suspend_grace = "1s"
 
-[tracing]
+[cache]
+type = "Disabled"
+
+[cache.config]
+
+[filesystem_snapshots]
+type = "Disabled"
+
+[filesystem_snapshots.config]
+
+[internal_grpc_tls]
+enabled = false
+
+[logging]
 console = false
 dtor_friendly = false
 file_name = "worker-executor.log"
 file_truncate = true
 
-[tracing.file]
+[logging.file]
 ansi = false
 compact = false
 enabled = false
@@ -430,13 +372,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.otlp]
-enabled = false
-host = "localhost"
-port = 4318
-service_name = "golem"
-
-[tracing.stderr]
+[logging.stderr]
 ansi = false
 compact = false
 enabled = false
@@ -449,7 +385,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.stdout]
+[logging.stdout]
 ansi = true
 compact = false
 enabled = true
@@ -462,7 +398,29 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
+[object_storage]
+artifacts_bucket = "golem-artifacts"
+components_bucket = "golem-components"
+data_bucket = "golem-data"
+object_prefix = ""
+region = "us-east-1"
+
+[otlp]
+enabled = false
+host = "localhost"
+port = 4318
+service_name = "golem"
+
+[postgres]
+database = "golem"
+host = "localhost"
+max_connections = 10
+password = ""
+port = 5432
+username = "golem"
+
 ## Generated from example config: with redis indexed_storage and s3 blob storage
+# [advanced.worker_executor]
 # bind_address = "0.0.0.0"
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
@@ -471,38 +429,39 @@ without_time = false
 # standalone_tool_invocation_retention = "7days"
 # tracing_file_name_with_port = true
 #
-# [active_agents]
+# [advanced.worker_executor.active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
 #
-# [agent_sockets]
+# [advanced.worker_executor.agent_sockets]
 # dns_servers = []
 # enabled = false
 # refused_ports = []
 #
-# [agent_status_checkpoint]
+# [advanced.worker_executor.agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
 #
-# [agent_status_flush]
+# [advanced.worker_executor.agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
 #
-# [agent_types_service]
+# [advanced.worker_executor.agent_types_service]
 # type = "Grpc"
 #
-# [agent_types_service.config]
+# [advanced.worker_executor.agent_types_service.config]
 # cache_time_to_idle = "1m"
 #
-# [agent_webhooks_service]
+# [advanced.worker_executor.agent_webhooks_service]
 # hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 # use_https_for_webhook_url = true
 #
-# [blob_storage]
+# [advanced.worker_executor.blob_storage]
 # type = "S3"
 #
-# [blob_storage.config]
+# [advanced.worker_executor.blob_storage.config]
+# artifacts_bucket = "golem-artifacts"
 # compilation_cache_bucket = "golem-compiled-components"
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
@@ -514,68 +473,68 @@ without_time = false
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
 #
-# [blob_storage.config.retries]
+# [advanced.worker_executor.blob_storage.config.retries]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [compiled_component_service]
+# [advanced.worker_executor.compiled_component_service]
 # type = "Enabled"
 #
-# [compiled_component_service.config]
+# [advanced.worker_executor.compiled_component_service.config]
 #
-# [component_cache]
+# [advanced.worker_executor.component_cache]
 # max_capacity = 32
 # max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
 #
-# [direct_invocation_auth_cache]
+# [advanced.worker_executor.direct_invocation_auth_cache]
 # cache_capacity = 1024
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
 #
-# [durable_stream]
+# [advanced.worker_executor.durable_stream]
 # abandoned_prepare_after = "5m"
 # external_batch_max_size = "8388608 B"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
 #
-# [engine]
+# [advanced.worker_executor.engine]
 # enable_fs_cache = false
 #
-# [environment_state_service]
+# [advanced.worker_executor.environment_state_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
 #
-# [environment_state_service.cache_ttl]
+# [advanced.worker_executor.environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
 #
-# [filesystem_snapshots]
+# [advanced.worker_executor.filesystem_snapshots]
 # type = "Disabled"
 #
-# [filesystem_snapshots.config]
+# [advanced.worker_executor.filesystem_snapshots.config]
 #
-# [filesystem_storage.cleanup_retry]
+# [advanced.worker_executor.filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
 # min_delay = "25ms"
 # multiplier = 4.0
 #
-# [filesystem_storage.filesystem_object_limit_policy]
+# [advanced.worker_executor.filesystem_storage.filesystem_object_limit_policy]
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
 #
-# [filesystem_storage.mode]
+# [advanced.worker_executor.filesystem_storage.mode]
 # type = "Temporary"
 #
-# [filesystem_storage.pressure]
+# [advanced.worker_executor.filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
 # minimum_available_filesystem_objects = 8192
 # reclamation_observation_attempts = 4
@@ -583,19 +542,19 @@ without_time = false
 # target_available_bytes = 134217728
 # target_available_filesystem_objects = 16384
 #
-# [grpc]
+# [advanced.worker_executor.grpc]
 # max_message_size = 33554432
 # port = 9093
 #
-# [grpc.tls]
+# [advanced.worker_executor.grpc.tls]
 # type = "Disabled"
 #
-# [grpc.tls.config]
+# [advanced.worker_executor.grpc.tls.config]
 #
-# [http_client]
+# [advanced.worker_executor.http_client]
 # type = "Enabled"
 #
-# [http_client.config]
+# [advanced.worker_executor.http_client.config]
 # connect_timeout = "30s"
 # idle_timeout = "1m 30s"
 # max_connections_per_host = 20
@@ -603,10 +562,10 @@ without_time = false
 # max_idle_per_host = 8
 # max_total_connections = 200
 #
-# [indexed_storage]
+# [advanced.worker_executor.indexed_storage]
 # type = "Redis"
 #
-# [indexed_storage.config]
+# [advanced.worker_executor.indexed_storage.config]
 # database = 0
 # host = "localhost"
 # key_prefix = ""
@@ -615,40 +574,42 @@ without_time = false
 # tls = false
 # tracing = false
 #
-# [indexed_storage.config.retries]
+# [advanced.worker_executor.indexed_storage.config.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [indexed_storage_retry]
+# [advanced.worker_executor.indexed_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [invocation_results]
+# [advanced.worker_executor.installation]
+#
+# [advanced.worker_executor.invocation_results]
 # bloom_bits = 1048576
 # bloom_hashes = 4
 # hydrated_cache_capacity = 1024
 # physical_index_catch_up_chunk_size = 1024
 # recent_capacity = 1024
 #
-# [key_value_storage]
+# [advanced.worker_executor.key_value_storage]
 # type = "InMemory"
 #
-# [key_value_storage.config]
+# [advanced.worker_executor.key_value_storage.config]
 #
-# [key_value_storage_retry]
+# [advanced.worker_executor.key_value_storage_retry]
 # max_attempts = 15
 # max_delay = "10s"
 # max_jitter_factor = 0.15
 # min_delay = "200ms"
 # multiplier = 2.0
 #
-# [limits]
+# [advanced.worker_executor.limits]
 # agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -668,11 +629,11 @@ without_time = false
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
-# [limits.scan_budget]
+# [advanced.worker_executor.limits.scan_budget]
 # entries = 100000
 # time = "5s"
 #
-# [mcp_transport]
+# [advanced.worker_executor.mcp_transport]
 # concurrency = 16
 # json_depth = 512
 # listing_bytes = 16777216
@@ -683,19 +644,19 @@ without_time = false
 # timeout = "1m"
 # tools = 1024
 #
-# [memory]
+# [advanced.worker_executor.memory]
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
 # worker_memory_ratio = 0.8
 #
-# [memory.oom_retry_config]
+# [advanced.worker_executor.memory.oom_retry_config]
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [oplog]
+# [advanced.worker_executor.oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
 # entry_count_limit = 1024
@@ -708,16 +669,16 @@ without_time = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
 #
-# [oplog.default_snapshotting]
+# [advanced.worker_executor.oplog.default_snapshotting]
 # type = "Disabled"
 #
-# [oplog.oplog_processor_snapshotting]
+# [advanced.worker_executor.oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
 #
-# [oplog.oplog_processor_snapshotting.config]
+# [advanced.worker_executor.oplog.oplog_processor_snapshotting.config]
 # count = 10
 #
-# [oplog.sweep]
+# [advanced.worker_executor.oplog.sweep]
 # enabled = true
 # interval = "1m"
 # max_archives_per_tick = 256
@@ -728,7 +689,7 @@ without_time = false
 # max_tracked_agents = 100000
 # page_size = 128
 #
-# [public_worker_api]
+# [advanced.worker_executor.public_worker_api]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -739,38 +700,38 @@ without_time = false
 # max_message_size = 33554432
 # port = 9007
 #
-# [public_worker_api.retries_on_unavailable]
+# [advanced.worker_executor.public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [public_worker_api.tls]
+# [advanced.worker_executor.public_worker_api.tls]
 # type = "Disabled"
 #
-# [public_worker_api.tls.config]
+# [advanced.worker_executor.public_worker_api.tls.config]
 #
-# [quota_service]
+# [advanced.worker_executor.quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
 # renewal_threshold = "20s"
 #
-# [rdbms.pool]
+# [advanced.worker_executor.rdbms.pool]
 # acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20
 #
-# [rdbms.query]
+# [advanced.worker_executor.rdbms.query]
 # query_batch = 50
 #
-# [read_only_cache]
+# [advanced.worker_executor.read_only_cache]
 # cache_capacity = 256
 # cache_eviction_interval = "1m"
 # max_entry_age = "2h"
 #
-# [registry_service]
+# [advanced.worker_executor.registry_service]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -782,64 +743,64 @@ without_time = false
 # port = 8080
 # request_timeout = "30s"
 #
-# [registry_service.invalidation_event_subscriber]
+# [advanced.worker_executor.registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
 #
-# [registry_service.retries_on_unavailable]
+# [advanced.worker_executor.registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [registry_service.tls]
+# [advanced.worker_executor.registry_service.tls]
 # type = "Disabled"
 #
-# [registry_service.tls.config]
+# [advanced.worker_executor.registry_service.tls.config]
 #
-# [resource_limits]
+# [advanced.worker_executor.resource_limits]
 # type = "Grpc"
 #
-# [resource_limits.config]
+# [advanced.worker_executor.resource_limits.config]
 # batch_update_interval = "1m"
 # limit_refresh_interval = "5m"
 #
-# [resource_usage_metering]
+# [advanced.worker_executor.resource_usage_metering]
 # compute = false
 # filesystem = false
 # memory = false
 #
-# [retry]
+# [advanced.worker_executor.retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [scheduler]
+# [advanced.worker_executor.scheduler]
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 #
-# [scheduler_storage]
+# [advanced.worker_executor.scheduler_storage]
 # type = "Sqlite"
 #
-# [scheduler_storage.config]
+# [advanced.worker_executor.scheduler_storage.config]
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
 #
-# [scheduler_storage_retry]
+# [advanced.worker_executor.scheduler_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [shard_manager]
+# [advanced.worker_executor.shard_manager]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -850,26 +811,26 @@ without_time = false
 # max_message_size = 33554432
 # port = 9002
 #
-# [shard_manager.retries]
+# [advanced.worker_executor.shard_manager.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [shard_manager.retries_on_unavailable]
+# [advanced.worker_executor.shard_manager.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [shard_manager.tls]
+# [advanced.worker_executor.shard_manager.tls]
 # type = "Disabled"
 #
-# [shard_manager.tls.config]
+# [advanced.worker_executor.shard_manager.tls.config]
 #
-# [suspend]
+# [advanced.worker_executor.suspend]
 # ephemeral_max_sleep = "1m"
 # rpc_resume_after = "5s"
 # rpc_suspend_after = "30s"
@@ -877,13 +838,13 @@ without_time = false
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"
 #
-# [tracing]
+# [advanced.worker_executor.tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
 # file_truncate = true
 #
-# [tracing.file]
+# [advanced.worker_executor.tracing.file]
 # ansi = false
 # compact = false
 # enabled = false
@@ -896,13 +857,13 @@ without_time = false
 # span_events_full = false
 # without_time = false
 #
-# [tracing.otlp]
+# [advanced.worker_executor.tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
 #
-# [tracing.stderr]
+# [advanced.worker_executor.tracing.stderr]
 # ansi = false
 # compact = false
 # enabled = false
@@ -915,7 +876,7 @@ without_time = false
 # span_events_full = false
 # without_time = false
 #
-# [tracing.stdout]
+# [advanced.worker_executor.tracing.stdout]
 # ansi = true
 # compact = false
 # enabled = true
@@ -929,6 +890,7 @@ without_time = false
 # without_time = false
 
 ## Generated from example config: with dual-stack listeners and an advertised executor address
+# [advanced.worker_executor]
 # bind_address = "::"
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
@@ -937,95 +899,95 @@ without_time = false
 # standalone_tool_invocation_retention = "7days"
 # tracing_file_name_with_port = true
 #
-# [active_agents]
+# [advanced.worker_executor.active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
 #
-# [agent_sockets]
+# [advanced.worker_executor.agent_sockets]
 # dns_servers = []
 # enabled = false
 # refused_ports = []
 #
-# [agent_status_checkpoint]
+# [advanced.worker_executor.agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
 #
-# [agent_status_flush]
+# [advanced.worker_executor.agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
 #
-# [agent_types_service]
+# [advanced.worker_executor.agent_types_service]
 # type = "Grpc"
 #
-# [agent_types_service.config]
+# [advanced.worker_executor.agent_types_service.config]
 # cache_time_to_idle = "1m"
 #
-# [agent_webhooks_service]
+# [advanced.worker_executor.agent_webhooks_service]
 # hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 # use_https_for_webhook_url = true
 #
-# [blob_storage]
+# [advanced.worker_executor.blob_storage]
 # type = "LocalFileSystem"
 #
-# [blob_storage.config]
+# [advanced.worker_executor.blob_storage.config]
 # root = "../data/blob_storage"
 #
-# [compiled_component_service]
+# [advanced.worker_executor.compiled_component_service]
 # type = "Enabled"
 #
-# [compiled_component_service.config]
+# [advanced.worker_executor.compiled_component_service.config]
 #
-# [component_cache]
+# [advanced.worker_executor.component_cache]
 # max_capacity = 32
 # max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
 #
-# [direct_invocation_auth_cache]
+# [advanced.worker_executor.direct_invocation_auth_cache]
 # cache_capacity = 1024
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
 #
-# [durable_stream]
+# [advanced.worker_executor.durable_stream]
 # abandoned_prepare_after = "5m"
 # external_batch_max_size = "8388608 B"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
 #
-# [engine]
+# [advanced.worker_executor.engine]
 # enable_fs_cache = false
 #
-# [environment_state_service]
+# [advanced.worker_executor.environment_state_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
 #
-# [environment_state_service.cache_ttl]
+# [advanced.worker_executor.environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
 #
-# [filesystem_snapshots]
+# [advanced.worker_executor.filesystem_snapshots]
 # type = "Disabled"
 #
-# [filesystem_snapshots.config]
+# [advanced.worker_executor.filesystem_snapshots.config]
 #
-# [filesystem_storage.cleanup_retry]
+# [advanced.worker_executor.filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
 # min_delay = "25ms"
 # multiplier = 4.0
 #
-# [filesystem_storage.filesystem_object_limit_policy]
+# [advanced.worker_executor.filesystem_storage.filesystem_object_limit_policy]
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
 #
-# [filesystem_storage.mode]
+# [advanced.worker_executor.filesystem_storage.mode]
 # type = "Temporary"
 #
-# [filesystem_storage.pressure]
+# [advanced.worker_executor.filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
 # minimum_available_filesystem_objects = 8192
 # reclamation_observation_attempts = 4
@@ -1033,20 +995,20 @@ without_time = false
 # target_available_bytes = 134217728
 # target_available_filesystem_objects = 16384
 #
-# [grpc]
+# [advanced.worker_executor.grpc]
 # advertised_ip = "fdaa::2"
 # max_message_size = 33554432
 # port = 9093
 #
-# [grpc.tls]
+# [advanced.worker_executor.grpc.tls]
 # type = "Disabled"
 #
-# [grpc.tls.config]
+# [advanced.worker_executor.grpc.tls.config]
 #
-# [http_client]
+# [advanced.worker_executor.http_client]
 # type = "Enabled"
 #
-# [http_client.config]
+# [advanced.worker_executor.http_client.config]
 # connect_timeout = "30s"
 # idle_timeout = "1m 30s"
 # max_connections_per_host = 20
@@ -1054,35 +1016,37 @@ without_time = false
 # max_idle_per_host = 8
 # max_total_connections = 200
 #
-# [indexed_storage]
+# [advanced.worker_executor.indexed_storage]
 # type = "Sqlite"
 #
-# [indexed_storage.config]
+# [advanced.worker_executor.indexed_storage.config]
 # database = "../data/worker-executor-indexed-storage.db"
 # foreign_keys = false
 # max_connections = 10
 #
-# [indexed_storage_retry]
+# [advanced.worker_executor.indexed_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [invocation_results]
+# [advanced.worker_executor.installation]
+#
+# [advanced.worker_executor.invocation_results]
 # bloom_bits = 1048576
 # bloom_hashes = 4
 # hydrated_cache_capacity = 1024
 # physical_index_catch_up_chunk_size = 1024
 # recent_capacity = 1024
 #
-# [key_value_storage]
+# [advanced.worker_executor.key_value_storage]
 # type = "NamespaceRouted"
 #
-# [key_value_storage.config.cache]
+# [advanced.worker_executor.key_value_storage.config.cache]
 # type = "Redis"
 #
-# [key_value_storage.config.cache.config]
+# [advanced.worker_executor.key_value_storage.config.cache.config]
 # database = 0
 # host = "localhost"
 # key_prefix = ""
@@ -1091,29 +1055,29 @@ without_time = false
 # tls = false
 # tracing = false
 #
-# [key_value_storage.config.cache.config.retries]
+# [advanced.worker_executor.key_value_storage.config.cache.config.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [key_value_storage.config.persistent]
+# [advanced.worker_executor.key_value_storage.config.persistent]
 # type = "Sqlite"
 #
-# [key_value_storage.config.persistent.config]
+# [advanced.worker_executor.key_value_storage.config.persistent.config]
 # database = "../data/worker-executor-key-value-storage.db"
 # foreign_keys = false
 # max_connections = 10
 #
-# [key_value_storage_retry]
+# [advanced.worker_executor.key_value_storage_retry]
 # max_attempts = 15
 # max_delay = "10s"
 # max_jitter_factor = 0.15
 # min_delay = "200ms"
 # multiplier = 2.0
 #
-# [limits]
+# [advanced.worker_executor.limits]
 # agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -1133,11 +1097,11 @@ without_time = false
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
-# [limits.scan_budget]
+# [advanced.worker_executor.limits.scan_budget]
 # entries = 100000
 # time = "5s"
 #
-# [mcp_transport]
+# [advanced.worker_executor.mcp_transport]
 # concurrency = 16
 # json_depth = 512
 # listing_bytes = 16777216
@@ -1148,19 +1112,19 @@ without_time = false
 # timeout = "1m"
 # tools = 1024
 #
-# [memory]
+# [advanced.worker_executor.memory]
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
 # worker_memory_ratio = 0.8
 #
-# [memory.oom_retry_config]
+# [advanced.worker_executor.memory.oom_retry_config]
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [oplog]
+# [advanced.worker_executor.oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
 # entry_count_limit = 1024
@@ -1173,16 +1137,16 @@ without_time = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
 #
-# [oplog.default_snapshotting]
+# [advanced.worker_executor.oplog.default_snapshotting]
 # type = "Disabled"
 #
-# [oplog.oplog_processor_snapshotting]
+# [advanced.worker_executor.oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
 #
-# [oplog.oplog_processor_snapshotting.config]
+# [advanced.worker_executor.oplog.oplog_processor_snapshotting.config]
 # count = 10
 #
-# [oplog.sweep]
+# [advanced.worker_executor.oplog.sweep]
 # enabled = true
 # interval = "1m"
 # max_archives_per_tick = 256
@@ -1193,7 +1157,7 @@ without_time = false
 # max_tracked_agents = 100000
 # page_size = 128
 #
-# [public_worker_api]
+# [advanced.worker_executor.public_worker_api]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -1204,38 +1168,38 @@ without_time = false
 # max_message_size = 33554432
 # port = 9007
 #
-# [public_worker_api.retries_on_unavailable]
+# [advanced.worker_executor.public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [public_worker_api.tls]
+# [advanced.worker_executor.public_worker_api.tls]
 # type = "Disabled"
 #
-# [public_worker_api.tls.config]
+# [advanced.worker_executor.public_worker_api.tls.config]
 #
-# [quota_service]
+# [advanced.worker_executor.quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
 # renewal_threshold = "20s"
 #
-# [rdbms.pool]
+# [advanced.worker_executor.rdbms.pool]
 # acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20
 #
-# [rdbms.query]
+# [advanced.worker_executor.rdbms.query]
 # query_batch = 50
 #
-# [read_only_cache]
+# [advanced.worker_executor.read_only_cache]
 # cache_capacity = 256
 # cache_eviction_interval = "1m"
 # max_entry_age = "2h"
 #
-# [registry_service]
+# [advanced.worker_executor.registry_service]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -1247,64 +1211,64 @@ without_time = false
 # port = 8080
 # request_timeout = "30s"
 #
-# [registry_service.invalidation_event_subscriber]
+# [advanced.worker_executor.registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
 #
-# [registry_service.retries_on_unavailable]
+# [advanced.worker_executor.registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [registry_service.tls]
+# [advanced.worker_executor.registry_service.tls]
 # type = "Disabled"
 #
-# [registry_service.tls.config]
+# [advanced.worker_executor.registry_service.tls.config]
 #
-# [resource_limits]
+# [advanced.worker_executor.resource_limits]
 # type = "Grpc"
 #
-# [resource_limits.config]
+# [advanced.worker_executor.resource_limits.config]
 # batch_update_interval = "1m"
 # limit_refresh_interval = "5m"
 #
-# [resource_usage_metering]
+# [advanced.worker_executor.resource_usage_metering]
 # compute = false
 # filesystem = false
 # memory = false
 #
-# [retry]
+# [advanced.worker_executor.retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [scheduler]
+# [advanced.worker_executor.scheduler]
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 #
-# [scheduler_storage]
+# [advanced.worker_executor.scheduler_storage]
 # type = "Sqlite"
 #
-# [scheduler_storage.config]
+# [advanced.worker_executor.scheduler_storage.config]
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
 #
-# [scheduler_storage_retry]
+# [advanced.worker_executor.scheduler_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [shard_manager]
+# [advanced.worker_executor.shard_manager]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -1315,26 +1279,26 @@ without_time = false
 # max_message_size = 33554432
 # port = 9002
 #
-# [shard_manager.retries]
+# [advanced.worker_executor.shard_manager.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [shard_manager.retries_on_unavailable]
+# [advanced.worker_executor.shard_manager.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [shard_manager.tls]
+# [advanced.worker_executor.shard_manager.tls]
 # type = "Disabled"
 #
-# [shard_manager.tls.config]
+# [advanced.worker_executor.shard_manager.tls.config]
 #
-# [suspend]
+# [advanced.worker_executor.suspend]
 # ephemeral_max_sleep = "1m"
 # rpc_resume_after = "5s"
 # rpc_suspend_after = "30s"
@@ -1342,13 +1306,13 @@ without_time = false
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"
 #
-# [tracing]
+# [advanced.worker_executor.tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
 # file_truncate = true
 #
-# [tracing.file]
+# [advanced.worker_executor.tracing.file]
 # ansi = false
 # compact = false
 # enabled = false
@@ -1361,13 +1325,13 @@ without_time = false
 # span_events_full = false
 # without_time = false
 #
-# [tracing.otlp]
+# [advanced.worker_executor.tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
 #
-# [tracing.stderr]
+# [advanced.worker_executor.tracing.stderr]
 # ansi = false
 # compact = false
 # enabled = false
@@ -1380,7 +1344,7 @@ without_time = false
 # span_events_full = false
 # without_time = false
 #
-# [tracing.stdout]
+# [advanced.worker_executor.tracing.stdout]
 # ansi = true
 # compact = false
 # enabled = true
@@ -1394,6 +1358,7 @@ without_time = false
 # without_time = false
 
 ## Generated from example config: with in-memory key value storage, indexed storage and blob storage
+# [advanced.worker_executor]
 # bind_address = "0.0.0.0"
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
@@ -1402,94 +1367,94 @@ without_time = false
 # standalone_tool_invocation_retention = "7days"
 # tracing_file_name_with_port = true
 #
-# [active_agents]
+# [advanced.worker_executor.active_agents]
 # drop_when_full = 0.25
 # ttl = "8h"
 #
-# [agent_sockets]
+# [advanced.worker_executor.agent_sockets]
 # dns_servers = []
 # enabled = false
 # refused_ports = []
 #
-# [agent_status_checkpoint]
+# [advanced.worker_executor.agent_status_checkpoint]
 # enabled = true
 # min_oplog_delta = 1000
 #
-# [agent_status_flush]
+# [advanced.worker_executor.agent_status_flush]
 # enabled = true
 # interval = "1s"
 # max_concurrency = 128
 #
-# [agent_types_service]
+# [advanced.worker_executor.agent_types_service]
 # type = "Grpc"
 #
-# [agent_types_service.config]
+# [advanced.worker_executor.agent_types_service.config]
 # cache_time_to_idle = "1m"
 #
-# [agent_webhooks_service]
+# [advanced.worker_executor.agent_webhooks_service]
 # hmac_key = "K34Co4pRMDl7dB3cYB+1/N0J3tMzJWI4FyPNOsmGHkE="
 # use_https_for_webhook_url = true
 #
-# [blob_storage]
+# [advanced.worker_executor.blob_storage]
 # type = "InMemory"
 #
-# [blob_storage.config]
+# [advanced.worker_executor.blob_storage.config]
 #
-# [compiled_component_service]
+# [advanced.worker_executor.compiled_component_service]
 # type = "Enabled"
 #
-# [compiled_component_service.config]
+# [advanced.worker_executor.compiled_component_service.config]
 #
-# [component_cache]
+# [advanced.worker_executor.component_cache]
 # max_capacity = 32
 # max_concurrent_compilations = 16
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
 #
-# [direct_invocation_auth_cache]
+# [advanced.worker_executor.direct_invocation_auth_cache]
 # cache_capacity = 1024
 # cache_eviction_interval = "1m"
 # cache_ttl = "5m"
 #
-# [durable_stream]
+# [advanced.worker_executor.durable_stream]
 # abandoned_prepare_after = "5m"
 # external_batch_max_size = "8388608 B"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
 #
-# [engine]
+# [advanced.worker_executor.engine]
 # enable_fs_cache = false
 #
-# [environment_state_service]
+# [advanced.worker_executor.environment_state_service]
 # cache_capacity = 1000
 # cache_eviction_interval = "1m"
 #
-# [environment_state_service.cache_ttl]
+# [advanced.worker_executor.environment_state_service.cache_ttl]
 # nanos = 0
 # secs = 300
 #
-# [filesystem_snapshots]
+# [advanced.worker_executor.filesystem_snapshots]
 # type = "Disabled"
 #
-# [filesystem_snapshots.config]
+# [advanced.worker_executor.filesystem_snapshots.config]
 #
-# [filesystem_storage.cleanup_retry]
+# [advanced.worker_executor.filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
 # min_delay = "25ms"
 # multiplier = 4.0
 #
-# [filesystem_storage.filesystem_object_limit_policy]
+# [advanced.worker_executor.filesystem_storage.filesystem_object_limit_policy]
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
 #
-# [filesystem_storage.mode]
+# [advanced.worker_executor.filesystem_storage.mode]
 # type = "Temporary"
 #
-# [filesystem_storage.pressure]
+# [advanced.worker_executor.filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
 # minimum_available_filesystem_objects = 8192
 # reclamation_observation_attempts = 4
@@ -1497,19 +1462,19 @@ without_time = false
 # target_available_bytes = 134217728
 # target_available_filesystem_objects = 16384
 #
-# [grpc]
+# [advanced.worker_executor.grpc]
 # max_message_size = 33554432
 # port = 9093
 #
-# [grpc.tls]
+# [advanced.worker_executor.grpc.tls]
 # type = "Disabled"
 #
-# [grpc.tls.config]
+# [advanced.worker_executor.grpc.tls.config]
 #
-# [http_client]
+# [advanced.worker_executor.http_client]
 # type = "Enabled"
 #
-# [http_client.config]
+# [advanced.worker_executor.http_client.config]
 # connect_timeout = "30s"
 # idle_timeout = "1m 30s"
 # max_connections_per_host = 20
@@ -1517,38 +1482,40 @@ without_time = false
 # max_idle_per_host = 8
 # max_total_connections = 200
 #
-# [indexed_storage]
+# [advanced.worker_executor.indexed_storage]
 # type = "InMemory"
 #
-# [indexed_storage.config]
+# [advanced.worker_executor.indexed_storage.config]
 #
-# [indexed_storage_retry]
+# [advanced.worker_executor.indexed_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [invocation_results]
+# [advanced.worker_executor.installation]
+#
+# [advanced.worker_executor.invocation_results]
 # bloom_bits = 1048576
 # bloom_hashes = 4
 # hydrated_cache_capacity = 1024
 # physical_index_catch_up_chunk_size = 1024
 # recent_capacity = 1024
 #
-# [key_value_storage]
+# [advanced.worker_executor.key_value_storage]
 # type = "InMemory"
 #
-# [key_value_storage.config]
+# [advanced.worker_executor.key_value_storage.config]
 #
-# [key_value_storage_retry]
+# [advanced.worker_executor.key_value_storage_retry]
 # max_attempts = 15
 # max_delay = "10s"
 # max_jitter_factor = 0.15
 # min_delay = "200ms"
 # multiplier = 2.0
 #
-# [limits]
+# [advanced.worker_executor.limits]
 # agent_scan_batch_size = 100
 # ephemeral_fuel_overdraft_multiplier = 100
 # epoch_interval = "10ms"
@@ -1568,11 +1535,11 @@ without_time = false
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
 #
-# [limits.scan_budget]
+# [advanced.worker_executor.limits.scan_budget]
 # entries = 100000
 # time = "5s"
 #
-# [mcp_transport]
+# [advanced.worker_executor.mcp_transport]
 # concurrency = 16
 # json_depth = 512
 # listing_bytes = 16777216
@@ -1583,19 +1550,19 @@ without_time = false
 # timeout = "1m"
 # tools = 1024
 #
-# [memory]
+# [advanced.worker_executor.memory]
 # acquire_retry_delay = "500ms"
 # component_size_coefficient = 2.0
 # enable_measured_admission = true
 # worker_memory_ratio = 0.8
 #
-# [memory.oom_retry_config]
+# [advanced.worker_executor.memory.oom_retry_config]
 # max_attempts = 4294967295
 # max_delay = "5s"
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [oplog]
+# [advanced.worker_executor.oplog]
 # archive_interval = "1day"
 # blob_storage_layers = 1
 # entry_count_limit = 1024
@@ -1608,16 +1575,16 @@ without_time = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
 #
-# [oplog.default_snapshotting]
+# [advanced.worker_executor.oplog.default_snapshotting]
 # type = "Disabled"
 #
-# [oplog.oplog_processor_snapshotting]
+# [advanced.worker_executor.oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
 #
-# [oplog.oplog_processor_snapshotting.config]
+# [advanced.worker_executor.oplog.oplog_processor_snapshotting.config]
 # count = 10
 #
-# [oplog.sweep]
+# [advanced.worker_executor.oplog.sweep]
 # enabled = true
 # interval = "1m"
 # max_archives_per_tick = 256
@@ -1628,7 +1595,7 @@ without_time = false
 # max_tracked_agents = 100000
 # page_size = 128
 #
-# [public_worker_api]
+# [advanced.worker_executor.public_worker_api]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -1639,38 +1606,38 @@ without_time = false
 # max_message_size = 33554432
 # port = 9007
 #
-# [public_worker_api.retries_on_unavailable]
+# [advanced.worker_executor.public_worker_api.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [public_worker_api.tls]
+# [advanced.worker_executor.public_worker_api.tls]
 # type = "Disabled"
 #
-# [public_worker_api.tls.config]
+# [advanced.worker_executor.public_worker_api.tls.config]
 #
-# [quota_service]
+# [advanced.worker_executor.quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
 # renewal_threshold = "20s"
 #
-# [rdbms.pool]
+# [advanced.worker_executor.rdbms.pool]
 # acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20
 #
-# [rdbms.query]
+# [advanced.worker_executor.rdbms.query]
 # query_batch = 50
 #
-# [read_only_cache]
+# [advanced.worker_executor.read_only_cache]
 # cache_capacity = 256
 # cache_eviction_interval = "1m"
 # max_entry_age = "2h"
 #
-# [registry_service]
+# [advanced.worker_executor.registry_service]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -1682,64 +1649,64 @@ without_time = false
 # port = 8080
 # request_timeout = "30s"
 #
-# [registry_service.invalidation_event_subscriber]
+# [advanced.worker_executor.registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
 #
-# [registry_service.retries_on_unavailable]
+# [advanced.worker_executor.registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [registry_service.tls]
+# [advanced.worker_executor.registry_service.tls]
 # type = "Disabled"
 #
-# [registry_service.tls.config]
+# [advanced.worker_executor.registry_service.tls.config]
 #
-# [resource_limits]
+# [advanced.worker_executor.resource_limits]
 # type = "Grpc"
 #
-# [resource_limits.config]
+# [advanced.worker_executor.resource_limits.config]
 # batch_update_interval = "1m"
 # limit_refresh_interval = "5m"
 #
-# [resource_usage_metering]
+# [advanced.worker_executor.resource_usage_metering]
 # compute = false
 # filesystem = false
 # memory = false
 #
-# [retry]
+# [advanced.worker_executor.retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [scheduler]
+# [advanced.worker_executor.scheduler]
 # claim_batch_size = 100
 # lease_ttl = "30s"
 # max_batches_per_tick = 10
 # max_concurrent_action_processing = 64
 # refresh_interval = "2s"
 #
-# [scheduler_storage]
+# [advanced.worker_executor.scheduler_storage]
 # type = "Sqlite"
 #
-# [scheduler_storage.config]
+# [advanced.worker_executor.scheduler_storage.config]
 # database = "../data/worker-executor-scheduler-storage.db"
 # foreign_keys = false
 # max_connections = 10
 #
-# [scheduler_storage_retry]
+# [advanced.worker_executor.scheduler_storage_retry]
 # max_attempts = 3
 # max_delay = "1s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
 #
-# [shard_manager]
+# [advanced.worker_executor.shard_manager]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -1750,26 +1717,26 @@ without_time = false
 # max_message_size = 33554432
 # port = 9002
 #
-# [shard_manager.retries]
+# [advanced.worker_executor.shard_manager.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [shard_manager.retries_on_unavailable]
+# [advanced.worker_executor.shard_manager.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [shard_manager.tls]
+# [advanced.worker_executor.shard_manager.tls]
 # type = "Disabled"
 #
-# [shard_manager.tls.config]
+# [advanced.worker_executor.shard_manager.tls.config]
 #
-# [suspend]
+# [advanced.worker_executor.suspend]
 # ephemeral_max_sleep = "1m"
 # rpc_resume_after = "5s"
 # rpc_suspend_after = "30s"
@@ -1777,13 +1744,13 @@ without_time = false
 # wait_suspend_check_interval = "10s"
 # wait_suspend_grace = "1s"
 #
-# [tracing]
+# [advanced.worker_executor.tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "worker-executor.log"
 # file_truncate = true
 #
-# [tracing.file]
+# [advanced.worker_executor.tracing.file]
 # ansi = false
 # compact = false
 # enabled = false
@@ -1796,13 +1763,13 @@ without_time = false
 # span_events_full = false
 # without_time = false
 #
-# [tracing.otlp]
+# [advanced.worker_executor.tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
 #
-# [tracing.stderr]
+# [advanced.worker_executor.tracing.stderr]
 # ansi = false
 # compact = false
 # enabled = false
@@ -1815,7 +1782,7 @@ without_time = false
 # span_events_full = false
 # without_time = false
 #
-# [tracing.stdout]
+# [advanced.worker_executor.tracing.stdout]
 # ansi = true
 # compact = false
 # enabled = true

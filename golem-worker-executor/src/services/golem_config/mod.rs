@@ -84,6 +84,8 @@ mod tests;
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GolemConfig {
+    #[serde(default)]
+    pub installation: golem_common::config::self_host::InstallationConfig,
     /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
     /// accounts. It is not configured here: the registry service keeps it in its database, and the
     /// executor asks the registry for it at start and stores it here. Code that embeds the
@@ -429,6 +431,7 @@ impl SafeDisplay for GolemConfig {
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
+            installation: Default::default(),
             golem_issuer: None,
             tracing: TracingConfig::local_dev("worker-executor"),
             tracing_file_name_with_port: true,
@@ -610,4 +613,5 @@ impl HasConfigExamples<GolemConfig> for GolemConfig {
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))
+        .for_service("worker_executor")
 }

@@ -417,16 +417,16 @@ impl EnvVarBuilder {
             .with_rust_back_log()
             .with_tracing_from_env()
             .with_oplog_from_env()
-            .with("GOLEM__TRACING__STDOUT__ANSI", "false".to_string())
-            .with("GOLEM__TRACING__STDOUT__ENABLED", "true".to_string())
-            .with("GOLEM__TRACING__STDOUT__JSON", "true".to_string())
-            .with("GOLEM__TRACING__STDOUT__JSON_FLATTEN", "false".to_string())
+            .with("GOLEM__LOGGING__STDOUT__ANSI", "false".to_string())
+            .with("GOLEM__LOGGING__STDOUT__ENABLED", "true".to_string())
+            .with("GOLEM__LOGGING__STDOUT__JSON", "true".to_string())
+            .with("GOLEM__LOGGING__STDOUT__JSON_FLATTEN", "false".to_string())
             .with(
-                "GOLEM__TRACING__STDOUT__JSON_FLATTEN_SPAN",
+                "GOLEM__LOGGING__STDOUT__JSON_FLATTEN_SPAN",
                 "false".to_string(),
             )
             .with(
-                "GOLEM__TRACING__STDOUT__JSON_SOURCE_LOCATION",
+                "GOLEM__LOGGING__STDOUT__JSON_SOURCE_LOCATION",
                 "true".to_string(),
             )
     }
@@ -478,37 +478,30 @@ impl EnvVarBuilder {
     }
 
     fn with_tracing_from_env(mut self) -> Self {
-        for (name, value) in
-            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__TRACING_"))
-        {
-            self.env_vars.insert(name, value);
-        }
+        self.env_vars.extend(std::env::vars().filter(|(name, _)| {
+            name.starts_with("GOLEM__LOGGING__") || name.starts_with("GOLEM__OTLP__")
+        }));
         self
     }
 
     fn with_oplog_from_env(mut self) -> Self {
-        for (name, value) in
-            std::env::vars().filter(|(name, _value)| name.starts_with("GOLEM__OPLOG__"))
-        {
-            self.env_vars.insert(name, value);
-        }
+        self.env_vars.extend(
+            std::env::vars()
+                .filter(|(name, _)| name.starts_with("GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__")),
+        );
         self
     }
 
     fn with_optional_otlp(mut self, service_name: &str, enabled: bool) -> Self {
         if enabled {
-            self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__ENABLED".to_string(),
-                "true".to_string(),
-            );
-            self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__HOST".to_string(),
-                "localhost".to_string(),
-            );
             self.env_vars
-                .insert("GOLEM__TRACING__OTLP__PORT".to_string(), "4318".to_string());
+                .insert("GOLEM__OTLP__ENABLED".to_string(), "true".to_string());
+            self.env_vars
+                .insert("GOLEM__OTLP__HOST".to_string(), "localhost".to_string());
+            self.env_vars
+                .insert("GOLEM__OTLP__PORT".to_string(), "4318".to_string());
             self.env_vars.insert(
-                "GOLEM__TRACING__OTLP__SERVICE_NAME".to_string(),
+                "GOLEM__OTLP__SERVICE_NAME".to_string(),
                 service_name.to_string(),
             );
             // The OTLP layer exports nothing unless its filter is set, and a test

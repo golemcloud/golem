@@ -217,7 +217,7 @@ scenarios:
     # out and puts the shards back in its routing table, and nothing reconciles
     # the two. One run left 460 of 1024 shards unserved for 43 minutes.
     #
-    # golem-dev now runs GOLEM__WORKER_EXECUTORS__REVOKE_SHARDS_TIMEOUT=60s
+    # golem-dev now runs GOLEM_ADVANCED__SHARD_MANAGER__WORKER_EXECUTORS__REVOKE_SHARDS_TIMEOUT=60s
     # (was 5s), matching the assign leg. That is a mitigation, not a fix — the
     # drain is unbounded, so a large enough working set still outruns any
     # timeout. Keeping this schedule here is deliberate: it is what tells us
@@ -2267,7 +2267,7 @@ scenarios:
   #     routes here.
   #   * scheduled — the emitter's `schedule_poll_at` registers into the
   #     scheduler's own schema, which lives on this same cluster under
-  #     `GOLEM__SCHEDULER_STORAGE__CONFIG__HOST`.
+  #     `GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__HOST`.
   #   * ephemeral — reaches none of it. `on_status_changed` returns immediately
   #     for an ephemeral agent, and its status goes to the Redis cache, so this
   #     is the one stream the delay should not touch. Under S17 it was the only
@@ -2712,7 +2712,7 @@ scenarios:
   #
   # ── The arithmetic, and the gate S15 does not have ─────────────────────────
   #
-  # golem-dev sets `GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS` to 64 in
+  # golem-dev sets `GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONCURRENT_OPS` to 64 in
   # front of a 96-connection pool, and `PostgresIndexedStorage::configured`
   # turns that setting into a `Semaphore`. The gate is therefore tighter than
   # the pool, and it is the gate that binds: under a 500ms one-way delay it
@@ -2918,7 +2918,7 @@ scenarios:
       # 0.6 of the window, which leaves 48s of overlap, and the number that
       # matters is the one it is under.
       #
-      # `GOLEM__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is **60s** on golem-dev
+      # `GOLEM_ADVANCED__SHARD_MANAGER__WORKER_EXECUTORS__ASSIGN_SHARDS_TIMEOUT` is **60s** on golem-dev
       # and golem-prod. It was raised from the 5s default in August 2026 after a
       # chaos run found the same failure on the revoke leg: 5s cannot cover a
       # handover whose handler recovers every agent it was just given, so the

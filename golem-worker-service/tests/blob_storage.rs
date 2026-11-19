@@ -178,7 +178,11 @@ impl GetBlobStorage for S3Test {
         config.validate().unwrap();
         create_buckets(&s3_server, &config).await;
         TestStorage {
-            storage: Arc::new(s3::S3BlobStorage::new(config).await),
+            storage: Arc::new(
+                s3::S3BlobStorage::new(config.clone(), &config.custom_data_bucket)
+                    .await
+                    .unwrap(),
+            ),
             _s3_server: Some(s3_server),
         }
     }

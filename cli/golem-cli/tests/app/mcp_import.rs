@@ -1346,7 +1346,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     let mut ctx = TestContext::new();
     // Keep periodic discovery outside the explicit refresh request count.
     ctx.add_env_var(
-        "GOLEM__REGISTRY_SERVICE__MCP_IMPORT__REFRESH_INTERVAL",
+        "GOLEM_ADVANCED__REGISTRY_SERVICE__MCP_IMPORT__REFRESH_INTERVAL",
         "1h",
     );
     ctx.start_server().await;

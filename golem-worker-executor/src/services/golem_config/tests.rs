@@ -802,15 +802,14 @@ fn filesystem_snapshots_enabled_config_hides_the_key() {
 #[test]
 fn the_golem_issuer_is_not_a_configuration_key_of_the_executor() {
     use figment::Jail;
-    use golem_common::config::env_config_provider;
 
     Jail::expect_with(|jail| {
         jail.clear_env();
-        jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
-        let config = super::make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()?;
+        jail.set_env(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__GOLEM_ISSUER",
+            "https://id.acme.example",
+        );
+        let config = super::make_config_loader().load()?;
         // The registry service gives the issuer at start, whatever the environment says.
         assert_eq!(config.golem_issuer, None);
         Ok(())

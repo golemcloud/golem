@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::rdb::{DbInfo, Rdb};
+use super::rdb::Rdb;
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::worker_service::WorkerService;
@@ -130,52 +130,91 @@ async fn env_vars(
         .with_str("ENVIRONMENT", "local")
         .with_str("WASMTIME_BACKTRACE_DETAILS", "1")
         .with(
-            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "GOLEM__DATA_DISK__BLOB_ROOT",
             std::env::temp_dir()
                 .join("ittest-local-object-store/golem")
                 .to_string_lossy()
                 .to_string(),
         )
-        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str("GOLEM__BLOB_STORE", "data_disk")
         .with_str(
-            "GOLEM__PUBLIC_WORKER_API__HOST",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__PUBLIC_WORKER_API__HOST",
             &worker_service.grpc_host(),
         )
         .with(
-            "GOLEM__PUBLIC_WORKER_API__PORT",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__PUBLIC_WORKER_API__PORT",
             worker_service.gprc_port().to_string(),
         )
         .with_str(
-            "GOLEM__REGISTRY_SERVICE__HOST",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__REGISTRY_SERVICE__HOST",
             &registry_service.grpc_host(),
         )
         .with(
-            "GOLEM__REGISTRY_SERVICE__PORT",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__REGISTRY_SERVICE__PORT",
             registry_service.grpc_port().to_string(),
         )
-        .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
-        .with_str("GOLEM__SHARD_MANAGER__HOST", &shard_manager.grpc_host())
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__COMPILED_COMPONENT_SERVICE__TYPE",
+            "Enabled",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST",
+            &shard_manager.grpc_host(),
+        )
         .with(
-            "GOLEM__SHARD_MANAGER__PORT",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT",
             shard_manager.grpc_port().to_string(),
         )
-        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS", "5")
-        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MIN_DELAY", "100ms")
-        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MAX_DELAY", "2s")
-        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MULTIPLIER", "2")
-        .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
-        .with_str("GOLEM__RESOURCE_USAGE_METERING__COMPUTE", "true")
         .with_str(
-            "GOLEM__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS",
+            "5",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MIN_DELAY",
+            "100ms",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MAX_DELAY",
+            "2s",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MULTIPLIER",
+            "2",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__LIMITS__FUEL_TO_BORROW",
+            "100000",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__COMPUTE",
+            "true",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
             "false",
         )
-        .with_str("GOLEM__QUOTA_SERVICE__INLINE_WAIT_THRESHOLD", "30s")
-        .with_str("GOLEM__QUOTA_SERVICE__RENEWAL_INTERVAL", "3s")
-        .with_str("GOLEM__QUOTA_SERVICE__RENEWAL_THRESHOLD", "55s") // shard manager sets 60s lease duration -> renew every 5s
-        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__QUOTA_SERVICE__INLINE_WAIT_THRESHOLD",
+            "30s",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__QUOTA_SERVICE__RENEWAL_INTERVAL",
+            "3s",
+        )
+        .with_str(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__QUOTA_SERVICE__RENEWAL_THRESHOLD",
+            "55s",
+        ) // shard manager sets 60s lease duration -> renew every 5s
         .with(
-            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT",
+            grpc_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__HTTP_PORT",
+            http_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__ENGINE__ENABLE_FS_CACHE",
             enable_fs_cache.to_string(),
         )
         .with_optional_otlp("worker_executor", otlp)
@@ -183,102 +222,20 @@ async fn env_vars(
 
     if let Some(environment_state_cache_capacity) = environment_state_cache_capacity {
         env.insert(
-            "GOLEM__ENVIRONMENT_STATE_SERVICE__CACHE_CAPACITY".to_string(),
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__ENVIRONMENT_STATE_SERVICE__CACHE_CAPACITY"
+                .to_string(),
             environment_state_cache_capacity.to_string(),
         );
     }
 
     if let Some(oplog_archive_interval) = oplog_archive_interval {
         env.insert(
-            "GOLEM__OPLOG__ARCHIVE_INTERVAL".to_string(),
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__ARCHIVE_INTERVAL".to_string(),
             serde_json::to_string(&humantime_serde::Serde::from(oplog_archive_interval)).unwrap(),
         );
     }
 
-    let db_env = rdb.info().env("golem_worker_executor", false);
-    let db_type = db_env
-        .get("GOLEM__DB__TYPE")
-        .map(String::as_str)
-        .expect("worker executor storage requires GOLEM__DB__TYPE");
-
-    env.insert(
-        "GOLEM__KEY_VALUE_STORAGE__TYPE".to_string(),
-        db_type.to_string(),
-    );
-    env.insert(
-        "GOLEM__SCHEDULER_STORAGE__TYPE".to_string(),
-        db_type.to_string(),
-    );
-
-    match rdb.info() {
-        DbInfo::Postgres(_) => {
-            env.insert(
-                "GOLEM__INDEXED_STORAGE__TYPE".to_string(),
-                "Postgres".to_string(),
-            );
-            for (key, value) in &db_env {
-                if let Some(rest) = key.strip_prefix("GOLEM__DB__CONFIG__") {
-                    let indexed_value = if rest == "SCHEMA" {
-                        format!("{value}_indexed")
-                    } else {
-                        value.clone()
-                    };
-                    env.insert(
-                        format!("GOLEM__INDEXED_STORAGE__CONFIG__{rest}"),
-                        indexed_value,
-                    );
-                    let scheduler_value = if rest == "SCHEMA" {
-                        format!("{value}_scheduler")
-                    } else {
-                        value.clone()
-                    };
-                    // SchedulerStoragePostgresConfig flattens DbPostgresConfig, so its
-                    // fields appear directly under CONFIG (not nested under POSTGRES).
-                    env.insert(
-                        format!("GOLEM__SCHEDULER_STORAGE__CONFIG__{rest}"),
-                        scheduler_value,
-                    );
-                }
-            }
-        }
-        DbInfo::Sqlite(_) => {
-            env.insert(
-                "GOLEM__INDEXED_STORAGE__TYPE".to_string(),
-                "KVStoreSqlite".to_string(),
-            );
-        }
-        DbInfo::Mysql(_) => {
-            panic!("Mysql-backed worker executor storage is not supported in the test framework");
-        }
-    }
-
-    for (key, value) in db_env {
-        if key == "GOLEM__DB__TYPE" {
-            continue;
-        }
-
-        if let Some(rest) = key.strip_prefix("GOLEM__DB__") {
-            env.insert(format!("GOLEM__KEY_VALUE_STORAGE__{rest}"), value.clone());
-            if let Some(config_rest) = rest.strip_prefix("CONFIG__")
-                && matches!(rdb.info(), DbInfo::Sqlite(_))
-            {
-                // Use a dedicated SQLite file for the scheduler storage. Keyvalue,
-                // indexed and scheduler each ship their own sqlx migrations under
-                // separate migration tables; if they shared one DB file their
-                // `_sqlx_migrations` entries would collide (both have a migration
-                // with version 1 but different SQL).
-                let scheduler_value = if config_rest == "DATABASE" {
-                    value.replacen(".db", "-scheduler.db", 1)
-                } else {
-                    value.clone()
-                };
-                env.insert(
-                    format!("GOLEM__SCHEDULER_STORAGE__CONFIG__{config_rest}"),
-                    scheduler_value,
-                );
-            }
-        }
-    }
+    env.extend(rdb.info().env("golem_worker_executor", false));
 
     if std::env::var_os("GOLEM_BENCH_SOCKETS_ENABLED").is_some() {
         env.insert(

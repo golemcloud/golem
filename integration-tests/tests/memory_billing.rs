@@ -60,15 +60,15 @@ mod tests {
         cluster
             .restart_all_with_extra_env_vars(vec![
                 (
-                    "GOLEM__RESOURCE_LIMITS__CONFIG__BATCH_UPDATE_INTERVAL".to_string(),
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_LIMITS__CONFIG__BATCH_UPDATE_INTERVAL".to_string(),
                     "200ms".to_string(),
                 ),
                 (
-                    "GOLEM__RESOURCE_LIMITS__CONFIG__LIMIT_REFRESH_INTERVAL".to_string(),
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_LIMITS__CONFIG__LIMIT_REFRESH_INTERVAL".to_string(),
                     "1s".to_string(),
                 ),
                 (
-                    "GOLEM__RESOURCE_USAGE_METERING__MEMORY".to_string(),
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY".to_string(),
                     "true".to_string(),
                 ),
             ])

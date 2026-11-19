@@ -44,13 +44,13 @@ GOLEM_S3_ENDPOINT='${{Bucket.ENDPOINT}}' \
 cat >> golem.env <<'EOF'
 AWS_ACCESS_KEY_ID=${{Bucket.ACCESS_KEY_ID}}
 AWS_SECRET_ACCESS_KEY=${{Bucket.SECRET_ACCESS_KEY}}
-GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST=golem.example.com
 GOLEM_LITESTREAM=true
 GOLEM_LITESTREAM_REPLICA_URL=s3://${{Bucket.BUCKET}}/litestream?endpoint=${{Bucket.ENDPOINT}}&region=${{Bucket.REGION}}
 EOF
 ```
 
-`golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
+`golem.env` contains the admin token, `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
 
 ### Create the service
 
@@ -59,11 +59,11 @@ Add an empty service named `golem`. Before connecting the image, configure:
 - **Variables.** Open the Raw Editor and paste `golem.env`.
 - **Volume.** Attach a volume with the mount path `/var/lib/golem`, and add the variable `RAILWAY_RUN_UID=0`. Railway documents that images that run as a non-root user, as this image does with uid 65534, have permission problems on volumes, and that `RAILWAY_RUN_UID=0` fixes them. The server then runs as root. See [Volume ownership](/next/deploy/server#volume-ownership).
 - **Port.** Set `PORT=9881`, and leave the start command empty to use the image's entrypoint.
-- **Health check.** Leave Railway's healthcheck path unset for this image. Railway sends its probes with the host `healthcheck.railway.app`, which does not match `GOLEM__ROUTER__MANAGEMENT_HOST`. The router sends these requests to the application endpoints, not the management health check. Check `/healthcheck` through the management domain instead. Railway can send traffic before Golem is ready; during startup, the server answers requests with 503. The first start on a new volume downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), which takes about a minute.
+- **Health check.** Leave Railway's healthcheck path unset for this image. Railway sends its probes with the host `healthcheck.railway.app`, which does not match `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`. The router sends these requests to the application endpoints, not the management health check. Check `/healthcheck` through the management domain instead. Railway can send traffic before Golem is ready; during startup, the server answers requests with 503. The first start on a new volume downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools), which takes about a minute.
 
 ### Add the domains
 
-In the service's networking settings, generate a Railway-provided domain or add a custom domain for the management API, with the target port `9881`. Set `GOLEM__ROUTER__MANAGEMENT_HOST` to that host name, without `https://`. Add a separate domain for each HTTP API or MCP deployment, also targeting port `9881`. For custom domains, Railway shows the DNS records to create and gets the certificates.
+In the service's networking settings, generate a Railway-provided domain or add a custom domain for the management API, with the target port `9881`. Set `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST` to that host name, without `https://`. Add a separate domain for each HTTP API or MCP deployment, also targeting port `9881`. For custom domains, Railway shows the DNS records to create and gets the certificates.
 
 ### Deploy an application
 
@@ -101,7 +101,7 @@ GOLEM_POSTGRES_PASSWORD='${{Postgres.PGPASSWORD}}' \
 cat >> golem.env <<'EOF'
 AWS_ACCESS_KEY_ID=${{Bucket.ACCESS_KEY_ID}}
 AWS_SECRET_ACCESS_KEY=${{Bucket.SECRET_ACCESS_KEY}}
-GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST=golem.example.com
 EOF
 ```
 
@@ -125,5 +125,5 @@ Restore the stores together so that the shard-manager epochs and indexed-storage
 ## Fixed cluster
 
 <Callout type="warning">
-  A [fixed cluster](/next/deploy/cluster) on Railway needs verification. The shard manager records the source address of each executor's registration, and Railway does not document whether its private network keeps that address. Railway environments created before 16 October 2025 have an IPv6-only private network, which needs `GOLEM__BIND_ADDRESS=::` on every service.
+  A [fixed cluster](/next/deploy/cluster) on Railway needs verification. The shard manager records the source address of each executor's registration, and Railway does not document whether its private network keeps that address. Railway environments created before 16 October 2025 have an IPv6-only private network, which needs `GOLEM_ADVANCED__SERVER__BIND_ADDRESS=::` on every service.
 </Callout>

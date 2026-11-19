@@ -126,498 +126,507 @@ async fn env_vars(
     let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__GOLEM_ISSUER", crate::components::TEST_GOLEM_ISSUER)
         .with_str(
-            "GOLEM__SECURITY_SCHEME__STRICT_ISSUER_URL_VALIDATION",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__SECURITY_SCHEME__STRICT_ISSUER_URL_VALIDATION",
             "false",
         )
-        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str("GOLEM__BLOB_STORE", "data_disk")
         .with(
-            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "GOLEM__DATA_DISK__BLOB_ROOT",
             std::env::temp_dir()
                 .join("ittest-local-object-store/golem")
                 .to_string_lossy()
                 .to_string(),
         )
-        .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
         .with(
-            "GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__LOGIN__TYPE",
+            "Disabled".to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__DOMAIN_REGISTRATION__RESERVED_DOMAINS",
             format!("[\"{RESERVED_DOMAIN}\"]"),
         );
 
     // component compilation
     let builder = match component_compilation_service {
         Some(component_compilation_service) => builder
-            .with("GOLEM__COMPONENT_COMPILATION__TYPE", "Enabled".to_string())
             .with(
-                "GOLEM__COMPONENT_COMPILATION__CONFIG__HOST",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__COMPONENT_COMPILATION__TYPE",
+                "Enabled".to_string(),
+            )
+            .with(
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__COMPONENT_COMPILATION__CONFIG__HOST",
                 component_compilation_service.grpc_host(),
             )
             .with(
-                "GOLEM__COMPONENT_COMPILATION__CONFIG__PORT",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__COMPONENT_COMPILATION__CONFIG__PORT",
                 component_compilation_service.grpc_port().to_string(),
             ),
-        _ => builder.with_str("GOLEM__COMPONENT_COMPILATION__TYPE", "Disabled"),
+        _ => builder.with_str(
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__COMPONENT_COMPILATION__TYPE",
+            "Disabled",
+        ),
     };
 
     let builder = builder
         // users
         .with(
-            "GOLEM__INITIAL_ACCOUNTS__ROOT__ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__ID",
             admin_account_id.to_string(),
         )
-        .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__NAME", "Root")
+        .with_str("GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__NAME", "Root")
         .with(
-            "GOLEM__INITIAL_ACCOUNTS__ROOT__EMAIL",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__EMAIL",
             admin_account_email.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_ACCOUNTS__ROOT__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__PLAN_ID",
             admin_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_ACCOUNTS__ROOT__TOKEN",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN",
             admin_token.secret().to_string(),
         )
-        .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__ROLE", "admin")
+        .with_str("GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__ROLE", "admin")
         .with(
-            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID",
             builtin_plugin_owner_account_id.to_string(),
         )
         .with_str(
-            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__NAME",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__NAME",
             "Builtin Plugin Owner",
         )
         .with_str(
-            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__EMAIL",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__EMAIL",
             "builtin-plugin-owner@golem.cloud",
         )
         .with(
-            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__PLAN_ID",
             default_plan_id.to_string(),
         )
         .with_str(
-            "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ROLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ROLE",
             "builtin-plugin-owner",
         )
         // plans
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__PLAN_ID",
             default_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__WORKER_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__WORKER_LIMIT",
             "100000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__MAX_STORAGE_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_COMPUTE_GCU",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_COMPUTE_GCU",
             "1000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__DEFAULT__OVERAGE_ELIGIBLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__OVERAGE_ELIGIBLE",
             "true".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__PLAN_ID",
             admin_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__PLAN_NAME",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__PLAN_NAME",
             "unlimited".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__APP_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__COMPONENT_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__ENV_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__ENV_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_MEMORY_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MAX_STORAGE_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_COMPUTE_GCU",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MONTHLY_COMPUTE_GCU",
             "1000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_MEMORY_GB_SECONDS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MONTHLY_MEMORY_GB_SECONDS",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MONTHLY_DURABLE_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__OVERAGE_ELIGIBLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__OVERAGE_ELIGIBLE",
             "false".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__STORAGE_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__BLOB_STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__BLOB_STORAGE_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__UNLIMITED__WORKER_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__UNLIMITED__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__PLAN_ID",
             low_fuel_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__PLAN_NAME",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__PLAN_NAME",
             "low_fuel".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__APP_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__COMPONENT_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__ENV_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__ENV_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_MEMORY_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MAX_STORAGE_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_COMPUTE_GCU",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MONTHLY_COMPUTE_GCU",
             "0".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_MEMORY_GB_SECONDS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MONTHLY_MEMORY_GB_SECONDS",
             "0".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MONTHLY_DURABLE_STORAGE_GB_MONTH",
             "0".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "0".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__OVERAGE_ELIGIBLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__OVERAGE_ELIGIBLE",
             "false".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__STORAGE_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__BLOB_STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__BLOB_STORAGE_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_FUEL__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         // Low storage plan: per-agent quota of 5 bytes so "hello world" exceeds it.
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_ID",
             low_disk_space_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_NAME",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__PLAN_NAME",
             "low_disk_space".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__APP_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__COMPONENT_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__ENV_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__ENV_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT_CEILING",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT_CEILING",
             "20000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT_USER_CONFIGURABLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_MEMORY_PER_AGENT_USER_CONFIGURABLE",
             "true".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_MEMORY_GB_SECONDS",
             "30".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_COMPUTE_GCU",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_COMPUTE_GCU",
             "20".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_DURABLE_STORAGE_GB_MONTH",
             "40".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "50".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__OVERAGE_ELIGIBLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__OVERAGE_ELIGIBLE",
             "false".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT",
             "5".to_string(), // 5 bytes, so "hello world" exceeds this.
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_ENABLED",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_ENABLED",
             "true".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_CEILING",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_CEILING",
             "20".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_USER_CONFIGURABLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MAX_STORAGE_PER_AGENT_USER_CONFIGURABLE",
             "true".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_UPLOAD_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__STORAGE_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__BLOB_STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__BLOB_STORAGE_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_CONNECTION_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         // Low HTTP calls plan — monthly HTTP call limit of 1 so the first HTTP call exhausts it
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__PLAN_ID",
             low_http_calls_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__PLAN_NAME",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__PLAN_NAME",
             "low_http_calls".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__APP_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__COMPONENT_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__ENV_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__ENV_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_MEMORY_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_STORAGE_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_COMPUTE_GCU",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_COMPUTE_GCU",
             "1000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_MEMORY_GB_SECONDS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_MEMORY_GB_SECONDS",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__OVERAGE_ELIGIBLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__OVERAGE_ELIGIBLE",
             "false".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_UPLOAD_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__STORAGE_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__BLOB_STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__BLOB_STORAGE_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_CONNECTION_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_HTTP_CALL_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_HTTP_CALL_LIMIT",
             "1".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_RPC_CALL_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_RPC_CALL_LIMIT",
             "1000000000000000000".to_string(),
         )
         // Low RPC calls plan — monthly RPC call limit of 1 so the first RPC call exhausts it
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__PLAN_ID",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__PLAN_ID",
             low_rpc_calls_plan_id.to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__PLAN_NAME",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__PLAN_NAME",
             "low_rpc_calls".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__APP_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__APP_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__COMPONENT_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__COMPONENT_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__ENV_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__ENV_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_MEMORY_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MAX_MEMORY_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_STORAGE_PER_AGENT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MAX_STORAGE_PER_AGENT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_COMPUTE_GCU",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_COMPUTE_GCU",
             "1000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_MEMORY_GB_SECONDS",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_MEMORY_GB_SECONDS",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_DURABLE_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH",
             "6000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__OVERAGE_ELIGIBLE",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__OVERAGE_ELIGIBLE",
             "false".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_UPLOAD_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_UPLOAD_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__STORAGE_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__BLOB_STORAGE_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__BLOB_STORAGE_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_CONNECTION_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_LIMIT",
             "10000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_HTTP_CALL_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_HTTP_CALL_LIMIT",
             "1000000000000000000".to_string(),
         )
         .with(
-            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_RPC_CALL_LIMIT",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_RPC_CALL_LIMIT",
             "1".to_string(),
         )
         //
-        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
-        .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with("GOLEM_ADVANCED__REGISTRY_SERVICE__GRPC__PORT", grpc_port.to_string())
+        .with("GOLEM_ADVANCED__REGISTRY_SERVICE__HTTP_PORT", http_port.to_string())
         .with(
-            "GOLEM__BUILTIN_ARTIFACTS__CACHE_DIR",
+            "GOLEM_ADVANCED__REGISTRY_SERVICE__BUILTIN_ARTIFACTS__CACHE_DIR",
             builtin_artifact_cache_dir.to_string_lossy().to_string(),
         )
-        .with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
+        .with_str("GOLEM_ADVANCED__REGISTRY_SERVICE__BUILTIN_PLUGINS__TYPE", "Enabled")
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
         .with_optional_otlp("registry_service", otlp);
 

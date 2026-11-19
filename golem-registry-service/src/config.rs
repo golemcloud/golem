@@ -240,6 +240,8 @@ impl McpImportResolverConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RegistryServiceConfig {
+    #[serde(default)]
+    pub installation: golem_common::config::self_host::InstallationConfig,
     pub tracing: TracingConfig,
     pub environment: String,
     /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
@@ -555,6 +557,7 @@ impl Default for RegistryServiceConfig {
         );
 
         Self {
+            installation: Default::default(),
             tracing: TracingConfig::local_dev("registry-service"),
             environment: "dev".to_string(),
             golem_issuer: None,
@@ -1007,6 +1010,7 @@ impl Default for SecuritySchemeConfig {
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
     ConfigLoader::new(&PathBuf::from("config/registry-service.toml"))
+        .for_service("registry_service")
 }
 
 #[cfg(test)]
