@@ -90,7 +90,9 @@ Each call creates a fresh **ephemeral owner** using that component's configurati
 
 ### Commands and schemas
 
-Only commands with bodies become MCP tools; a parent with its own body is exported alongside its executable descendants. Names are lowercase, hyphens become underscores, and path segments are joined with underscores: `file-tools read-file` becomes `file_tools_read_file`. Aliases produce additional tools that invoke the same canonical command. Name collisions fail deployment.
+Only commands with bodies become MCP tools; a parent with its own body is exported alongside its executable descendants. An MCP tool name is `<tool>_<command path>` in snake_case: each name is split into words at hyphens and at camelCase boundaries, the words are joined with `_`, and all letters are lowercase. So `file-tools read-file` becomes `file_tools_read_file`, and a command `searchItems` becomes `search_items`. Aliases produce additional tools that invoke the same canonical command. When two commands project to the same name, the deployment fails, and the error names both commands.
+
+Argument names project to snake_case in the same way, so the option `--dry-run` is the argument `dry_run`. The projection keeps these argument names for itself: `_stdin`, `idempotency_key`, `_agent` and `_agent_id`. When an exported command has an argument that projects to one of them, such as an `--idempotency-key` option, the deployment fails, and the error names the command and the argument. Golem does this check only on the commands that an MCP deployment exports. A command that no MCP deployment exports can have an `--idempotency-key` option.
 
 Use either `include` or `exclude`, never both. Patterns are space-separated command paths without the tool prefix: `*` matches one segment and `**` matches any depth. Selecting a canonical command includes its aliases; excluding it also removes its aliases.
 
@@ -104,7 +106,13 @@ MCP has no native fd 2, so successful content lists stdout before stderr and tag
 
 Structured results are returned as `structuredContent` matching the advertised output schema, with a `value` wrapper when needed to produce a root object.
 
-Invalid parameters, constraint violations, and invalid results produce JSON-RPC `-32602` errors. Tool execution and custom errors produce `isError: true`. MCP does not expose native formatter selection, exit-code semantics, repetition modes, the alias graph, or middleware composition; middleware still runs normally.
+Invalid parameters, constraint violations, and invalid results produce JSON-RPC `-32602` errors. Tool execution and custom errors produce `isError: true`. A declared error of the command is returned as one text block with this JSON envelope, where `error` is the name of the declared error case and `payload` is its payload:
+
+```json
+{ "error": "not-found", "payload": { "id": "42" } }
+```
+
+MCP does not expose native formatter selection, exit-code semantics, repetition modes, the alias graph, or middleware composition; middleware still runs normally.
 
 Listings and calls are tied to a deployment definition. After a deployment changes, an existing session may receive a tool-list-changed notification and must list tools again before calling. Each MCP call has a fresh native idempotency key; repeating a JSON-RPC request ID is not a durable execution retry.
 

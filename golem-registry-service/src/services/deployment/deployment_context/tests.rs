@@ -2239,7 +2239,7 @@ fn compile_mcp_rejects_cross_tool_normalized_name_collision_and_auth_conflict() 
         &mut errors,
     );
 
-    assert!(errors.iter().any(|e| matches!(e, DeployValidationError::McpDeploymentToolNameCollision { name, .. } if name == "foo_bar_baz")), "{errors:?}");
+    assert!(errors.iter().any(|e| matches!(e, DeployValidationError::McpDeploymentToolNameCollision { name, first, second, .. } if name == "foo_bar_baz" && first == "tool command `foo bar-baz`" && second == "tool command `foo-bar baz`")), "{errors:?}");
     assert!(
         errors.iter().any(|e| matches!(
             e,
@@ -3652,4 +3652,86 @@ fn optional_secret_declaration_accepts_existing_stored_plaintext_schema() {
     assert_eq!(creations.len(), 0);
     assert_eq!(updates.len(), 0);
     assert_eq!(replacements.len(), 0);
+}
+
+#[test]
+fn compile_mcp_checks_reserved_arguments_only_on_exported_commands() {
+    let environment = test_environment();
+    let mut definition = executable_test_tool("foo", "search");
+    definition.commands.nodes[1]
+        .body
+        .as_mut()
+        .unwrap()
+        .options
+        .push(golem_common::schema::tool::OptionSpec {
+            long: "idempotency-key".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape: golem_common::schema::tool::OptionShape::Scalar(SchemaType::string()),
+            default: None,
+            required: false,
+            env_var: None,
+        });
+    definition.commands.nodes[0]
+        .subcommands
+        .push(CommandIndex(2));
+    definition.commands.nodes.push(CommandNode {
+        name: "list".to_string(),
+        ..definition.commands.nodes[1].clone()
+    });
+    definition.commands.nodes[2]
+        .body
+        .as_mut()
+        .unwrap()
+        .options
+        .clear();
+    let component = native_tool_component("owner", "foo", definition);
+    let compile = |exclude: Option<Vec<String>>| {
+        let deployment = mcp_deployment(
+            environment.id,
+            "reserved.example.com",
+            BTreeMap::new(),
+            BTreeMap::from([(
+                ToolName::try_from("foo").unwrap(),
+                McpDeploymentToolOptions {
+                    owner_component: component.component_name.clone(),
+                    security_scheme: None,
+                    include: None,
+                    exclude,
+                },
+            )]),
+        );
+        let context = DeploymentContext {
+            environment: environment.clone(),
+            components: BTreeMap::from([(component.component_name.clone(), component.clone())]),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+            registered_agent_types: HashMap::new(),
+        };
+        let mut errors = Vec::new();
+        let tools = context.compile_tools(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &mut errors,
+            &mut Vec::new(),
+        );
+        let compiled = context.compile_mcp_deployments(
+            AccountId::new(),
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &HashMap::new(),
+            &tools,
+            &[],
+            &mut errors,
+        );
+        (compiled, errors)
+    };
+
+    let (_, errors) = compile(None);
+    assert!(errors.iter().any(|e| matches!(e, DeployValidationError::McpDeploymentInvalidTool { error, .. } if error.contains("`foo search`") && error.contains("`idempotency-key`"))), "{errors:?}");
+
+    let (compiled, errors) = compile(Some(vec!["search".to_string()]));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(compiled[0].tools.len(), 1);
+    assert_eq!(compiled[0].tools[0].mcp_name, "foo_list");
 }

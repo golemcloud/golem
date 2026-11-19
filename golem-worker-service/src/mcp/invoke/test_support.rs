@@ -1261,6 +1261,7 @@ impl InvocationHarness {
             &native_tool_definition(),
             None,
             None,
+            None,
         )
         .unwrap()
         .remove(0);

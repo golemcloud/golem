@@ -1158,6 +1158,7 @@ impl DeploymentContext {
                     definition,
                     options.include.as_deref(),
                     options.exclude.as_deref(),
+                    None,
                 ) {
                     Ok(exports) => native_tools.extend(exports),
                     Err(error) => errors.push(DeployValidationError::McpDeploymentInvalidTool {
@@ -1188,16 +1189,32 @@ impl DeploymentContext {
                                 golem_common::schema::agent::FieldSource::UserSupplied
                             )
                         });
-                        (has_user_input || method.read_only.is_none())
-                            .then(|| format!("{}-{}", agent.agent_type.type_name.0, method.name))
+                        (has_user_input || method.read_only.is_none()).then(|| {
+                            (
+                                format!("{}-{}", agent.agent_type.type_name.0, method.name),
+                                format!(
+                                    "agent method {}.{}",
+                                    agent.agent_type.type_name.0, method.name
+                                ),
+                            )
+                        })
                     })
                 })
-                .collect::<HashSet<_>>();
+                .collect::<HashMap<_, _>>();
             for export in &native_tools {
-                if !names.insert(export.mcp_name.clone()) {
+                let command = format!(
+                    "tool command `{}`",
+                    std::iter::once(export.tool_name.as_str())
+                        .chain(export.command_path.iter().map(String::as_str))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+                if let Some(first) = names.insert(export.mcp_name.clone(), command.clone()) {
                     errors.push(DeployValidationError::McpDeploymentToolNameCollision {
                         mcp_deployment_domain: domain.clone(),
                         name: export.mcp_name.clone(),
+                        first,
+                        second: command,
                     });
                 }
             }

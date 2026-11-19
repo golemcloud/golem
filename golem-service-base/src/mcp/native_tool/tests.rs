@@ -60,6 +60,7 @@ fn compile(tool: &Tool) -> Result<Vec<CompiledMcpToolExport>, String> {
         tool,
         None,
         None,
+        None,
     )
 }
 
@@ -187,6 +188,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
         &definition,
         Some(&include),
         None,
+        None,
     )
     .unwrap();
     assert_eq!(exports.len(), 8);
@@ -202,6 +204,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
         &definition,
         None,
         Some(&["do-work **".to_string()]),
+        None,
     )
     .unwrap();
     assert_eq!(
@@ -230,7 +233,186 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
         },
         schema: SchemaGraph::empty(),
     };
-    assert!(compile(&collision).unwrap_err().contains("collision"));
+    let error = compile(&collision).unwrap_err();
+    assert!(error.contains("`root a-b`"), "{error}");
+    assert!(error.contains("`root a b`"), "{error}");
+    assert!(error.contains("`root_a_b`"), "{error}");
+}
+
+#[test]
+fn names_project_to_snake_case() {
+    for name in ["searchItems", "search-items", "search_items", "SearchItems"] {
+        assert_eq!(snake_case(name), "search_items", "{name}");
+    }
+    assert_eq!(snake_case("HTTPServer"), "http_server");
+    assert_eq!(snake_case("parseURL"), "parse_url");
+    assert_eq!(snake_case("item2Go"), "item2_go");
+    assert_eq!(snake_case("v2"), "v2");
+    assert_eq!(
+        projected_tool_name("my-tool", &["searchItems".to_string(), "by-id".to_string()]),
+        "my_tool_search_items_by_id"
+    );
+}
+
+#[test]
+fn arguments_project_to_snake_case_in_the_schema_and_the_call() {
+    let mut command = body();
+    command.options = vec![option(
+        "dry-run",
+        OptionShape::Scalar(SchemaType::string()),
+        true,
+    )];
+    let export = compile(&tool(node("root", Some(command))))
+        .unwrap()
+        .remove(0);
+    let schema = export.input_json_schema().unwrap();
+    assert_eq!(schema["required"], json!(["dry_run"]));
+    assert!(schema["properties"]["dry_run"].is_object(), "{schema:?}");
+    assert!(schema["properties"].get("dry-run").is_none(), "{schema:?}");
+    let (value, _) = export
+        .parse_arguments(Map::from_iter([("dry_run".to_string(), json!("x"))]))
+        .unwrap();
+    assert_eq!(
+        value.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::String("x".to_string())]
+        }
+    );
+    assert!(
+        export
+            .parse_arguments(Map::from_iter([("dry-run".to_string(), json!("x"))]))
+            .unwrap_err()
+            .contains("unknown argument `dry-run`")
+    );
+}
+
+#[test]
+fn each_reserved_argument_is_rejected_with_the_command_and_the_argument() {
+    for argument in [
+        "_stdin",
+        "idempotency-key",
+        "idempotencyKey",
+        "_agent",
+        "_agent_id",
+    ] {
+        let mut command = body();
+        command.options = vec![option(
+            argument,
+            OptionShape::Scalar(SchemaType::string()),
+            true,
+        )];
+        let mut child = node("search", Some(command));
+        child.aliases.clear();
+        let mut root = node("root", None);
+        root.subcommands.push(CommandIndex(1));
+        let definition = Tool {
+            commands: CommandTree {
+                nodes: vec![root, child],
+            },
+            ..tool(node("root", None))
+        };
+        let error = check_reserved_arguments(&definition, 1, "root search").unwrap_err();
+        assert!(error.contains("`root search`"), "{argument}: {error}");
+        assert!(
+            error.contains(&format!("`{argument}`")),
+            "{argument}: {error}"
+        );
+    }
+    let mut command = body();
+    command.options = vec![option(
+        "idempotency-keys",
+        OptionShape::Scalar(SchemaType::string()),
+        true,
+    )];
+    assert!(check_reserved_arguments(&tool(node("root", Some(command))), 0, "root").is_ok());
+}
+
+#[test]
+fn the_reserved_argument_check_covers_only_the_selected_commands() {
+    let mut keyed = body();
+    keyed.options = vec![option(
+        "idempotency-key",
+        OptionShape::Scalar(SchemaType::string()),
+        false,
+    )];
+    let mut root = node("root", None);
+    root.subcommands = vec![CommandIndex(1), CommandIndex(2)];
+    let definition = Tool {
+        commands: CommandTree {
+            nodes: vec![
+                root,
+                node("keyed", Some(keyed)),
+                node("plain", Some(body())),
+            ],
+        },
+        ..tool(node("root", None))
+    };
+    let error = compile(&definition).unwrap_err();
+    assert!(error.contains("`root keyed`"), "{error}");
+    assert!(error.contains("`idempotency-key`"), "{error}");
+    assert!(error.contains("`idempotency_key`"), "{error}");
+    let compile_with = |include: Option<&[String]>, exclude: Option<&[String]>| {
+        compile_native_tool_exports(
+            ComponentId::new(),
+            "test:owner".try_into().unwrap(),
+            "root".try_into().unwrap(),
+            &definition,
+            include,
+            exclude,
+            None,
+        )
+    };
+    let selected = |exports: Vec<CompiledMcpToolExport>| {
+        exports
+            .into_iter()
+            .map(|export| export.mcp_name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        selected(compile_with(None, Some(&["keyed".to_string()])).unwrap()),
+        ["root_plain"]
+    );
+    assert_eq!(
+        selected(compile_with(Some(&["plain".to_string()]), None).unwrap()),
+        ["root_plain"]
+    );
+}
+
+#[test]
+fn mcp_name_replaces_the_tool_name_and_its_aliases_in_every_command() {
+    let mut root = node("root", Some(body()));
+    root.aliases.push("r".to_string());
+    root.subcommands.push(CommandIndex(1));
+    let mut child = node("do-work", Some(body()));
+    child.aliases.push("run".to_string());
+    let definition = Tool {
+        commands: CommandTree {
+            nodes: vec![root, child],
+        },
+        ..tool(node("root", None))
+    };
+    let exports = compile_native_tool_exports(
+        ComponentId::new(),
+        "test:owner".try_into().unwrap(),
+        "root".try_into().unwrap(),
+        &definition,
+        None,
+        None,
+        Some("fileSearch"),
+    )
+    .unwrap();
+    assert_eq!(
+        exports
+            .iter()
+            .map(|export| export.mcp_name.as_str())
+            .collect::<Vec<_>>(),
+        ["file_search", "file_search_do_work", "file_search_run"]
+    );
+    assert!(
+        exports
+            .iter()
+            .all(|export| export.tool_name.as_str() == "root")
+    );
 }
 
 #[test]
@@ -415,6 +597,7 @@ fn nested_streams_and_filters_selecting_no_commands_fail_compilation() {
             "root".try_into().unwrap(),
             &definition,
             Some(&["missing".to_string()]),
+            None,
             None
         )
         .unwrap_err()

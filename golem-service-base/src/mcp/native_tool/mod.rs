@@ -19,8 +19,8 @@ use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
 use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::tool::{FlagShape, OptionShape, Tool};
 use golem_common::schema::{
-    FALLBACK_OUTPUT_FIELD_NAME, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
-    find_host_managed_type,
+    FALLBACK_OUTPUT_FIELD_NAME, NamedFieldType, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue, find_host_managed_type,
 };
 use golem_schema::schema::render::{
     JsonSchemaConfig, from_untrusted_json_value, to_external_input_json_schema,
@@ -29,10 +29,71 @@ use golem_schema::schema::render::{
 use golem_schema::schema::tool::constraints::validate_tool_constraints;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 const STDIN_FIELD: &str = "_stdin";
 const MAX_STDIN: usize = 16 * 1024 * 1024;
+
+/// The argument names that the function-tool projection keeps for itself. No argument of an
+/// exported command can project to one of these names.
+pub const RESERVED_ARGUMENTS: [&str; 4] = [STDIN_FIELD, "idempotency_key", "_agent", "_agent_id"];
+
+/// Projects a name to snake_case. A hyphen becomes an underscore, an uppercase letter that
+/// starts a new camelCase word gets an underscore before it, and every letter becomes
+/// lowercase. `searchItems`, `search-items` and `search_items` all project to `search_items`.
+pub fn snake_case(name: &str) -> String {
+    let chars: Box<[char]> = name.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .fold(String::with_capacity(name.len() + 4), |mut out, (i, &c)| {
+            if c == '-' {
+                out.push('_');
+            } else if c.is_uppercase() {
+                let previous = i.checked_sub(1).map(|p| chars[p]);
+                let next = chars.get(i + 1);
+                let word_start = previous.is_some_and(|p| p.is_lowercase() || p.is_ascii_digit())
+                    || (previous.is_some_and(char::is_uppercase)
+                        && next.is_some_and(|n| n.is_lowercase()));
+                if word_start && !out.ends_with('_') {
+                    out.push('_');
+                }
+                out.extend(c.to_lowercase());
+            } else {
+                out.push(c);
+            }
+            out
+        })
+}
+
+/// The projected tool name of a command: `<tool>_<command path>`, with each part in snake_case.
+pub fn projected_tool_name(tool: &str, command_path: &[String]) -> String {
+    std::iter::once(tool)
+        .chain(command_path.iter().map(String::as_str))
+        .map(snake_case)
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+/// Checks that no argument of the command at `command_index` projects to a name in
+/// [`RESERVED_ARGUMENTS`]. The error names the command and the argument.
+pub fn check_reserved_arguments(
+    definition: &Tool,
+    command_index: usize,
+    command: &str,
+) -> Result<(), String> {
+    definition
+        .canonical_input_fields(command_index)
+        .iter()
+        .map(|field| (field, snake_case(&field.name)))
+        .find(|(_, projected)| RESERVED_ARGUMENTS.contains(&projected.as_str()))
+        .map_or(Ok(()), |(field, projected)| {
+            Err(format!(
+                "argument `{}` of command `{command}` projects to the reserved MCP argument `{projected}`",
+                field.name
+            ))
+        })
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, desert_rust::BinaryCodec)]
 #[desert(evolution())]
@@ -61,13 +122,22 @@ impl CompiledMcpToolExport {
 
     pub fn input_json_schema(&self) -> Result<Map<String, Value>, String> {
         let (index, body) = self.command()?;
-        match &self.input_schema.root {
-            SchemaType::Record { .. } => {}
+        let projected_root = match &self.input_schema.root {
+            SchemaType::Record { fields, metadata } => SchemaType::Record {
+                fields: fields
+                    .iter()
+                    .map(|field| NamedFieldType {
+                        name: snake_case(&field.name),
+                        ..field.clone()
+                    })
+                    .collect(),
+                metadata: metadata.clone(),
+            },
             _ => return Err("canonical native tool input is not a record".to_string()),
-        }
+        };
         let mut value = to_external_input_json_schema(
             &self.input_schema,
-            &self.input_schema.root,
+            &projected_root,
             JsonSchemaConfig::WITHOUT_DRAFT_MARKER.include_draft_marker,
         );
         let object = value
@@ -83,20 +153,21 @@ impl CompiledMcpToolExport {
             .into_iter()
             .zip(&model.fields)
         {
+            let name = snake_case(&field.name);
             let required = object
                 .entry("required")
                 .or_insert_with(|| json!([]))
                 .as_array_mut()
                 .unwrap();
-            required.retain(|name| name.as_str() != Some(&field.name));
+            required.retain(|required| required.as_str() != Some(&name));
             if omitted_value(&self.definition, index, surface).is_none() {
-                required.push(json!(field.name));
+                required.push(json!(name));
             }
             if let Some((min, max)) = collection_bounds(&self.definition, index, surface)
                 && let Some(property) = object
                     .get_mut("properties")
                     .and_then(Value::as_object_mut)
-                    .and_then(|properties| properties.get_mut(&field.name))
+                    .and_then(|properties| properties.get_mut(&name))
                     .and_then(Value::as_object_mut)
             {
                 property.insert("minItems".to_string(), Value::from(min));
@@ -108,7 +179,7 @@ impl CompiledMcpToolExport {
                 && let Some(property) = object
                     .get_mut("properties")
                     .and_then(Value::as_object_mut)
-                    .and_then(|properties| properties.get_mut(&field.name))
+                    .and_then(|properties| properties.get_mut(&name))
                     .and_then(Value::as_object_mut)
             {
                 property.insert("minProperties".to_string(), Value::from(1));
@@ -207,10 +278,12 @@ impl CompiledMcpToolExport {
             .definition
             .canonical_input_model(index)
             .map_err(|e| e.to_string())?;
-        if let Some(name) = args
-            .keys()
-            .find(|name| !model.fields.iter().any(|field| field.name == **name))
-        {
+        if let Some(name) = args.keys().find(|name| {
+            !model
+                .fields
+                .iter()
+                .any(|field| snake_case(&field.name) == **name)
+        }) {
             return Err(format!("unknown argument `{name}`"));
         }
         let mut fields = Vec::with_capacity(model.fields.len());
@@ -220,11 +293,12 @@ impl CompiledMcpToolExport {
             .into_iter()
             .zip(&model.fields)
         {
-            fields.push(match args.remove(&field.name) {
+            let name = snake_case(&field.name);
+            fields.push(match args.remove(&name) {
                 Some(json) => from_untrusted_json_value(&self.input_schema, &field.type_, &json)
-                    .map_err(|e| format!("invalid argument `{}`: {e}", field.name))?,
+                    .map_err(|e| format!("invalid argument `{name}`: {e}"))?,
                 None => omitted_value(&self.definition, index, surface)
-                    .ok_or_else(|| format!("missing required argument `{}`", field.name))?,
+                    .ok_or_else(|| format!("missing required argument `{name}`"))?,
             });
         }
         let value = SchemaValue::Record { fields };
@@ -252,6 +326,10 @@ impl CompiledMcpToolExport {
     }
 }
 
+/// Projects the commands of `definition` that the export selects to MCP tools.
+///
+/// `mcp_name`, when present, is used in place of the tool name and its root aliases in each
+/// projected tool name. The reserved-argument check runs only on the selected commands.
 pub fn compile_native_tool_exports(
     owner_component_id: ComponentId,
     owner_component_name: ComponentName,
@@ -259,6 +337,7 @@ pub fn compile_native_tool_exports(
     definition: &Tool,
     include: Option<&[String]>,
     exclude: Option<&[String]>,
+    mcp_name: Option<&str>,
 ) -> Result<Vec<CompiledMcpToolExport>, String> {
     if include.is_some() && exclude.is_some() {
         return Err("include and exclude are mutually exclusive".to_string());
@@ -277,8 +356,19 @@ pub fn compile_native_tool_exports(
     let filter_includes = include.is_some();
     let mut candidates = Vec::new();
     walk_paths(definition, 0, vec![], vec![vec![]], &mut candidates)?;
-    let mut names = HashSet::new();
+    let mut names = HashMap::new();
     let mut result = Vec::new();
+    let root_names: Box<[&str]> = match mcp_name {
+        Some(mcp_name) => Box::new([mcp_name]),
+        None => std::iter::once(tool_name.as_str())
+            .chain(
+                definition.commands.nodes[0]
+                    .aliases
+                    .iter()
+                    .map(String::as_str),
+            )
+            .collect(),
+    };
     for (index, canonical, exposed) in candidates {
         if excludes.iter().any(|p| pattern_matches(p, &canonical)) {
             continue;
@@ -297,10 +387,14 @@ pub fn compile_native_tool_exports(
             let input_schema = definition
                 .canonical_input_record_schema(index)
                 .map_err(|e| e.to_string())?;
-            if matches!(&input_schema.root, SchemaType::Record { fields, .. } if fields.iter().any(|field| field.name == STDIN_FIELD))
-            {
-                return Err("native input field `_stdin` is reserved".to_string());
-            }
+            check_reserved_arguments(
+                definition,
+                index,
+                &std::iter::once(tool_name.as_str())
+                    .chain(canonical.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )?;
             reject_capabilities(&input_schema, &input_schema.root, "input")?;
             let body = definition.commands.nodes[index].body.as_ref().unwrap();
             if let Some(r) = &body.result {
@@ -335,25 +429,20 @@ pub fn compile_native_tool_exports(
                     " Streaming is exposed as finite buffered data (16 MiB per direction).",
                 );
             }
-            for root_name in std::iter::once(tool_name.as_str()).chain(
-                definition.commands.nodes[0]
-                    .aliases
-                    .iter()
-                    .map(String::as_str),
-            ) {
-                let mut all = vec![root_name.to_string()];
-                all.extend(alias_path.clone());
-                let name = all
-                    .iter()
-                    .map(|s| s.replace('-', "_").to_lowercase())
+            for &root_name in &root_names {
+                let name = projected_tool_name(root_name, &alias_path);
+                let command = std::iter::once(root_name)
+                    .chain(alias_path.iter().map(String::as_str))
                     .collect::<Vec<_>>()
-                    .join("_");
-                if !names.insert(name.clone()) {
-                    return Err(format!("native MCP tool name collision: `{name}`"));
+                    .join(" ");
+                if let Some(other) = names.insert(name.clone(), command.clone()) {
+                    return Err(format!(
+                        "commands `{other}` and `{command}` both project to the MCP tool name `{name}`"
+                    ));
                 }
                 result.push(CompiledMcpToolExport {
                     mcp_name: name,
-                    description: if root_name == tool_name.as_str() {
+                    description: if root_name == tool_name.as_str() || mcp_name.is_some() {
                         description.clone()
                     } else {
                         format!(
@@ -555,7 +644,7 @@ fn validate_collection_values(
         {
             return Err(format!(
                 "argument `{}` requires at least 1 value(s)",
-                value.name
+                snake_case(&value.name)
             ));
         }
         let Some((min, max)) = collection_bounds(tool, command_index, surface) else {
@@ -568,7 +657,7 @@ fn validate_collection_values(
         if length < min {
             return Err(format!(
                 "argument `{}` requires at least {min} value(s)",
-                value.name
+                snake_case(&value.name)
             ));
         }
         if let Some(max) = max
@@ -576,7 +665,7 @@ fn validate_collection_values(
         {
             return Err(format!(
                 "argument `{}` accepts at most {max} value(s)",
-                value.name
+                snake_case(&value.name)
             ));
         }
     }
