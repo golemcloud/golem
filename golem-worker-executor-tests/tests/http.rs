@@ -2113,7 +2113,7 @@ async fn outgoing_http_persisted_body_chunk_discarded_before_delivery(
 
 /// The oplog of `worker_id` once every invocation with a recorded result settled. An invocation
 /// can settle after its caller got the result.
-async fn settled_oplog(
+pub(crate) async fn settled_oplog(
     executor: &(impl TestDsl + Sync),
     worker_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {

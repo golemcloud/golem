@@ -11639,6 +11639,210 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
     Ok(())
 }
 
+/// A stop accepted while the method's result is recorded at its export's return retires a
+/// capable tool child that the method staged until its end: the owner fence of the stop leaves
+/// the child's `Start` without a terminal, so the drain ends interrupted and the method does not
+/// settle. The recorded result stays.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_capable_child(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_agent_sockets(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
+        start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+    let agent = agent_key!("ToolStreamingCaller", "stop-while-staged-child-result");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owner = worker_id.clone();
+    let call = tokio::spawn({
+        let executor = executor.clone();
+        let caller_component = caller_component.clone();
+        let agent = agent.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(
+                    &caller_component,
+                    &agent,
+                    "hold_fire_and_forget_capable_staging",
+                    data_value!(b"stopped-staged".to_vec()),
+                )
+                .await
+        }
+    });
+    let mut next_checkpoint = async |name: &str| {
+        let arrival = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            checkpoint_arrivals.recv(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("checkpoint {name} timed out"))?
+        .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped"))?;
+        assert_eq!(arrival.name, name);
+        Ok::<_, anyhow::Error>(arrival)
+    };
+    next_checkpoint("fire-capable-staging")
+        .await?
+        .release
+        .send(())
+        .expect("release the staging gate");
+    let parent_open = next_checkpoint("fire-capable-ready-parent-open").await?;
+    // The staged body is not held: whether the stop lets it start is not what this test checks.
+    let _release_later_checkpoints =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            while let Some(arrival) = checkpoint_arrivals.recv().await {
+                let _ = arrival.release.send(());
+            }
+        }));
+    let worker = executor
+        .active_agent(&owner)
+        .await
+        .expect("the caller is resident")
+        .primary();
+    let (at_result, release_result) = executor
+        .gate_next_invocation_outcome_append(&worker_id.agent_id)
+        .await;
+    parent_open
+        .release
+        .send(())
+        .expect("release the parent-open gate");
+    tokio::time::timeout(std::time::Duration::from_secs(30), at_result)
+        .await
+        .map_err(|_| anyhow::anyhow!("the method's result was not recorded"))??;
+
+    let accepted = worker.await_interrupt_for_test();
+    let stop = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.interrupt(&worker_id).await }
+    });
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(30), accepted).await?,
+        golem_service_base::error::worker_executor::InterruptKind::Interrupt(_)
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        worker.join_accepted_stops_for_test(),
+    )
+    .await??;
+    assert_eq!(
+        worker.selected_owner_failure_for_test().await,
+        Some(ToolOwnerFailureMetadata::Lifecycle)
+    );
+    release_result.send(false).unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), stop).await???;
+    tokio::time::timeout(std::time::Duration::from_secs(30), call).await???;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while worker.is_loaded().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name.replace('-', "_")
+                        == "hold_fire_and_forget_capable_staging" =>
+                {
+                    Some(method.invocation_id)
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("the method started");
+    let finished = after_return_finished(&oplog, &invocation)
+        .expect("the method's result is recorded at its export's return");
+    let child = *after_return_tool_starts(&oplog)
+        .first()
+        .expect("the method staged the capable tool call");
+    assert!(
+        !oplog.iter().any(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => end.start_index == child,
+            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == child,
+            _ => false,
+        }),
+        "the stop retires the staged call before it ends: {oplog:#?}"
+    );
+    assert!(
+        after_return_settled(&oplog, &invocation).is_empty(),
+        "the interrupted drain does not settle: {oplog:#?}"
+    );
+    assert!(
+        oplog.iter().any(|entry| entry.oplog_index > finished
+            && matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "the stop interrupts the drain after the result: {oplog:#?}"
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the stop fails nothing: {oplog:#?}"
+    );
+    checkpoint_server.abort();
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
