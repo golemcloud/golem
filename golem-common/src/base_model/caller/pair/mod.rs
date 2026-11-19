@@ -26,7 +26,7 @@ pub const GITHUB_ISSUER: &str = "https://github.com";
 /// normalizes a trailing slash or Unicode text: OpenID Connect compares both as exact strings,
 /// so a normalization would merge two users or split one.
 ///
-/// The text form, from [`Display`] and [`FromStr`], is `("<issuer>","<subject>")` with no spaces.
+/// The text form is `("<issuer>","<subject>")` with no spaces.
 /// Each string is escaped as RFC 8785 serializes JSON strings, and the parser refuses every other
 /// spelling, so two texts are equal exactly when their pairs are equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
