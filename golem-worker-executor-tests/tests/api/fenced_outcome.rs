@@ -146,6 +146,7 @@ async fn selected_writer_fence(
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
                 epoch: 2,

@@ -172,6 +172,7 @@ pub struct ExecutorShards {
 pub struct PendingGrant {
     shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     expires_at: DateTime<Utc>,
+    executor_count: usize,
 }
 
 impl PendingGrant {
@@ -180,6 +181,7 @@ impl PendingGrant {
         ShardLeaseGrant {
             shard_epochs: self.shard_epochs,
             expires_at: self.expires_at,
+            executor_count: self.executor_count,
             revision,
         }
     }
@@ -195,6 +197,8 @@ impl PendingGrant {
 pub struct ShardLeaseGrant {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     pub expires_at: DateTime<Utc>,
+    /// The number of executors with a lease in the state at `revision`.
+    pub executor_count: usize,
     /// The revision of the persisted state `shard_epochs` was read from. Every delivery of a
     /// shard set carries it, and the executor applies a delivery only if its revision is at least
     /// the last one it applied, so a renewal response and a push that cross on the network cannot
@@ -220,8 +224,32 @@ pub struct RegisterAck {
 pub struct ShardAssignmentPush {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     pub number_of_shards: usize,
+    /// The number of executors with a lease in the state at `revision`.
+    pub executor_count: usize,
     /// See [`ShardLeaseGrant::revision`].
     pub revision: ShardLeaseRevision,
+}
+
+impl ShardAssignmentPush {
+    pub fn to_proto(
+        &self,
+        incarnation_id: String,
+    ) -> golem::workerexecutor::v1::AssignShardsRequest {
+        golem::workerexecutor::v1::AssignShardsRequest {
+            shard_epochs: self
+                .shard_epochs
+                .iter()
+                .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
+                    shard_id: Some((*shard_id).into()),
+                    epoch: epoch.0,
+                })
+                .collect(),
+            revision: self.revision.0,
+            number_of_shards: self.number_of_shards as u32,
+            executor_count: self.executor_count as u32,
+            incarnation_id,
+        }
+    }
 }
 
 pub type ExecutorAddrs = BTreeMap<ExecutorId, ExecutorAddr>;
@@ -302,6 +330,7 @@ impl ShardLeaseState {
         Some(PendingGrant {
             shard_epochs: self.owned_epochs(executor_id),
             expires_at: lease.expires_at,
+            executor_count: self.executor_count(),
         })
     }
 
@@ -325,6 +354,7 @@ impl ShardLeaseState {
         Some(ShardAssignmentPush {
             shard_epochs: self.owned_epochs(executor_id),
             number_of_shards: self.number_of_shards,
+            executor_count: self.executor_count(),
             // Read off a state that is already stored, so this state's own revision is the one
             // its set was stored under. The loop persists a rebalance before it pushes anything,
             // so the revision here is a real one and never a prediction.
@@ -943,6 +973,34 @@ mod tests {
             }
         }
         shard_state
+    }
+
+    #[test]
+    fn deliveries_count_all_executor_leases_after_join_and_leave() {
+        let mut state = shard_state_with(2, &[(1, 1, &[0]), (2, 2, &[1])]);
+        let check = |state: &ShardLeaseState, expected| {
+            state.get_executors().for_each(|executor_id| {
+                let grant = state
+                    .lease_grant_for(*executor_id)
+                    .unwrap()
+                    .stamp(state.revision);
+                let push = state.assignment_push_for(*executor_id).unwrap();
+                assert_eq!(grant.executor_count, expected);
+                assert_eq!(push.executor_count, expected);
+                assert_eq!(grant.revision, push.revision);
+                let wire = push.to_proto(Uuid::nil().to_string());
+                assert_eq!(wire.executor_count, expected as u32);
+                assert_eq!(wire.incarnation_id, Uuid::nil().to_string());
+            });
+        };
+
+        check(&state, 2);
+        state.add_executor(executor(3), addr(3), None, t0(), TTL);
+        state.bump_revision().unwrap();
+        check(&state, 3);
+        state.remove_executor(executor(1));
+        state.bump_revision().unwrap();
+        check(&state, 2);
     }
 
     #[test]

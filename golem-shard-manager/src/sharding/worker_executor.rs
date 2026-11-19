@@ -258,19 +258,7 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
-        let assign_shards_request = golem::workerexecutor::v1::AssignShardsRequest {
-            shard_epochs: assignment
-                .shard_epochs
-                .iter()
-                .map(|(shard_id, epoch)| golem::shardmanager::ShardEpochEntry {
-                    shard_id: Some((*shard_id).into()),
-                    epoch: epoch.0,
-                })
-                .collect(),
-            revision: assignment.revision.0,
-            number_of_shards: assignment.number_of_shards as u32,
-            incarnation_id: super::model::incarnation_id(),
-        };
+        let assign_shards_request = assignment.to_proto(super::model::incarnation_id());
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,

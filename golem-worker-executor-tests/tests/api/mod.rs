@@ -3251,6 +3251,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     );
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -3275,6 +3276,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
     faults.clear();
     let assigned = client
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(shard),
                 epoch: 0,
@@ -11777,6 +11779,7 @@ async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
         .client
         .clone()
         .assign_shards(AssignShardsRequest {
+            executor_count: 1,
             shard_epochs: vec![ShardEpochEntry {
                 shard_id: Some(ShardId { value: 0 }),
                 epoch: 0,
@@ -12035,6 +12038,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             async move {
                 client
                     .assign_shards(AssignShardsRequest {
+                        executor_count: 1,
                         shard_epochs: vec![ShardEpochEntry {
                             shard_id: Some(shard),
                             epoch: 0,

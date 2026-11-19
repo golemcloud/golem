@@ -1616,6 +1616,8 @@ agents retain their clean fail-stop lifecycle and never append it.
 
 ### Resharding, revocation and the oplog epoch fence
 
+Registration, lease renewal and assignment pushes carry the number of executors with a lease, including executors with no shards. `ShardService::executor_count` reads the last accepted count without copying the assignment, for cluster-wide resource budgets. The count and shard set share the revision and manager-incarnation check. An older renewal can extend the lease but cannot replace the count. The `executor_count` metric reports the accepted count. The single-binary executor reports one. This count does not grant ownership or change the epoch fence.
+
 Two triggers retire an agent for its lost shard rather than reconstructing it here, and both go
 through `Worker::interrupt_and_retire(InterruptKind::ShardLost)`, the one stop-and-drop path an
 owner leaves by:

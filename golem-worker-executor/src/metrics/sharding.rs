@@ -19,6 +19,17 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 lazy_static! {
     static ref ASSIGNED_SHARD_COUNT: Gauge =
         register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+    static ref EXECUTOR_COUNT: Gauge = register_gauge!(
+        "executor_count",
+        "Number of executor leases in the last accepted shard assignment"
+    )
+    .unwrap();
+    static ref SHARD_DELIVERY_ATTEMPTS_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "shard_delivery_attempts_total",
+        "Number of shard deliveries started before applying the assignment transition",
+        &["delivery"]
+    )
+    .unwrap();
     static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
         "stale_shard_delivery_total",
         "Number of shard deliveries dropped for naming a revision older than the last applied",
@@ -46,6 +57,10 @@ lazy_static! {
 
 pub fn record_assigned_shard_count(size: usize) {
     ASSIGNED_SHARD_COUNT.set(size as f64);
+}
+
+pub fn record_executor_count(count: usize) {
+    EXECUTOR_COUNT.set(count as f64);
 }
 
 /// The outcome of one shard lease renewal attempt, as the `outcome` label.
@@ -107,12 +122,15 @@ impl ShardAdmissionRefusal {
     }
 }
 
-/// Exports every renewal outcome and admission refusal at zero, so that a dashboard or an
-/// alert reads 0 instead of no data before the first one happens.
+/// Exports delivery attempts, renewal outcomes and admission refusals before their first use.
+/// Repeated initialization preserves existing totals.
 ///
 /// Called when the executor registers with a shard manager, so that a single-shard executor,
 /// which has no lease, exports none of the lease metrics.
 pub fn record_shard_lease_metrics_started() {
+    ShardDelivery::ALL.into_iter().for_each(|delivery| {
+        SHARD_DELIVERY_ATTEMPTS_TOTAL.with_label_values(&[delivery.label()]);
+    });
     for outcome in ShardLeaseRenewalOutcome::ALL {
         SHARD_LEASE_RENEWALS_TOTAL.with_label_values(&[outcome.label()]);
     }
@@ -155,6 +173,8 @@ pub enum ShardDelivery {
 }
 
 impl ShardDelivery {
+    const ALL: [Self; 4] = [Self::Register, Self::Assign, Self::Revoke, Self::Renewal];
+
     fn label(self) -> &'static str {
         match self {
             Self::Register => "register",
@@ -163,6 +183,13 @@ impl ShardDelivery {
             Self::Renewal => "renewal",
         }
     }
+}
+
+/// Records delivery entry before the assignment or its count gauge can change.
+pub fn record_shard_delivery_attempt(delivery: ShardDelivery) {
+    SHARD_DELIVERY_ATTEMPTS_TOTAL
+        .with_label_values(&[delivery.label()])
+        .inc();
 }
 
 /// A delivery was dropped for arriving older than the last one applied.
@@ -182,4 +209,49 @@ pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
     STALE_SHARD_DELIVERY_TOTAL
         .with_label_values(&[delivery.label()])
         .get()
+}
+
+#[cfg(test)]
+pub fn shard_delivery_attempt_count(delivery: ShardDelivery) -> u64 {
+    SHARD_DELIVERY_ATTEMPTS_TOTAL
+        .with_label_values(&[delivery.label()])
+        .get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn delivery_metric_initialization_preserves_existing_totals() {
+        record_shard_lease_metrics_started();
+        let metrics = prometheus::gather();
+        let attempts = metrics
+            .iter()
+            .find(|metric| metric.name() == "shard_delivery_attempts_total")
+            .expect("delivery attempts must be exported before their first use");
+        ShardDelivery::ALL.into_iter().for_each(|delivery| {
+            assert!(attempts.get_metric().iter().any(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == "delivery" && label.value() == delivery.label())
+            }));
+        });
+        ShardDelivery::ALL
+            .into_iter()
+            .for_each(record_shard_delivery_attempt);
+        let before = ShardDelivery::ALL.map(shard_delivery_attempt_count);
+        record_shard_lease_metrics_started();
+        ShardDelivery::ALL
+            .into_iter()
+            .zip(before)
+            .for_each(|(delivery, before)| {
+                assert!(
+                    shard_delivery_attempt_count(delivery) >= before,
+                    "re-registration must not reset a delivery total"
+                );
+            });
+    }
 }
