@@ -78,6 +78,71 @@ async fn component_initial_card_without_identity_read_warns_for_the_agents_that_
     );
 }
 
+#[test]
+#[timeout("20 minutes")]
+async fn manifest_trace_with_build_shows_the_component_initial_card_of_the_agents_that_inherit_it(
+    _tracing: &Tracing,
+) {
+    let mut ctx = TestContext::new();
+    let app_name = "initial-card-trace";
+    let component_name = format!("{app_name}:rust-main");
+
+    let output = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(output.success_or_dump());
+    ctx.cd(app_name);
+    let manifest = fs::read_to_string(ctx.cwd_path_join("golem.yaml")).unwrap();
+    write_component_card(
+        &ctx,
+        &manifest,
+        &[FILESYSTEM_READ, AGENT_ID_READ, AGENT_TYPE_READ],
+    );
+
+    let trace = manifest_trace(&ctx, &component_name, false).await;
+    assert!(
+        trace["agents"]
+            .as_object()
+            .is_none_or(|agents| agents.is_empty()),
+        "the trace of a component that is not built has agents: {trace}"
+    );
+
+    let trace = manifest_trace(&ctx, &component_name, true).await;
+    let card = &trace["agents"]["CounterAgent"]["initialCard"];
+    assert_eq!(
+        card["value"]["lowerBound"]["positive"],
+        serde_json::json!([FILESYSTEM_READ, AGENT_ID_READ, AGENT_TYPE_READ]),
+        "CounterAgent does not have the component card: {trace}"
+    );
+    assert_eq!(
+        card["trace"][0]["id"],
+        serde_json::json!({ "component": component_name }),
+        "the trace does not name the component as the source of the card: {trace}"
+    );
+}
+
+/// Returns the JSON manifest trace of the component.
+async fn manifest_trace(ctx: &TestContext, component_name: &str, build: bool) -> serde_json::Value {
+    let mut args = vec![
+        flag::YES,
+        "component",
+        "manifest-trace",
+        component_name,
+        flag::FORMAT,
+        "json",
+    ];
+    if build {
+        args.push("--build");
+    }
+    let output = ctx.cli(args).await;
+    assert!(output.success_or_dump());
+    output
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .find(|trace| trace["componentName"] == component_name)
+        .unwrap_or_else(|| panic!("missing manifest trace for {component_name}"))
+}
+
 async fn initial_card_without_identity_read_warns_on_deploy_and_fails_at_first_call(
     template: &str,
     result_format: &str,

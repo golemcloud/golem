@@ -133,7 +133,7 @@ This command outputs a detailed trace for each component, and for each agent typ
 
 - **Applied Layers** — the ordered list of configuration layers that contributed to the final values (e.g., component template, component definition, agent template, agent common, environment presets, custom presets)
 - **Property Values and Origins** — for each property (`config`, `env`, `plugins`, `files`, `initialCard`, `build`, `clean`, `componentWasm`), the final resolved value plus a trace of which layer introduced or modified it
-- **Agents** — under `agents`, the resolved layers of each agent type: its `config`, `env`, `plugins`, `files`, `initialCard` and tool bindings. The agent types come from the built component, so build it first; for a component that is not built, the command prints a hint and shows no agents
+- **Agents** — under `agents`, the resolved layers of each agent type: its `config`, `env`, `plugins`, `files`, `initialCard` and tool bindings. The agent types come from the built component, so build it first or pass `--build`; for a component that is not built, the command prints a hint and shows no agents
 - **Merge Operations** — whether values were merged (showing inserted/updated entries) or entirely replaced, and from which layer
 
 ### Example Usage
@@ -144,6 +144,9 @@ golem component manifest-trace
 
 # Trace one component
 golem component manifest-trace app:main
+
+# Build the component first, so that the trace includes its agent types
+golem component manifest-trace app:main --build
 ```
 
 ### What to Look For
