@@ -5501,6 +5501,7 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
                         environment_id: Some(agent_id.environment_id.into()),
                         auth_ctx: Some(auth_ctx.into()),
                         principal: None,
+                        expected_fingerprint: None,
                     })
                     .await?
                     .into_inner();
@@ -5924,6 +5925,31 @@ async fn stale_delete_does_not_follow_its_agent_id_to_a_replacement_generation(
 
     hook.release();
     stale_delete.await??;
+
+    // A dispatch admitted by the service before replacement, or retried after a lost delete
+    // reply, must keep the original fingerprint rather than capture the replacement's.
+    let stale_request = golem_api_grpc::proto::golem::workerexecutor::v1::DeleteWorkerRequest {
+        agent_id: Some(worker_id.agent_id.into()),
+        environment_id: Some(worker_id.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        principal: None,
+        expected_fingerprint: Some(original.fingerprint.0.into()),
+    };
+    for _ in 0..2 {
+        let response = executor
+            .client
+            .clone()
+            .delete_worker(stale_request.clone())
+            .await?
+            .into_inner();
+        let Some(golem_api_grpc::proto::golem::workerexecutor::v1::delete_worker_response::Result::Failure(error)) = response.result else {
+            bail!("a stale deletion did not refuse the replacement");
+        };
+        assert!(matches!(
+            WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+            WorkerExecutorError::AgentNotFound { .. }
+        ));
+    }
 
     let after_stale_delete = executor.get_worker_metadata(&worker_id).await?;
     assert_eq!(after_stale_delete.fingerprint, replacement.fingerprint);
@@ -12674,6 +12700,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
+            expected_fingerprint: None,
         };
         async move {
             let response = client.interrupt_worker(request).await?.into_inner();
@@ -12694,6 +12721,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
+            expected_fingerprint: None,
         };
         async move {
             let response = client.activate_plugin(request).await?.into_inner();

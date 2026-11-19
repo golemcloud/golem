@@ -509,6 +509,7 @@ async fn run_insert_race(
                 force: Some(true),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();

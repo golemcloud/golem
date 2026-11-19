@@ -298,6 +298,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
             component_owner_account_email: "test@golem".to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
+            expected_fingerprint: None,
         })
         .await?
         .into_inner();

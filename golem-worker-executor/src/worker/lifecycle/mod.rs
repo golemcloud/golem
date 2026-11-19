@@ -24,7 +24,9 @@ use golem_common::model::agent::{AgentMode, ParsedAgentKey, Principal};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
-use golem_common::model::{AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp,
+};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use tracing::{debug, info, warn};
 
@@ -134,6 +136,21 @@ pub(super) fn has_duplicate_pending_update(
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    pub(crate) async fn ensure_management_fingerprint(
+        &self,
+        expected_fingerprint: Option<AgentFingerprint>,
+    ) -> Result<(), WorkerExecutorError> {
+        let _instance = self.instance.lock().await;
+        if expected_fingerprint
+            .is_some_and(|expected| expected != self.get_initial_worker_metadata().fingerprint)
+        {
+            return Err(WorkerExecutorError::worker_not_found(
+                self.owned_agent_id.agent_id(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
@@ -150,6 +167,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn delete<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
         principal: Principal,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -159,7 +177,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Self::get_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         loop {
-            if let Some(outcome) = worker.start_deletion().await? {
+            if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
             worker = match Self::get_existing_suspended(deps, owned_agent_id, principal.clone())
@@ -179,6 +197,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -188,6 +207,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
         };
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         // A running deletion that already stopped the state actor answers as a missing agent.
         let metadata = match worker.try_get_latest_worker_metadata().await {
             Err(_) if worker.answers_as_deleted().await => return Ok(()),
@@ -250,11 +272,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         force: bool,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         worker.ensure_component_agent_ingress("resume")?;
         let metadata = worker.try_get_latest_worker_metadata().await?;
 
@@ -322,11 +348,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<OplogIndex, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         let metadata = worker.try_get_latest_worker_metadata().await?;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
             return Err(WorkerExecutorError::invalid_request(
@@ -462,11 +492,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         worker.ensure_component_agent_ingress("revert")?;
         worker.revert_internal(target, resolved_revert).await
     }
@@ -527,11 +561,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::set_plugin_activation(deps, owned_agent_id, plugin_priority, principal, true).await
+        Self::set_plugin_activation(
+            deps,
+            owned_agent_id,
+            plugin_priority,
+            principal,
+            true,
+            expected_fingerprint,
+        )
+        .await
     }
 
     pub async fn deactivate_plugin<T>(
@@ -539,11 +582,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
         principal: Principal,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        Self::set_plugin_activation(deps, owned_agent_id, plugin_priority, principal, false).await
+        Self::set_plugin_activation(
+            deps,
+            owned_agent_id,
+            plugin_priority,
+            principal,
+            false,
+            expected_fingerprint,
+        )
+        .await
     }
 
     async fn set_plugin_activation<T>(
@@ -552,11 +604,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         plugin_priority: PluginPriority,
         principal: Principal,
         activate: bool,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
         worker.ensure_component_agent_ingress("plugin change")?;
         let metadata = worker.try_get_latest_worker_metadata().await?;
         if worker.deletion_owns_retirement().await {

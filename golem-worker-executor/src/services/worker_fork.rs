@@ -104,6 +104,7 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
@@ -1073,6 +1074,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
             source.environment_id,
@@ -1087,6 +1089,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id))?
             .initial_worker_metadata;
+        if expected_fingerprint.is_some_and(|expected| expected != source_metadata.fingerprint) {
+            return Err(WorkerExecutorError::worker_not_found(source.agent_id));
+        }
         let hash =
             publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
                 .map_err(WorkerExecutorError::runtime)?;
@@ -1339,6 +1344,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1348,6 +1354,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             None,
             auth_ctx,
             fork_request,
+            expected_fingerprint,
         )
         .await
     }
@@ -1371,6 +1378,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             Some((copied_scope_start, invocation_id)),
             auth_ctx,
             fork_request,
+            None,
         )
         .await
     }

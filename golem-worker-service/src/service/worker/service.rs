@@ -1150,19 +1150,25 @@ impl WorkerService {
         // the routing layer's retries. A retried delete cannot tell "I already deleted it"
         // from "it was never here", but a read can, so the read settles whether the agent
         // was there when the caller asked, before any delete goes out.
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Delete,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::Delete,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
-            .delete(&agent_id.agent_id, agent_id.environment_id, auth_ctx)
+            .delete(
+                &agent_id.agent_id,
+                agent_id.environment_id,
+                agent.metadata.fingerprint,
+                auth_ctx,
+            )
             .await?;
 
         Ok(())
@@ -1202,22 +1208,24 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Interrupt,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::Interrupt,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
             .interrupt(
                 &agent_id.agent_id,
                 recover_immediately,
                 agent_id.environment_id,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await?;
@@ -1281,19 +1289,26 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Resume,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::Resume,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
-            .resume(&agent_id.agent_id, force, agent_id.environment_id, auth_ctx)
+            .resume(
+                &agent_id.agent_id,
+                force,
+                agent_id.environment_id,
+                agent.metadata.fingerprint,
+                auth_ctx,
+            )
             .await?;
 
         Ok(())
@@ -1308,16 +1323,17 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::UpdateRevision,
-                AgentResourcePattern::Empty,
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::UpdateRevision,
+                    AgentResourcePattern::Empty,
+                )],
+            )
+            .await?;
 
         self.worker_client
             .update(
@@ -1326,6 +1342,7 @@ impl WorkerService {
                 target_revision,
                 disable_wakeup,
                 agent_id.environment_id,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await
@@ -1601,7 +1618,7 @@ impl WorkerService {
         verb: AgentVerb,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<AgentFingerprint> {
         let agent = self
             .read_agent(
                 agent_id,
@@ -1627,7 +1644,8 @@ impl WorkerService {
                 verb,
                 AgentResourcePattern::PluginName(AgentPluginName(plugin_name)),
             )],
-        )
+        )?;
+        Ok(agent.metadata.fingerprint)
     }
 
     pub async fn activate_plugin(
@@ -1637,20 +1655,22 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.plugin_agent(
-            agent_id,
-            plugin_priority,
-            AgentVerb::ActivatePlugin,
-            expected_fingerprint,
-            &auth_ctx,
-        )
-        .await?;
+        let fingerprint = self
+            .plugin_agent(
+                agent_id,
+                plugin_priority,
+                AgentVerb::ActivatePlugin,
+                expected_fingerprint,
+                &auth_ctx,
+            )
+            .await?;
 
         self.worker_client
             .activate_plugin(
                 &agent_id.agent_id,
                 plugin_priority,
                 agent_id.environment_id,
+                fingerprint,
                 auth_ctx,
             )
             .await
@@ -1663,20 +1683,22 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.plugin_agent(
-            agent_id,
-            plugin_priority,
-            AgentVerb::DeactivatePlugin,
-            expected_fingerprint,
-            &auth_ctx,
-        )
-        .await?;
+        let fingerprint = self
+            .plugin_agent(
+                agent_id,
+                plugin_priority,
+                AgentVerb::DeactivatePlugin,
+                expected_fingerprint,
+                &auth_ctx,
+            )
+            .await?;
 
         self.worker_client
             .deactivate_plugin(
                 &agent_id.agent_id,
                 plugin_priority,
                 agent_id.environment_id,
+                fingerprint,
                 auth_ctx,
             )
             .await
@@ -1731,6 +1753,7 @@ impl WorkerService {
                 agent.component.account_id,
                 agent.component.account_email.clone(),
                 principal,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await?;
@@ -1828,6 +1851,7 @@ impl WorkerService {
                 target,
                 resolved_revert,
                 agent_id.environment_id,
+                agent.metadata.fingerprint,
                 auth_ctx,
             )
             .await?;
@@ -1844,16 +1868,17 @@ impl WorkerService {
     ) -> WorkerResult<bool> {
         let accepted_id = parse_final_invocation_id(&idempotency_key.value)?;
         let invocation_id = AgentInvocationIdPattern::Uuid(accepted_id.0);
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::CancelInvocation,
-                AgentResourcePattern::InvocationId(invocation_id),
-            )],
-        )
-        .await?;
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Agent(
+                    AgentVerb::CancelInvocation,
+                    AgentResourcePattern::InvocationId(invocation_id),
+                )],
+            )
+            .await?;
 
         self.worker_client
             .cancel_invocation(
@@ -1862,6 +1887,7 @@ impl WorkerService {
                 agent_id.environment_id,
                 auth_ctx,
                 None,
+                Some(agent.metadata.fingerprint),
             )
             .await
     }
@@ -1894,6 +1920,7 @@ impl WorkerService {
                         target_environment_id: Some(target.environment_id.into()),
                     },
                 ),
+                None,
             )
             .await
     }
@@ -4874,8 +4901,10 @@ mod tests {
             &self,
             agent_id: &AgentId,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("delete");
             self.deleted_agent_ids.lock().unwrap().push(*agent_id);
             Ok(())
@@ -4896,8 +4925,10 @@ mod tests {
             _: &AgentId,
             _: bool,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("interrupt");
             Ok(())
         }
@@ -4976,8 +5007,10 @@ mod tests {
             _: &AgentId,
             _: bool,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("resume");
             Ok(())
         }
@@ -4989,8 +5022,10 @@ mod tests {
             _: ComponentRevision,
             _: bool,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<OplogIndex> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("update");
             Ok(OplogIndex::INITIAL)
         }
@@ -5109,8 +5144,10 @@ mod tests {
             _: &AgentId,
             _: PluginPriority,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("activate-plugin");
             Ok(())
         }
@@ -5120,8 +5157,10 @@ mod tests {
             _: &AgentId,
             _: PluginPriority,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("deactivate-plugin");
             Ok(())
         }
@@ -5135,8 +5174,10 @@ mod tests {
             _: AccountId,
             _: AccountEmail,
             _: Principal,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("fork");
             Ok(())
         }
@@ -5147,8 +5188,10 @@ mod tests {
             _: RevertWorkerTarget,
             _: Option<ResolvedRevert>,
             _: EnvironmentId,
+            expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("revert");
             Ok(())
         }
@@ -5176,7 +5219,9 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
+            expected_fingerprint: Option<AgentFingerprint>,
         ) -> WorkerResult<bool> {
+            assert_eq!(expected_fingerprint, Some(self.fingerprint));
             self.effects.lock().unwrap().push("cancel-invocation");
             Ok(true)
         }

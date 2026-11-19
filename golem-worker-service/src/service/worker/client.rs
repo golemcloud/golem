@@ -511,6 +511,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -527,6 +528,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         recover_immediately: bool,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -553,6 +555,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         force: bool,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -563,6 +566,7 @@ pub trait WorkerClient: Send + Sync {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex>;
 
@@ -629,6 +633,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -637,6 +642,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -649,6 +655,7 @@ pub trait WorkerClient: Send + Sync {
         account_id: AccountId,
         account_email: AccountEmail,
         principal: Principal,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -658,6 +665,7 @@ pub trait WorkerClient: Send + Sync {
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -676,6 +684,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         scheduled: Option<ScheduledInvocationCancellation>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<bool>;
 
     async fn invoke_agent(
@@ -1161,6 +1170,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         // Built once here, cloned per attempt below, the same way
@@ -1173,6 +1183,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             environment_id: Some(environment_id.into()),
             auth_ctx: Some(auth_ctx.into()),
             principal: None,
+            expected_fingerprint: Some(expected_fingerprint.0.into()),
         };
 
         // How many times the request has been handed to a connection. Both
@@ -1267,6 +1278,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         recover_immediately: bool,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let agent_id = *agent_id;
@@ -1280,6 +1292,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_id: Some(agent_id.into()),
                         recover_immediately,
                         environment_id: Some(environment_id.into()),
+                        expected_fingerprint: Some(expected_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                         principal: None,
                     }),
@@ -1399,6 +1412,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         force: bool,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let agent_id = *agent_id;
@@ -1411,6 +1425,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     agent_id: Some(agent_id.into()),
                     force: Some(force),
                     environment_id: Some(environment_id.into()),
+                    expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
                 }))
@@ -1437,6 +1452,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
         let agent_id = *agent_id;
@@ -1451,6 +1467,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         as i32,
                     target_revision: target_revision.into(),
                     environment_id: Some(environment_id.into()),
+                    expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
                     principal: None,
@@ -1831,6 +1848,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let agent_id = *agent_id;
@@ -1844,6 +1862,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_id: Some(agent_id.into()),
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
+                        expected_fingerprint: Some(expected_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                         principal: None,
                     }),
@@ -1871,6 +1890,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let agent_id = *agent_id;
@@ -1884,6 +1904,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_id: Some(agent_id.into()),
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
+                        expected_fingerprint: Some(expected_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
                         principal: None,
                     }),
@@ -1915,6 +1936,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         account_id: AccountId,
         account_email: AccountEmail,
         principal: Principal,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_agent_id = *source_agent_id;
@@ -1932,6 +1954,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     component_owner_account_id: Some(account_id.into()),
                     component_owner_account_email: account_email.as_str().to_string(),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
+                    expected_fingerprint: Some(expected_fingerprint.0.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: Some(principal.clone()),
@@ -1958,6 +1981,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
         environment_id: EnvironmentId,
+        expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let agent_id = *agent_id;
@@ -1972,6 +1996,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     agent_id: Some(agent_id.into()),
                     target: Some(target.into()),
                     environment_id: Some(environment_id.into()),
+                    expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
                     resolved_revert: resolved_revert.map(|resolved| {
@@ -2055,6 +2080,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         scheduled: Option<ScheduledInvocationCancellation>,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<bool> {
         let agent_id = *agent_id;
         let idempotency_key = *idempotency_key;
@@ -2067,6 +2093,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     agent_id: Some(agent_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
                     environment_id: Some(environment_id.into()),
+                    expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     principal: None,
                     scheduled,
@@ -3637,6 +3664,8 @@ mod rejection_mapping_tests {
         routing_misses: Arc<AtomicUsize>,
         create_request: Arc<std::sync::Mutex<Option<CreateWorkerRequest>>>,
         create_sharding_error: bool,
+        delete_requests: Arc<std::sync::Mutex<Vec<DeleteWorkerRequest>>>,
+        delete_sharding_error: bool,
         accept: bool,
         calls: Arc<AtomicUsize>,
         /// The opening frame's freshness disposition, one per call in call order.
@@ -3744,7 +3773,27 @@ mod rejection_mapping_tests {
             }))
         }
         unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
-        unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
+        async fn delete_worker(
+            &self,
+            request: Request<DeleteWorkerRequest>,
+        ) -> Result<Response<DeleteWorkerResponse>, Status> {
+            use golem_api_grpc::proto::golem::workerexecutor::v1::delete_worker_response::Result as Reply;
+            let first = {
+                let mut requests = self.delete_requests.lock().unwrap();
+                requests.push(request.into_inner());
+                requests.len() == 1
+            };
+            if first && !self.delete_sharding_error {
+                return Err(Status::unavailable("delete response lost"));
+            }
+            Ok(Response::new(DeleteWorkerResponse {
+                result: Some(if first {
+                    Reply::Failure(WorkerExecutorError::ShardingNotReady.into())
+                } else {
+                    Reply::Success(Default::default())
+                }),
+            }))
+        }
         unimplemented_unary!(
             complete_promise,
             CompletePromiseRequest,
@@ -4108,6 +4157,37 @@ mod rejection_mapping_tests {
             )
             .await
             .unwrap_err()
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn delete_retries_keep_the_authorized_fingerprint() {
+        for delete_sharding_error in [false, true] {
+            let executor = RejectingExecutor {
+                delete_sharding_error,
+                ..Default::default()
+            };
+            let requests = executor.delete_requests.clone();
+            let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
+            let fingerprint = golem_common::model::AgentFingerprint(uuid::Uuid::new_v4());
+            client
+                .delete(
+                    &agent_id,
+                    EnvironmentId::new(),
+                    fingerprint,
+                    AuthCtx::system(),
+                )
+                .await
+                .unwrap();
+            let requests = requests.lock().unwrap();
+            assert!(requests.len() >= 2);
+            for request in requests.iter() {
+                assert_eq!(
+                    request.expected_fingerprint.map(uuid::Uuid::from),
+                    Some(fingerprint.0)
+                );
+            }
+        }
     }
 
     #[test]

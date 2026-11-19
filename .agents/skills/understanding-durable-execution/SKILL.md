@@ -1402,6 +1402,7 @@ carries no principal or context. Tests:
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+Management mutations carry the fingerprint of the metadata authorized by the worker service through every routing retry, even when the caller omitted `expectedFingerprint`. Delete compares it under the instance mutex before claiming deletion. Interrupt, resume, update, revert, plugin changes and public cancellation check the acquired worker under the same mutex, then operate only on that pinned worker. Fork carries the authorized source fingerprint into the source-oplog lifecycle guard. A retry cannot capture the fingerprint of a replacement at the same ID. Scheduled token cancellation and promise completion retain their separate incarnation-bound authority.
 `ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
 `AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
 whether the worker was resident or loaded cold. A caller that joined another caller's load loads

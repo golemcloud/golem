@@ -212,7 +212,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let principal = extract_principal(&request.principal);
 
-        Worker::<Ctx>::delete(self, &owned_agent_id, principal).await
+        let expected_fingerprint = AgentFingerprint(
+            request
+                .expected_fingerprint
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("expected_fingerprint not found")
+                })?
+                .into(),
+        );
+        Worker::<Ctx>::delete(self, &owned_agent_id, expected_fingerprint, principal).await
     }
 
     pub(super) async fn fork_worker_internal(
@@ -274,6 +282,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     extract_principal(&request.principal),
                     &InvocationContextStack::fresh(),
                 ),
+                request
+                    .expected_fingerprint
+                    .map(|fingerprint| AgentFingerprint(fingerprint.into())),
             )
             .await?;
 
@@ -311,7 +322,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        Worker::<Ctx>::revert(self, &owned_agent_id, target, resolved_revert, principal).await
+        Worker::<Ctx>::revert(
+            self,
+            &owned_agent_id,
+            target,
+            resolved_revert,
+            principal,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn resolve_revert_last_invocations_internal(
@@ -406,6 +427,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
+        let expected_fingerprint = request
+            .expected_fingerprint
+            .map(|fingerprint| AgentFingerprint(fingerprint.into()));
+        if expected_fingerprint.is_some_and(|expected| expected != metadata.fingerprint) {
+            return Err(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ));
+        }
         let status = &metadata.last_known_status;
         if status
             .pending_invocations
@@ -414,6 +443,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             let worker = self
                 .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .await?;
+            worker
+                .ensure_management_fingerprint(expected_fingerprint)
                 .await?;
             Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
                 .await?;
@@ -490,6 +522,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             request.recover_immediately,
             principal,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
         )
         .await
     }
@@ -508,7 +543,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let force_resume = request.force.unwrap_or(false);
 
-        Worker::<Ctx>::resume(self, &owned_agent_id, force_resume, principal).await
+        Worker::<Ctx>::resume(
+            self,
+            &owned_agent_id,
+            force_resume,
+            principal,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn update_worker_internal(
@@ -541,6 +585,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             target_revision,
             request.disable_wakeup,
             principal,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
         )
         .await
     }

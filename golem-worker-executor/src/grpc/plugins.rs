@@ -36,7 +36,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
-        Worker::<Ctx>::activate_plugin(self, &owned_agent_id, plugin_priority, principal).await
+        Worker::<Ctx>::activate_plugin(
+            self,
+            &owned_agent_id,
+            plugin_priority,
+            principal,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn deactivate_plugin_internal(
@@ -52,7 +61,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
-        Worker::<Ctx>::deactivate_plugin(self, &owned_agent_id, plugin_priority, principal).await
+        Worker::<Ctx>::deactivate_plugin(
+            self,
+            &owned_agent_id,
+            plugin_priority,
+            principal,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn process_oplog_entries_internal(

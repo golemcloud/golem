@@ -295,6 +295,7 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
             resolved_revert: Some(resolved),
+            expected_fingerprint: None,
         })
         .await?
         .into_inner();

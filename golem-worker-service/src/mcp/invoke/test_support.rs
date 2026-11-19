@@ -490,7 +490,13 @@ impl WorkerClient for RecordingWorkerClient {
         unimplemented!()
     }
 
-    async fn delete(&self, _: &AgentId, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
+    async fn delete(
+        &self,
+        _: &AgentId,
+        _: EnvironmentId,
+        _: AgentFingerprint,
+        _: AuthCtx,
+    ) -> WorkerResult<()> {
         unimplemented!()
     }
 
@@ -509,6 +515,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: bool,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -546,7 +553,14 @@ impl WorkerClient for RecordingWorkerClient {
         unimplemented!()
     }
 
-    async fn resume(&self, _: &AgentId, _: bool, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
+    async fn resume(
+        &self,
+        _: &AgentId,
+        _: bool,
+        _: EnvironmentId,
+        _: AgentFingerprint,
+        _: AuthCtx,
+    ) -> WorkerResult<()> {
         unimplemented!()
     }
 
@@ -557,6 +571,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: ComponentRevision,
         _: bool,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
         Ok(OplogIndex::INITIAL)
@@ -653,6 +668,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: PluginPriority,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -663,6 +679,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: &AgentId,
         _: PluginPriority,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -677,6 +694,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: AccountId,
         _: AccountEmail,
         _: Principal,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -688,6 +706,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: RevertWorkerTarget,
         _: Option<ResolvedRevert>,
         _: EnvironmentId,
+        _: AgentFingerprint,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -710,6 +729,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AuthCtx,
         _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
+        _: Option<AgentFingerprint>,
     ) -> WorkerResult<bool> {
         unimplemented!()
     }

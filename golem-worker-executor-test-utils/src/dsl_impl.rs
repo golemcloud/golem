@@ -848,6 +848,7 @@ impl TestDsl for TestWorkerExecutor {
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                expected_fingerprint: None,
                 resolved_revert,
             })
             .await?
@@ -1005,6 +1006,7 @@ impl TestDsl for TestWorkerExecutor {
                 recover_immediately,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1029,6 +1031,7 @@ impl TestDsl for TestWorkerExecutor {
                 force: Some(force),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1109,6 +1112,7 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1140,6 +1144,7 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1171,6 +1176,7 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1186,6 +1192,7 @@ impl TestDsl for TestWorkerExecutor {
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
+        let fingerprint = self.get_worker_metadata(agent_id).await?.fingerprint;
         let response = self
             .client
             .clone()
@@ -1194,6 +1201,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(agent_id.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                expected_fingerprint: Some(fingerprint.0.into()),
             })
             .await?
             .into_inner();
@@ -1302,6 +1310,7 @@ impl TestDsl for TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
                 scheduled: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
@@ -1559,6 +1568,7 @@ impl TestWorkerExecutor {
                 component_owner_account_email: "test@golem".to_string(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();

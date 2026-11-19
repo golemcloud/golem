@@ -90,6 +90,7 @@ message ForkWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 6;
   optional golem.component.Principal principal = 7;
   string component_owner_account_email = 8;
+  optional golem.common.UUID expected_fingerprint = 9;
 }
 
 message ForkWorkerResponse {
@@ -104,6 +105,7 @@ message DeleteWorkerRequest {
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
   optional golem.component.Principal principal = 4;
+  golem.common.UUID expected_fingerprint = 5;
 }
 
 message DeleteWorkerResponse {
@@ -191,6 +193,7 @@ message InterruptWorkerRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message RevokeShardsRequest {
@@ -278,6 +281,7 @@ message ResumeWorkerRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message ResumeWorkerResponse {
@@ -338,6 +342,7 @@ message UpdateWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 5;
   bool disable_wakeup = 6;
   optional golem.component.Principal principal = 7;
+  golem.common.UUID expected_fingerprint = 8;
 }
 
 message UpdateWorkerResponse {
@@ -489,6 +494,7 @@ message ActivatePluginRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message ActivatePluginResponse {
@@ -504,6 +510,7 @@ message DeactivatePluginRequest {
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
+  golem.common.UUID expected_fingerprint = 6;
 }
 
 message DeactivatePluginResponse {
@@ -520,6 +527,7 @@ message RevertWorkerRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
   optional golem.common.ResolvedRevert resolved_revert = 6;
+  golem.common.UUID expected_fingerprint = 7;
 }
 
 message ResolveRevertLastInvocationsRequest {
@@ -550,6 +558,7 @@ message CancelInvocationRequest {
   golem.auth.AuthCtx auth_ctx = 4;
   optional golem.component.Principal principal = 5;
   optional golem.worker.ScheduledInvocationCancellation scheduled = 6;
+  golem.common.UUID expected_fingerprint = 7;
 }
 
 message CancelInvocationResponse {

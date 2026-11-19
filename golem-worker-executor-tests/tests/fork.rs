@@ -130,6 +130,7 @@ pub(crate) async fn fork_worker_to(
             component_owner_account_email: "test@golem".to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
             principal: None,
+            expected_fingerprint: None,
         })
         .await?
         .into_inner();
@@ -614,6 +615,7 @@ impl WorkerProxy for LocalResumeProxy {
                 force: Some(force),
                 auth_ctx: Some(auth_ctx.clone().into()),
                 principal: None,
+                expected_fingerprint: None,
             })
             .await?
             .into_inner();
