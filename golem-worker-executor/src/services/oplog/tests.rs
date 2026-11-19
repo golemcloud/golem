@@ -23,7 +23,6 @@ use crate::services::oplog::rate_limited::RateLimitedOplog;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
-use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -32,7 +31,6 @@ use crate::storage::indexed::{
 use assert2::check;
 use bytes::Bytes;
 use futures::FutureExt;
-use golem_common::config::RedisConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
@@ -43,7 +41,6 @@ use golem_common::model::oplog::{AgentError, LogLevel, OplogErrorKind};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentFingerprint, AgentMetadata, AgentStatusRecord, OwnedAgentId};
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
-use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -6172,50 +6169,43 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 
 #[test]
 async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
-    multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
+    multilayer_transfers_entries_after_limit_reached(315, 5, 1, 3, false).await;
 }
 
 #[test]
 async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
-    multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
+    multilayer_transfers_entries_after_limit_reached(12, 2, 1, 0, false).await;
 }
 
 #[test]
 async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
-    multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
+    multilayer_transfers_entries_after_limit_reached(10000, 0, 0, 100, false).await;
 }
 
 #[test]
 async fn blob_multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
-    multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
+    multilayer_transfers_entries_after_limit_reached(315, 5, 1, 3, true).await;
 }
 
 #[test]
 async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
-    multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
+    multilayer_transfers_entries_after_limit_reached(12, 2, 1, 0, true).await;
 }
 
 #[test]
 async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
-    multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
+    multilayer_transfers_entries_after_limit_reached(10000, 0, 0, 100, true).await;
 }
 
 async fn multilayer_transfers_entries_after_limit_reached(
-    use_redis: bool,
     n: u64,
     expected_1: u64,
     expected_2: u64,
     expected_3: u64,
     use_blob: bool,
 ) {
-    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = if use_redis {
-        let pool = RedisPool::configured(&RedisConfig::default())
-            .await
-            .unwrap();
-        Arc::new(RedisIndexedStorage::new(pool))
-    } else {
-        Arc::new(InMemoryIndexedStorage::new())
-    };
+    let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(InMemoryIndexedStorage::new());
 
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
@@ -9038,136 +9028,6 @@ async fn an_archive_last_index_that_is_unavailable_requires_a_recovery(_tracing:
                 && details.contains("injected archive index outage")),
         "{error:?}"
     );
-}
-
-/// Reads one RESP command of the client, as a list of its arguments.
-async fn read_resp_command(
-    reader: &mut tokio::io::BufReader<tokio::net::TcpStream>,
-) -> Option<Vec<Vec<u8>>> {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
-    let mut line = String::new();
-    if reader.read_line(&mut line).await.ok()? == 0 {
-        return None;
-    }
-    let count = line.strip_prefix('*')?.trim_end().parse::<usize>().ok()?;
-    let mut parts = Vec::with_capacity(count);
-    for _ in 0..count {
-        line.clear();
-        reader.read_line(&mut line).await.ok()?;
-        let len = line.strip_prefix('$')?.trim_end().parse::<usize>().ok()?;
-        let mut part = vec![0; len];
-        reader.read_exact(&mut part).await.ok()?;
-        let mut crlf = [0; 2];
-        reader.read_exact(&mut crlf).await.ok()?;
-        parts.push(part);
-    }
-    Some(parts)
-}
-
-/// A Redis server that holds no oplog: it answers the last-index read of a primary oplog with an
-/// empty stream, and closes the connection on the last-index read of a compressed oplog, as when
-/// the connection is lost. It counts the primary reads it answers.
-async fn redis_losing_the_archive_last_index(
-    stream: tokio::net::TcpStream,
-    primary_reads: Arc<AtomicUsize>,
-) {
-    use tokio::io::AsyncWriteExt;
-    let mut reader = tokio::io::BufReader::new(stream);
-    while let Some(command) = read_resp_command(&mut reader).await {
-        let name = command
-            .first()
-            .map(|name| String::from_utf8_lossy(name).to_ascii_uppercase())
-            .unwrap_or_default();
-        let key = command
-            .get(1)
-            .map(|key| String::from_utf8_lossy(key).into_owned())
-            .unwrap_or_default();
-        let reply: &[u8] = match name.as_str() {
-            "XREVRANGE" if key.contains("-oplog:") && !key.contains(":oplog:") => return,
-            "XREVRANGE" => {
-                primary_reads.fetch_add(1, Ordering::SeqCst);
-                b"*0\r\n"
-            }
-            "EXISTS" | "XLEN" => b":0\r\n",
-            _ => b"+OK\r\n",
-        };
-        reader.get_mut().write_all(reply).await.unwrap();
-    }
-}
-
-/// A lost Redis connection on the last-index read of an archive layer, after the primary oplog
-/// answered, is a storage that did not answer: the open gives `RecoveryRequired`, which the start
-/// and shard-assignment recovery retry, and not `OplogFailed`.
-#[test]
-async fn a_redis_archive_last_index_lost_in_transport_requires_a_recovery(_tracing: &Tracing) {
-    use fred::prelude::{Config, Pool, ReconnectPolicy};
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let primary_reads = Arc::new(AtomicUsize::new(0));
-    let answered = primary_reads.clone();
-    let server = tokio::spawn(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            tokio::spawn(redis_losing_the_archive_last_index(
-                stream,
-                answered.clone(),
-            ));
-        }
-    });
-    let config = Config::from_url(&format!("redis://{address}")).unwrap();
-    let pool = Pool::new(
-        config,
-        None,
-        None,
-        Some(ReconnectPolicy::new_constant(20, 10)),
-        1,
-    )
-    .unwrap();
-    let storage: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(RedisIndexedStorage::new(
-        RedisPool::new(pool, String::new()),
-    ));
-    let primary = Arc::new(
-        PrimaryOplogService::new(
-            storage.clone(),
-            Arc::new(InMemoryBlobStorage::new()),
-            1,
-            1,
-            16,
-            32,
-            immediate_archive_retry_config(2),
-        )
-        .await,
-    );
-    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
-        storage,
-        1,
-        immediate_archive_retry_config(2),
-    ));
-    let service = MultiLayerOplogService::new(primary, nev![archive], 10, 10);
-    let (_, owned_agent_id, metadata) = archive_open_agent("redis-archive-index-lost");
-
-    let error = tokio::time::timeout(
-        Duration::from_secs(10),
-        failed_open(
-            &service,
-            &owned_agent_id,
-            AgentMode::Durable,
-            None,
-            metadata,
-            None,
-        ),
-    )
-    .await
-    .unwrap();
-
-    assert!(primary_reads.load(Ordering::SeqCst) > 0);
-    assert!(
-        matches!(&error, WorkerExecutorError::RecoveryRequired { details, .. }
-            if details.contains(&owned_agent_id.agent_id.to_string())
-                && details.contains("archive layer 0")),
-        "{error:?}"
-    );
-    server.abort();
 }
 
 /// Only a storage that did not answer is a transient archive failure. An error of the data or of

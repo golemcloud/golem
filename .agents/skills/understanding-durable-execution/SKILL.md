@@ -1619,8 +1619,7 @@ owner leaves by:
   includes a held index reported to a repeated attempt, since the attempt before it may have
   been sent. Such an append is checked against the manifest: if this attempt's entry landed, or
   another attempt listed a chunk holding the same entries, it counts as stored, and otherwise it
-  is a maintenance failure to retry. On Redis a manifest append is sent once, as a primary oplog
-  insert is, so that a lost reply is reported as a failure and not answered by a second run.
+  is a maintenance failure to retry. PostgreSQL and SQLite store oplogs and their epoch records. Redis holds only cache namespaces and cannot hold indexed storage or persistent key-value data. Cache loss does not remove agent state.
   Reads, lengths and scans go through the manifest, never a directory listing. A trim removes
   the manifest entries first and deletes their objects after, and never deletes the agent's
   directory, which is recursive and unfenced. An object no manifest lists is left behind by a

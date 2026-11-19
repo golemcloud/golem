@@ -165,6 +165,7 @@ tempfile = { workspace = true }
 test-r = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }
+toml = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 wat = { workspace = true }

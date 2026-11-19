@@ -59,12 +59,12 @@ Executors run components as native code compiled from WebAssembly. The registry 
 
 | Storage | Holds | Backends |
 | ------- | ----- | -------- |
-| Indexed storage | Oplogs | SQLite, PostgreSQL, Redis |
+| Indexed storage | Oplogs | SQLite, PostgreSQL |
 | Blob storage | Component files, compiled code, archived oplog chunks, large payloads, initial agent files, filesystem snapshots | Local file system, S3, SQLite |
-| Key-value storage | Cached agent metadata, promise state | SQLite, PostgreSQL, Redis |
+| Key-value storage | Cached agent metadata, promise state | SQLite, PostgreSQL; Redis for cache namespaces only |
 | Relational database | Registry data | PostgreSQL, SQLite |
 
-The oplog is the source of truth for an agent's state; cached agent metadata is rebuilt from it when needed. Executors that share shards need indexed storage they can all reach, which means PostgreSQL or Redis. See [Persistence](/next/operate/persistence) for details, including scheduler storage.
+The oplog is the source of truth for an agent's state; cached agent metadata is rebuilt from it when needed. Executors that share shards need indexed storage they can all reach, which means PostgreSQL. Redis holds only cache data. See [Persistence](/next/operate/persistence) for details, including scheduler storage.
 
 ## Local and distributed deployments
 

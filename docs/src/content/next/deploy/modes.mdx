@@ -9,7 +9,7 @@ Golem runs in one of four shapes, from one process on one machine to a cluster o
 | 1. Single node | One [all-in-one server](/next/deploy/server) process | SQLite on a volume; blobs in S3 | Seconds of downtime for each deploy; restore onto a new machine after a failure | Vertically |
 | 2. Managed Postgres | The same all-in-one process, with no volume | Managed Postgres; blobs in S3 | Restart on failure; no stateful service to operate yourself | Vertically, exactly one instance |
 | 3. Fixed cluster | The [per-service images](/next/deploy/cluster), with N worker executors | Managed Postgres; blobs in S3 | An executor can be lost: its shards move to the other executors | Horizontally, by the number of executors |
-| 4. Kubernetes | The per-service images, with autoscaled executors and shard manager replicas | Postgres or Redis; shard state in etcd; blobs in S3 | Rolling deploys; executors and the shard manager fail over | Horizontally, autoscaled |
+| 4. Kubernetes | The per-service images, with autoscaled executors and shard manager replicas | Postgres; shard state in etcd; blobs in S3 | Rolling deploys; executors and the shard manager fail over | Horizontally, autoscaled |
 
 ## Single node
 
