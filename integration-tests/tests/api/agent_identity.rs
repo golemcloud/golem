@@ -498,6 +498,7 @@ async fn ephemeral_grpc_invocations_preserve_explicit_ids_and_rest_retries_reuse
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 idempotency_key: Some(IdempotencyKey::new(idempotency_key.clone()).into()),
                 auth_ctx: Some(AuthCtx::System.into()),
+                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
                 environment_id: Some(component.environment_id.into()),
                 component_id: Some(component.id.into()),
                 ..Default::default()
