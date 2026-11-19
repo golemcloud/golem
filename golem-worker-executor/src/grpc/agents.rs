@@ -353,20 +353,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         self.ensure_not_being_deleted(&owned_agent_id).await?;
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
 
-        let status = &metadata.last_known_status;
-        if status.invocation_results.contains_key(&idempotency_key) {
-            return Ok(false);
-        }
-        // The last known status can lag behind a fresh acceptance, so the worker decides.
+        // The worker decides under its instance lock first: a recent result can belong to an
+        // invocation that still runs (a retry marker) or is still queued (a fail-fast error after
+        // an earlier invocation trapped), and neither is terminal.
         let worker = self
             .get_existing_for_management(&owned_agent_id, caller, "cancel")
             .await?;
+        if let Some(decided) = Self::cancel_decided(&worker, idempotency_key).await? {
+            return Ok(decided);
+        }
         // A deletion, even one that failed later and left the generation cached, can have
         // stopped its state actor. The lookup then fails, and the deletion answers instead.
         let lookup = match worker.try_lookup_invocation_result(&idempotency_key).await {
@@ -382,27 +383,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match Self::not_found_if_deleting(&worker, lookup).await? {
             LookupResult::Complete(_) => Ok(false),
             LookupResult::New => Err(WorkerExecutorError::invalid_request("Invocation not found")),
+            // Accepted after the first decision.
             LookupResult::Pending | LookupResult::Interrupted => {
-                Self::cancel_decided(&worker, idempotency_key).await
+                Ok(Self::cancel_decided(&worker, idempotency_key)
+                    .await?
+                    .unwrap_or(false))
             }
         }
     }
 
-    /// Asks the worker to cancel under its instance lock and turns the decision into the RPC
-    /// answer: `true` when withdrawn, `false` when it finished meanwhile, and a typed error when
-    /// it is running.
+    /// Asks the worker to cancel under its instance lock: `true` when withdrawn, a typed error
+    /// when it is running, and `None` when it is neither pending nor running.
     async fn cancel_decided(
         worker: &Arc<Worker<Ctx>>,
         idempotency_key: golem_common::model::InvocationId,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<Option<bool>, WorkerExecutorError> {
         match Self::not_found_if_deleting(worker, worker.cancel_invocation(idempotency_key).await)
             .await?
         {
-            CancelInvocationOutcome::Withdrawn => Ok(true),
+            CancelInvocationOutcome::Withdrawn => Ok(Some(true)),
             CancelInvocationOutcome::Running => {
                 Err(WorkerExecutorError::CannotCancelRunningInvocation)
             }
-            CancelInvocationOutcome::NotPending => Ok(false),
+            CancelInvocationOutcome::NotPending => Ok(None),
         }
     }
 

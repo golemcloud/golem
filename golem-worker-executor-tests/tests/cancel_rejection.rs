@@ -20,15 +20,14 @@
 
 use crate::Tracing;
 use chrono::Utc;
-use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
 };
 use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, InvocationId, InvocationOperation, OwnedAgentId,
-    Timestamp,
+    AgentInvocation, AgentInvocationPayload, IdempotencyKey, InvocationId, InvocationOperation,
+    OwnedAgentId, Timestamp,
 };
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -39,7 +38,7 @@ use golem_worker_executor::worker::invocations::{
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, callers, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -79,9 +78,7 @@ async fn late_rejection_after_cancel(
         method_name: "inc_global_by".to_string(),
         input: data_value!(value).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.clone(),
-        }),
+        caller: callers::agent(owner.clone()),
         scope_card: None,
     };
     let owned = OwnedAgentId::new(component.environment_id, &target);
@@ -110,6 +107,8 @@ async fn late_rejection_after_cancel(
             Some(key),
             error.clone(),
             OplogIndex::INITIAL,
+            None,
+            None,
             None,
         ))
         .await?;
@@ -254,9 +253,7 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         method_name: "inc_global_by".to_string(),
         input: data_value!(1u64).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.clone(),
-        }),
+        caller: callers::agent(owner.clone()),
         scope_card: None,
     };
     executor
@@ -348,10 +345,10 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
 
 /// The invocation loop withdraws a queued duplicate of a finished invocation. The withdrawal is
 /// not the result of the key, so once the finished result has left the recent results the list
-/// still shows that result.
+/// and a lookup of the key still give that result, before and after a restart.
 #[test]
 #[timeout("4m")]
-async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
+async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
@@ -361,6 +358,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
             config.invocation_results.recent_capacity = 1;
             config.invocation_results.bloom_bits = 8;
             config.invocation_results.physical_index_catch_up_chunk_size = 1;
+            config.invocation_results.hydrated_cache_capacity = 0;
         })),
         ..Default::default()
     };
@@ -378,15 +376,13 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
             agent_id!("ScheduledInvocationClient", "listed-duplicate-owner"),
         )
         .await?;
-    let principal = Principal::Agent(AgentPrincipal {
-        agent_id: owner.clone(),
-    });
+    let caller = callers::agent(owner.clone());
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
         input: data_value!(1u64).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        principal: principal.clone(),
+        caller: caller.clone(),
         scope_card: None,
     };
     executor
@@ -447,7 +443,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
             OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "inc_global_by".to_string(),
                 input: data_value!(1u64).into_parts().1,
-                principal: principal.clone(),
+                caller: caller.clone(),
                 scope_card: None,
             })),
             TraceId::generate(),
@@ -463,12 +459,190 @@ async fn a_withdrawn_duplicate_of_an_older_result_is_listed_as_that_result(
         .list_invocation_page(&InvocationFilter::default(), None, MAX_INVOCATION_PAGE_SIZE)
         .await?
         .0;
-    let lookup = worker.lookup_invocation_result(&finished).await;
     assert_eq!(
         state_of(&listed),
         Some(InvocationState::Completed),
-        "after the withdrawn duplicate (lookup of the key: {lookup:?}): {listed:?}"
+        "after the withdrawn duplicate: {listed:?}"
     );
+    let lookup = worker.lookup_invocation_result(&finished).await;
+    assert!(
+        matches!(lookup, LookupResult::Complete(Ok(_))),
+        "lookup of the key after the withdrawn duplicate: {lookup:?}"
+    );
+    drop(worker);
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    executor
+        .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+        .await?;
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let lookup = worker.lookup_invocation_result(&finished).await;
+    assert!(
+        matches!(lookup, LookupResult::Complete(Ok(_))),
+        "lookup of the key after a restart: {lookup:?}"
+    );
+    drop(worker);
+    Ok(())
+}
+
+/// A cancel is decided under the instance lock before a recent result is read. A running
+/// invocation with a retry marker answers the typed "cannot cancel yet", and a queued invocation
+/// with a warm fail-fast error, given after an earlier invocation trapped, is withdrawn and then
+/// reads as cancelled. A terminal failure is not cancelled.
+#[test]
+#[timeout("4m")]
+async fn cancel_decides_before_reading_recent_results(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    // A running invocation with a retry marker.
+    let counter = agent_id!("RpcBlockingCounter", "cancel-before-results");
+    let counter_id = executor.start_agent(&component.id, counter.clone()).await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &counter, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow::anyhow!("expected a promise ID"))?;
+    let await_key = IdempotencyKey::fresh();
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &counter,
+            &await_key,
+            "await_promise",
+            crate::raw_params(vec![promise]),
+        )
+        .await?;
+    let running = executor
+        .external_invocation_key(&counter_id, &await_key, "await_promise")
+        .await?;
+    let counter_worker = executor
+        .active_agent(&OwnedAgentId::new(component.environment_id, &counter_id))
+        .await
+        .unwrap()
+        .primary();
+    tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        while counter_worker
+            .get_last_known_status()
+            .await
+            .current_idempotency_key()
+            != Some(&running)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    counter_worker
+        .add_and_commit_oplog(OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(running),
+            AgentError::TransientError("retried".to_string()),
+            OplogIndex::INITIAL,
+            None,
+            None,
+            None,
+        ))
+        .await?;
+    assert!(
+        counter_worker
+            .get_last_known_status()
+            .await
+            .invocation_results
+            .contains_key(&running),
+        "the retry marker is a recent result of the running invocation"
+    );
+    let cancel_running = executor
+        .cancel_invocation(&counter_id, &running)
+        .await
+        .expect_err("a retrying invocation is still running");
+    assert!(
+        format!("{cancel_running:?}").contains("CannotCancelRunningInvocation"),
+        "{cancel_running:?}"
+    );
+    drop(counter_worker);
+
+    // A queued invocation with a warm fail-fast error.
+    let server = agent_id!("ScheduledInvocationServer", "cancel-before-results");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "cancel-before-results-owner"),
+        )
+        .await?;
+    let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
+        idempotency_key: *key,
+        method_name: "inc_global_by".to_string(),
+        input: data_value!(1u64).into_parts().1,
+        invocation_context: InvocationContextStack::fresh(),
+        caller: callers::agent(owner.clone()),
+        scope_card: None,
+    };
+    let worker = executor
+        .active_agent(&OwnedAgentId::new(component.environment_id, &target))
+        .await
+        .unwrap()
+        .primary();
+    let due = Utc::now() + chrono::Duration::hours(1);
+    let queued = InvocationId(uuid::Uuid::new_v4());
+    worker.schedule_invocation(invocation(&queued), due).await?;
+    let trapped = InvocationId(uuid::Uuid::new_v4());
+    worker
+        .store_invocation_failure(
+            &trapped,
+            &TrapType::Error {
+                error: AgentError::DeterministicTrap("trapped".to_string()),
+                retry_from: OplogIndex::INITIAL,
+                semantic_trap_retry_override: None,
+            },
+        )
+        .await;
+    let fail_fast = worker.lookup_invocation_result(&queued).await;
+    assert!(
+        matches!(fail_fast, LookupResult::Complete(Err(_))),
+        "the queued invocation has a warm fail-fast error: {fail_fast:?}"
+    );
+    assert!(executor.cancel_invocation(&target, &queued).await?);
+    assert_eq!(
+        format!("{:?}", worker.lookup_invocation_result(&queued).await),
+        format!(
+            "{:?}",
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+        ),
+        "the committed cancellation outranks the fail-fast error"
+    );
+
+    // A terminal failure: the rejection pair of a queued invocation.
+    let rejected = InvocationId(uuid::Uuid::new_v4());
+    worker
+        .schedule_invocation(invocation(&rejected), due)
+        .await?;
+    worker
+        .add_to_oplog(OplogEntry::cancel_pending_invocation(rejected))
+        .await?;
+    worker
+        .add_and_commit_oplog(OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            Some(rejected),
+            AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
+            OplogIndex::INITIAL,
+            None,
+            None,
+            None,
+        ))
+        .await?;
+    assert!(!executor.cancel_invocation(&target, &rejected).await?);
     drop(worker);
     Ok(())
 }

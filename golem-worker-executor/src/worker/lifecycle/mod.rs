@@ -1097,7 +1097,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
             .await?;
         drop(instance_guard);
-        self.publish_cancelled(&withdrawn);
+        self.publish_cancelled(&withdrawn).await;
         Ok(true)
     }
 
@@ -1136,7 +1136,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
 
         drop(instance_guard);
-        self.publish_cancelled(&withdrawn);
+        self.publish_cancelled(&withdrawn).await;
         Ok(CancelInvocationOutcome::Withdrawn)
     }
 
@@ -1164,7 +1164,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(())
     }
 
-    fn publish_cancelled(&self, withdrawn: &[InvocationId]) {
+    /// Wakes the waiters of withdrawn invocations. A warm fail-fast result cached for a queued
+    /// invocation is dropped first, so the committed cancellation is what later lookups read.
+    async fn publish_cancelled(&self, withdrawn: &[InvocationId]) {
+        {
+            let mut hydrated = self.hydrated_invocation_results.write().await;
+            for key in withdrawn {
+                hydrated.remove(key);
+            }
+        }
         for key in withdrawn {
             self.publish_completion(key, Err(WorkerExecutorError::InvocationCancelled));
         }
@@ -1503,7 +1511,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             self.hydrated_invocation_results.write().await.clear();
             self.current_component.store(Arc::new(restored_component));
-            self.publish_cancelled(&cancelled_by_cut);
+            self.publish_cancelled(&cancelled_by_cut).await;
             Ok(reverted)
         }
     }

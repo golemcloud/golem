@@ -727,14 +727,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let maybe_result = if cached.is_some() {
             crate::metrics::workers::record_invocation_result_resolution("memory_exact");
             cached
-        } else if let Some(oplog_idx) = status.invocation_results.get(key) {
+        } else if let Some(position) = status.invocation_results.position(key) {
             crate::metrics::workers::record_invocation_result_resolution("memory_exact");
-            Some((
-                Arc::new(InvocationResult::Lazy {
-                    oplog_idx: *oplog_idx,
-                }),
-                *oplog_idx,
-            ))
+            // The invocation loop withdraws a queued duplicate of a key that already has a result.
+            // When that result has left the recent results, the fold records the withdrawal
+            // instead, so an older result in the index outranks it.
+            let oplog_idx = if position.end == InvocationEnd::Cancelled
+                && !status.invocation_results.is_exact_complete()
+            {
+                match self.resolve_old_invocation_result_index(&status, key).await {
+                    Ok(Some(older)) if older.end != InvocationEnd::Cancelled => older.terminal,
+                    Ok(_) => position.terminal,
+                    Err(error) => return LookupResult::Complete(Err(error.into())),
+                }
+            } else {
+                position.terminal
+            };
+            Some((Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx))
         } else if status.invocation_results.is_exact_complete() {
             crate::metrics::workers::record_invocation_result_resolution("memory_exact_miss");
             None

@@ -2246,6 +2246,8 @@ fn invalid_request_rejection_before_start_is_a_failure_and_not_a_cancellation() 
             AgentError::InvalidRequest("Agent method not found".to_string()),
             OplogIndex::INITIAL,
             None,
+            None,
+            None,
         ),
     ]);
 
@@ -9666,6 +9668,8 @@ fn rejection_after_a_user_cancellation_stays_cancelled_when_the_fold_splits_the_
             AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
             OplogIndex::INITIAL,
             None,
+            None,
+            None,
         ),
     ]
     .into_iter()
@@ -9710,6 +9714,8 @@ fn rejection_after_a_user_cancellation_keeps_the_cancellation_as_the_result() {
             Some(cancelled),
             AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
             OplogIndex::INITIAL,
+            None,
+            None,
             None,
         ),
     ]);
@@ -9768,6 +9774,8 @@ fn a_split_status_fold_keeps_the_user_cancellation_over_a_late_rejection() {
             Some(cancelled),
             AgentError::InvalidRequest("Agent method 'gone' not found".to_string()),
             OplogIndex::INITIAL,
+            None,
+            None,
             None,
         ),
     ]
@@ -9990,6 +9998,8 @@ fn every_result_entry_gives_its_end() {
             Some(cancelled),
             AgentError::PermissionDenied("denied".to_string()),
             OplogIndex::INITIAL,
+            None,
+            None,
             None,
         ),
     ]);
