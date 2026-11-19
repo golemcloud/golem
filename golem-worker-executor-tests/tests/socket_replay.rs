@@ -2345,6 +2345,78 @@ async fn p3_udp_receive_after_a_released_disconnect_waits_after_replay(
     session.finish().await
 }
 
+/// A disconnect releases the port of a socket bound on a loopback address with port 0 and keeps
+/// the address. The endpoint rebuild restores both: after a reconstruction a receive waits, a
+/// send leaves from the loopback address on a new port, and a connect to a remote address fails
+/// from the loopback source as it does live.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_released_loopback_bind_keeps_its_address_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "udp-released-loopback",
+    )
+    .await?;
+    for slot in ["live", "rebuilt"] {
+        let bound: Result<(), String> = session
+            .call("p3_udp_bind", data_value!(slot.to_string(), 0u16))
+            .await?;
+        assert_eq!(bound, Ok(()));
+        let connected: Result<(), String> = session
+            .call("p3_udp_connect", data_value!(slot.to_string(), peer.port()))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let disconnected: Result<(), String> = session
+            .call("p3_udp_disconnect", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(disconnected, Ok(()));
+        assert_eq!(local_address(&session, slot).await?, "127.0.0.1:0");
+    }
+    let live = session
+        .call::<Result<(), String>>(
+            "p3_udp_connect_ipv4",
+            data_value!("live".to_string(), "8.8.8.8:9".to_string()),
+        )
+        .await?;
+    assert_eq!(live, Err("ErrorCode::InvalidArgument".to_string()));
+
+    session.restart_executor().await?;
+    let waits: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("rebuilt".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(waits, Ok(true));
+    assert_eq!(local_address(&session, "rebuilt").await?, "127.0.0.1:0");
+    let replayed = session
+        .call::<Result<(), String>>(
+            "p3_udp_connect_ipv4",
+            data_value!("rebuilt".to_string(), "8.8.8.8:9".to_string()),
+        )
+        .await?;
+    assert_eq!(replayed, live);
+    send_to(&session, "rebuilt", Some(peer.port()), b"after").await?;
+    let (data, source) = peer.receive().await?;
+    assert_eq!(data, b"after".to_vec());
+    assert_eq!(source.ip().to_string(), "127.0.0.1");
+    assert_eq!(
+        local_address(&session, "rebuilt").await?,
+        source.to_string()
+    );
+    session.finish().await
+}
+
 /// A live P3 TCP send delivers each byte to the peer once and records only byte counts. Replay
 /// of the completed conversation neither connects nor sends again.
 #[test]

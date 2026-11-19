@@ -1085,9 +1085,11 @@ rebuilt the endpoint, keeps it when the guest dropped that call. At the first li
 `SocketEntry::udp_rebuild_bind_address` selects and connects it again when the entry is connected,
 without sending a packet. A local address that names an interface, such as the one a connect
 selected, is bound as it is; an unspecified one is bound on the bind request's address with the
-recorded port. A local address with port 0, which only a disconnect leaves, is not bound:
-`UdpSocket::assume_bound_after_disconnect` marks the new native socket bound, as the disconnect
-left the old one, so receive waits and the next send selects a port. The socket address policy
+recorded port. A local address with port 0, which only a disconnect leaves, is restored by
+`UdpSocket::restore_released_bind`: it binds the new native socket on that address and dissolves
+the association at once, so the socket keeps the IP address without a port, as the disconnect left
+the old one. A connect then keeps the same source address, receive waits and the next send selects
+a port. The socket address policy
 allows a fixed port only on a loopback address, so an unconnected wildcard or implicit endpoint
 with a fixed port cannot be rebuilt and is lost. When the rebuild fails, the entry becomes `Lost`
 and every later operation returns `connection-broken`; the rebuild is not checked against grants

@@ -118,15 +118,22 @@ fn ensure_native_endpoint<Ctx: WorkerCtx>(
     let restored = match entry.udp_rebuild_bind_address() {
         // No endpoint yet: the next send binds implicitly.
         None => Ok(()),
-        // A port that a disconnect released. The native socket stays bound without a port, as
-        // after the disconnect: `receive` waits and the next send selects a port.
+        // A port that a disconnect released. The native socket is bound on the recorded IP
+        // address without a port, as after the disconnect: a connect keeps that source address,
+        // `receive` waits and the next send selects a port.
         Some(bind_address) if bind_address.port == 0 => {
             let mut wasi = ctx.as_wasi_view();
             let view = wasi.sockets();
-            view.table
-                .get_mut(&Resource::<UdpSocket>::new_borrow(rep))?
-                .assume_bound_after_disconnect();
-            Ok(())
+            let socket = view
+                .table
+                .get_mut(&Resource::<UdpSocket>::new_borrow(rep))?;
+            run_at_once(async {
+                Ok(socket
+                    .restore_released_bind(std::net::SocketAddr::from(
+                        types::IpSocketAddress::from(bind_address),
+                    ))
+                    .await?)
+            })
         }
         Some(bind_address) => {
             let remote_address = entry.remote_address.clone();
