@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Persistence of the *clean* cached [`AgentStatusRecord`] checkpoint.
+//! Persistence of the durable status baseline: the *clean* [`AgentStatusRecord`] checkpoint.
 //!
 //! The live cached status blob (see [`crate::worker::status_flusher`]) is written in the background
 //! and is allowed to advance into replay/deleted oplog regions. That makes it useless as a fold
@@ -26,9 +26,11 @@
 //! baseline that predates any later jump, so the recompute can fold forward from it
 //! (see [`crate::worker::status::calculate_last_known_status_with_checkpoint`]).
 //!
-//! The checkpoint is best-effort: a failed (or stale, or missing) checkpoint only means a future
-//! recompute reads a few more oplog entries, never incorrect state — the oplog remains the single
-//! source of truth.
+//! The checkpoint is the durable status baseline of the agent. It has no expiry, and an archive of
+//! the oplog keeps it. Its namespace contains the fingerprint of the agent, so a re-created agent
+//! never reads the baseline of an earlier incarnation. While the oplog starts at index 1, a
+//! write is best-effort: a failed (or stale, or missing) checkpoint only means a future recompute
+//! reads more oplog entries, never incorrect state.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -86,7 +88,7 @@ pub struct StatusCheckpointer {
     worker_service: Arc<dyn WorkerService>,
 
     /// Set once the owning worker starts deleting. After this, no checkpoint is written, so an
-    /// in-flight write cannot resurrect the checkpoint after `remove_cached_status` deletes it.
+    /// in-flight write cannot resurrect the checkpoint after `WorkerService::remove` deletes it.
     delete_started: AtomicBool,
     /// Why the shard moved to another executor, once it has.
     lost_shard: super::LostShard,
@@ -130,7 +132,7 @@ impl StatusCheckpointer {
     /// early-out may be mid-write while holding the state lock and would complete after the delete.
     /// Acquiring the state lock here is a barrier — once held, no checkpoint write is in progress,
     /// and every subsequent call observes `delete_started == true` and bails before writing. Must be
-    /// called (and awaited) before `WorkerService::remove`/`remove_cached_status`.
+    /// called (and awaited) before `WorkerService::remove`.
     pub async fn begin_delete(&self) {
         self.delete_started.store(true, Ordering::Release);
         // Barrier: blocks until any in-flight checkpoint write completes.

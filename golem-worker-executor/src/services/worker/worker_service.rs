@@ -346,6 +346,11 @@ impl WorkerService for DefaultWorkerService {
 
         self.remove_cached_status(owned_agent_id, fingerprint)
             .await?;
+        self.remove_split_status(
+            owned_agent_id,
+            Self::checkpoint_namespace(&owned_agent_id.agent_id, fingerprint),
+        )
+        .await?;
         self.remove_all_fields(
             owned_agent_id,
             Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint),
@@ -422,11 +427,6 @@ impl WorkerService for DefaultWorkerService {
         self.remove_split_status(
             owned_agent_id,
             Self::status_namespace(&owned_agent_id.agent_id, fingerprint),
-        )
-        .await?;
-        self.remove_split_status(
-            owned_agent_id,
-            Self::checkpoint_namespace(&owned_agent_id.agent_id, fingerprint),
         )
         .await?;
         self.remove_cached_agent_mode_if_fingerprint(owned_agent_id, fingerprint)

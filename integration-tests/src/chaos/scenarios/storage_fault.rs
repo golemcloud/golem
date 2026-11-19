@@ -118,8 +118,8 @@
 //!
 //! The **Redis cache** that S18 and S17 aim at is not a cluster at all but the
 //! front half of the key-value layer. `NamespaceRoutedKeyValueStorage` sends the `Worker`,
-//! `AgentStatus` and `AgentStatusCheckpoint` namespaces to it and everything
-//! else to Postgres, so S18 removes exactly the part S16 leaves standing and
+//! `AgentStatus` and derived index namespaces to it and everything
+//! else, the status baseline included, to Postgres, so S18 removes exactly the part S16 leaves standing and
 //! S17 slows the same part instead. Both Aurora clusters stay reachable
 //! throughout either.
 //!

@@ -85,6 +85,7 @@ pub mod scheduler_storage;
 mod scheduler_waits;
 pub mod scope_cards;
 pub mod socket_replay;
+pub mod status_baseline;
 pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;

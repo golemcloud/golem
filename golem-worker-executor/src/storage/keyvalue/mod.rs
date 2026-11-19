@@ -968,13 +968,17 @@ pub enum KeyValueStorageNamespace {
         agent_id: AgentId,
         fingerprint: AgentFingerprint,
     },
-    /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
-    /// (one structure-per-agent split into `core` / `membership` / `regions` / `updates` and
-    /// per-transfer fields), but written only at structurally clean boundaries (snapshot save,
-    /// throttled idle) where no jumpable oplog region is open. It is never advanced by the
-    /// background status flusher, so it always holds a baseline before any later jump region and
-    /// lets the status recompute fold forward from it instead of re-reading the whole oplog from
-    /// index 1.
+    /// Per-agent durable status baseline (the *clean* status checkpoint). Same physical layout as
+    /// [`Self::AgentStatus`] (one structure-per-agent split into `core` / `membership` /
+    /// `regions` / `updates` and per-transfer fields), but written only at structurally clean
+    /// boundaries (snapshot save, throttled idle) where no jumpable oplog region is open. It is
+    /// never advanced by the background status flusher, so it always holds a baseline before any
+    /// later jump region and lets the status recompute fold forward from it instead of re-reading
+    /// the whole oplog from index 1.
+    ///
+    /// Unlike the other per-agent status namespaces, this one is not a cache: it has no expiry,
+    /// an archive of the oplog keeps it, and namespace routing stores it in the persistent
+    /// backend. Only the deletion of the agent removes it.
     AgentStatusCheckpoint {
         agent_id: Arc<AgentId>,
         fingerprint: AgentFingerprint,

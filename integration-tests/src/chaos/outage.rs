@@ -59,7 +59,7 @@
 //! must not be read as one.
 //!
 //! S18 cuts the Redis half instead, and the picture inverts. Only `Worker`,
-//! `AgentStatus` and `AgentStatusCheckpoint` live there, the status blob is
+//! `AgentStatus` and the derived indexes live there, the status blob is
 //! written off the commit path by a background sweeper, and what still crosses
 //! the cache synchronously is a lifecycle boundary or a `get_agent_mode` miss.
 //! So `ephemeral` stops and `durable`, `scheduled` and `promise` carry on, and
