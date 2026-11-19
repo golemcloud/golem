@@ -989,6 +989,11 @@ pub enum KeyValueStorageNamespace {
     AgentRejectedPeriodicSnapshots {
         owned_agent_id: OwnedAgentId,
     },
+    /// Per-agent retained start of the oplog, with one hash field per agent mode. It has no
+    /// expiry: the start of an oplog is a fact about its stored entries, not a cache.
+    AgentOplogRetention {
+        agent_id: AgentId,
+    },
     /// Per-incarnation promise storage. The fingerprint is part of the namespace, so a promise ID
     /// of a deleted incarnation finds no entry in the namespace of the re-created agent.
     Promise {

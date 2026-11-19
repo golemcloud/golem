@@ -168,13 +168,12 @@ pub enum WorkerExecutorError {
         kind: ComponentServiceRefusal,
         reason: String,
     },
-    /// The agent's oplog failed: it does not give the entries a replay or a recovery needs (a
-    /// source of the oplog failed or gave corrupt data), or an archive layer did not store its
-    /// entries. The agent fails and does not run; its oplog is left as it is, so it can be
-    /// inspected. Crosses the wire as `RuntimeError` with this text.
+    /// The agent's oplog failed: it does not give the entries a replay, a recovery or a read
+    /// needs. The agent fails and does not run; its oplog is left as it is, so it can be
+    /// inspected. The failure tells why.
     OplogFailed {
         agent_id: AgentId,
-        details: String,
+        failure: OplogFailure,
     },
     /// An oplog read refuses its cursor, because the cursor did not come from a page of this
     /// read. The caller starts again without a cursor.
@@ -189,6 +188,18 @@ pub enum WorkerExecutorError {
     /// A cancel request for an invocation that is running. Cancelling a running invocation is
     /// not supported yet; until it is, this typed answer replaces the spec's `202`.
     CannotCancelRunningInvocation,
+}
+
+/// Why the oplog of an agent failed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum OplogFailure {
+    /// A source of the oplog failed or gave corrupt data, or an archive layer did not store its
+    /// entries. Crosses the wire as `RuntimeError` with the text of the error.
+    Unreadable { details: String },
+    /// The read reaches below the retained start of the oplog: a cut removed those entries. Crosses
+    /// the wire as `OplogExpired`.
+    Expired { retained_start: OplogIndex },
 }
 
 /// Why an oplog read refuses a cursor.
@@ -358,7 +369,16 @@ impl WorkerExecutorError {
     pub fn oplog_failed(agent_id: AgentId, details: impl Into<String>) -> Self {
         Self::OplogFailed {
             agent_id,
-            details: details.into(),
+            failure: OplogFailure::Unreadable {
+                details: details.into(),
+            },
+        }
+    }
+
+    pub fn oplog_expired(agent_id: AgentId, retained_start: OplogIndex) -> Self {
+        Self::OplogFailed {
+            agent_id,
+            failure: OplogFailure::Expired { retained_start },
         }
     }
 
@@ -557,9 +577,17 @@ impl Display for WorkerExecutorError {
                 "The component service refused {} ({kind}): {reason}",
                 ComponentRef(component_id, component_revision.as_ref())
             ),
-            Self::OplogFailed { agent_id, details } => {
-                write!(f, "The oplog of {agent_id} failed: {details}")
-            }
+            Self::OplogFailed {
+                agent_id,
+                failure: OplogFailure::Unreadable { details },
+            } => write!(f, "The oplog of {agent_id} failed: {details}"),
+            Self::OplogFailed {
+                agent_id,
+                failure: OplogFailure::Expired { retained_start },
+            } => write!(
+                f,
+                "The oplog of {agent_id} expired: it starts at index {retained_start}"
+            ),
             Self::StaleCursor {
                 agent_id,
                 next_oplog_index,
@@ -799,7 +827,11 @@ impl From<WorkerExecutorError> for Status {
                 let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
                 Self::with_details(code, message, details.into())
             }
-            error @ WorkerExecutorError::StaleCursor { .. } => {
+            error @ (WorkerExecutorError::StaleCursor { .. }
+            | WorkerExecutorError::OplogFailed {
+                failure: OplogFailure::Expired { .. },
+                ..
+            }) => {
                 let message = error.to_string();
                 let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
                 Self::with_details(tonic::Code::InvalidArgument, message, details.into())
@@ -1148,6 +1180,19 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     },
                 )),
             },
+            WorkerExecutorError::OplogFailed {
+                agent_id,
+                failure: OplogFailure::Expired { retained_start },
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::OplogExpired(
+                        golem::worker::v1::OplogExpired {
+                            agent_id: Some(agent_id.into()),
+                            retained_start: retained_start.into(),
+                        },
+                    ),
+                ),
+            },
             failed @ WorkerExecutorError::OplogFailed { .. } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError {
@@ -1487,6 +1532,14 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     details: error.details,
                 })
             }
+            Some(golem::worker::v1::worker_execution_error::Error::OplogExpired(error)) => {
+                Ok(Self::OplogFailed {
+                    agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                    failure: OplogFailure::Expired {
+                        retained_start: OplogIndex::from_u64(error.retained_start),
+                    },
+                })
+            }
             Some(golem::worker::v1::worker_execution_error::Error::StaleCursor(error)) => {
                 Ok(Self::StaleCursor {
                     agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
@@ -1721,6 +1774,46 @@ mod read_only_violation_trap_tests {
                 Ok(expected)
             );
         }
+    }
+
+    #[test]
+    fn an_expired_oplog_keeps_its_retained_start_through_grpc() {
+        let expected = WorkerExecutorError::oplog_expired(
+            AgentId {
+                component_id: ComponentId(uuid::Uuid::nil()),
+                agent_id: "Counter(\"a\")".to_string(),
+            },
+            OplogIndex::from_u64(42),
+        );
+
+        let status: Status = expected.clone().into();
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(status.message().contains("starts at index 42"));
+        assert_eq!(
+            WorkerExecutorError::from_status_details(&status),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_oplog_still_crosses_grpc_as_its_text() {
+        let failed = WorkerExecutorError::oplog_failed(
+            AgentId {
+                component_id: ComponentId(uuid::Uuid::nil()),
+                agent_id: "Counter(\"a\")".to_string(),
+            },
+            "gap",
+        );
+
+        assert_eq!(
+            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(
+                failed.clone()
+            )),
+            Ok(WorkerExecutorError::Runtime {
+                details: failed.to_string()
+            })
+        );
     }
 
     #[test]

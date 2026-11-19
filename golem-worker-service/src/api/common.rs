@@ -24,7 +24,7 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
 use golem_service_base::clients::registry::RegistryServiceError;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
@@ -324,6 +324,10 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::StaleCursor { .. } => {
                 Self::bad_request(api::error_code::STALE_CURSOR, error)
             }
+            WorkerExecutorError::OplogFailed {
+                failure: OplogFailure::Expired { .. },
+                ..
+            } => Self::bad_request(api::error_code::OPLOG_EXPIRED, error),
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
@@ -780,6 +784,27 @@ mod tests {
                 }
                 other => panic!("expected BadRequest, got: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn an_expired_oplog_read_maps_to_its_own_code() {
+        let api_error: ApiEndpointError =
+            WorkerServiceError::GolemError(WorkerExecutorError::oplog_expired(
+                golem_common::model::AgentId {
+                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                    agent_id: "Counter(\"a\")".to_string(),
+                },
+                golem_common::model::OplogIndex::from_u64(42),
+            ))
+            .into();
+
+        match api_error {
+            ApiEndpointError::BadRequest(Json(body)) => {
+                assert_eq!(body.code, "OPLOG_EXPIRED");
+                assert!(body.errors.iter().any(|error| error.contains("42")));
+            }
+            other => panic!("expected BadRequest, got: {other:?}"),
         }
     }
 

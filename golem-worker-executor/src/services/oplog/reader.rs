@@ -50,6 +50,10 @@ pub enum OplogReadError {
         start: OplogIndex,
         end: OplogIndex,
     },
+    /// The read reaches below the retained start of the oplog: a cut removed those entries.
+    Expired {
+        retained_start: OplogIndex,
+    },
     Corruption {
         source: OplogReadSource,
         detail: String,
@@ -115,6 +119,12 @@ impl Display for OplogReadError {
             Self::Gap { start, end } => {
                 write!(f, "missing oplog entries in range [{start}..={end}]")
             }
+            Self::Expired { retained_start } => {
+                write!(
+                    f,
+                    "the oplog starts at index {retained_start}; the entries before it expired"
+                )
+            }
             Self::Corruption { source, detail } => {
                 write!(f, "corrupt oplog data from {source}: {detail}")
             }
@@ -170,13 +180,16 @@ impl UnreadableOplog {
 }
 
 /// A transient failure is `RecoveryRequired`, which the start and the invocation retry with
-/// backoff. Any other failure is `OplogFailed`, which fails the agent for good.
+/// backoff. A read below the retained start is `OplogFailed` with the expired cause, which names
+/// the start. Any other failure is `OplogFailed`, which fails the agent for good.
 impl From<UnreadableOplog> for WorkerExecutorError {
     fn from(value: UnreadableOplog) -> Self {
-        if value.is_transient() {
-            WorkerExecutorError::recovery_required(value.to_string())
-        } else {
-            WorkerExecutorError::oplog_failed(value.agent_id, value.error.to_string())
+        match value.error {
+            OplogReadError::Expired { retained_start } => {
+                WorkerExecutorError::oplog_expired(value.agent_id, retained_start)
+            }
+            _ if value.is_transient() => WorkerExecutorError::recovery_required(value.to_string()),
+            error => WorkerExecutorError::oplog_failed(value.agent_id, error.to_string()),
         }
     }
 }
@@ -417,6 +430,7 @@ impl<T: PartialEq> OplogRead<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_service_base::error::worker_executor::OplogFailure;
     use test_r::test;
 
     #[test]
@@ -462,8 +476,19 @@ mod tests {
         assert!(!failed.is_transient());
         assert!(matches!(
             WorkerExecutorError::from(failed),
-            WorkerExecutorError::OplogFailed { .. }
+            WorkerExecutorError::OplogFailed {
+                failure: OplogFailure::Unreadable { .. },
+                ..
+            }
         ));
+        let retained_start = OplogIndex::from_u64(7);
+        assert_eq!(
+            WorkerExecutorError::from(UnreadableOplog::new(
+                &agent_id,
+                OplogReadError::Expired { retained_start }
+            )),
+            WorkerExecutorError::oplog_expired(agent_id.clone(), retained_start)
+        );
         assert!(
             !UnreadableOplog::new(
                 &agent_id,

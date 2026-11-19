@@ -114,7 +114,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Forks retain invocation keys from their source. Find the initialization by its
         // operation, not by interpreting a caller-controlled idempotency-key prefix.
         let status = self.try_get_last_known_status().await?;
-        let mut first = OplogIndex::INITIAL;
+        let mut first = self.oplog.first_retained_index();
         while first <= status.oplog_idx {
             let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(256);
             let entries = self.oplog.read_exact(first, count).await?;

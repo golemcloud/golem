@@ -94,6 +94,7 @@ impl MultiSqliteKeyValueStorage {
             | KeyValueStorageNamespace::AgentStatusCheckpoint { owned_agent_id, .. }
             | KeyValueStorageNamespace::AgentDurableStreamSessionIndex { owned_agent_id, .. }
             | KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { owned_agent_id }
+            | KeyValueStorageNamespace::AgentOplogRetention { owned_agent_id }
             | KeyValueStorageNamespace::Promise { owned_agent_id, .. } => format!(
                 "kv-worker-{}_{}.db",
                 owned_agent_id.environment_id, owned_agent_id.agent_id

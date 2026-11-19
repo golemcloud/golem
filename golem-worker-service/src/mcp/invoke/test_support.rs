@@ -683,7 +683,7 @@ impl WorkerClient for RecordingWorkerClient {
     async fn get_oplog(
         &self,
         _: &AgentId,
-        _: OplogIndex,
+        _: Option<OplogIndex>,
         _: Option<OplogCursor>,
         _: u64,
         _: Option<crate::service::worker::OplogRangeRead>,

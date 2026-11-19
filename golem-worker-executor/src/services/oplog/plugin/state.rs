@@ -239,8 +239,13 @@ impl ForwardingOplogState {
             // RETRY: exact same range — never widen
             Some((live.confirmed_up_to.next(), live.sending_up_to, true))
         } else if live.confirmed_up_to < committed_tail {
-            // NEW BATCH: from confirmed+1 to committed tail
-            Some((live.confirmed_up_to.next(), committed_tail, false))
+            // NEW BATCH: from confirmed+1, or from the retained start of the oplog when the
+            // entries after the confirmed index are gone, to committed tail
+            let batch_start = live
+                .confirmed_up_to
+                .next()
+                .max(self.inner.first_retained_index());
+            (batch_start <= committed_tail).then_some((batch_start, committed_tail, false))
         } else {
             None
         };

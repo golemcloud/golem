@@ -121,6 +121,9 @@ impl SqliteKeyValueStorage {
                     owned_agent_id.storage_key()
                 )
             }
+            KeyValueStorageNamespace::AgentOplogRetention { agent_id } => {
+                format!("agent:oplog_retention:{}", agent_id.to_redis_key())
+            }
             KeyValueStorageNamespace::Promise {
                 owned_agent_id,
                 fingerprint,

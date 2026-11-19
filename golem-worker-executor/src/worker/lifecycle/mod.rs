@@ -522,6 +522,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let last_index = oplog_service
             .get_last_index(owned_agent_id, agent_mode)
             .await?;
+        let first_retained = oplog_service
+            .first_retained_index(owned_agent_id, agent_mode)
+            .await?;
         let read = |index: OplogIndex| {
             let oplog_service = oplog_service.clone();
             async move {
@@ -536,14 +539,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })
             }
         };
-        cut_point::cut_before_last_invocations(read, last_index, number_of_invocations)
-            .await?
-            .map(|last_oplog_index| ResolvedRevert { last_oplog_index })
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Could not find {number_of_invocations} invocations to revert"
-                ))
-            })
+        cut_point::cut_before_last_invocations(
+            read,
+            first_retained,
+            last_index,
+            number_of_invocations,
+        )
+        .await?
+        .map(|last_oplog_index| ResolvedRevert { last_oplog_index })
+        .ok_or_else(|| {
+            WorkerExecutorError::invalid_request(format!(
+                "Could not find {number_of_invocations} invocations to revert"
+            ))
+        })
     }
 
     pub async fn activate_plugin<T>(
@@ -1428,6 +1436,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ))
                     }))
                 },
+                OplogIndex::INITIAL,
                 region_end,
                 number_of_invocations,
             )

@@ -1410,7 +1410,7 @@ impl WorkerService {
     pub async fn get_oplog(
         &self,
         agent_id: &OwnedAgentId,
-        from_oplog_index: OplogIndex,
+        from_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         expected_fingerprint: Option<AgentFingerprint>,
@@ -1421,25 +1421,30 @@ impl WorkerService {
         let start = cursor
             .as_ref()
             .map(|cursor| cursor.next_oplog_index)
-            .unwrap_or_else(|| from_oplog_index.into());
-        let end = start
-            .checked_add(count.saturating_sub(1))
-            .map(|end| match range {
-                Some(range) => end.min(range.to.into()),
-                None => end,
-            });
-        self.managed_agent(
-            agent_id,
-            expected_fingerprint,
-            &auth_ctx,
-            &[AgentPermission::Oplog(OplogResourcePattern::range(
-                Some(start),
-                end,
-            ))],
-        )
-        .await?;
+            .or(from_oplog_index.map(Into::into))
+            .unwrap_or(OplogIndex::INITIAL.into());
+        let page_end = |start: u64| {
+            start
+                .checked_add(count.saturating_sub(1))
+                .map(|end| match range {
+                    Some(range) => end.min(range.to.into()),
+                    None => end,
+                })
+        };
+        let agent = self
+            .managed_agent(
+                agent_id,
+                expected_fingerprint,
+                &auth_ctx,
+                &[AgentPermission::Oplog(OplogResourcePattern::range(
+                    Some(start),
+                    page_end(start),
+                ))],
+            )
+            .await?;
 
-        self.worker_client
+        let result = self
+            .worker_client
             .get_oplog(
                 &agent_id.agent_id,
                 from_oplog_index,
@@ -1448,9 +1453,23 @@ impl WorkerService {
                 range,
                 claims,
                 agent_id.environment_id,
-                auth_ctx,
+                auth_ctx.clone(),
             )
-            .await
+            .await?;
+
+        // A read without a start begins at the retained start of the oplog, which can be after
+        // the index that the check above authorized. The entries that it gave are checked too.
+        if result.first_index_in_chunk > start {
+            agent.authorize(
+                &auth_ctx,
+                &[AgentPermission::Oplog(OplogResourcePattern::range(
+                    Some(result.first_index_in_chunk),
+                    page_end(result.first_index_in_chunk),
+                ))],
+            )?;
+        }
+
+        Ok(result)
     }
 
     /// Reads one oplog entry in full. Oplog pages omit the entries that are too large for them;
@@ -5291,6 +5310,7 @@ mod tests {
             Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
         invocation_reads: Mutex<Vec<(AgentId, golem_common::model::InvocationId)>>,
         revert_resolution_error: Mutex<Option<String>>,
+        oplog_page_first_index: Mutex<u64>,
     }
 
     impl RecordingWorkerClient {
@@ -5331,6 +5351,7 @@ mod tests {
                 invocation_summary: Mutex::new(None),
                 invocation_reads: Mutex::new(Vec::new()),
                 revert_resolution_error: Mutex::new(None),
+                oplog_page_first_index: Mutex::new(0),
             }
         }
 
@@ -5623,7 +5644,7 @@ mod tests {
         async fn get_oplog(
             &self,
             _: &AgentId,
-            _: OplogIndex,
+            _: Option<OplogIndex>,
             _: Option<OplogCursor>,
             _: u64,
             _: Option<super::OplogRangeRead>,
@@ -5639,7 +5660,7 @@ mod tests {
             Ok(GetOplogResponse {
                 entries: Vec::new(),
                 next: None,
-                first_index_in_chunk: 0,
+                first_index_in_chunk: *self.oplog_page_first_index.lock().unwrap(),
                 last_index: 0,
                 scan: None,
             })
@@ -7180,7 +7201,7 @@ mod tests {
             .worker_service
             .get_oplog(
                 &owned,
-                OplogIndex::from_u64(5),
+                Some(OplogIndex::from_u64(5)),
                 None,
                 3,
                 None,
@@ -7235,6 +7256,35 @@ mod tests {
                 "metadata",
                 "cancel-invocation",
             ]
+        );
+    }
+
+    #[test]
+    async fn an_oplog_page_without_a_start_requires_permission_for_the_entries_it_gives() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
+            &agent_id,
+            OplogResourcePattern::range(Some(1), Some(3)),
+        )]);
+
+        harness
+            .worker_service
+            .get_oplog(&agent_id, None, None, 3, auth_ctx.clone())
+            .await
+            .unwrap();
+
+        *harness.worker_client.oplog_page_first_index.lock().unwrap() = 10;
+        assert!(
+            harness
+                .worker_service
+                .get_oplog(&agent_id, None, None, 3, auth_ctx)
+                .await
+                .is_err(),
+            "the oplog starts at index 10, after the range of the permission"
         );
     }
 

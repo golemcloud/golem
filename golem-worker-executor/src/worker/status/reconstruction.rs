@@ -708,7 +708,11 @@ pub(crate) async fn skipped_regions_at(
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
     // depends on, so the read leaves them out.
-    let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
+    let first = this
+        .oplog_service()
+        .first_retained_index(owned_agent_id, AgentMode::Durable)
+        .await?;
+    let entries = read_region_entries(&reader, first, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
     Ok(skipped_regions(&entries))
