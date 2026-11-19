@@ -1144,6 +1144,7 @@ async fn lookup_of_a_completed_method_returns_its_value_and_revision(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?;
