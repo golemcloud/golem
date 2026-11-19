@@ -27,7 +27,6 @@ use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 pub mod memory;
 pub mod multi_sqlite;
 pub mod postgres;
-pub mod redis;
 pub mod sqlite;
 
 /// Typed error for [`IndexedStorage`] operations.

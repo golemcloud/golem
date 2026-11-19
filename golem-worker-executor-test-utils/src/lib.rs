@@ -135,7 +135,7 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
-    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageCacheConfig,
     KeyValueStorageConfig, KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig,
     MemoryConfig, OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
     ResourceUsageMeteringConfig, SchedulerStorageConfig, SnapshotPolicy,
@@ -2952,29 +2952,28 @@ pub async fn start_with_oplog_config(
     start_customized(deps, context, None, None, None, None, oplog_config_override).await
 }
 
-pub async fn start_with_redis_storage(
+pub async fn start_with_redis_cache(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
-) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_redis_oplog_config(deps, context, None).await
-}
-
-pub async fn start_with_redis_oplog_config(
-    deps: &WorkerExecutorTestDependencies,
-    context: &TestContext,
-    oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
     redis.assert_valid();
-    redis_monitor.assert_valid();
-    info!("Using Redis on port {}", redis.public_port());
 
     let mut config = make_base_test_config(deps);
-    apply_redis_storage_config(&mut config, deps, context);
-    if let Some(oplog_config) = oplog_config_override {
-        config.oplog = oplog_config;
-    }
+    apply_sqlite_storage_config(&mut config, deps, context);
+    config.key_value_storage =
+        KeyValueStorageConfig::NamespaceRouted(KeyValueStorageNamespaceRoutedConfig {
+            cache: KeyValueStorageCacheConfig::Redis(RedisConfig {
+                port: redis.public_port(),
+                key_prefix: context.redis_prefix(),
+                ..Default::default()
+            }),
+            persistent: KeyValueStorageInnerConfig::Sqlite(sqlite_storage_config(deps, context)),
+        });
+    config.indexed_storage = IndexedStorageConfig::Sqlite(derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, context),
+        "indexed",
+    ));
 
     start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
 }
@@ -3424,26 +3423,6 @@ fn apply_sqlite_storage_config(
     config.key_value_storage = KeyValueStorageConfig::Sqlite(sqlite_storage_config(deps, context));
     config.indexed_storage =
         IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {});
-    config.scheduler_storage =
-        SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(deps, context));
-}
-
-fn apply_redis_storage_config(
-    config: &mut GolemConfig,
-    deps: &WorkerExecutorTestDependencies,
-    context: &TestContext,
-) {
-    config.key_value_storage =
-        KeyValueStorageConfig::NamespaceRouted(KeyValueStorageNamespaceRoutedConfig {
-            cache: KeyValueStorageInnerConfig::Redis(RedisConfig {
-                port: deps.redis.public_port(),
-                key_prefix: context.redis_prefix(),
-                ..Default::default()
-            }),
-            persistent: KeyValueStorageInnerConfig::Sqlite(sqlite_storage_config(deps, context)),
-        });
-    config.indexed_storage =
-        IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {});
     config.scheduler_storage =
         SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(deps, context));
 }

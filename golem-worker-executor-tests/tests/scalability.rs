@@ -14,30 +14,33 @@
 
 use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
-use futures::StreamExt;
+use crate::persistent_storage::PersistentStorage;
 use futures::stream::FuturesUnordered;
+use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_key, data_value};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
 use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
-    start_with_redis_oplog_config,
 };
 use pretty_assertions::assert_eq;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(#[tagged_as("durable_sqlite")] Arc<PersistentStorage>);
+inherit_test_dep!(#[tagged_as("durable_postgres")] Arc<PersistentStorage>);
+define_matrix_dimension!(durable_storage: Arc<PersistentStorage> -> "durable_sqlite", "durable_postgres");
 inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
@@ -748,38 +751,25 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     Ok(())
 }
 
-/// Returns the number of entries in the primary oplog stream for a given worker.
-async fn primary_oplog_length(
-    redis: &dyn golem_test_framework::components::redis::Redis,
-    redis_prefix: &str,
-    agent_id: &golem_common::model::OwnedAgentId,
-) -> u64 {
-    let mut conn = redis.get_async_connection(0).await;
-    let key = format!("{redis_prefix}worker:oplog:{}", agent_id.storage_key());
-    redis::cmd("XLEN")
-        .arg(&key)
-        .query_async(&mut conn)
-        .await
-        .unwrap_or(0)
-}
-
 /// Wait until the primary oplog layer becomes empty (all entries archived), or timeout.
 async fn wait_for_primary_oplog_empty(
-    redis: &dyn golem_test_framework::components::redis::Redis,
-    redis_prefix: &str,
-    agent_id: &golem_common::model::OwnedAgentId,
+    storage: &PersistentStorage,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    agent_id: &OwnedAgentId,
     timeout: Duration,
-) -> bool {
-    let start = tokio::time::Instant::now();
-    while start.elapsed() < timeout {
-        let len = primary_oplog_length(redis, redis_prefix, agent_id).await;
-        if len == 0 {
-            return true;
-        }
-        info!("Waiting for primary oplog to drain, current length: {len}");
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    false
+) -> anyhow::Result<()> {
+    let nonempty = futures::stream::try_unfold(
+        tokio::time::interval(Duration::from_millis(500)),
+        |mut interval| async move {
+            interval.tick().await;
+            let length = storage.primary_length(deps, context, agent_id).await?;
+            Ok::<_, anyhow::Error>((length != 0).then_some(((), interval)))
+        },
+    );
+    let drained = nonempty.try_for_each(|()| std::future::ready(Ok(())));
+    tokio::time::timeout(timeout, drained).await??;
+    Ok(())
 }
 
 #[test]
@@ -788,6 +778,7 @@ async fn auto_committed_invocations_publish_idle_status(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -795,7 +786,9 @@ async fn auto_committed_invocations_publish_idle_status(
         max_operations_before_commit: 0,
         ..Default::default()
     };
-    let executor = start_with_redis_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let executor = durable_storage
+        .start(deps, &context, Some(oplog_config.clone()))
+        .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -806,7 +799,7 @@ async fn auto_committed_invocations_publish_idle_status(
         .await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
     let metadata = executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
@@ -818,6 +811,32 @@ async fn auto_committed_invocations_publish_idle_status(
     );
     assert_eq!(metadata.pending_invocation_count, 0);
 
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = durable_storage
+        .start(deps, &context, Some(oplog_config))
+        .await?;
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Idle
+    );
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&recovered, OplogIndex::NONE),
+        count_agent_invocation_pair_since(&entries, OplogIndex::NONE),
+    );
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 1);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 2);
+
     Ok(())
 }
 
@@ -827,6 +846,7 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -835,7 +855,9 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         entry_count_limit: 5,
         ..Default::default()
     };
-    let executor = start_with_redis_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let executor = durable_storage
+        .start(deps, &context, Some(oplog_config.clone()))
+        .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -848,7 +870,7 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
 
     // Invoke a simple function; after it completes, the worker becomes Idle
     executor
-        .invoke_and_await_agent(&component, &agent_id, "get_arguments", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
 
     // Verify the worker is idle
@@ -858,19 +880,15 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
     assert_eq!(metadata.status, AgentStatus::Idle);
 
     // Wait for archiving to move entries out of the primary oplog
-    let redis_prefix = context.redis_prefix();
-    let archived = wait_for_primary_oplog_empty(
-        deps.redis.as_ref(),
-        &redis_prefix,
-        &worker_id,
+    let owned_agent = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    wait_for_primary_oplog_empty(
+        durable_storage,
+        deps,
+        &context,
+        &owned_agent,
         Duration::from_secs(30),
     )
-    .await;
-    let len_after = primary_oplog_length(deps.redis.as_ref(), &redis_prefix, &worker_id).await;
-    assert!(
-        archived,
-        "Primary oplog should be empty after archiving (len={len_after})"
-    );
+    .await?;
 
     // Verify the oplog entries are still readable after archiving
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -878,6 +896,32 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         !entries.is_empty(),
         "Oplog entries should still be readable after archiving"
     );
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = durable_storage
+        .start(deps, &context, Some(oplog_config))
+        .await?;
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Idle
+    );
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&recovered, OplogIndex::NONE),
+        count_agent_invocation_pair_since(&entries, OplogIndex::NONE),
+    );
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 1);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 2);
 
     Ok(())
 }
@@ -888,6 +932,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
@@ -896,7 +941,9 @@ async fn oplog_archive_scheduled_when_worker_fails(
         entry_count_limit: 5,
         ..Default::default()
     };
-    let executor = start_with_redis_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let executor = durable_storage
+        .start(deps, &context, Some(oplog_config.clone()))
+        .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -908,7 +955,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .await?;
 
     // Invoke with 0 retries to cause immediate failure
-    let _result = executor
+    let result = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
@@ -916,6 +963,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
             data_value!(0u64),
         )
         .await;
+    assert!(result.is_err());
 
     // Verify the worker is failed
     let metadata = executor
@@ -924,25 +972,36 @@ async fn oplog_archive_scheduled_when_worker_fails(
     assert_eq!(metadata.status, AgentStatus::Failed);
 
     // Wait for archiving to move entries out of the primary oplog
-    let redis_prefix = context.redis_prefix();
-    let archived = wait_for_primary_oplog_empty(
-        deps.redis.as_ref(),
-        &redis_prefix,
-        &worker_id,
+    let owned_agent = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    wait_for_primary_oplog_empty(
+        durable_storage,
+        deps,
+        &context,
+        &owned_agent,
         Duration::from_secs(30),
     )
-    .await;
-    let len_after = primary_oplog_length(deps.redis.as_ref(), &redis_prefix, &worker_id).await;
-    assert!(
-        archived,
-        "Primary oplog should be empty after archiving (len={len_after})"
-    );
+    .await?;
 
     // Verify the oplog entries are still readable after archiving
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert!(
         !entries.is_empty(),
         "Oplog entries should still be readable after archiving"
+    );
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = durable_storage
+        .start(deps, &context, Some(oplog_config))
+        .await?;
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.status,
+        AgentStatus::Failed
+    );
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&recovered, OplogIndex::NONE),
+        count_agent_invocation_pair_since(&entries, OplogIndex::NONE),
     );
 
     Ok(())

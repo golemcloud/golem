@@ -345,7 +345,7 @@ This protection has limits:
 - **It protects the oplog, not every agent write.** Do not infer the same guarantee for key-value data, status blobs, or arbitrary blob payloads.
 - **It cannot undo external effects.** A call that reached an external service before its oplog entry was recorded can run again after recovery, as it can after a crash.
 
-Executors that share shards need shared indexed storage, such as PostgreSQL or Redis. A local SQLite file serves one executor. Redis failover that loses recent writes can also lose fencing records; Redis Cluster is not supported. See [Persistence](/next/operate/persistence) for storage configuration.
+Executors that share shards need shared indexed storage, which means PostgreSQL. A local SQLite file serves one executor. Redis holds only cache data, not fencing records. See [Persistence](/next/operate/persistence) for storage configuration.
 
 ## Restore shard-manager state carefully
 
@@ -355,7 +355,7 @@ Treat this as coordinated storage recovery, not a routine restart:
 
 1. Stop every worker executor before changing fencing records, and prevent the orchestrator from restarting them.
 2. Back up the shard-manager store and indexed storage. Determine which state must be restored together before changing either store.
-3. If epoch records must be reset, account for every indexed-storage layer. SQL uses `indexed_key_epoch`; Redis uses the `oplog-epoch` keys. MultiSqlite also retains epoch snapshots in `epochs.db`, separate from the live oplog databases. Clearing only the live databases is incomplete: the saved epochs can be restored when a database reopens.
+3. If epoch records must be reset, account for every indexed-storage layer. SQL uses `indexed_key_epoch`. MultiSqlite also retains epoch snapshots in `epochs.db`, separate from the live oplog databases. Clearing only the live databases is incomplete: the saved epochs can be restored when a database reopens.
 
 <Callout type="warning">
   Never clear fencing records while an executor is running. Without a record, an oplog accepts the epoch of its first opener, including an executor that no longer owns the shard. Do not delete oplog entries or archive data to work around an epoch mismatch.

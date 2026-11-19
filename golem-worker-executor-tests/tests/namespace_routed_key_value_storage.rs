@@ -13,30 +13,35 @@
 // limitations under the License.
 
 use crate::WorkerExecutorTestDependencies;
-use golem_common::config::{DbPostgresConfig, RedisConfig};
+use crate::persistent_storage::PersistentStorage;
+use futures::StreamExt;
+use golem_common::config::RedisConfig;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::redis::RedisPool;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
 use golem_worker_executor::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
-use golem_worker_executor::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use golem_worker_executor_test_utils::{LastUniqueId, TestContext};
 use pretty_assertions::assert_eq;
-use test_r::{inherit_test_dep, test};
-use url::Url;
+use std::sync::Arc;
+use test_r::{define_matrix_dimension, inherit_test_dep, test};
 use uuid::{Uuid, uuid};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(#[tagged_as("durable_sqlite")] Arc<PersistentStorage>);
+inherit_test_dep!(#[tagged_as("durable_postgres")] Arc<PersistentStorage>);
+define_matrix_dimension!(durable_storage: Arc<PersistentStorage> -> "durable_sqlite", "durable_postgres");
 
 async fn build_namespace_routed_kvs(
     deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    durable_storage: &PersistentStorage,
 ) -> (
     NamespaceRoutedKeyValueStorage,
     std::sync::Arc<RedisKeyValueStorage>,
-    std::sync::Arc<PostgresKeyValueStorage>,
-    DockerPostgresRdb,
+    Arc<dyn KeyValueStorage + Send + Sync>,
 ) {
     let random_prefix = Uuid::new_v4();
     let redis_pool = RedisPool::configured(&RedisConfig {
@@ -56,49 +61,20 @@ async fn build_namespace_routed_kvs(
 
     let redis_storage = std::sync::Arc::new(RedisKeyValueStorage::new(redis_pool.clone()));
 
-    let unique_network_id = Uuid::new_v4().to_string();
-    let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
-    let db_name = format!("kv_routed_test_{}", Uuid::new_v4().simple());
-    let admin_pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&postgres.public_connection_string())
-        .await
-        .expect("Cannot create postgres admin pool");
-    sqlx::query(&format!("CREATE DATABASE \"{db_name}\";"))
-        .execute(&admin_pool)
-        .await
-        .expect("Cannot create postgres database for routed kvs tests");
-
-    let postgres_config = KeyValueStoragePostgresConfig {
-        postgres: DbPostgresConfig {
-            host: "localhost".to_string(),
-            database: db_name,
-            username: "postgres".to_string(),
-            password: "postgres".to_string(),
-            port: Url::parse(&postgres.public_connection_string())
-                .expect("Invalid postgres connection string")
-                .port()
-                .expect("Postgres connection string missing port"),
-            max_connections: 10,
-            schema: None,
-            acquire_timeout: None,
-        },
-    };
-
-    let postgres_storage = std::sync::Arc::new(
-        PostgresKeyValueStorage::configured(&postgres_config)
-            .await
-            .expect("Cannot create postgres key value storage for routed kvs tests"),
-    );
-
-    let kvs = NamespaceRoutedKeyValueStorage::new(redis_storage.clone(), postgres_storage.clone());
-
-    (kvs, redis_storage, postgres_storage, postgres)
+    let persistent = durable_storage.key_value(deps, context).await.unwrap();
+    let kvs = NamespaceRoutedKeyValueStorage::new(redis_storage.clone(), persistent.clone());
+    (kvs, redis_storage, persistent)
 }
 
 #[test]
-async fn routes_agent_namespaces_to_redis(deps: &WorkerExecutorTestDependencies) {
-    let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
+async fn routes_agent_namespaces_to_redis(
+    deps: &WorkerExecutorTestDependencies,
+    last_unique_id: &LastUniqueId,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
+) {
+    let context = TestContext::new(last_unique_id);
+    let (kvs, redis, persistent) =
+        build_namespace_routed_kvs(deps, &context, durable_storage).await;
 
     let agent_id = crate::fresh_owned_agent_id();
     let cases = [
@@ -119,28 +95,37 @@ async fn routes_agent_namespaces_to_redis(deps: &WorkerExecutorTestDependencies)
         ),
     ];
 
-    for (namespace, key, value) in cases {
-        kvs.set("test", "api", "entity", namespace.clone(), key, value)
-            .await
-            .unwrap();
+    let (kvs, redis, persistent) = (&kvs, &redis, &persistent);
+    futures::stream::iter(cases)
+        .for_each(|(namespace, key, value)| async move {
+            kvs.set("test", "api", "entity", namespace.clone(), key, value)
+                .await
+                .unwrap();
 
-        let redis_read = redis
-            .get("test", "api", "entity", namespace.clone(), key)
-            .await
-            .unwrap();
-        let postgres_read = postgres
-            .get("test", "api", "entity", namespace, key)
-            .await
-            .unwrap();
+            let redis_read = redis
+                .get("test", "api", "entity", namespace.clone(), key)
+                .await
+                .unwrap();
+            let persistent_read = persistent
+                .get("test", "api", "entity", namespace, key)
+                .await
+                .unwrap();
 
-        assert_eq!(redis_read, Some(value.into()));
-        assert_eq!(postgres_read, None);
-    }
+            assert_eq!(redis_read, Some(value.into()));
+            assert_eq!(persistent_read, None);
+        })
+        .await;
 }
 
 #[test]
-async fn routes_non_worker_namespace_to_postgres(deps: &WorkerExecutorTestDependencies) {
-    let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
+async fn routes_non_worker_namespace_to_persistent_storage(
+    deps: &WorkerExecutorTestDependencies,
+    last_unique_id: &LastUniqueId,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
+) {
+    let context = TestContext::new(last_unique_id);
+    let (kvs, redis, persistent) =
+        build_namespace_routed_kvs(deps, &context, durable_storage).await;
 
     let ns = KeyValueStorageNamespace::UserDefined {
         environment_id: EnvironmentId(uuid!("2ae7a48f-84fc-4951-b9ec-87d09fcb0fa4")),
@@ -153,12 +138,12 @@ async fn routes_non_worker_namespace_to_postgres(deps: &WorkerExecutorTestDepend
         .await
         .unwrap();
 
-    let postgres_read = postgres
+    let persistent_read = persistent
         .get("test", "api", "entity", ns.clone(), key)
         .await
         .unwrap();
     let redis_read = redis.get("test", "api", "entity", ns, key).await.unwrap();
 
-    assert_eq!(postgres_read, Some(value.as_slice().into()));
+    assert_eq!(persistent_read, Some(value.as_slice().into()));
     assert_eq!(redis_read, None);
 }
