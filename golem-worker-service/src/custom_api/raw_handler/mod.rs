@@ -174,7 +174,10 @@ impl RawHandler {
                 &AuthCtx::System,
             )
             .await
-            .map_err(|_| RequestHandlerError::RawInternal)?;
+            .map_err(|error| {
+                tracing::warn!(error = %error, "Raw HTTP invocation target could not be bound");
+                RequestHandlerError::RawInternal
+            })?;
         let caller = caller_from_request(request)?;
         let context = InvocationContext {
             parent: None,

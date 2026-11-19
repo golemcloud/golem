@@ -381,6 +381,10 @@ pub(super) async fn run_session(
                     return;
                 }
                 if request_tx.send(request).await.is_err() {
+                    debug!(
+                        reason = "input_disposal_send_closed",
+                        "HTTP session requires reattachment"
+                    );
                     continue 'attempts;
                 }
             }
@@ -409,8 +413,17 @@ pub(super) async fn run_session(
                     (permit, responses.next().await)
                 } => {
                     let (permit, response) = response;
-                    let Some(response) = response else { continue 'attempts };
-                    let response = match response { Ok(response) => response, Err(_) => continue 'attempts };
+                    let Some(response) = response else {
+                        debug!(reason = "response_eof", "HTTP session requires reattachment");
+                        continue 'attempts;
+                    };
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => {
+                            debug!(reason = "response_error", error = %error, "HTTP session requires reattachment");
+                            continue 'attempts;
+                        }
+                    };
                     if response.encoded_len() > limits.max_event_bytes {
                         send_error(&events, HttpSessionError::RetainedInputLimit).await;
                         return;
@@ -493,7 +506,10 @@ pub(super) async fn run_session(
                             permit.send(HttpSessionEvent::Finished(finished));
                             return;
                         }
-                        invocation_response::Response::AttachmentRevoked(_) => continue 'attempts,
+                        invocation_response::Response::AttachmentRevoked(_) => {
+                            debug!(reason = "attachment_revoked", "HTTP session requires reattachment");
+                            continue 'attempts;
+                        }
                         invocation_response::Response::Accepted(_) | invocation_response::Response::Rejected(_) => unreachable!(),
                     }
                 }
@@ -531,7 +547,10 @@ pub(super) async fn run_session(
                         send_error(&events, error).await;
                         return;
                     }
-                    if request_tx.send(request).await.is_err() { continue 'attempts; }
+                    if request_tx.send(request).await.is_err() {
+                        debug!(reason = "command_send_closed", "HTTP session requires reattachment");
+                        continue 'attempts;
+                    }
                 }
             }
         }
