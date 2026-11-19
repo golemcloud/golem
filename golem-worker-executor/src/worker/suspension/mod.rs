@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+use crate::durable_host::InvocationAttribution;
 use crate::durable_host::durability::GuestImportNumbering;
 use futures::future::Either;
 use futures::stream::FuturesUnordered;
@@ -892,6 +893,7 @@ pub(crate) struct RuntimeStore {
     owner: Arc<OwnerSuspension>,
     store_id: u64,
     guest_imports: Arc<GuestImportNumbering>,
+    attribution: InvocationAttribution,
     guest_blocked: tokio::sync::Notify,
 }
 
@@ -905,13 +907,15 @@ impl RuntimeStore {
 
     #[cfg(test)]
     pub(crate) fn new(owner: Arc<OwnerSuspension>) -> Arc<Self> {
-        Self::with_guest_imports(owner, Default::default())
+        Self::with_guest_imports(owner, Default::default(), Default::default())
     }
 
-    /// A Store whose guest import calls are numbered by `guest_imports`.
+    /// A Store whose guest import calls are numbered by `guest_imports`, and whose guest imports
+    /// `attribution` tracks for the authority cut-off.
     pub(crate) fn with_guest_imports(
         owner: Arc<OwnerSuspension>,
         guest_imports: Arc<GuestImportNumbering>,
+        attribution: InvocationAttribution,
     ) -> Arc<Self> {
         let store_id = {
             let mut state = owner.state.lock().unwrap();
@@ -925,6 +929,7 @@ impl RuntimeStore {
             owner,
             store_id,
             guest_imports,
+            attribution,
             guest_blocked: tokio::sync::Notify::new(),
         })
     }
@@ -1464,13 +1469,17 @@ impl RuntimeObserver for RuntimeStore {
             RuntimeObservation::ActivityStarted {
                 activity,
                 kind: RuntimeActivityKind::Import,
-            } => self.guest_imports.import_started(*activity),
+            } => {
+                self.guest_imports.import_started(*activity);
+                self.attribution.import_started(*activity);
+            }
             RuntimeObservation::ActivityStarted {
                 activity,
                 kind: RuntimeActivityKind::Root,
             } => self.guest_imports.driver_started(*activity),
             RuntimeObservation::ActivityFinished { activity } => {
-                self.guest_imports.activity_finished(*activity)
+                self.guest_imports.activity_finished(*activity);
+                self.attribution.activity_finished(*activity);
             }
             _ => {}
         }

@@ -16044,8 +16044,8 @@ async fn start_open_invocation_with_handle(rs: &ReplayState) -> (OplogIndex, Exp
         .await
         .unwrap()
         .expect("an invocation starts");
-    let export_returned = rs
-        .open_invocation_anchor(started.oplog_index)
+    let export_returned = ExportReturned::default();
+    rs.open_invocation_anchor(started.oplog_index, export_returned.clone())
         .await
         .unwrap();
     (started.oplog_index, export_returned)

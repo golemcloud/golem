@@ -931,16 +931,17 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let engine = owner.engine();
         let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
         let guest_imports = store.data().durable_ctx().guest_imports.clone();
+        let attribution = store.data().durable_ctx().attribution.clone();
         let runtime = super::suspension::RuntimeStore::with_guest_imports(
             self.owner_execution.suspension(),
             guest_imports.clone(),
+            attribution.clone(),
         );
         store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
         store
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
-        let attribution = store.data().durable_ctx().attribution.clone();
         store.as_context_mut().task_group_hook(attribution.hook());
         let fuel_metering = store.data().fuel_metering_enabled();
         store.call_hook(move |mut store, boundary| {
@@ -948,12 +949,21 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             // the import's host code runs; see `GuestImportNumbering`.
             match boundary {
                 CallHook::CallingHost => {
-                    if attribution.resolve().is_none() {
+                    let invocation = attribution.resolve();
+                    if invocation.is_none() {
                         error!(
                             agent_id = %store.data().agent_id(),
                             "A guest host call has no attributed invocation"
                         );
                     }
+                    // The export's return, which the export future's waker signals inside
+                    // `task.return`, cuts off the invocation's scope card at its next host call.
+                    // A call made before keeps the authority it was made with.
+                    let before_cut_off = store
+                        .data_mut()
+                        .durable_ctx_mut()
+                        .host_call_made_before_cut_off(invocation);
+                    attribution.mark_next_import_before_cut_off(before_cut_off);
                     let custom_invocation_scope = store
                         .as_context()
                         .guest_task_context::<GuestTaskContext>()?

@@ -241,7 +241,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 .as_context_mut()
                                 .data_mut()
                                 .durable_ctx_mut()
-                                .open_invocation_anchor(oplog_index)
+                                .open_invocation_anchor(oplog_index, idempotency_key)
                                 .await
                         {
                             store

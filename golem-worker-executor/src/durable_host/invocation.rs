@@ -44,18 +44,22 @@ impl InvocationTerminalReader {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// Opens the invocation anchor at `anchor` for the invocation the loop replays, which
-    /// records its result at the export's return and drains its background work after it.
+    /// Opens the invocation anchor at `anchor` for the invocation `invocation_id` the loop
+    /// replays, which records its result at the export's return and drains its background work
+    /// after it. The anchor reads the invocation's return signal.
     pub(crate) async fn open_invocation_anchor(
         &mut self,
         anchor: OplogIndex,
+        invocation_id: golem_common::model::InvocationId,
     ) -> Result<(), WorkerExecutorError> {
         let export_returned = self
-            .state
+            .attribution
+            .export_returned(attribution::InvocationKey::Invocation(invocation_id));
+        self.state
             .replay_state
-            .open_invocation_anchor(anchor)
+            .open_invocation_anchor(anchor, export_returned)
             .await?;
-        self.state.open_invocation_anchor = Some((anchor, export_returned));
+        self.state.open_invocation_anchor = Some(anchor);
         Ok(())
     }
 
@@ -81,12 +85,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.replayed_invocation_terminal = Some(terminal);
     }
 
-    /// Marks the [`replay_state::ExportReturned`] of the open invocation anchor, when the export
-    /// of the invocation the loop replays returned.
-    pub(crate) fn mark_export_returned(&self) {
-        if let Some((_, export_returned)) = &self.state.open_invocation_anchor {
-            export_returned.mark();
+    /// Applies the authority cut-off of `invocation` once its export returned: its scope card
+    /// stops bounding the calls it makes from then on, and stays installed, hidden, for the calls
+    /// it made before. The Store's call hook applies it before every host call, and the
+    /// invocation loop when the export call's future resolves. Returns whether the cut-off
+    /// applies.
+    pub(crate) fn apply_return_cut_off(&mut self, invocation: attribution::InvocationKey) -> bool {
+        if invocation == attribution::InvocationKey::AgentLevel
+            || !self.attribution.export_returned_is_marked(invocation)
+        {
+            return false;
         }
+        if let Some(entry) = self.state.invocations.own_mut(Some(invocation))
+            && !entry.authority.final_outcome_reached()
+        {
+            entry.authority.reach_final_outcome();
+            self.rederive_agent_effective_surface_from_wallet();
+        }
+        true
+    }
+
+    /// Called from the Store's call hook before every host call: applies the cut-off of
+    /// `invocation`, the invocation the call is attributed to, and returns whether the call is
+    /// made before that cut-off. Such a call keeps the invocation's scope card while its own host
+    /// code continues after the cut-off.
+    pub(crate) fn host_call_made_before_cut_off(
+        &mut self,
+        invocation: Option<attribution::InvocationKey>,
+    ) -> bool {
+        invocation.is_some_and(|invocation| {
+            invocation != attribution::InvocationKey::AgentLevel
+                && !self.apply_return_cut_off(invocation)
+        })
     }
 
     /// Whether replay stashed the terminal of the invocation, or the failure of reading it, for
@@ -136,7 +166,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             WorkerExecutorError::runtime("agent invocation settled without a current invocation")
         })?;
         let invocation = self.invocation_key();
-        if let Some((anchor, _)) = self.state.open_invocation_anchor.take() {
+        if let Some(anchor) = self.state.open_invocation_anchor.take() {
             match self
                 .state
                 .replay_state

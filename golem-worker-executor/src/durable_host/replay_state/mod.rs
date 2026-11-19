@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::QuotaClass;
+use crate::durable_host::attribution::ExportReturned;
 use crate::durable_host::concurrent::{ReplayCallHandle, Resolution, ResolutionOutcome};
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
@@ -912,28 +913,6 @@ struct CursorState {
 struct OpenInvocation {
     invocation_id: golem_common::model::InvocationId,
     export_returned: ExportReturned,
-}
-
-/// Records that the export of an open-anchor invocation returned. Before that, replay reproduces
-/// only calls the live run made before the export returned, and their records precede the
-/// invocation's terminal; after it, a background task's records can follow the terminal.
-///
-/// [`ReplayState::open_invocation_anchor`] returns it, so the driver can mark it synchronously
-/// when the export returns, without access to the Store or the cursor lock.
-/// [`ReplayState::get_oplog_entry_agent_invocation_terminal_in_open_anchor`] also marks it.
-/// Marking only makes cursor readers wait for the terminal read that they did not wait for
-/// before, so it does not need to wake parked readers.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ExportReturned(Arc<AtomicBool>);
-
-impl ExportReturned {
-    pub(crate) fn mark(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    fn is_marked(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
 }
 
 /// Whether `entry` is the primary invocation terminal (`AgentInvocationFinished`, or an

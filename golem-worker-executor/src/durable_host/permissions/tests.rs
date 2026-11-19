@@ -131,6 +131,7 @@ fn scope_cards_cannot_use_persistent_snapshot_transport() {
             vec![CardId(Uuid::from_u128(1))],
         ),
         Uuid::new_v4().into(),
+        BTreeSet::new(),
     );
 
     let error = entry.into_snapshot().unwrap_err();
@@ -161,6 +162,54 @@ fn scope_card_handles_are_owned_by_the_minting_invocation() {
     assert!(
         resolve_owned_scope_card(Some((card, None)), &owner).is_err(),
         "a retired scope card must not be accepted, even in the invocation that minted it"
+    );
+}
+
+#[test]
+fn a_call_after_the_export_return_cannot_use_the_hidden_scope_card_or_a_card_derived_from_it() {
+    // The lender and the callee can share a root, such as their component's template card, so
+    // the roots do not tell a card derived from the lent card from one derived from the wallet.
+    let shared_root = CardId(Uuid::from_u128(1));
+    let invocation: golem_common::model::InvocationId = Uuid::from_u128(5).into();
+    let lent = PermissionCardEntry::from_scope(
+        scope_card(CardId(Uuid::from_u128(10)), vec![shared_root]),
+        invocation,
+        BTreeSet::new(),
+    );
+    let derived_from_lent = PermissionCardEntry::from_scope(
+        scope_card(CardId(Uuid::from_u128(11)), vec![shared_root]),
+        invocation,
+        lent.scope_lineage_of_child(),
+    );
+    let derived_from_derived = PermissionCardEntry::from_scope(
+        scope_card(CardId(Uuid::from_u128(12)), vec![shared_root]),
+        invocation,
+        derived_from_lent.scope_lineage_of_child(),
+    );
+    let derived_from_own_wallet = PermissionCardEntry::from_scope(
+        scope_card(CardId(Uuid::from_u128(13)), vec![shared_root]),
+        invocation,
+        BTreeSet::new(),
+    );
+    let cut_off = lent.scope_card().unwrap().0.clone();
+    let refuse = |entry: &PermissionCardEntry, cut_off: Option<&ScopeCard>| {
+        refuse_cut_off_scope_card(
+            entry.scope_card().unwrap().0.scope_card_id,
+            &entry.scope_lineage_of_child(),
+            cut_off,
+        )
+    };
+
+    assert!(refuse(&lent, Some(&cut_off)).is_err());
+    assert!(refuse(&derived_from_lent, Some(&cut_off)).is_err());
+    assert!(refuse(&derived_from_derived, Some(&cut_off)).is_err());
+    assert!(
+        refuse(&derived_from_own_wallet, Some(&cut_off)).is_ok(),
+        "a card the agent derived from its own wallet stays agent authority"
+    );
+    assert!(
+        refuse(&lent, None).is_ok(),
+        "a call made before the cut-off keeps its admitted authority"
     );
 }
 

@@ -19,6 +19,7 @@
 //! body handle back to [`EntityInvocationDurability::drive_owned`].
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::attribution;
 pub(crate) use crate::durable_host::concurrent::EntitySettlementContext;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, InvocationIdSource,
@@ -544,8 +545,10 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
+        // The entity inherits the scope card of the call that started it, also when the
+        // invocation's export returned since.
         let (owner, invocation_scope_card, enclosing_invocation_id, interest, calling_principal) =
-            store.with(|mut access| {
+            attribution::with_import_access(store, |mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
                     ctx.state.owned_agent_id.clone(),

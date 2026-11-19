@@ -31,6 +31,7 @@ mod replay_to_live;
 mod resources;
 mod snapshots;
 mod wasi;
+pub(crate) use attribution::{InvocationAttribution, with_import_access};
 pub(crate) use authorization::context::{
     add_wallet_card, adopt_recorded_wallet_generation,
     agent_effective_surface_from_component_metadata, agent_initial_card_from_component_metadata,
@@ -1288,9 +1289,9 @@ struct PrivateDurableWorkerState {
     tail_work_deadline_exceeded: Arc<AtomicBool>,
 
     /// The open replay anchor of the invocation the loop replays, when that invocation records
-    /// its result at the export's return and drains its background work after it. The handle is
-    /// marked when the export returns. The end of the drain closes the anchor.
-    open_invocation_anchor: Option<(OplogIndex, replay_state::ExportReturned)>,
+    /// its result at the export's return and drains its background work after it. The end of the
+    /// drain closes the anchor.
+    open_invocation_anchor: Option<OplogIndex>,
 
     /// The terminal of the invocation the loop replays, which replay consumed when the export
     /// returned. The result reader of the invocation takes it.
@@ -1740,14 +1741,17 @@ impl PrivateDurableWorkerState {
         invocation_key: golem_common::model::InvocationId,
     ) {
         self.result_recorded_at_return = false;
-        self.invocations
-            .begin(attribution::InvocationKey::Invocation(invocation_key));
+        let key = attribution::InvocationKey::Invocation(invocation_key);
+        self.attribution.retain_export_returned(key);
+        self.invocations.begin(key);
     }
 
     /// Ends the loop's invocation without beginning another, as an entity Store does when its
     /// entity invocation scope is removed.
     pub fn clear_current_idempotency_key(&mut self) {
         self.result_recorded_at_return = false;
+        self.attribution
+            .retain_export_returned(attribution::InvocationKey::AgentLevel);
         self.invocations
             .begin(attribution::InvocationKey::AgentLevel);
     }
@@ -1771,9 +1775,16 @@ impl PrivateDurableWorkerState {
         self.invocations.own_mut(attributed)
     }
 
-    /// The authority of the invocation the calling code is attributed to.
-    pub fn authority(&self) -> &execution_state::InvocationAuthority {
-        &self.invocation_state().authority
+    /// The authority of the invocation the calling code is attributed to, as that code sees it:
+    /// code of a call made before the invocation's final outcome keeps the scope card that the
+    /// final outcome hides (see [`execution_state::AuthorityView`]).
+    pub fn authority(&self) -> execution_state::AuthorityView<'_> {
+        let attributed = self.attribution.resolve();
+        let key = self.invocations.key(attributed);
+        execution_state::AuthorityView::new(
+            &self.invocations.get(attributed).authority,
+            attributed == Some(key) && self.attribution.issued_before_cut_off(),
+        )
     }
 
     pub fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {

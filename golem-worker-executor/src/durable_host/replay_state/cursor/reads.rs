@@ -1583,13 +1583,13 @@ impl ReplayState {
     /// invocation's terminal, the retained `Start`s stay claimable after that terminal, and the
     /// wallet replay of the invocation stays open until [`Self::close_invocation_anchor`].
     ///
-    /// The driver marks the returned [`ExportReturned`] when the invocation's export returns.
+    /// `export_returned` is the invocation's return signal, which the export call sets when it
+    /// returns.
     pub(crate) async fn open_invocation_anchor(
         &self,
         anchor: OplogIndex,
-    ) -> Result<ExportReturned, WorkerExecutorError> {
-        let export_returned = ExportReturned::default();
-        let handle = export_returned.clone();
+        export_returned: ExportReturned,
+    ) -> Result<(), WorkerExecutorError> {
         self.run_owned_cursor_op(move |state| async move {
             let mut st = state.cursor.state.lock().await;
             let invocation_id = match st.last_started_invocation {
@@ -1619,8 +1619,7 @@ impl ReplayState {
             }
             Ok(())
         })
-        .await?;
-        Ok(handle)
+        .await
     }
 
     /// The index and entry of the `AgentInvocationFinished` or `AgentInvocationFailed` of the

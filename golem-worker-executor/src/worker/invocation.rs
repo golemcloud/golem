@@ -1433,12 +1433,6 @@ async fn run_guest_call_until_return<Ctx: WorkerCtx, R>(
     )
 }
 
-/// Marks, in replay, that the export of the invocation returned. From then on the background work
-/// of the invocation may meet the invocation's recorded terminal before the result reader reads it.
-fn mark_export_returned<Ctx: WorkerCtx>(accessor: &Accessor<Ctx>) {
-    accessor.with(|mut access| access.data_mut().durable_ctx().mark_export_returned());
-}
-
 /// In replay, after the export returned, waits with the event loop running for the recorded
 /// terminal of the invocation and stashes it for the result reader. The background work and the
 /// tool children of the invocation keep replaying meanwhile and consume the entries recorded
@@ -1619,19 +1613,20 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             *at_return_usage.expect("the guard checked the usage slot") =
                 prepare_metered_guest_call(store, display_name, false).await?;
+            let returned = attribution.export_returned(invocation_key);
             let result = run_guest_call_until_return(store, async |accessor| {
-                let result = attribution
-                    .armed(
+                returned
+                    .observe(attribution.armed(
                         invocation_key,
                         guest.call_initialize(accessor, agent_type, input),
-                    )
-                    .await;
-                if matches!(result, Ok(Ok(()))) {
-                    mark_export_returned(accessor);
-                }
-                result
+                    ))
+                    .await
             })
             .await;
+            store
+                .data_mut()
+                .durable_ctx_mut()
+                .apply_return_cut_off(invocation_key);
             // A constructor error is not recorded at the return, so its background work drains
             // before the failure is handled, as for every other unrecorded result.
             let result = match result {
@@ -1673,19 +1668,20 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             let guest = load_agent_guest(store, instance)?;
             *at_return_usage.expect("the guard checked the usage slot") =
                 prepare_metered_guest_call(store, display_name, false).await?;
+            let returned = attribution.export_returned(invocation_key);
             let result = run_guest_call_until_return(store, async |accessor| {
-                let result = attribution
-                    .armed(
+                returned
+                    .observe(attribution.armed(
                         invocation_key,
                         guest.call_invoke(accessor, method_name, input),
-                    )
-                    .await;
-                if result.is_ok() {
-                    mark_export_returned(accessor);
-                }
-                result
+                    ))
+                    .await
             })
             .await;
+            store
+                .data_mut()
+                .durable_ctx_mut()
+                .apply_return_cut_off(invocation_key);
             let consumed_fuel =
                 finish_invocation_and_get_fuel_consumption(store, display_name).await?;
             match result {

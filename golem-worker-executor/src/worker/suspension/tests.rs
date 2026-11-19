@@ -281,7 +281,11 @@ fn runtime_run_ids(count: usize) -> Vec<RuntimeRunId> {
 fn guest_imports_reserve_in_the_order_they_start() {
     let ids = runtime_ids(5);
     let guest_imports = Arc::new(GuestImportNumbering::default());
-    let store = RuntimeStore::with_guest_imports(OwnerSuspension::new(), guest_imports.clone());
+    let store = RuntimeStore::with_guest_imports(
+        OwnerSuspension::new(),
+        guest_imports.clone(),
+        Default::default(),
+    );
     let root = OplogIndex::from_u64(5);
     let import = |activity| {
         guest_imports.number_next_import(ImportNumbering::Under { root, anchor: root });
