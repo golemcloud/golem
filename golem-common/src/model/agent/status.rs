@@ -622,9 +622,9 @@ pub struct AgentStatusRecord {
     pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
-    /// The furthest backoff deadline of the in-function retries of each `retry_from` oplog index.
-    /// Repair of an incomplete call waits until this time, so a restart does not shorten its
-    /// backoff.
+    /// The backoff deadline of each host call that waits for an in-function retry, keyed by the
+    /// call's `Start` index until its terminal. Repair of the incomplete call waits until this
+    /// time, so a restart does not shorten its backoff.
     pub current_retry_at: HashMap<OplogIndex, Timestamp>,
     /// Mandatory recovery snapshot established by a successful update. Agent will call
     /// load_snapshot on this payload before starting replay.

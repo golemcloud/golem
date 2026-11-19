@@ -40,16 +40,20 @@ suspend the agent and schedule its wakeup at the deadline instead of holding an 
 direct `&mut ctx` path, ephemeral agents and snapshot mode keep the threshold and the trap
 fallback. P3 HTTP sends, response-body resumption, accessor host calls and asynchronous agent
 RPC (`rpc/future.rs::get`, which re-sends with the same idempotency key) wait durably; streaming
-RPC and DNS lookups do not. A P3 HTTP send waits durably only while its request body can be
-resent in-function (`can_replay_after_send_failure`); otherwise a long delay keeps the trap
-fallback, whose reconstruction rebuilds the body from its recording.
+RPC and DNS lookups do not. A P3 HTTP send waits durably while its request body can become
+resendable (`may_replay_after_send_failure`): nothing was pulled yet, or every pulled frame is
+recorded. Before it waits, the send drains a body that is still streaming to its terminal. A
+guest body error or a failed recording keeps the trap fallback, whose reconstruction rebuilds the
+body from its recording.
 
-Every in-function retry `Error` carries `retry_at`, the wall-clock deadline of its backoff, and
-the status fold keeps the furthest one per `retry_from` (`AgentStatusRecord::current_retry_at`,
-cleared at invocation boundaries). Concurrent calls of one entity body share its retry point,
-so neither a sibling's shorter backoff nor its trap can shorten a longer one; a sibling may
-instead wait for the longest deadline on repair. When a suspension, interrupt or crash ends the wait,
-the call's `Start` stays incomplete. Repair of that `Start` first waits `retry_at − now`
+Every in-function retry `Error` of an accessor call carries `retry_at`, the wall-clock deadline
+of its backoff, and `retrying_start_index`, the `Start` of the call that waits. The status fold
+keeps the latest deadline per waiting call (`AgentStatusRecord::current_retry_at`) and drops it
+at that call's `End` or `Cancelled` and at invocation boundaries. Calls that share a retry point,
+such as the calls of one entity body, therefore never wait for each other's deadline, and a
+cancelled call's deadline does not delay a later call. The direct path records no
+`retrying_start_index`; it never waits durably. When a suspension, interrupt or crash ends the
+wait, the call's `Start` stays incomplete. Repair of that `Start` first waits `retry_at − now`
 (`wait_recorded_retry_backoff`), so a restart or a sibling's wakeup does not shorten the
 backoff, and a deadline that passed during the outage retries at once. Recomputing the delay
 on repair would not do: jitter makes it nondeterministic.

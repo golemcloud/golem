@@ -675,6 +675,7 @@ where
                                 make_p3_http_retry_task_context::<Ctx, U>(
                                     accessor,
                                     parent_begin,
+                                    parent_begin,
                                     properties.clone(),
                                 )
                                 .await,

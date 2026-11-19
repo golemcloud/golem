@@ -327,6 +327,8 @@ declare module 'golem:api/oplog@1.5.0' {
     retryPolicyState?: RetryPolicyState;
     /** When the failed host call retries, for an in-function retry. */
     retryAt?: Datetime;
+    /** The start of the host call that waits until `retry-at`. */
+    retryingStartIndex?: OplogIndex;
   };
   export type OplogRegion = {
     start: OplogIndex;
@@ -990,6 +992,8 @@ declare module 'golem:api/oplog@1.5.0' {
     retryPolicyState?: RetryPolicyState;
     /** When the failed host call retries, for an in-function retry. */
     retryAt?: Datetime;
+    /** The start of the host call that waits until `retry-at`. */
+    retryingStartIndex?: OplogIndex;
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;

@@ -1595,10 +1595,14 @@ fn error_serialization_poem_serde_equivalence() {
             },
         ))
     })) {
-        for (kind, retry_at) in [
-            (OplogErrorKind::Invocation, None),
-            (OplogErrorKind::Invocation, Some(Timestamp::from(1_700))),
-            (OplogErrorKind::Recovery, None),
+        for (kind, retry_at, retrying_start_index) in [
+            (OplogErrorKind::Invocation, None, None),
+            (
+                OplogErrorKind::Invocation,
+                Some(Timestamp::from(1_700)),
+                Some(OplogIndex::from_u64(19)),
+            ),
+            (OplogErrorKind::Recovery, None, None),
         ] {
             let entry = PublicOplogEntry::Error(ErrorParams {
                 timestamp: Timestamp::now_utc().rounded(),
@@ -1608,6 +1612,7 @@ fn error_serialization_poem_serde_equivalence() {
                 retry_from: OplogIndex::from_u64(17),
                 retry_policy_state: retry_policy_state.clone(),
                 retry_at,
+                retrying_start_index,
             });
             let serialized = entry.to_json_string();
             let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1641,6 +1646,7 @@ fn agent_invocation_failed_contract_roundtrips() {
             Some(invocation_id),
             AgentError::InternalError("fatal".into()),
             OplogIndex::INITIAL,
+            None,
             None,
             None
         )
@@ -2091,6 +2097,7 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
         retry_at: Some(Timestamp::from(2_500)),
+        retrying_start_index: Some(OplogIndex::from_u64(4)),
     };
     let recovery_error = OplogEntry::Error {
         timestamp: Timestamp::from(3_000),
@@ -2101,6 +2108,7 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
         retry_at: None,
+        retrying_start_index: None,
     };
 
     for entry in [finished, invocation_error, recovery_error] {
@@ -2127,6 +2135,7 @@ fn raw_recovery_error_naming_an_invocation_is_rejected() {
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
         retry_at: None,
+        retrying_start_index: None,
     };
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry = malformed.try_into().unwrap();
     assert!(OplogEntry::try_from(proto).is_err());
@@ -2165,6 +2174,7 @@ fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
         retry_at: Some(Timestamp::from(2_500)),
+        retrying_start_index: Some(OplogIndex::from_u64(4)),
     });
     let recovery_error = PublicOplogEntry::Error(ErrorParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -2174,6 +2184,7 @@ fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
         retry_at: None,
+        retrying_start_index: None,
     });
 
     for entry in [finished, invocation_error, recovery_error] {
@@ -3313,6 +3324,7 @@ mod scope_projection {
                     idx(99),
                     None,
                     None,
+                    None,
                 ),
             ),
             (
@@ -3323,6 +3335,7 @@ mod scope_projection {
                     Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into()),
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
+                    None,
                     None,
                     None,
                 ),

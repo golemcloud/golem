@@ -474,6 +474,7 @@ where
             // to this task and SharedDropError, not the guest's ambient retry point.
             TaskRetryContext {
                 retry_point: begin,
+                retrying_start_index: Some(begin),
                 entity_parent_start_index: ctx.entity_parent_start_index(),
                 invocation_id: ctx.state.get_current_idempotency_key(),
                 environment_state_service: ctx.state.environment_state_service.clone(),

@@ -437,9 +437,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         outcome.map_err(|err| self.trap(err))
     }
 
-    /// Before repair runs an incomplete call again, waits the rest of the backoff that the latest
-    /// in-function retry of its retry point recorded. An interrupt or suspension during the wait
-    /// leaves the `Start` incomplete.
+    /// Before repair runs an incomplete call again, waits the rest of the backoff that its latest
+    /// in-function retry recorded. An interrupt or suspension during the wait leaves the `Start`
+    /// incomplete.
     pub(crate) async fn wait_recorded_retry_backoff<T, D, Ctx>(
         &mut self,
         store: &(impl DurableAccess<T, D> + ?Sized),
@@ -450,8 +450,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        let retry_point = self.execution_scope.trap_retry_point();
-        wait_recorded_retry_backoff(store, get_ctx, retry_point)
+        wait_recorded_retry_backoff(store, get_ctx, self.start_idx)
             .await
             .map_err(|kind| {
                 self.abandon_for_trap();
@@ -499,6 +498,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         TaskRetryContext {
             retry_point,
+            retrying_start_index: Some(self.start_idx),
             entity_parent_start_index: self.execution_scope.entity_parent_start_index,
             invocation_id: self.execution_scope.agent_invocation,
             environment_state_service,

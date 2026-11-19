@@ -155,6 +155,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
             internal.into()
         }),
         retry_at: retry_at.map(Into::into),
+        retrying_start_index: retrying_start_index.map(Into::into),
     } }
     RecoverySucceeded { override (PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp })) => Ok({
                     Self::RecoverySucceeded(timestamp.into())

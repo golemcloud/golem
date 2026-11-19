@@ -32,20 +32,23 @@ pub(super) fn calculate_latest_worker_status(
         {
             current_retry_state.insert(*retry_from, state.clone());
         }
-        // The furthest backoff deadline of a retry point. Concurrent calls of one entity body share
-        // its retry point, so neither a sibling's shorter backoff nor its trap may shorten a longer
-        // one. A deadline that has passed makes repair wait nothing.
-        if !deleted_regions.is_in_deleted_region(*idx)
-            && let OplogEntry::Error {
-                retry_from,
-                retry_at: Some(retry_at),
-                ..
-            } = entry
-        {
-            current_retry_at
-                .entry(*retry_from)
-                .and_modify(|deadline| *deadline = (*deadline).max(*retry_at))
-                .or_insert(*retry_at);
+        // The backoff deadline of each host call that waits, keyed by its `Start`: the latest
+        // retry of the call sets it and the call's terminal ends it, so it never delays the repair
+        // of another call, even one sharing the retry point.
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            match entry {
+                OplogEntry::Error {
+                    retry_at: Some(retry_at),
+                    retrying_start_index: Some(start_index),
+                    ..
+                } => {
+                    current_retry_at.insert(*start_index, *retry_at);
+                }
+                OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. } => {
+                    current_retry_at.remove(start_index);
+                }
+                _ => {}
+            }
         }
 
         // Skipping entries in skipped regions, as they are skipped during replay too

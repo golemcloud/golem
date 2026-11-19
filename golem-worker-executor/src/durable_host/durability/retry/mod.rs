@@ -617,6 +617,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
             retry_from,
             retry_policy_state,
             Some(retry_at),
+            None,
         );
         self.public_state
             .worker()
@@ -922,14 +923,14 @@ where
     }
 }
 
-/// Waits the rest of the backoff that the latest in-function retry of `retry_point` recorded in
-/// its `Error` entry, before repair of the incomplete call runs it again. A restart, or a wakeup
-/// that a sibling caused, therefore does not shorten the backoff; a deadline that has passed
-/// waits nothing.
+/// Waits the rest of the backoff that the latest in-function retry of the call at `start_index`
+/// recorded in its `Error` entry, before repair of the incomplete call runs it again. A restart,
+/// or a wakeup that a sibling caused, therefore does not shorten the backoff; a deadline that has
+/// passed waits nothing.
 pub(crate) async fn wait_recorded_retry_backoff<T, D, Ctx>(
     store: &(impl DurableAccess<T, D> + ?Sized),
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    retry_point: OplogIndex,
+    start_index: OplogIndex,
 ) -> Result<(), InterruptKind>
 where
     T: 'static,
@@ -941,12 +942,12 @@ where
         .get_last_known_status()
         .await
         .current_retry_at
-        .get(&retry_point)
+        .get(&start_index)
         .copied();
     match retry_at.map(|retry_at| remaining_backoff(retry_at, Timestamp::now_utc())) {
         Some(remaining) if !remaining.is_zero() => {
             debug!(
-                %retry_point,
+                %start_index,
                 ?remaining,
                 "Repair waits the rest of the recorded retry backoff"
             );
@@ -1003,6 +1004,9 @@ pub async fn count_oplog_errors_for(
 pub struct TaskRetryContext<Ctx: WorkerCtx> {
     /// The oplog index that error entries reference as their `retry_from` point.
     pub retry_point: OplogIndex,
+    /// The `Start` of the host call that retries; its error entries name it, so that only the
+    /// repair of that call waits for their deadline.
+    pub retrying_start_index: Option<OplogIndex>,
     /// Entity invocation that initiated this task, if any.
     pub entity_parent_start_index: Option<OplogIndex>,
     /// The agent invocation whose work the task retries; its error entries name it. A task can
@@ -1086,6 +1090,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             retry_from,
             retry_policy_state.clone(),
             Some(retry_at),
+            self.retrying_start_index,
         );
         self.worker.add_and_commit_oplog(entry).await?;
 

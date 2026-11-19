@@ -469,6 +469,12 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(retry_at) = &params.retry_at {
                     logln(format!("{pad}retry at:          {}", format_id(retry_at)));
                 }
+                if let Some(retrying_start_index) = &params.retrying_start_index {
+                    logln(format!(
+                        "{pad}retrying start:    {}",
+                        format_id(retrying_start_index)
+                    ));
+                }
                 logln(format!(
                     "{pad}error:             {}",
                     format_error(&params.error)

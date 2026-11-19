@@ -5053,6 +5053,7 @@ async fn ephemeral_read_exact_partial_range(_tracing: &Tracing) {
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
             retry_at: None,
+            retrying_start_index: None,
         }
         .rounded();
         oplog.add(entry.clone()).await.unwrap();
@@ -5170,6 +5171,7 @@ async fn ephemeral_read_exact_across_archive_layers(_tracing: &Tracing) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -6494,6 +6496,7 @@ async fn read_from_archive_impl(use_blob: bool) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -10211,6 +10214,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -10323,6 +10327,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })
@@ -10436,6 +10441,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded(),
         )
@@ -10492,6 +10498,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
             retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10506,6 +10513,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
             retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10520,6 +10528,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
             retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10534,6 +10543,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             retry_from: OplogIndex::NONE,
             retry_policy_state: None,
             retry_at: None,
+            retrying_start_index: None,
         }
         .rounded()
     );
@@ -10637,6 +10647,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                     retry_from: OplogIndex::NONE,
                     retry_policy_state: None,
                     retry_at: None,
+                    retrying_start_index: None,
                 }
                 .rounded()
             })
@@ -10788,6 +10799,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })

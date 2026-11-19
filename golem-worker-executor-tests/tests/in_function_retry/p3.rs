@@ -1001,6 +1001,11 @@ async fn http_long_backoff_survives_restart_and_waits_only_until_its_deadline(
         1,
         "one in-function retry, no trap and no second backoff: {errors:#?}"
     );
+    assert_eq!(
+        errors[0].retrying_start_index,
+        Some(errors[0].retry_from),
+        "the deadline names the send that waits"
+    );
     let send_end = oplog
         .iter()
         .filter_map(|e| match &e.entry {

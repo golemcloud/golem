@@ -1598,6 +1598,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 expected_callee_fingerprint,
                 span.span_id(),
                 handle.trap_context().retry_from,
+                handle.start_index(),
                 initial_freshness_disposition,
                 scope_card,
                 auth_ctx.clone(),

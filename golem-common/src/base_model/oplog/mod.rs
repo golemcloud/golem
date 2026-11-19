@@ -267,6 +267,9 @@ oplog_entry! {
             /// The wall-clock time the failed host call retries at, for an in-function retry.
             /// Repair of the call's incomplete `Start` waits until this time before it runs again.
             retry_at: Option<Timestamp>,
+            /// The `Start` of the host call that waits until `retry_at`. Its terminal ends the
+            /// deadline, which then applies to no other call of the same retry point.
+            retrying_start_index: Option<OplogIndex>,
         }
         public {
             kind: OplogErrorKind,
@@ -275,6 +278,7 @@ oplog_entry! {
             retry_from: OplogIndex,
             retry_policy_state: Option<PublicRetryPolicyState>,
             retry_at: Option<Timestamp>,
+            retrying_start_index: Option<OplogIndex>,
         }
     },
     /// A previously failed startup or replay completed successfully.

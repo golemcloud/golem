@@ -162,6 +162,9 @@ before (value) {}
             internal
         }),
         retry_at: params.retry_at.map(timestamp_from_datetime),
+        retrying_start_index: params
+            .retrying_start_index
+            .map(golem_common::model::OplogIndex::from_u64),
     } }
     RecoverySucceeded { record (ts) {
         timestamp: timestamp_from_datetime(ts.timestamp),
@@ -651,6 +654,7 @@ before (value) {}
         retry_from: retry_from.into(),
         retry_policy_state: retry_policy_state.map(|s| s.into()),
         retry_at: retry_at.map(Into::into),
+        retrying_start_index: retrying_start_index.map(Into::into),
     } }
     RecoverySucceeded { override (M::RecoverySucceeded { timestamp }) => Ok(Self::RecoverySucceeded(timestamp.into())) }
     Jump { record (entity_parent_start_index) => JumpParameters {

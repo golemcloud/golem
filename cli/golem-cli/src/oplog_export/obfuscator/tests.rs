@@ -3032,6 +3032,7 @@ fn error_entry(error: &str) -> PublicOplogEntryWithIndex {
             retry_from: OplogIndex::from_u64(3),
             retry_policy_state: None,
             retry_at: None,
+            retrying_start_index: None,
             invocation_id: None,
         }),
     )
@@ -3808,6 +3809,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 PublicRetryPolicyStateCounter { count: 2 },
             )),
             retry_at: None,
+            retrying_start_index: None,
             invocation_id: Some(invocation_id()),
         }),
         PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp: ts() }),

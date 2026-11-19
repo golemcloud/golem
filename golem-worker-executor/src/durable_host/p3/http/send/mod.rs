@@ -764,12 +764,14 @@ where
     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
         store,
         handle.trap_context().retry_from,
+        handle.start_index(),
         RetryContext::http(&retry_method, &retry_uri),
     )
     .await;
-    // A backoff waits durably only while the request body can still be resent in-function;
-    // otherwise a delay above the threshold keeps the trap fallback, whose reconstruction rebuilds
-    // the body from its recording.
+    // A backoff waits durably only while the request body can become resendable
+    // (`may_replay_after_send_failure`); a body that is still streaming is drained to its terminal
+    // before the wait. Otherwise a delay above the threshold keeps the trap fallback, whose
+    // reconstruction rebuilds the body from its recording.
     let send_waits_durably = retry_task_ctx.durable_wait;
 
     let mut send_semantic_override = None;
@@ -1155,6 +1157,7 @@ where
                     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
                         store,
                         handle.trap_context().retry_from,
+                        handle.start_index(),
                         properties.clone(),
                     )
                     .await;

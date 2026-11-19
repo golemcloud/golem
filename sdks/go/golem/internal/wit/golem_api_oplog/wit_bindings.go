@@ -468,6 +468,8 @@ type ErrorParameters struct {
 	RetryPolicyState witTypes.Option[RetryPolicyState]
 	// When the failed host call retries, for an in-function retry.
 	RetryAt witTypes.Option[wasi_clocks_0_3_0_system_clock.Instant]
+	// The start of the host call that waits until `retry-at`.
+	RetryingStartIndex witTypes.Option[uint64]
 }
 
 type OplogRegion struct {
@@ -1499,6 +1501,8 @@ type RawErrorParameters struct {
 	RetryPolicyState witTypes.Option[RetryPolicyState]
 	// When the failed host call retries, for an in-function retry.
 	RetryAt witTypes.Option[wasi_clocks_0_3_0_system_clock.Instant]
+	// The start of the host call that waits until `retry-at`.
+	RetryingStartIndex witTypes.Option[uint64]
 }
 
 type RawPendingAgentInvocationParameters struct {
@@ -4085,6 +4089,19 @@ func wasm_lower_1_t391(pinner *runtime.Pinner, value RawErrorParameters, dst uns
 		panic("unreachable")
 	}
 
+	switch (value).RetryingStartIndex.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (112 + 4*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := (value).RetryingStartIndex.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(dst), (112 + 4*4))) = int8(int32(1))
+		*(*int64)(unsafe.Add(unsafe.Pointer(dst), (120 + 4*4))) = int64(payload)
+
+	default:
+		panic("unreachable")
+	}
+
 }
 
 //go:noinline
@@ -4958,8 +4975,19 @@ func wasm_lift_1_t289(src unsafe.Pointer) ErrorParameters {
 	default:
 		panic("unreachable")
 	}
+	var option6 witTypes.Option[uint64]
+	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (88 + 4*4)))) {
+	case 0:
 
-	return ErrorParameters{Timestamp: result, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16)))), InvocationId: option, Error: value1, RetryFrom: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (48 + 2*4)))), RetryPolicyState: option3, RetryAt: option5}
+		option6 = witTypes.None[uint64]()
+	case 1:
+
+		option6 = witTypes.Some[uint64](uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (96 + 4*4)))))
+	default:
+		panic("unreachable")
+	}
+
+	return ErrorParameters{Timestamp: result, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16)))), InvocationId: option, Error: value1, RetryFrom: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (48 + 2*4)))), RetryPolicyState: option3, RetryAt: option5, RetryingStartIndex: option6}
 }
 
 //go:noinline

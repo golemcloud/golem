@@ -875,6 +875,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                                 retry_from,
                                 retry_policy_state,
                                 None,
+                                None,
                             )
                         }
                     }),
@@ -940,6 +941,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 error.clone(),
                 *retry_from,
                 retry_policy_state,
+                None,
                 None,
             )),
         };

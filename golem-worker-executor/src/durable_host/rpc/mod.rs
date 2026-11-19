@@ -114,6 +114,8 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
+    /// The `Start` of the RPC call that retries.
+    retrying_start_index: OplogIndex,
     entity_parent_start_index: Option<OplogIndex>,
     invocation_id: Option<golem_common::model::InvocationId>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,

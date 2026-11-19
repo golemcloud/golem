@@ -295,6 +295,7 @@ async fn observer_open_after_primary_growth(archived: u64) {
                 retry_from: OplogIndex::NONE,
                 retry_policy_state: None,
                 retry_at: None,
+                retrying_start_index: None,
             }
             .rounded()
         })

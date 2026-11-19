@@ -6878,7 +6878,8 @@
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
         "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] },
-        "retryAt": { "type": ["string", "null"] }
+        "retryAt": { "type": ["string", "null"] },
+        "retryingStartIndex": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
