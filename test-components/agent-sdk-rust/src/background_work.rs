@@ -70,6 +70,22 @@ pub trait BackgroundWork {
     /// `tally` and returns the new total.
     async fn add_before_return(&self, release: PromiseId, tally: String, amount: u64) -> u64;
 
+    /// Spawns background work and returns at once. The background work waits for `release`,
+    /// then sends a POST request to `url` and reads its response, then adds `amount` on the tally
+    /// agent named `tally`, then counts one completed background run.
+    async fn add_after_http(
+        &self,
+        release: PromiseId,
+        url: String,
+        tally: String,
+        amount: u64,
+    ) -> String;
+
+    /// Spawns background work and returns at once. The background work waits for a timer of
+    /// `millis` milliseconds, then adds `amount` on the tally agent named `tally`, then counts
+    /// one completed background run.
+    async fn add_after_timer(&self, millis: u64, tally: String, amount: u64) -> String;
+
     /// Spawns background work and returns at once. The background work waits for `release` and
     /// then panics.
     async fn trap_after_release(&self, release: PromiseId) -> String;
@@ -130,6 +146,45 @@ impl BackgroundWork for BackgroundWorkImpl {
         TallyClient::upsert(tally)
             .add_when_released(None, amount)
             .await
+    }
+
+    async fn add_after_http(
+        &self,
+        release: PromiseId,
+        url: String,
+        tally: String,
+        amount: u64,
+    ) -> String {
+        let completions = self.completions.clone();
+        spawn_local(async move {
+            await_promise(&release).await;
+            let request = golem_rust::http::Request::post(url)
+                .body(Vec::new())
+                .expect("the request is valid");
+            let response = golem_rust::http::send(request)
+                .await
+                .expect("the request succeeds");
+            golem_rust::http::response_bytes(response)
+                .await
+                .expect("the response body is read");
+            TallyClient::upsert(tally)
+                .add_when_released(None, amount)
+                .await;
+            completions.set(completions.get() + 1);
+        });
+        "returned".to_string()
+    }
+
+    async fn add_after_timer(&self, millis: u64, tally: String, amount: u64) -> String {
+        let completions = self.completions.clone();
+        spawn_local(async move {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(millis * 1_000_000).await;
+            TallyClient::upsert(tally)
+                .add_when_released(None, amount)
+                .await;
+            completions.set(completions.get() + 1);
+        });
+        "returned".to_string()
     }
 
     async fn trap_after_release(&self, release: PromiseId) -> String {

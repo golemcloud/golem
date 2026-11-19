@@ -23,7 +23,9 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId, PromiseId};
+use golem_common::model::{
+    AgentStatus, IdempotencyKey, InvocationId, OwnedAgentId, PromiseId, RetryConfig,
+};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -32,8 +34,11 @@ use golem_worker_executor_test_utils::{
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::Instrument;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -138,6 +143,138 @@ impl Agents {
             )
         })??;
         result.into_typed::<String>()
+    }
+
+    /// Invokes `add_after_http` with `key`, adding 3, and returns its result within
+    /// [`RESULT_WAIT`].
+    async fn add_after_http(
+        &self,
+        executor: &(impl TestDsl + Sync),
+        key: &IdempotencyKey,
+        release: &PromiseId,
+        url: &str,
+    ) -> anyhow::Result<String> {
+        tokio::time::timeout(
+            RESULT_WAIT,
+            executor.invoke_and_await_agent_with_key(
+                &self.component,
+                &self.worker,
+                key,
+                "add_after_http",
+                data_value!(
+                    release.clone(),
+                    url.to_string(),
+                    self.tally_name.clone(),
+                    3u64
+                ),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("the result of add_after_http did not arrive"))??
+        .into_typed::<String>()
+    }
+
+    /// Waits until an invocation is queued on the worker.
+    async fn await_queued(&self, executor: &(impl TestDsl + Sync)) -> anyhow::Result<()> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while executor
+            .get_worker_metadata(&self.worker_id)
+            .await?
+            .pending_invocation_count
+            == 0
+        {
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("no invocation was queued on the worker");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(())
+    }
+
+    /// Checks that `method` ran once and keeps its recorded result: nothing fails or cancels it.
+    async fn assert_result_kept(
+        &self,
+        executor: &(impl TestDsl + Sync),
+        method: &str,
+    ) -> anyhow::Result<()> {
+        let oplog = executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?;
+        let started = method_starts(&oplog, method);
+        assert_eq!(started.len(), 1, "{method} is started once");
+        assert!(
+            finished_of(&oplog, &started[0]).is_some(),
+            "the result of {method} is recorded"
+        );
+        let replaced = oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationFailed(params) => {
+                    params.invocation_id == started[0]
+                }
+                PublicOplogEntry::CancelPendingInvocation(params) => {
+                    params.invocation_id == started[0]
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            replaced.is_empty(),
+            "nothing fails or cancels {method}: {replaced:?}"
+        );
+        Ok(())
+    }
+
+    /// Invokes `add_after_timer` and returns its result within [`RESULT_WAIT`].
+    async fn add_after_timer(
+        &self,
+        executor: &(impl TestDsl + Sync),
+        timer: Duration,
+        amount: u64,
+    ) -> anyhow::Result<String> {
+        let millis = u64::try_from(timer.as_millis())?;
+        let result = tokio::time::timeout(
+            RESULT_WAIT,
+            executor.invoke_and_await_agent(
+                &self.component,
+                &self.worker,
+                "add_after_timer",
+                data_value!(millis, self.tally_name.clone(), amount),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the result of add_after_timer did not arrive within {RESULT_WAIT:?}: it must \
+                 not wait for the background work"
+            )
+        })??;
+        result.into_typed::<String>()
+    }
+
+    /// Waits, without invoking the worker, until the invocation of `method` settled, and
+    /// returns the worker's oplog.
+    async fn await_settled(
+        &self,
+        executor: &(impl TestDsl + Sync),
+        method: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let oplog = executor
+                .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+                .await?;
+            if method_starts(&oplog, method)
+                .first()
+                .is_some_and(|invocation| !settled_of(&oplog, invocation).is_empty())
+            {
+                return Ok(oplog);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!("the invocation of {method} did not settle by itself");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Invokes `trap_after_release` with `key` and returns its result within [`RESULT_WAIT`].
@@ -799,7 +936,8 @@ async fn a_trap_after_the_result_keeps_the_result(
 
 /// An interrupt while the background work drains is not the outcome of the invocation: the
 /// caller keeps the recorded success, before and after a reconstruction, and the background
-/// work completes once after the agent resumes. The background call to the tally is open when
+/// work completes once after the agent resumes. The interrupt fails the invocation queued behind
+/// the drain. The background call to the tally is open when
 /// the interrupt arrives, so the agent is running its drain.
 #[test]
 #[timeout("180s")]
@@ -842,13 +980,25 @@ async fn an_interrupt_during_the_drain_keeps_the_result(
     agents
         .assert_unsettled_after_result(&executor, "add_after_release", "rpc", true)
         .await?;
-    executor.interrupt(&agents.worker_id).await?;
+    let queued = tokio::time::timeout(RESULT_WAIT, agents.completions(&executor));
+    let (queued, interrupted) = tokio::join!(queued, async {
+        agents.await_queued(&executor).await?;
+        executor.interrupt(&agents.worker_id).await
+    });
+    interrupted?;
+    assert!(
+        matches!(queued, Ok(Err(_))),
+        "the interrupt fails the invocation queued behind the drain: {queued:?}"
+    );
     executor
         .wait_for_status(
             &agents.worker_id,
             AgentStatus::Interrupted,
             Duration::from_secs(30),
         )
+        .await?;
+    agents
+        .assert_result_kept(&executor, "add_after_release")
         .await?;
     assert_eq!(
         agents
@@ -877,6 +1027,381 @@ async fn an_interrupt_during_the_drain_keeps_the_result(
     assert_eq!(agents.total(&executor).await?, 7);
     agents
         .assert_executed_once(&executor, "add_after_release")
+        .await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// The URL of a [`FlakyHttpServer`] and what it saw.
+struct FlakyHttpServer {
+    url: String,
+    connections: Arc<AtomicUsize>,
+    answered: Arc<AtomicUsize>,
+}
+
+/// Starts an HTTP server that drops each of the first `failures` connections without a response,
+/// which is a transient failure of the request, and answers every later request with `200 OK`.
+async fn start_flaky_http_server(failures: usize) -> FlakyHttpServer {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let answered = Arc::new(AtomicUsize::new(0));
+    let accepted = connections.clone();
+    let served = answered.clone();
+    tokio::spawn(
+        async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                if accepted.fetch_add(1, Ordering::SeqCst) < failures {
+                    drop(stream);
+                    continue;
+                }
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let response =
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+                if stream.write_all(response).await.is_ok() {
+                    served.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+        .in_current_span(),
+    );
+    FlakyHttpServer {
+        url: format!("http://127.0.0.1:{port}/"),
+        connections,
+        answered,
+    }
+}
+
+/// A fixed retry delay of `delay`, above the in-function retry limit, so that every transient
+/// failure falls back to a trap and a reconstruction.
+fn trap_retry_overrides(delay: Duration) -> TestExecutorOverrides {
+    TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: delay,
+                max_delay: delay,
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_millis(1);
+        })),
+        ..Default::default()
+    }
+}
+
+/// A transient failure of the background work after the result is retried, and the result stays
+/// recorded. The background work's HTTP request fails twice. Its retry delay is above the
+/// in-function retry limit, so each failure waits out the backoff in the call, on a runtime timer
+/// of the background work, and sends again under the same Start. Each retry records an
+/// in-function retry `Error` after the result; the agent does not trap and the method does not run
+/// again.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn a_transient_failure_in_the_drain_is_retried_and_keeps_the_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        trap_retry_overrides(Duration::from_millis(100)),
+    )
+    .await?;
+    let server = start_flaky_http_server(2).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "transient-drain").await?;
+    let release = agents.create_release(&executor, &agents.worker).await?;
+    let key = IdempotencyKey::fresh();
+    let add_after_http = || agents.add_after_http(&executor, &key, &release, &server.url);
+
+    assert_eq!(add_after_http().await?, "returned");
+    agents.complete(&executor, &release).await?;
+    assert_eq!(
+        agents.completions(&executor).await?,
+        1,
+        "the background work completes once after the retries"
+    );
+    assert_eq!(
+        server.connections.load(Ordering::SeqCst),
+        3,
+        "the request is sent once per attempt"
+    );
+    assert_eq!(
+        server.answered.load(Ordering::SeqCst),
+        1,
+        "the server answers the request once"
+    );
+    assert_eq!(agents.total(&executor).await?, 3);
+    assert_eq!(
+        add_after_http().await?,
+        "returned",
+        "the same key returns the recorded result"
+    );
+    agents
+        .assert_executed_once(&executor, "add_after_http")
+        .await?;
+
+    let oplog = executor
+        .get_oplog(&agents.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let started = method_starts(&oplog, "add_after_http");
+    let finished = finished_of(&oplog, &started[0]).expect("the result is recorded");
+    let errors = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Error(params) => Some((entry.oplog_index, params)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let requests = oplog
+        .iter()
+        .filter(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) => params.function_name == "http::client::send",
+            _ => false,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        1,
+        "the retries send again under the send's own Start: {requests:?}"
+    );
+    assert_eq!(
+        errors.len(),
+        2,
+        "each transient failure is one retry of the send: {errors:?}"
+    );
+    assert!(
+        errors.iter().all(|(index, params)| *index > finished
+            && params.error.contains("in-function retry")
+            && params.retry_at.is_some()
+            && params.retrying_start_index == Some(requests[0].oplog_index)),
+        "the failures are in-function retries of the send after the result: {errors:?}"
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::CancelPendingInvocation(_))),
+        "the failures cancel no invocation"
+    );
+    assert_eq!(
+        open_starts(&oplog, "http::"),
+        Vec::<OplogIndex>::new(),
+        "every HTTP call of the request is completed"
+    );
+
+    drop(executor);
+    Ok(())
+}
+
+/// An interrupt while the drain waits for its delayed retry gives what an interrupt of the
+/// running drain gives: it fails the invocation queued behind the drain and keeps the recorded
+/// result. The background work's HTTP request fails once, and the retry waits 10 seconds.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn an_interrupt_while_the_drain_waits_to_retry_fails_the_queued_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        trap_retry_overrides(Duration::from_secs(10)),
+    )
+    .await?;
+    let server = start_flaky_http_server(1).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "interrupt-retry").await?;
+    let release = agents.create_release(&executor, &agents.worker).await?;
+    let key = IdempotencyKey::fresh();
+
+    assert_eq!(
+        agents
+            .add_after_http(&executor, &key, &release, &server.url)
+            .await?,
+        "returned"
+    );
+    let queued = tokio::time::timeout(RESULT_WAIT, agents.completions(&executor));
+    let (queued, interrupted) = tokio::join!(queued, async {
+        agents.await_queued(&executor).await?;
+        agents.complete(&executor, &release).await?;
+        executor
+            .wait_for_status(
+                &agents.worker_id,
+                AgentStatus::Retrying,
+                Duration::from_secs(5),
+            )
+            .await?;
+        // The failure is committed before the Store stops; this aims the interrupt at the
+        // delayed retry that follows. An earlier interrupt reaches the stopping Store instead.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        executor.interrupt(&agents.worker_id).await
+    });
+    interrupted?;
+    assert!(
+        matches!(queued, Ok(Err(_))),
+        "the interrupt fails the invocation queued behind the drain: {queued:?}"
+    );
+    assert_eq!(
+        server.connections.load(Ordering::SeqCst),
+        1,
+        "the interrupt comes before the retry"
+    );
+    agents
+        .assert_result_kept(&executor, "add_after_http")
+        .await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// Suspension during the drain, while the background work waits only for a timer: the agent
+/// suspends, the wake that the suspension persisted reconstructs it without any other call, the
+/// replay consumes the recorded result at the export's return, and the background work completes
+/// once after its timer.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn a_timer_in_the_drain_resumes_the_suspended_agent_by_itself(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.suspend_after = Duration::from_secs(1);
+            config.suspend.wait_suspend_grace = Duration::from_millis(200);
+            config.suspend.wait_suspend_check_interval = Duration::from_millis(200);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "timer-drain").await?;
+
+    assert_eq!(
+        agents
+            .add_after_timer(&executor, Duration::from_secs(10), 4)
+            .await?,
+        "returned"
+    );
+    executor
+        .wait_for_status(
+            &agents.worker_id,
+            AgentStatus::Suspended,
+            Duration::from_secs(8),
+        )
+        .await?;
+    let oplog = agents.await_settled(&executor, "add_after_timer").await?;
+    let started = method_starts(&oplog, "add_after_timer");
+    let finished = finished_of(&oplog, &started[0]).expect("the result is recorded");
+    let settled = settled_of(&oplog, &started[0]);
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))
+                && entry.oplog_index > finished
+                && entry.oplog_index < settled[0]),
+        "the agent suspends during the drain"
+    );
+
+    assert_eq!(agents.completions(&executor).await?, 1);
+    assert_eq!(agents.total(&executor).await?, 4);
+    agents
+        .assert_executed_once(&executor, "add_after_timer")
+        .await?;
+
+    drop(executor);
+    Ok(())
+}
+
+/// The maximum invocation duration bounds an invocation until its result. It does not bound the
+/// background work after the result: the background work waits for a timer longer than the
+/// limit, and completes without a failure.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn the_maximum_invocation_duration_does_not_bound_the_drain(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // The worker stays resident while its timer waits, so the timer runs under the limit.
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.limits.max_invocation_duration = Some(Duration::from_secs(2));
+            config.suspend.wait_suspend_grace = Duration::from_secs(600);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agents = Agents::new(&executor, component, &context, "deadline-drain").await?;
+
+    assert_eq!(
+        agents
+            .add_after_timer(&executor, Duration::from_secs(4), 6)
+            .await?,
+        "returned"
+    );
+    let oplog = agents.await_settled(&executor, "add_after_timer").await?;
+    let started = method_starts(&oplog, "add_after_timer");
+    let finished = finished_of(&oplog, &started[0]).expect("the result is recorded");
+    let settled = settled_of(&oplog, &started[0]);
+    let stops = oplog
+        .iter()
+        .filter(|entry| {
+            entry.oplog_index > finished
+                && entry.oplog_index < settled[0]
+                && matches!(
+                    entry.entry,
+                    PublicOplogEntry::Error(_)
+                        | PublicOplogEntry::Interrupted(_)
+                        | PublicOplogEntry::Suspend(_)
+                )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        stops.is_empty(),
+        "the drain runs to its end without a timeout: {stops:?}"
+    );
+
+    assert_eq!(agents.completions(&executor).await?, 1);
+    assert_eq!(agents.total(&executor).await?, 6);
+    agents
+        .assert_executed_once(&executor, "add_after_timer")
         .await?;
 
     drop(executor);

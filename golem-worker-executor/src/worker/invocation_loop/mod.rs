@@ -898,10 +898,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 cleanup_ephemeral_worker = true;
             }
 
-            retry_was_live = {
+            // Whether the Store stopped in the drain of an invocation that recorded its result
+            // at the export's return, as `on_invocation_failure` decides for its own failures.
+            let recorded_at_return;
+            (retry_was_live, recorded_at_return) = {
                 let store = prepared.runtime().store.lock().await;
                 store.data().durable_ctx().begin_stream_runtime_teardown();
-                store.data().is_live()
+                (
+                    store.data().is_live(),
+                    store.data().durable_ctx().result_recorded_at_return(),
+                )
             };
             self.suspend_worker(&prepared.runtime().store).await;
 
@@ -1156,6 +1162,18 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                                 &key,
                                                 retry_was_live,
                                             );
+                                        } else if matches!(kind, InterruptKind::Interrupt(_))
+                                            && recorded_at_return
+                                        {
+                                            // Like an interrupt of the running drain, this fails
+                                            // the queued invocations and keeps the recorded
+                                            // result, which is no longer the current invocation.
+                                            self.parent
+                                                .store_queued_invocation_failures(
+                                                    None,
+                                                    &TrapType::Interrupt(kind),
+                                                )
+                                                .await;
                                         }
                                     }
                                     match decision {
