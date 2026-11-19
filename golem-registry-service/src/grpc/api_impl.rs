@@ -33,21 +33,21 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
-    BatchGetCardsRequest, BatchGetCardsResponse, BatchGetCardsSuccessResponse,
-    BatchGetExistingCardsRequest, BatchGetExistingCardsResponse,
-    BatchGetExistingCardsSuccessResponse, BatchUpdateResourceUsageRequest,
-    BatchUpdateResourceUsageResponse, BatchUpdateResourceUsageSuccessResponse, CardData,
-    CreateRuntimeCardRequest, CreateRuntimeCardResponse, CreateRuntimeCardSuccessResponse,
-    DownloadComponentRequest, DownloadComponentResponse, GetActiveMcpForDomainRequest,
-    GetActiveMcpForDomainResponse, GetActiveMcpForDomainSuccessResponse,
-    GetActiveRoutesForDomainRequest, GetActiveRoutesForDomainResponse,
-    GetActiveRoutesForDomainSuccessResponse, GetAgentSecretRevisionRequest,
-    GetAgentSecretRevisionResponse, GetAgentSecretRevisionSuccessResponse, GetAgentTypeRequest,
-    GetAgentTypeResponse, GetAgentTypeSuccessResponse, GetAllAgentTypesRequest,
-    GetAllAgentTypesResponse, GetAllAgentTypesSuccessResponse,
-    GetAllDeployedComponentRevisionsRequest, GetAllDeployedComponentRevisionsResponse,
-    GetAllDeployedComponentRevisionsSuccessResponse, GetComponentMetadataRequest,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
+    AuthorizeEnvironmentRequest, AuthorizeEnvironmentResponse, BatchGetCardsRequest,
+    BatchGetCardsResponse, BatchGetCardsSuccessResponse, BatchGetExistingCardsRequest,
+    BatchGetExistingCardsResponse, BatchGetExistingCardsSuccessResponse,
+    BatchUpdateResourceUsageRequest, BatchUpdateResourceUsageResponse,
+    BatchUpdateResourceUsageSuccessResponse, CardData, CreateRuntimeCardRequest,
+    CreateRuntimeCardResponse, CreateRuntimeCardSuccessResponse, DownloadComponentRequest,
+    DownloadComponentResponse, GetActiveMcpForDomainRequest, GetActiveMcpForDomainResponse,
+    GetActiveMcpForDomainSuccessResponse, GetActiveRoutesForDomainRequest,
+    GetActiveRoutesForDomainResponse, GetActiveRoutesForDomainSuccessResponse,
+    GetAgentSecretRevisionRequest, GetAgentSecretRevisionResponse,
+    GetAgentSecretRevisionSuccessResponse, GetAgentTypeRequest, GetAgentTypeResponse,
+    GetAgentTypeSuccessResponse, GetAllAgentTypesRequest, GetAllAgentTypesResponse,
+    GetAllAgentTypesSuccessResponse, GetAllDeployedComponentRevisionsRequest,
+    GetAllDeployedComponentRevisionsResponse, GetAllDeployedComponentRevisionsSuccessResponse,
+    GetComponentMetadataRequest, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse,
     GetCurrentEnvironmentStateRequest, GetCurrentEnvironmentStateResponse,
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedAgentTypeRequest,
     GetDeployedAgentTypeResponse, GetDeployedAgentTypeSuccessResponse,
@@ -65,9 +65,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveTypeIdRequest, ResolveTypeIdResponse, ResolveTypeIdSuccessResponse, ResolvedTypeId,
     RevokeCardRequest, RevokeCardResponse, RevokeCardSuccessResponse, RuntimeCardData,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, authenticate_token_response, batch_get_cards_response,
-    batch_get_existing_cards_response, batch_update_resource_usage_response,
-    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    UpdateWorkerConnectionLimitResponse, authenticate_token_response,
+    authorize_environment_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, create_runtime_card_response,
+    download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
@@ -843,6 +844,24 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn authorize_environment_internal(
+        &self,
+        request: AuthorizeEnvironmentRequest,
+    ) -> Result<golem_schema::proto::golem::common::Empty, GrpcApiError> {
+        let environment_id = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let auth_ctx = request
+            .auth_ctx
+            .ok_or("missing auth_ctx field")?
+            .try_into()?;
+        self.deployment_service
+            .authorize_environment(environment_id, &auth_ctx)
+            .await?;
+        Ok(golem_schema::proto::golem::common::Empty {})
+    }
+
     async fn resolve_type_id_internal(
         &self,
         request: ResolveTypeIdRequest,
@@ -1477,6 +1496,29 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(ResolveAgentTypeByNamesResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn authorize_environment(
+        &self,
+        request: Request<AuthorizeEnvironmentRequest>,
+    ) -> Result<Response<AuthorizeEnvironmentResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "authorize_environment",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+        );
+        let response = match self
+            .authorize_environment_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => authorize_environment_response::Result::Success(result),
+            Err(error) => authorize_environment_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(AuthorizeEnvironmentResponse {
             result: Some(response),
         }))
     }

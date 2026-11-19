@@ -25,6 +25,7 @@ import "golem/worker/worker_id.proto";
 service RegistryService {
   // auth api
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
+  rpc AuthorizeEnvironment (AuthorizeEnvironmentRequest) returns (AuthorizeEnvironmentResponse);
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
@@ -72,6 +73,18 @@ service RegistryService {
   // registry invalidation stream — multiplexed event types
   rpc SubscribeRegistryInvalidations(SubscribeRegistryInvalidationsRequest)
       returns (stream RegistryInvalidationEvent);
+}
+
+message AuthorizeEnvironmentRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
+}
+
+message AuthorizeEnvironmentResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    RegistryServiceError error = 2;
+  }
 }
 
 message AuthenticateTokenRequest {

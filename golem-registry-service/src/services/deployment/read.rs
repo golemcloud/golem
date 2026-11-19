@@ -127,6 +127,19 @@ impl DeploymentService {
             .collect()
     }
 
+    pub async fn authorize_environment(
+        &self,
+        environment_id: EnvironmentId,
+        auth: &AuthCtx,
+    ) -> Result<(), DeploymentError> {
+        let environment = self
+            .environment_service
+            .get(environment_id, false, &AuthCtx::system())
+            .await?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::View)?;
+        Ok(())
+    }
+
     pub async fn resolve_type_id(
         &self,
         environment_id: EnvironmentId,

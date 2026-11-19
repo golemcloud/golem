@@ -25,19 +25,21 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchGetCardsRequest, BatchGetExistingCardsRequest,
-    BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest, DownloadComponentRequest,
-    GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentSecretRevisionRequest,
-    GetAgentTypeRequest, GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
-    GetComponentMetadataRequest, GetCurrentEnvironmentStateRequest, GetDeployedAgentTypeRequest,
+    AuthenticateTokenRequest, AuthorizeEnvironmentRequest, BatchGetCardsRequest,
+    BatchGetExistingCardsRequest, BatchUpdateResourceUsageRequest, CreateRuntimeCardRequest,
+    DownloadComponentRequest, GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest,
+    GetAgentSecretRevisionRequest, GetAgentTypeRequest, GetAllAgentTypesRequest,
+    GetAllDeployedComponentRevisionsRequest, GetComponentMetadataRequest,
+    GetCurrentEnvironmentStateRequest, GetDeployedAgentTypeRequest,
     GetDeployedComponentMetadataRequest, GetMcpRuntimeCredentialRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     GetToolDeploymentStateAtRevisionRequest, GetToolDeploymentStateRequest,
     ReportMcpResourceUnauthorizedRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
     ResolveMcpImportRequest, ResolveTypeIdRequest, RevokeCardRequest, RuntimeCardData,
-    UpdateWorkerConnectionLimitRequest, authenticate_token_response, batch_get_cards_response,
-    batch_get_existing_cards_response, batch_update_resource_usage_response,
-    create_runtime_card_response, download_component_response, get_active_mcp_for_domain_response,
+    UpdateWorkerConnectionLimitRequest, authenticate_token_response,
+    authorize_environment_response, batch_get_cards_response, batch_get_existing_cards_response,
+    batch_update_resource_usage_response, create_runtime_card_response,
+    download_component_response, get_active_mcp_for_domain_response,
     get_active_routes_for_domain_response, get_agent_secret_revision_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
@@ -337,6 +339,16 @@ pub trait RegistryService: Send + Sync {
         owner_account_email: Option<&str>,
         auth_ctx: &AuthCtx,
     ) -> Result<ResolvedAgentType, RegistryServiceError>;
+
+    async fn authorize_environment(
+        &self,
+        _environment_id: EnvironmentId,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "authorize_environment is not supported by this registry service",
+        ))
+    }
 
     /// Resolves the type ID in an agent ID's tag. `None` when the environment never
     /// assigned it. Also resolves types that are no longer deployed.
@@ -1410,6 +1422,29 @@ impl RegistryService for GrpcRegistryService {
                 })
             }
             Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn authorize_environment(
+        &self,
+        environment_id: EnvironmentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RegistryServiceError> {
+        let auth_ctx = auth_ctx.clone();
+        let response = self
+            .client
+            .call("authorize_environment", move |client| {
+                Box::pin(client.authorize_environment(AuthorizeEnvironmentRequest {
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(authorize_environment_response::Result::Success(_)) => Ok(()),
+            Some(authorize_environment_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

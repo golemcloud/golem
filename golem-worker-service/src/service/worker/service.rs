@@ -818,15 +818,24 @@ impl WorkerService {
             return Ok(());
         }
         let denied = || WorkerServiceError::AgentAccessDenied(agent_id.agent_id);
+        self.agent_types
+            .authorize_environment(agent_id.environment_id, auth_ctx)
+            .await
+            .map_err(|error| match error {
+                RegistryServiceError::Unauthorized(_)
+                | RegistryServiceError::NotFound(_)
+                | RegistryServiceError::CouldNotAuthenticate(_) => denied(),
+                other => other.into(),
+            })?;
         let Some(tagged) = self
             .agent_types
             .tagged(agent_id.environment_id, agent_id.agent_id)
             .await?
         else {
-            return Err(denied());
+            return Ok(());
         };
         let Some(implementer) = tagged.implemented_by else {
-            return Err(denied());
+            return Ok(());
         };
         let component = self
             .component_service
@@ -4514,11 +4523,41 @@ mod tests {
             Ok(self.resolved.clone())
         }
 
+        async fn authorize_environment(
+            &self,
+            environment_id: EnvironmentId,
+            auth_ctx: &AuthCtx,
+        ) -> Result<(), RegistryServiceError> {
+            use golem_common::model::card::owner::EnvironmentOwnerPattern;
+            use golem_common::model::card::{EnvironmentResourcePattern, EnvironmentVerb};
+            if environment_id != self.resolved.environment_id {
+                return Err(RegistryServiceError::NotFound("environment".into()));
+            }
+            auth_ctx
+                .authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+                    owner: EnvironmentOwnerPattern::Environment {
+                        account: AccountEmail::new("weather@golem"),
+                        application: ApplicationName::try_from("weather-app").unwrap(),
+                        environment: EnvironmentName::try_from("prod").unwrap(),
+                    },
+                    verb: Some(EnvironmentVerb::View),
+                    resource: EnvironmentResourcePattern::Any,
+                }))
+                .map_err(|error| RegistryServiceError::Unauthorized(error.to_string()))
+        }
+
         async fn resolve_type_id(
             &self,
             environment_id: EnvironmentId,
             type_id: TypeId,
         ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
+            if environment_id == self.resolved.environment_id && type_id.get() == 43 {
+                return Ok(Some(ResolvedTypeId {
+                    kind: TypeIdKind::Tool,
+                    name: "test-tool".into(),
+                    implemented_by: None,
+                }));
+            }
             let registered = &self.resolved.registered_agent_type;
             Ok(
                 (environment_id == self.resolved.environment_id && type_id == registered.type_id)
@@ -8490,6 +8529,63 @@ mod tests {
                 .unwrap(),
             vec![true],
             "an upsert joins the keyed agent when it exists"
+        );
+    }
+
+    #[test]
+    async fn unknown_agent_ids_require_environment_access_before_tag_resolution() {
+        use golem_common::model::card::owner::EnvironmentOwnerPattern;
+        use golem_common::model::card::{EnvironmentResourcePattern, EnvironmentVerb};
+
+        let harness = RestHarness::new(AgentMode::Durable);
+        let environment_permission = PermissionTarget::Environment(ClassPermissionTarget {
+            owner: EnvironmentOwnerPattern::AnyEnvironments,
+            verb: Some(EnvironmentVerb::View),
+            resource: EnvironmentResourcePattern::Any,
+        });
+        let agent_permission = PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::AnyAgents,
+            verb: None,
+            resource: AgentResourcePattern::Any,
+        });
+        let authorized =
+            auth_ctx_with_permissions(vec![environment_permission.clone(), agent_permission]);
+        let environment_only = auth_ctx_with_permissions(vec![environment_permission]);
+        for tag in [42, 43, 98765, 0] {
+            let agent = harness.owned(&AgentId::from_parts(tag, 123));
+            for (auth, allowed) in [
+                (authorized.clone(), true),
+                (scoped_invocation_auth(), false),
+                (environment_only.clone(), tag != 42),
+                (auth_ctx_with_permissions(vec![]), false),
+            ] {
+                let read = harness
+                    .worker_service
+                    .get_metadata(&agent, None, auth.clone())
+                    .await;
+                let delete = harness.worker_service.delete(&agent, None, auth).await;
+                for error in [read.unwrap_err(), delete.unwrap_err()] {
+                    if allowed {
+                        assert!(
+                            matches!(error, WorkerServiceError::AgentNotFound(_)),
+                            "tag={tag}: {error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(error, WorkerServiceError::AgentAccessDenied(_)),
+                            "tag={tag}: {error:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            harness
+                .worker_client
+                .deleted_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty()
         );
     }
 
