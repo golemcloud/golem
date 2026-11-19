@@ -779,7 +779,26 @@ where
         let interrupt = store.with(|mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
         });
-        let send = physical.attempt();
+        let pool = &physical.pool;
+        let send = physical.attempt(|request, options| async move {
+            match pool {
+                Some(pool) => pool
+                    .send_request(request, options)
+                    .await
+                    .map(|(response, io, connection)| (response, io, Some(connection))),
+                None => match wasmtime_wasi_http::default_send_request(request, options).await {
+                    Ok((response, io)) => Ok((
+                        response.map(http_body_util::BodyExt::boxed_unsync),
+                        Box::new(io)
+                            as Box<
+                                dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send,
+                            >,
+                        None,
+                    )),
+                    Err(error) => Err(error),
+                },
+            }
+        });
         let attempt_result = match select(Box::pin(send), interrupt).await {
             Either::Left((result, _)) => result,
             Either::Right((interrupt_kind, _)) => {
