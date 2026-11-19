@@ -230,11 +230,7 @@ impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::Invocat
     fn proto_constructor(&self) -> Result<Option<ParsedAgentKey>, WorkerExecutorError> {
         self.constructor
             .clone()
-            .map(|key| {
-                golem_common::model::agent::AgentKey::try_from(key)
-                    .map(ParsedAgentKey::from)
-                    .map_err(WorkerExecutorError::invalid_request)
-            })
+            .map(|key| ParsedAgentKey::try_from(key).map_err(WorkerExecutorError::invalid_request))
             .transpose()
     }
 

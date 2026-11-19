@@ -64,9 +64,7 @@ impl ResolvedTarget {
             .constructor
             .clone()
             .map(|constructor| {
-                AgentKey::new(constructor.agent_type, constructor.parameters)
-                    .map_err(|err| err.to_string())
-                    .and_then(golem_api_grpc::proto::golem::worker::AgentKey::try_from)
+                golem_api_grpc::proto::golem::worker::AgentKey::try_from(constructor)
                     .map_err(WorkerExecutorError::invalid_request)
             })
             .transpose()?;
@@ -311,10 +309,9 @@ async fn check_constructor(
             ))
         })?;
     let agent_mode = agent_type.mode;
-    let constructor: ParsedAgentKey = constructor
-        .canonical_key(&component.metadata)
-        .map_err(WorkerExecutorError::invalid_request)?
-        .into();
+    let constructor = constructor
+        .canonical_constructor(&component.metadata)
+        .map_err(WorkerExecutorError::invalid_request)?;
     let registered = agent_types
         .get(
             environment_id,

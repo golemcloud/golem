@@ -15,9 +15,7 @@
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use super::structural_format::{
-    StructuralFormatError, format_structural_typed, normalize_structural, parse_structural_typed,
-};
+use super::structural_format::{StructuralFormatError, format_structural_typed};
 use super::{AgentTypeName, AgentTypeSchemaResolver, parse_agent_key_parts};
 use crate::schema::AgentTypeSchema;
 use crate::schema::graph::TypedSchemaValue;
@@ -79,12 +77,9 @@ impl AgentKey {
     ) -> Result<(Self, AgentTypeSchema), String> {
         let agent_type_name = AgentTypeName(agent_type_name.to_string());
         let agent_type = resolver.resolve_agent_type_schema_by_name(&agent_type_name)?;
-        let root = super::constructor_parameter_record(&agent_type);
-        let value =
-            parse_structural_typed(&normalize_structural(param_list), &agent_type.schema, &root)
-                .map_err(|e| e.to_string())?;
-        let parameters = super::typed_constructor_parameters(&agent_type, value);
-        let key = Self::new(agent_type_name, parameters).map_err(|e| e.to_string())?;
+        let constructor =
+            super::ParsedAgentKey::parse_parameters(&agent_type_name, param_list, &agent_type)?;
+        let key = Self::new(agent_type_name, constructor.parameters).map_err(|e| e.to_string())?;
         Ok((key, agent_type))
     }
 

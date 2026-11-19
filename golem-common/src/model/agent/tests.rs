@@ -270,14 +270,17 @@ fn agent_id_excludes_auto_injected_constructor_fields() {
 fn a_key_longer_than_512_bytes_is_rejected() {
     // `t("…")` is the string plus five bytes; `é` is two bytes, so the limit counts bytes.
     let at_limit = format!("{}é", "a".repeat(505));
-    let key = ParsedAgentKey::try_new(AgentTypeName("t".to_string()), data_value!(at_limit))
+    let key = super::AgentKey::new(AgentTypeName("t".to_string()), data_value!(at_limit))
         .expect("a 512-byte key is accepted");
     assert_eq!(key.to_string().len(), 512);
 
     let over_limit = format!("{}é", "a".repeat(506));
-    let err = ParsedAgentKey::try_new(AgentTypeName("t".to_string()), data_value!(over_limit))
+    let err = super::AgentKey::new(AgentTypeName("t".to_string()), data_value!(over_limit))
         .expect_err("a 513-byte key is rejected");
-    assert_eq!(err, "Agent key is too long: 513 bytes, max length: 512");
+    assert_eq!(
+        err.to_string(),
+        "Agent key is too long: 513 bytes, max length: 512"
+    );
 
     // `agent-7([…])` around 300 one-digit elements is 610 bytes.
     let err = ParsedAgentKey::parse(
@@ -286,6 +289,36 @@ fn a_key_longer_than_512_bytes_is_rejected() {
     )
     .expect_err("parsed key text is limited too");
     assert_eq!(err, "Agent key is too long: 610 bytes, max length: 512");
+}
+
+#[test]
+fn constructor_roundtrip_has_no_key_length_limit() {
+    let constructor =
+        ParsedAgentKey::try_new(AgentTypeName("Doc".into()), data_value!("é".repeat(520))).unwrap();
+    let proto =
+        golem_api_grpc::proto::golem::worker::AgentKey::try_from(constructor.clone()).unwrap();
+    assert_eq!(
+        ParsedAgentKey::try_from(proto.clone()).unwrap(),
+        constructor
+    );
+    assert!(
+        super::AgentKey::try_from(proto)
+            .unwrap_err()
+            .contains("Agent key is too long")
+    );
+    let env = crate::model::environment::EnvironmentId::new();
+    let type_id = crate::model::type_id::TypeId::try_from(42u32).unwrap();
+    let logical_id = AgentId::ephemeral_proxy(env, type_id, &constructor).unwrap();
+    assert_eq!(
+        logical_id,
+        AgentId::ephemeral_proxy(env, type_id, &constructor).unwrap()
+    );
+    let other =
+        ParsedAgentKey::try_new(AgentTypeName("Doc".into()), data_value!("é".repeat(521))).unwrap();
+    assert_ne!(
+        logical_id,
+        AgentId::ephemeral_proxy(env, type_id, &other).unwrap()
+    );
 }
 
 #[test]

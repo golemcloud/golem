@@ -347,14 +347,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let environment_id = self.owned_agent_id.environment_id;
         let component_id = remote.registered.implemented_by.component_id;
         let type_id = remote.registered.type_id;
-        let target = match keyed_target(environment_id, type_id, component_id, constructor) {
-            Ok(target) => target,
-            Err(err) => {
-                return Ok(Err(RpcError::RemoteAgentError(
-                    WitAgentError::InvalidInput(err.to_string()),
-                )));
-            }
-        };
         let RemoteAgentType {
             registered,
             agent_type,
@@ -364,13 +356,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         if registered.agent_type.mode == AgentMode::Ephemeral {
             // A client of an ephemeral agent type is a logical proxy: every invocation runs on
-            // a new one-shot instance. Its logical ID is the key derivation, which no ephemeral
-            // agent has.
-            let constructor = target
-                .new_owner
-                .and_then(|owner| owner.constructor)
-                .expect("a keyed target has a constructor");
-            let mut logical_remote_agent_id = target.owned_agent_id;
+            // a new one-shot instance. Its logical ID never addresses an instance.
+            let logical_id = AgentId::ephemeral_proxy(environment_id, type_id, &constructor)
+                .map_err(anyhow::Error::msg)?;
+            let mut logical_remote_agent_id = OwnedAgentId::new(environment_id, &logical_id);
             let (handle, span) = start_rpc_connection_call::<_, GolemRpcWasmRpcUpsert>(
                 self,
                 HostRequestGolemRpcCreate {
@@ -420,6 +409,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .map(Ok);
         }
 
+        let target = match keyed_target(environment_id, type_id, component_id, constructor) {
+            Ok(target) => target,
+            Err(err) => {
+                return Ok(Err(RpcError::RemoteAgentError(
+                    WitAgentError::InvalidInput(err.to_string()),
+                )));
+            }
+        };
         let (handle, span) = start_rpc_connection_call::<_, GolemRpcWasmRpcUpsert>(
             self,
             HostRequestGolemRpcCreate {

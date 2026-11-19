@@ -808,7 +808,7 @@ impl WorkerGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
 
-        let constructor: golem_common::model::agent::AgentKey = request
+        let constructor: golem_common::model::agent::ParsedAgentKey = request
             .constructor
             .ok_or_else(|| bad_request_error("Missing constructor"))?
             .try_into()
@@ -1083,10 +1083,9 @@ impl WorkerGrpcApi {
                 .map_err(|e| bad_request_error(format!("Invalid target: {e}")))?;
             let constructor = request
                 .constructor
-                .map(golem_common::model::agent::AgentKey::try_from)
+                .map(golem_common::model::agent::ParsedAgentKey::try_from)
                 .transpose()
-                .map_err(|e| bad_request_error(format!("Invalid constructor: {e}")))?
-                .map(golem_common::model::agent::ParsedAgentKey::from);
+                .map_err(|e| bad_request_error(format!("Invalid constructor: {e}")))?;
             let component_id = request
                 .component_id
                 .map(ComponentId::try_from)

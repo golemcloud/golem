@@ -1315,6 +1315,33 @@ mod tests {
 
         let existing = ResolvedTarget::existing(OwnedAgentId::new(environment_id, &allocated));
         assert!(launch_target(&existing).is_err());
+
+        for mode in [
+            golem_common::model::agent::AgentMode::Durable,
+            golem_common::model::agent::AgentMode::Ephemeral,
+        ] {
+            let constructor = golem_common::model::agent::ParsedAgentKey::try_new(
+                golem_common::model::agent::AgentTypeName("counter".into()),
+                golem_common::data_value!("é".repeat(520)),
+            )
+            .unwrap();
+            let target = crate::worker::target::unkeyed_target(
+                environment_id,
+                allocated,
+                component_id,
+                constructor.clone(),
+                mode,
+            );
+            let (_, encoded, unkeyed_id) = launch_target(&target).unwrap();
+            assert_eq!(
+                unkeyed_id.map(AgentId::try_from).transpose().unwrap(),
+                Some(allocated)
+            );
+            assert_eq!(
+                golem_common::model::agent::ParsedAgentKey::try_from(encoded).unwrap(),
+                constructor
+            );
+        }
     }
 
     fn accepted_invocation_id() -> InvocationId {

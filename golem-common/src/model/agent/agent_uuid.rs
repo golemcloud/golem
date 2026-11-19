@@ -36,6 +36,7 @@ use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, RESERVED_TYPE
 const KEYED_DOMAIN: &str = "golem:agent-id:keyed:v1";
 const IDEMPOTENT_CREATE_DOMAIN: &str = "golem:agent-id:idempotent-create:v1";
 const EPHEMERAL_INVOCATION_DOMAIN: &str = "golem:agent-id:ephemeral-invocation:v1";
+const EPHEMERAL_PROXY_DOMAIN: &str = "golem:agent-id:ephemeral-proxy:v1";
 const DURABLE_STREAM_FORK_DOMAIN: &str = "golem:agent-id:durable-stream-fork:v1";
 const DURABLE_STREAM_SESSION_DOMAIN: &str = "golem:agent-id:durable-stream-session:v1";
 const IMPORTED_PHANTOM_DOMAIN: &str = "golem:agent-id:imported-phantom:v1";
@@ -91,6 +92,23 @@ impl AgentId {
                 .type_id(type_id)
                 .variable(owner_key.value.as_bytes()),
         )
+    }
+
+    /// The logical identity of an ephemeral RPC proxy, not an instance's address.
+    /// Constructor parameters are not a key and have no key-length limit. Each call
+    /// through the proxy uses [`Self::ephemeral_invocation`] for its actual target.
+    pub fn ephemeral_proxy(
+        environment_id: EnvironmentId,
+        type_id: TypeId,
+        constructor: &super::ParsedAgentKey,
+    ) -> Result<Self, String> {
+        Ok(Self::typed(
+            type_id,
+            HashInput::new(EPHEMERAL_PROXY_DOMAIN)
+                .environment(environment_id)
+                .type_id(type_id)
+                .variable(constructor.canonical_parameters()?.as_bytes()),
+        ))
     }
 
     /// The ID of a Durable Streams fork of `root` on the route of `route_scope`. It carries

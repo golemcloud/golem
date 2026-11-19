@@ -979,7 +979,7 @@ impl WorkerService {
     pub async fn launch_agent(
         &self,
         component_id: ComponentId,
-        constructor: golem_common::model::agent::AgentKey,
+        constructor: ParsedAgentKey,
         unkeyed_id: Option<AgentId>,
         method_name: Option<String>,
         prepare: bool,
@@ -998,11 +998,15 @@ impl WorkerService {
             .await?;
         let trusted_internal_caller = matches!(&auth_ctx, AuthCtx::System | AuthCtx::Agent(_));
         let (target, constructor) = match unkeyed_id {
-            None => (AgentTarget::Key(constructor), None),
-            Some(agent_id) => (
-                AgentTarget::Id(agent_id),
-                Some(ParsedAgentKey::from(constructor)),
+            None => (
+                AgentTarget::Key(
+                    constructor
+                        .canonical_key(&component.metadata)
+                        .map_err(WorkerServiceError::TypeChecker)?,
+                ),
+                None,
             ),
+            Some(agent_id) => (AgentTarget::Id(agent_id), Some(constructor)),
         };
         let resource = method_name
             .clone()
@@ -2487,10 +2491,9 @@ impl WorkerService {
             let constructor = start
                 .constructor
                 .clone()
-                .map(golem_common::model::agent::AgentKey::try_from)
+                .map(ParsedAgentKey::try_from)
                 .transpose()
-                .map_err(WorkerServiceError::TypeChecker)?
-                .map(ParsedAgentKey::from);
+                .map_err(WorkerServiceError::TypeChecker)?;
             self.resolve_requested_target(
                 environment_id,
                 start_target(&start)?,
@@ -5923,6 +5926,53 @@ mod tests {
     }
 
     #[test]
+    fn key_limit_is_not_a_constructor_limit() {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let name = AgentTypeName("Doc".into());
+            let mut ty = test_agent_type(name.clone(), mode);
+            ty.constructor.input_schema = InputSchema::Parameters(vec![NamedField::user_supplied(
+                "body",
+                SchemaType::string(),
+            )]);
+            let env = EnvironmentId::new();
+            let component = test_component(
+                ComponentId::new(),
+                env,
+                AccountId::new(),
+                ComponentRevision::INITIAL,
+                ty.clone(),
+            );
+            for body in ["a".repeat(10), "a".repeat(520), "é".repeat(260)] {
+                let constructor = ParsedAgentKey::new(
+                    name.clone(),
+                    golem_common::model::agent::typed_constructor_parameters(
+                        &ty,
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::String(body.clone())],
+                        },
+                    ),
+                );
+                if mode == AgentMode::Durable {
+                    let keyed = RoutedTarget::keyed(env, test_type_id(), &component, &constructor);
+                    assert_eq!(keyed.is_ok(), body.len() == 10);
+                    if let Err(error) = keyed {
+                        assert!(error.to_string().contains("Agent key is too long"));
+                    }
+                }
+                let routed = RoutedTarget::unkeyed(
+                    AgentId::random(test_type_id()),
+                    &component,
+                    &constructor,
+                )
+                .expect("a constructor is not a key");
+                let (_, wire_constructor, _) = routed.invoke_fields();
+                let decoded = ParsedAgentKey::try_from(wire_constructor.unwrap()).unwrap();
+                assert_eq!(decoded, constructor);
+            }
+        }
+    }
+
+    #[test]
     async fn explicit_create_requires_any_invoke_grant_and_preserves_the_creating_key() {
         let harness = RestHarness::new(AgentMode::Durable);
         let agent_id = harness.keyed_agent_id();
@@ -5938,7 +5988,7 @@ mod tests {
                 .worker_service
                 .launch_agent(
                     harness.component_id,
-                    harness.agent_key(),
+                    harness.agent_key().into(),
                     None,
                     None,
                     false,
@@ -5992,7 +6042,7 @@ mod tests {
         let launch = |prepare: bool, permission: PermissionTarget, key: Option<IdempotencyKey>| {
             harness.worker_service.launch_agent(
                 harness.component_id,
-                harness.agent_key(),
+                harness.agent_key().into(),
                 None,
                 Some("run".to_string()),
                 prepare,

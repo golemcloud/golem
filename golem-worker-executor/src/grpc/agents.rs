@@ -23,7 +23,7 @@ use super::{
 use crate::services::{HasAgentTypesService, HasComponentService};
 use crate::worker::CreateIntent;
 use golem_common::model::agent::{
-    AgentKey, InvocationFreshnessDisposition, ParsedAgentKey, Principal, ScheduleId,
+    InvocationFreshnessDisposition, ParsedAgentKey, Principal, ScheduleId,
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
@@ -52,11 +52,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
-        let constructor: ParsedAgentKey = AgentKey::try_from(request.constructor.clone().ok_or(
+        let constructor = ParsedAgentKey::try_from(request.constructor.clone().ok_or(
             WorkerExecutorError::invalid_request("constructor not found"),
         )?)
-        .map_err(WorkerExecutorError::invalid_request)?
-        .into();
+        .map_err(WorkerExecutorError::invalid_request)?;
         let target = match request.unkeyed_id {
             Some(agent_id) => {
                 let agent_id: AgentId = agent_id

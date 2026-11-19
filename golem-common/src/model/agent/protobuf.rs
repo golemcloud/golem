@@ -1177,7 +1177,7 @@ impl TryFrom<TypedAgentConfigEntry>
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey {
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::ParsedAgentKey {
     type Error = String;
 
     fn try_from(
@@ -1187,8 +1187,29 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey
             .parameters
             .ok_or_else(|| "Missing field: AgentKey.parameters".to_string())?
             .try_into()?;
-        Self::new(super::AgentTypeName(value.agent_type_name), parameters)
-            .map_err(|err| err.to_string())
+        Self::try_new(super::AgentTypeName(value.agent_type_name), parameters)
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentKey> for super::AgentKey {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::AgentKey,
+    ) -> Result<Self, Self::Error> {
+        let constructor = super::ParsedAgentKey::try_from(value)?;
+        Self::new(constructor.agent_type, constructor.parameters).map_err(|err| err.to_string())
+    }
+}
+
+impl TryFrom<super::ParsedAgentKey> for golem_api_grpc::proto::golem::worker::AgentKey {
+    type Error = String;
+
+    fn try_from(value: super::ParsedAgentKey) -> Result<Self, Self::Error> {
+        Ok(Self {
+            agent_type_name: value.agent_type.0,
+            parameters: Some(value.parameters.try_into()?),
+        })
     }
 }
 
