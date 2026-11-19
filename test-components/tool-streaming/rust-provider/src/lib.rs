@@ -844,6 +844,60 @@ impl Typed for TypedImpl {
     }
 }
 
+#[derive(Debug, Clone, ToolError)]
+pub enum ProcessExitError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Usage { reason: String },
+}
+
+#[tool_definition(version = "1.0.0", requires_filesystem = true)]
+pub trait ProcessExit {
+    /// Write STDOUT and STDERR, then end the body with `exit(CODE)`.
+    #[arg(cwd = "option", default = "/", env = "PWD")]
+    #[arg(args = "tail", separator = "--", verbatim = true)]
+    #[arg(stderr, channel = "stderr")]
+    async fn process_exit(
+        &self,
+        cwd: String,
+        args: Vec<String>,
+        stdout: OutputStream,
+        stderr: OutputStream,
+    ) -> Result<golem_rust::tool::ProcessExitStatus, ProcessExitError>;
+}
+
+struct ProcessExitImpl;
+
+#[tool_implementation]
+impl ProcessExit for ProcessExitImpl {
+    async fn process_exit(
+        &self,
+        _cwd: String,
+        args: Vec<String>,
+        mut stdout: OutputStream,
+        mut stderr: OutputStream,
+    ) -> Result<golem_rust::tool::ProcessExitStatus, ProcessExitError> {
+        let [code, out, err] = args.as_slice() else {
+            return Err(ProcessExitError::Usage {
+                reason: "usage: process-exit CODE STDOUT STDERR".to_string(),
+            });
+        };
+        let code = code
+            .parse::<i32>()
+            .map_err(|error| ProcessExitError::Usage {
+                reason: error.to_string(),
+            })?;
+        stdout
+            .write(out.as_bytes().to_vec())
+            .await
+            .expect("write stdout");
+        stderr
+            .write(err.as_bytes().to_vec())
+            .await
+            .expect("write stderr");
+        std::process::exit(code)
+    }
+}
+
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct EnvironmentProbeEvidence {
     pub marker: String,

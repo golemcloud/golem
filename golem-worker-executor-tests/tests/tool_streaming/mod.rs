@@ -7215,6 +7215,151 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
     Ok(())
 }
 
+// `exit(CODE)` in a tool body that returns `ProcessExitStatus` ends that call as a process exit
+// does: CODE is its status, its stdout and stderr are complete, and the owner stays healthy.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn tool_body_exit_becomes_its_process_exit_status(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let worker_id = executor
+        .start_agent(
+            &caller_component.id,
+            agent_key!("ToolStreamingCaller", "tool-exit"),
+        )
+        .await?;
+
+    let tool_terminals = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) => params.response.as_ref(),
+                _ => None,
+            })
+            .filter_map(|response| {
+                SerializableToolOperationTerminal::from_value(response.value()).ok()
+            })
+            .collect::<Vec<_>>()
+    };
+    let errors = |oplog: &[PublicOplogEntryWithIndex]| {
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+            .count()
+    };
+
+    let exited = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["3", "out-3", "err-3"],
+    )
+    .await?;
+    assert_eq!(exited.exit_code, 3, "{exited:?}");
+    assert_eq!(exited.stdout, b"out-3");
+    assert_eq!(exited.stderr, b"err-3");
+    let succeeded = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["0", "out-0", ""],
+    )
+    .await?;
+    assert_eq!(succeeded.exit_code, 0, "{succeeded:?}");
+    assert_eq!(succeeded.stdout, b"out-0");
+    assert!(succeeded.stderr.is_empty());
+
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let terminals = tool_terminals(&before);
+    assert_eq!(terminals.len(), 2, "{before:#?}");
+    for terminal in &terminals {
+        assert_eq!(
+            terminal.body_execution,
+            SerializableEntityBodyExecution::Executed
+        );
+        assert!(terminal.result.is_ok(), "{terminal:?}");
+    }
+    assert_eq!(errors(&before), 0, "{before:#?}");
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let after_restart = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["5", "out-5", "err-5"],
+    )
+    .await?;
+    assert_eq!(after_restart.exit_code, 5, "{after_restart:?}");
+    assert_eq!(after_restart.stdout, b"out-5");
+    assert_eq!(after_restart.stderr, b"err-5");
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let replayed = tool_terminals(&after);
+    assert_eq!(
+        replayed.len(),
+        3,
+        "replay must not append duplicate terminals"
+    );
+    assert_eq!(&replayed[..2], terminals.as_slice());
+    assert_eq!(errors(&after), 0, "{after:#?}");
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
