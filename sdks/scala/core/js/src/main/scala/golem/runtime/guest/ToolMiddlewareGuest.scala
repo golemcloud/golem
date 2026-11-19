@@ -121,11 +121,11 @@ object ToolMiddlewareGuest {
                   validateFinalOutput
                 )
             }
+            // A result that holds a stream keeps the caller for its producer, which runs after
+            // the call returns. The outputs are forwarded first, while this call still holds the
+            // host's caller.
             FutureInterop.toPromise(
-              invocation.transform { result =>
-                decoded.context.end()
-                result
-              }.flatMap {
+              invocation.flatMap {
                 case Right(result) => forwardOutputs(result, outputTargets)
                 case Left(error)   =>
                   settleTargets(outputTargets).flatMap(_ =>
@@ -135,6 +135,9 @@ object ToolMiddlewareGuest {
                       )
                     )
                   )
+              }.transform { result =>
+                decoded.context.end(result.toOption.exists(Guest.invocationResultHoldsStream))
+                result
               }
             )
         }

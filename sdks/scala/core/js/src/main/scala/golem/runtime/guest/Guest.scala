@@ -138,7 +138,7 @@ object Guest {
       result
     }
 
-  private def invocationResultHoldsStream(result: JsInvocationResult): Boolean = {
+  private[runtime] def invocationResultHoldsStream(result: JsInvocationResult): Boolean = {
     val typed = result.asInstanceOf[js.Dynamic].selectDynamic("result")
     !js.isUndefined(typed) && typed != null && holdsStream(typed.selectDynamic("value"))
   }
