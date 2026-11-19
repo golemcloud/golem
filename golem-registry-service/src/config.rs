@@ -1321,6 +1321,7 @@ mod tests {
     pub async fn mcp_import_resolver_rejects_unrepresentable_operation_timeout() {
         use crate::bootstrap::Services;
         use golem_common::config::{DbConfig, DbSqliteConfig};
+        use tokio_util::sync::CancellationToken;
 
         let mut config = RegistryServiceConfig::default();
         config.mcp_import.operation_timeout = std::time::Duration::MAX;
@@ -1337,6 +1338,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
+            CancellationToken::new(),
         )
         .await
         .err()
@@ -1382,6 +1384,7 @@ mod tests {
         use golem_common::config::{DbConfig, DbSqliteConfig};
         use serde_json::json;
         use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
 
         let mut config = RegistryServiceConfig::default();
         assert_eq!(
@@ -1416,6 +1419,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
+            CancellationToken::new(),
         )
         .await
         .err()

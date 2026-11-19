@@ -107,6 +107,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -189,12 +190,22 @@ struct Repos {
 }
 
 impl Services {
+    /// `builtin_artifact_cancellation` is cancelled when the caller no longer needs built-in
+    /// artifact resolution to continue, such as a server shutdown signal arriving during
+    /// startup. A download or metadata extraction in progress then fails with a plain error
+    /// instead of racing the owning Tokio runtime's shutdown.
     pub async fn new(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
         startup_progress: &StartupProgress,
+        builtin_artifact_cancellation: CancellationToken,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, Some(startup_progress)).await
+        Self::new_inner(
+            config,
+            join_set,
+            Some((startup_progress, builtin_artifact_cancellation)),
+        )
+        .await
     }
 
     #[doc(hidden)]
@@ -208,7 +219,7 @@ impl Services {
     async fn new_inner(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-        component_builtins_startup_progress: Option<&StartupProgress>,
+        component_builtins: Option<(&StartupProgress, CancellationToken)>,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -555,11 +566,12 @@ impl Services {
             });
         }
 
-        if let Some(startup_progress) = component_builtins_startup_progress {
+        if let Some((startup_progress, builtin_artifact_cancellation)) = component_builtins {
             let artifact_resolver =
                 crate::services::builtin_artifact::BuiltinArtifactResolver::new(
                     &config.builtin_artifacts,
                     startup_progress.clone(),
+                    builtin_artifact_cancellation,
                 )?;
             crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
                 &config.builtin_plugins,

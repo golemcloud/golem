@@ -41,6 +41,7 @@ use poem::middleware::CookieJarManager;
 use poem::middleware::Cors;
 use poem::{EndpointExt, Route};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 #[cfg(test)]
@@ -61,6 +62,7 @@ pub struct RegistryService {
     config: RegistryServiceConfig,
     prometheus_registry: prometheus::Registry,
     startup_progress: StartupProgress,
+    builtin_artifact_cancellation: CancellationToken,
 }
 
 impl RegistryService {
@@ -69,11 +71,23 @@ impl RegistryService {
             config,
             prometheus_registry,
             startup_progress: StartupProgress::default(),
+            builtin_artifact_cancellation: CancellationToken::new(),
         }
     }
 
     pub fn with_startup_progress(mut self, startup_progress: StartupProgress) -> Self {
         self.startup_progress = startup_progress;
+        self
+    }
+
+    /// Cancelled when the caller no longer needs built-in artifact resolution to continue, such
+    /// as a server shutdown signal arriving during startup. A download or metadata extraction in
+    /// progress then fails with a plain error instead of racing the owning runtime's shutdown.
+    pub fn with_builtin_artifact_cancellation(
+        mut self,
+        builtin_artifact_cancellation: CancellationToken,
+    ) -> Self {
+        self.builtin_artifact_cancellation = builtin_artifact_cancellation;
         self
     }
 
@@ -83,7 +97,13 @@ impl RegistryService {
         tracer: Option<SdkTracer>,
     ) -> Result<RunDetails, anyhow::Error> {
         info!("Initializing registry service");
-        let services = Services::new(&self.config, join_set, &self.startup_progress).await?;
+        let services = Services::new(
+            &self.config,
+            join_set,
+            &self.startup_progress,
+            self.builtin_artifact_cancellation.clone(),
+        )
+        .await?;
 
         let http_port = self.start_http_server(join_set, tracer, &services).await?;
         let grpc_port = self.start_grpc_server(join_set, &services).await?;
@@ -100,7 +120,13 @@ impl RegistryService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<SingleExecutableRunDetails, anyhow::Error> {
         info!("Initializing registry service");
-        let services = Services::new(&self.config, join_set, &self.startup_progress).await?;
+        let services = Services::new(
+            &self.config,
+            join_set,
+            &self.startup_progress,
+            self.builtin_artifact_cancellation.clone(),
+        )
+        .await?;
 
         let grpc_port = self.start_grpc_server(join_set, &services).await?;
         let endpoint = with_json_auth_errors(api::make_open_api_service(&services))

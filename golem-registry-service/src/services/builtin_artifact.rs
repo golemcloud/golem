@@ -30,10 +30,26 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 // Bump when metadata extraction semantics or its serialized representation changes.
 const METADATA_CACHE_REVISION: u32 = 1;
+
+/// A download or metadata extraction was cancelled before it finished, because the caller's
+/// [`CancellationToken`] fired. This is a plain error, not a panic: it lets a resolution in
+/// progress during process shutdown return promptly instead of leaving a blocking-pool thread
+/// parked on a Tokio timer that the runtime tears down out from under it.
+#[derive(Debug)]
+struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
 
 #[derive(Clone)]
 pub struct BuiltinArtifactResolver {
@@ -42,12 +58,19 @@ pub struct BuiltinArtifactResolver {
     client: reqwest::Client,
     in_process_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     startup_progress: StartupProgress,
+    cancellation: CancellationToken,
 }
 
 impl BuiltinArtifactResolver {
+    /// `cancellation` is cancelled when the caller no longer needs resolutions to continue, such
+    /// as a server shutdown signal arriving during startup. A download or metadata extraction in
+    /// progress then fails with a plain error instead of racing the owning runtime's shutdown.
+    /// Pass [`CancellationToken::new`] when nothing should ever cancel it, e.g. in tests or
+    /// callers outside the startup path.
     pub fn new(
         config: &BuiltinArtifactsConfig,
         startup_progress: StartupProgress,
+        cancellation: CancellationToken,
     ) -> anyhow::Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent(concat!(
@@ -64,6 +87,7 @@ impl BuiltinArtifactResolver {
             client,
             in_process_locks: Arc::new(Mutex::new(HashMap::new())),
             startup_progress,
+            cancellation,
         })
     }
 
@@ -157,11 +181,13 @@ impl BuiltinArtifactResolver {
         let artifact_id = artifact_id.to_string();
         let handle = Handle::current();
         let startup_progress = self.startup_progress.clone();
+        let cancellation = self.cancellation.clone();
         let bytes = tokio::task::spawn_blocking(move || {
             resolve_locked(
                 &handle,
                 &client,
                 &startup_progress,
+                &cancellation,
                 &cache_dir,
                 &artifact_id,
                 &url,
@@ -198,8 +224,9 @@ impl BuiltinArtifactResolver {
         let _in_process_guard = in_process_lock.lock().await;
         let cache_dir = self.cache_dir.clone();
         let handle = Handle::current();
+        let cancellation = self.cancellation.clone();
         tokio::task::spawn_blocking(move || {
-            extract_metadata_locked(&handle, &cache_dir, &cache_key, &wasm_bytes)
+            extract_metadata_locked(&handle, &cancellation, &cache_dir, &cache_key, &wasm_bytes)
         })
         .await
         .context("built-in artifact metadata extraction task panicked")?
@@ -208,6 +235,7 @@ impl BuiltinArtifactResolver {
 
 fn extract_metadata_locked(
     handle: &Handle,
+    cancellation: &CancellationToken,
     cache_dir: &Path,
     cache_key: &str,
     wasm_bytes: &[u8],
@@ -255,9 +283,16 @@ fn extract_metadata_locked(
             "Regenerating unreadable cached built-in metadata"
         ),
     }
-    let metadata = handle.block_on(extract_component_metadata_from_bytes(
-        wasm_bytes, true, true,
-    ))?;
+    let metadata = handle
+        .block_on(async {
+            tokio::select! {
+                result = extract_component_metadata_from_bytes(wasm_bytes, true, true) => result,
+                () = cancellation.cancelled() => Err(anyhow::Error::new(Cancelled)),
+            }
+        })
+        .with_context(|| {
+            format!("failed to extract metadata for cached built-in artifact '{cache_key}'")
+        })?;
     let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)
         .context("failed to create temporary built-in metadata cache file")?;
     serde_json::to_writer(&mut temporary, &metadata)
@@ -302,6 +337,7 @@ fn resolve_locked(
     handle: &Handle,
     client: &reqwest::Client,
     startup_progress: &StartupProgress,
+    cancellation: &CancellationToken,
     cache_dir: &Path,
     artifact_id: &str,
     url: &Url,
@@ -368,7 +404,12 @@ fn resolve_locked(
 
     tracing::info!(artifact_id, "Downloading built-in artifact");
     let response = handle
-        .block_on(client.get(url.clone()).send())
+        .block_on(async {
+            tokio::select! {
+                result = client.get(url.clone()).send() => result.map_err(anyhow::Error::new),
+                () = cancellation.cancelled() => Err(anyhow::Error::new(Cancelled)),
+            }
+        })
         .with_context(|| format!("failed to download built-in artifact '{artifact_id}'"))?
         .error_for_status()
         .with_context(|| format!("failed to download built-in artifact '{artifact_id}'"))?;
@@ -382,7 +423,12 @@ fn resolve_locked(
     })?;
     let mut hasher = Sha256::new();
     while let Some(chunk) = handle
-        .block_on(response.chunk())
+        .block_on(async {
+            tokio::select! {
+                result = response.chunk() => result.map_err(anyhow::Error::new),
+                () = cancellation.cancelled() => Err(anyhow::Error::new(Cancelled)),
+            }
+        })
         .with_context(|| format!("failed while downloading built-in artifact '{artifact_id}'"))?
     {
         hasher.update(&chunk);
@@ -468,6 +514,7 @@ mod tests {
                 ..Default::default()
             },
             StartupProgress::default(),
+            CancellationToken::new(),
         )
         .unwrap();
         // Expectations are compiled into the test; no checkout files are read at runtime.
@@ -512,8 +559,12 @@ mod tests {
             ..Default::default()
         };
         assert!(config.source_overrides.is_empty());
-        let mut resolver =
-            BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+        let mut resolver = BuiltinArtifactResolver::new(
+            &config,
+            StartupProgress::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         // Keep cache misses offline without changing the embedded HTTPS sources.
         let unavailable_proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         resolver.client = reqwest::Client::builder()
@@ -570,7 +621,12 @@ mod tests {
                 },
             )]),
         };
-        let resolver = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+        let resolver = BuiltinArtifactResolver::new(
+            &config,
+            StartupProgress::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         std::fs::write(&path, b"first").unwrap();
         assert_eq!(
             resolver.resolve("python").await.unwrap().as_slice(),
@@ -583,7 +639,12 @@ mod tests {
         );
         config.source_overrides.get_mut("python").unwrap().sha256 =
             Some(hex::encode(Sha256::digest(b"second")));
-        let pinned = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+        let pinned = BuiltinArtifactResolver::new(
+            &config,
+            StartupProgress::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         assert_eq!(
             pinned.resolve("python").await.unwrap().as_slice(),
             b"second"
@@ -678,7 +739,12 @@ mod tests {
                 },
             )]),
         };
-        let resolver = BuiltinArtifactResolver::new(&config, StartupProgress::default()).unwrap();
+        let resolver = BuiltinArtifactResolver::new(
+            &config,
+            StartupProgress::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         let (first, second) = tokio::join!(resolver.resolve("test"), resolver.resolve("test"));
         assert_eq!(first.unwrap().as_slice(), payload);
         assert_eq!(second.unwrap().as_slice(), payload);
@@ -695,12 +761,77 @@ mod tests {
                 },
             )]),
         };
-        let offline_resolver =
-            BuiltinArtifactResolver::new(&offline_config, StartupProgress::default()).unwrap();
+        let offline_resolver = BuiltinArtifactResolver::new(
+            &offline_config,
+            StartupProgress::default(),
+            CancellationToken::new(),
+        )
+        .unwrap();
         assert_eq!(
             offline_resolver.resolve("test").await.unwrap().as_slice(),
             payload
         );
+    }
+
+    /// Regression test for the SIGABRT reported in
+    /// <https://github.com/golemcloud/golem/issues/4575>: a listener that accepts the connection
+    /// but never sends a response holds `resolve`'s blocking thread inside `handle.block_on` on
+    /// the request future, which keeps a live Tokio timer (the client's 600s timeout) in flight.
+    /// Cancelling the token must make `resolve` return a plain error promptly, instead of
+    /// hanging until that timeout or racing this test's own runtime shutdown.
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn cancellation_stops_a_connecting_download_promptly() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accept connections and hold them open without ever writing a response, like the
+        // loopback HTTPS endpoint in the GitHub issue's second reproducer, but over plain TCP so
+        // the test needs no TLS setup: the client blocks the same way while reading the
+        // response headers.
+        let held_connections = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => held.push(stream),
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let cache = tempfile::tempdir().unwrap();
+        let config = BuiltinArtifactsConfig {
+            cache_dir: Some(cache.path().to_path_buf()),
+            source_overrides: BTreeMap::from([(
+                "test".to_string(),
+                BuiltinArtifactSource {
+                    url: format!("http://127.0.0.1:{port}/artifact.wasm"),
+                    sha256: None,
+                },
+            )]),
+        };
+        let cancellation = CancellationToken::new();
+        let resolver =
+            BuiltinArtifactResolver::new(&config, StartupProgress::default(), cancellation.clone())
+                .unwrap();
+
+        let resolve = tokio::spawn(async move { resolver.resolve("test").await });
+        // Give the blocking task time to reach `handle.block_on(client.get(url).send())` before
+        // cancelling, so the test exercises cancellation of a download that is already
+        // connecting rather than one that has not started.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        cancellation.cancel();
+
+        let error = tokio::time::timeout(Duration::from_secs(5), resolve)
+            .await
+            .expect("cancellation must stop the connecting download well before the test timeout")
+            .expect("the resolver task must not panic")
+            .expect_err("a cancelled download must fail, not succeed");
+        assert!(
+            error.to_string().contains("failed to download"),
+            "{error:#}"
+        );
+
+        drop(held_connections);
     }
 
     #[test]
@@ -739,6 +870,7 @@ mod tests {
                 )]),
             },
             progress.clone(),
+            CancellationToken::new(),
         )
         .unwrap();
 
@@ -790,6 +922,7 @@ mod tests {
                 )]),
             },
             StartupProgress::default(),
+            CancellationToken::new(),
         )
         .unwrap();
 
@@ -840,6 +973,7 @@ mod tests {
                 )]),
             },
             StartupProgress::default(),
+            CancellationToken::new(),
         )
         .unwrap();
 
