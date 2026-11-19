@@ -3864,6 +3864,38 @@ fn public_invocation_caller_round_trips_protobuf() {
     assert!(PublicAgentInvocation::try_from(without_caller).is_err());
 }
 
+/// A claim set may hold a number that no `f64` holds. The executor sends the shown claims of such
+/// a user to the worker service, and the entry must decode there.
+#[test]
+fn public_entry_with_claims_beyond_f64_decodes_from_protobuf() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"user-1","n":1e400}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+        timestamp: Timestamp::from(2_000),
+        invocation: public_invocations_with_caller(caller)
+            .into_iter()
+            .nth(1)
+            .unwrap(),
+        wallet_pin: PublicInvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            scope_card_id: None,
+        },
+    });
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let bytes = prost::Message::encode_to_vec(&proto);
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        prost::Message::decode(bytes.as_slice()).unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto), Ok(entry));
+}
+
 #[test]
 fn oplog_search_matches_the_caller_pair_but_never_claims() {
     let bob = Principal::User(UserPrincipal {

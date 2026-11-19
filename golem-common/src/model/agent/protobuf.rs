@@ -907,8 +907,12 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PublicUserPrincipal> for P
             Some(claims) => {
                 let claims: serde_json::Value = serde_json::from_str(&claims)
                     .map_err(|error| format!("Invalid field: claims: {error}"))?;
-                if !claims.is_object() {
-                    return Err("Invalid field: claims: the claim set must be a JSON object".into());
+                // A claim set with a number that no `f64` holds shows as its JSON text, a string.
+                if !claims.is_object() && !claims.is_string() {
+                    return Err(
+                        "Invalid field: claims: the claim set must be a JSON object or its text"
+                            .into(),
+                    );
                 }
                 Some(claims)
             }
