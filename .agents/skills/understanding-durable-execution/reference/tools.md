@@ -604,7 +604,8 @@ waits outside cleanup drains so reconstruction can still make progress, and retr
 target grows. The context registers these admission jobs synchronously in a separate owned task set,
 reusing `NativeReconstructionTasks` and `WorkerTasks`, not Store tail activity. Successful
 completion drains cleanup, joins admissions, then drains their handoffs before publishing its
-terminal. The primary does not join before consuming a historical Finished; successful replay exit
+terminal. An agent method or constructor that records its result at the export's return does this
+at the end of its drain, before `AgentInvocationSettled`. The primary does not join before consuming a historical Finished; successful replay exit
 also drains pending disposals. A failed entity body closes and aborts admission jobs, but still
 joins already accepted terminal publications and native accepted-write reconstruction. Later
 destructors and unaccepted queued disposals cannot start repair in that failed context. Context
@@ -707,7 +708,11 @@ temporarily connects its caller to the awaited subtree, including children retai
 terminal. Before returning a result, the await withdraws its incapable edges and waits for any
 already-running capable descendant to return the lane. Later capable work stays queued until a
 new causal await or caller completion; an output producer must not depend on an unawaited ambient
-capable call after its caller resumes.
+capable call after its caller resumes. For an agent method or constructor that records its result
+at the export's return, tool children that already run, or need no admission, settle before the
+result is recorded, and their failure fails the invocation; capable children staged until their
+parent ends are admitted at the end of the drain (`end_tool_parent` in `worker/invocation.rs`)
+and settle before `AgentInvocationSettled`.
 
 Owner failure selection is a runtime teardown boundary, like executor loss: unfinished durable
 calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.

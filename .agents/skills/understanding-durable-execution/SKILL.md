@@ -81,7 +81,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Durable (authoritative) | Resident (disposable, derived) |
 |---|---|
 | Oplog entries and their payloads (`golem-common/src/base_model/oplog/mod.rs`) | Wasmtime `Store`, instance, linear memory |
-| `PendingAgentInvocation` / `AgentInvocationStarted` / `AgentInvocationFinished` | `Worker.queue: VecDeque<QueuedWorkerInvocation>`, event subscriptions |
+| `PendingAgentInvocation` / `AgentInvocationStarted` / `AgentInvocationFinished` / `AgentInvocationSettled` | `Worker.queue: VecDeque<QueuedWorkerInvocation>`, event subscriptions |
 | Idempotency keys and recorded invocation results | `hydrated_invocation_results` cache, read-only cache |
 | Durable-call `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers | `DurableCallSession`, `ReplayableOneshot`, spawned store tasks |
 | `PendingUpdate` / `SuccessfulUpdate` / `FailedUpdate`, `Snapshot` hints, snapshot blobs | In-flight update decision, loaded snapshot bytes |
@@ -301,7 +301,8 @@ replay tolerance.
 | Host context | `durable_host/mod.rs`, `durable_host/recovery.rs` | `prepare_instance`, `replay`, `switch_to_live`, `PendingReplayToLive`, `IdempotencyKeyPosition`, snapshot boundary checks |
 | Attribution | `durable_host/attribution.rs` | `InvocationKey`, the task-group hook, Golem's scoped value, arming of export calls |
 | Per-invocation state | `durable_host/execution_state.rs` | `Invocations` entries keyed by `InvocationKey`, `InvocationAuthority`, the loop-key fallback |
-| Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before `AgentInvocationFinished` |
+| Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before the invocation settles: before `AgentInvocationSettled` after a result recorded at the return, before `AgentInvocationFinished` on the settled path |
+| Settlement | `worker/invocation.rs` | `record_at_return_and_drain`, `ReturnRecorder`, `SettlementDeadline::AfterResult`: the result at the export's return, then the unbounded drain and `AgentInvocationSettled` |
 | RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Owner wallet | `worker/owner_wallet.rs`, `worker/instance/mod.rs` | Generation-bound live wallet, recorded replay baseline and shared cursor installation |
@@ -736,8 +737,9 @@ concrete monthly admission or cleanup dependencies, not a stronger quota/complet
 After guest success, the invocation loop uses the ordinary `Interrupts::claim_pending_terminal`
 check before success finalization. A queued terminal waits for its own establishment and takes the
 existing failure path, as in main. Once that boundary permits success, its recorder
-does not recheck or consume a later stop or turn the result into a quota error. Finalization still
-drains required durable work and commits `AgentInvocationFinished` before notifying waiters.
+does not recheck or consume a later stop or turn the result into a quota error. Finalization
+commits `AgentInvocationFinished` before notifying waiters; a result recorded at the export's
+return drains the required durable work afterwards, before `AgentInvocationSettled`.
 Colocated tests exercise the actual terminal check; native callback/persistence tests retain the
 effect, key, committed-prefix, terminal, cleanup and reconstruction guarantees.
 
@@ -1731,7 +1733,8 @@ order and skips hints. Key kinds:
   protocols retain request-less `<scope:transaction>` Start/End pairs. A P3 HTTP response body
   uses its actual `consume-body` call as its parent. Neither creates a generic batched scope;
   nesting uses `parent_start_index`, and invocation ids distinguish concurrent calls.
-- `AgentInvocationStarted` / `AgentInvocationFinished` bracket one invocation;
+- `AgentInvocationStarted` opens an invocation; its terminal ends it on the settled path, and
+  `AgentInvocationSettled` (hint) closes it when the result was recorded at the export's return.
   `PendingAgentInvocation` (hint) is the durable queue entry.
 - `CompletionDelivered` / `CompletionDiscarded` (hints, always after their `End`) record the
   guest-observation boundary of an accessor completion.
@@ -2064,14 +2067,14 @@ The outgoing request's `body-transmission` result is also a guest input. Its Sto
 deferred completion and the transmission `FutureReader` retains the delivery token until its
 terminal observer confirms consumption or discard. Live and replay both use the fresh-block
 delivery gate; replay waits for the recorded marker before resolving the future. A reader retained
-across invocations records its marker in the invocation that consumes it. While an
-`AgentInvocationFinished` lies between the cursor and that marker, the marker wait parks its
-passive progress wait, so the invocation that recorded the `End` can settle and the consuming
-invocation can replay. Its cursor operations stay active. The wait finds that finish in
-`invocation_finishes`, which the recovery metadata scan builds and keeps in step with the replay
-target, so the wait adds no oplog reads. Completing the
-host channel without this boundary can wake the POST continuation early and exchange the import
-ordinals of concurrent response-body consumers. Response trailers share the same
+across invocations records its marker in the invocation that consumes it. While an invocation
+boundary (a terminal, an `AgentInvocationSettled` or an `AgentInvocationStarted`) lies between
+the cursor and that marker, the marker wait parks its passive progress wait, so the invocation
+that recorded the `End` can settle and the consuming invocation can replay. Its cursor operations
+stay active. The wait finds that boundary in `invocation_finishes`, which the recovery metadata
+scan builds and keeps in step with the replay target, so the wait adds no oplog reads. Completing
+the host channel without this boundary can wake the POST continuation early and exchange the
+import ordinals of concurrent response-body consumers. Response trailers share the same
 `HttpFutureDelivery` observer state. Transmission readers returned by request and response
 constructors retain weak identity witnesses in the resident `HttpTransmissionRegistry`.
 Passing one back to either `consume-body` changes its destination to a host consumer before
@@ -2306,10 +2309,11 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   `tests/rpc/gc_timed_cleanup.rs` require rejection and full replay without duplicate effects.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
-  invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
-  released with a warning; an unclosed one is a divergence error
-  (`release_retained_starts_at_live_invocation_end`), so `AgentInvocationFinished` is never
-  appended after an open `Start`. A settled entity body that returned without claiming a retained
+  invocation settles (at its terminal on the settled path, at `AgentInvocationSettled` when the
+  result was recorded at the export's return), retained `Start`s that are closed by a recorded
+  `End`/`Cancelled` are released with a warning; an unclosed one is a divergence error
+  (`release_retained_starts_at_live_invocation_end`), so that entry is never appended after an
+  open `Start`. A settled entity body that returned without claiming a retained
   descendant is a structural divergence (`ensure_body_claimed_retained_descendants`, `entity.rs`).
 - While unclaimed retained `Start`s exist, a call arriving after the live transition may still be
   their replayed owner, so durable-call admission uses `durable_call_is_live()` (stricter than
@@ -2519,9 +2523,22 @@ keyed by start index and scope ID, and each record names its owner key.
   and an entity Store's interest leave invalidation to the caller. Wallet-wide changes
   (re-derivation, root revocation, `interested_card_ids`, invalidation) loop over every entry.
   Two states are explicit. `ScopeBinding` is `Unscoped`, `Bound(card)` or
-  `FinalOutcome { admitted }`: `reach_final_outcome` enters `FinalOutcome` when the invocation's
-  guest call ends or its failure gives up, so `bound_scope_card()` is none and the invocation has
-  the agent's authority only. Removing the card keeps the reached final outcome. `install_scope`
+  `FinalOutcome { admitted }`: `reach_final_outcome` enters `FinalOutcome` at the export's return
+  or when its failure gives up, so `bound_scope_card()` is none and the invocation has the agent's
+  authority only. The export call's return signal marks the invocation's `ExportReturned` inside
+  `task.return` (the waker of its `StagedCall` oneshot; a dropped sender counts too), and the
+  `CallingHost` call hook applies the final outcome before the next host call with Store access,
+  and at the end of the export's first phase. The card stays installed, hidden by the final
+  outcome, until the drain ends; it leaves with the invocation's entry. Host code reads authority
+  through `authority()`, an `AuthorityView` that hides the admitted card from a call made after
+  the cut-off and shows it to a call made before (`InvocationAttribution::issued_before_cut_off`:
+  the import's mark from the call hook, or the scope of a store task, `CapturedAttribution`).
+  Accessor host code that touches the Store after an await goes through `with_import_access`, so
+  the decision does not depend on when the await ends. Handle resolution and derivation refuse a
+  handle to the hidden card, or to a scope card derived from it (whose `lineage` names the hidden
+  card), after the cut-off; cards derived from the agent's own wallet stay usable. Code that must
+  see the installed card for every caller, such as replay application of root cards, reads the
+  admitted card explicitly. Removing the card keeps the reached final outcome. `install_scope`
   binds a new card; `begin` after a reached final outcome binds the admitted card again, if any,
   and marks the surface stale. `Synchronization` is `Stale { last_generation }` or
   `Synchronized { generation }`; a stale surface keeps the generation it was last synchronized at,
@@ -2637,10 +2654,11 @@ not individually delete a referenced payload blob.
 During replay the recorded result is compared with the recomputed one
 (`replay_equivalent`); a mismatch is an `unexpected_oplog_entry` determinism error. Tail work
 (`durable_host/tail_work.rs`) keeps the store loop running until no spawned task is still
-*active*, so a task's positional `Start`/`End` never lands after `AgentInvocationFinished`
-(tasks parked at guest-driven safe park points may span invocations). Hints can follow
-`Finished`: `invocation_loop.rs::agent_invocation_finished` completes the streaming session
-(protocol terminals, `StreamSession { Finished }`) after `on_agent_invocation_success`.
+*active*, so a task's positional `Start`/`End` never lands after the invocation settles (tasks
+parked at guest-driven safe park points may span invocations); see "Settlement at the export's
+return" below for where that is. Hints can follow `Finished`:
+`invocation_loop.rs::agent_invocation_finished` completes the streaming session (protocol
+terminals, `StreamSession { Finished }`) after `on_agent_invocation_success`.
 
 This execution-needing path acquires no capacity during preparation; cancellation cannot split its
 durably enqueued acceptance prefix. Read-only hits/followers persist no invocation/result/alias.
@@ -2663,6 +2681,72 @@ paths. Explicit cancellation acknowledgements keep their producer handoff bounda
 waiting for parent finalization, avoiding an observer/acknowledgement cycle. Trailers still settle
 the parent's token at the future's terminal observer. Tests: `tests/http.rs` cancellation and
 offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
+
+### Settlement at the export's return
+
+A successful constructor and agent methods that use no streams record their result at the
+export's return (`worker/invocation.rs::record_at_return_and_drain`, `ReturnRecorder`).
+`run_guest_call_until_return` drives the export call until the guest calls `task.return`; the invocation deadline is disarmed,
+and `AgentInvocationFinished` (or `AgentInvocationFailed`) is appended with `awaits_settlement`,
+committed and published. Same-key callers get the result now. Then the invocation's background
+work drains: spawned guest tasks, active store tasks and retained durable calls
+(`SettlementDeadline::AfterResult`). Tool children that already run, or need no admission,
+settle before the result is recorded (`settle_tool_children_before_result`), and their failure
+fails the invocation; capable children staged until their parent ends are admitted at the end of
+the drain (`end_tool_parent`) and settle before `AgentInvocationSettled`. Neither
+`max_invocation_duration` nor `tail_work_settle_timeout` bounds the drain. Its end appends the hint
+`AgentInvocationSettled { invocation_id, consumed_fuel }` (`on_agent_invocation_settled`), and
+only then does the loop start the next invocation. Only the constructor and agent methods that
+use no streams can record at the return (`records_result_at_return`): methods that use streams
+(stream inputs or a stream result, which open a streaming session), snapshot save and load
+(including a manual update's), oplog-processor batches and external-tool invocations keep the
+settled path: their work settles before their terminal, and they write no
+`AgentInvocationSettled`. Of a constructor, only a success is recorded at the return. On a
+constructor error, `dispatch_call` first drains the background work through
+`run_guest_call_settled`, within the invocation deadline and `tail_work_settle_timeout`; the error
+then takes the constructor's fatal path (`unrecorded_at_return`) with no `awaits_settlement`
+terminal.
+
+Replay mirrors the live order. The invocation's anchor opens at its `AgentInvocationStarted`;
+replay consumes the terminal where the guest returns
+(`get_oplog_entry_agent_invocation_terminal_in_open_anchor`), and keeps the anchor open while the
+background work replays, so `Start`/`End` entries of the invocation that follow its terminal are
+claimed under it. `close_invocation_anchor` closes it at the recorded `AgentInvocationSettled`
+(`SettledAt::Recorded`) or at the replay tail (`SettledAt::ReplayTail`), where the Store goes
+live, releases the retained `Start`s and appends `AgentInvocationSettled` itself. The
+abandoned-`Start` check (`replay_state/abandoned.rs`) and the closed-anchor rule run at the
+anchor's close, not at the terminal.
+
+The status fold keeps the agent `Running` from a terminal with `awaits_settlement` until its
+`AgentInvocationSettled` (`AgentStatusRecord::settling_invocation`), so interrupts,
+`simulated_crash`, assignment recovery after an executor crash and retirement treat a draining
+agent as running; after a restart the drain resumes without an outside activation. Lifecycle
+predicates for "a result is recorded and the drain has not settled" use that status, not the
+Store's `result_recorded_at_return` flag, which stays set after `Settled`.
+
+Failures after the result never replace it. A trap during the drain goes through
+`on_invocation_failure` with the retry policy; reconstruction replays the invocation, consumes
+its terminal at the return and continues the background work live, so the method body does not
+run again. Giving up marks the agent failed and fails the queued invocations
+(`store_queued_invocation_failures`), but publishes no failure for the recorded invocation.
+`PermissionDenied` and `InvalidRequest` after the result are ordinary traps: no
+`CancelPendingInvocation`, no error attributed to the invocation. An interrupt or suspension
+during the drain stops the agent; resuming it reconstructs the same way. An interrupt fails the queued invocations, on the
+running drain and on the delayed-retry path alike. The authority of the invocation ends at the
+return (see the authority bullet in "Invocation attribution and per-invocation state");
+`invocation-id()` stays the method's.
+
+Tests: `tests/background_work.rs` (`the_result_arrives_before_the_background_work_ends`, the
+restart rows `a_restart_*`, `a_trap_after_the_result_keeps_the_result`,
+`a_transient_failure_in_the_drain_is_retried_and_keeps_the_result`,
+`an_interrupt_during_the_drain_keeps_the_result`,
+`an_interrupt_while_the_drain_waits_to_retry_fails_the_queued_invocation`,
+`an_interrupt_while_the_drain_only_waits_is_not_ignored`,
+`a_timer_in_the_drain_resumes_the_suspended_agent_by_itself`,
+`the_invocation_and_tail_work_limits_do_not_bound_the_drain`),
+`tests/scope_cards.rs::{lent_scope_card_is_cut_off_at_the_callee_export_return_live_and_after_restart,
+lent_scope_card_handles_are_refused_after_the_callee_export_return_live_and_after_restart}`, and
+`tests/invocation_context.rs::background_work_after_the_method_returns_reads_its_invocation_live_and_after_restart`.
 
 ## Durable RPC exactly-once
 
@@ -4096,6 +4180,7 @@ first. A repaired incomplete decision decides at its own `Start`. Tests:
 | "A start from a snapshot can run the core initializer with durability suppressed, because the snapshot restores the state anyway." | The initializer runs before the load, and the application snapshot does not hold the state that the initializer derived from its durable inputs (seeds, clocks, environment); with durability suppressed, those calls would run unrecorded and get fresh values. Recovery replays the bootstrap range that the restore point names on a bootstrap cursor; a snapshot-based update target records and replays its own block, and a snapshot-assisted one replays the selected record's block. | `tests/durability.rs::automatic_snapshot_every_2nd_invocation`, `tests/hot_update.rs::{a_periodic_snapshot_after_a_snapshot_based_update_recovers_from_that_snapshot, a_snapshot_assisted_update_replays_the_source_initializer_block_for_its_target}` |
 | "The Store has one current invocation, so host code can read the invocation from Store fields." | Host code reads the entry of the invocation its task is attributed to (task group, then Golem's scoped value); only unattributed work, agent-level work and work of a replaced invocation fall back to the loop's entry. The guest never names its invocation. | `invocation_context.rs::a_spawned_guest_future_reads_its_method_invocation_live_and_after_restart`, `scope_cards.rs::card_decisions_survive_reconstruction` |
 | "Spawned continuations can live in Store memory after the invocation finished." | Store memory is disposable; only oplog-backed work survives. | Restart tests after `AgentInvocationFinished` |
+| "The result waits for background work, so `Finished` is the invocation's last entry." | The result is recorded and published at the export's return (`task.return`). Background work drains after it, unbounded by the invocation and tail-work limits, and its `Start`/`End` entries follow `Finished` until `AgentInvocationSettled`; the next invocation starts after that. Authority, not attribution, ends at the return. | `background_work.rs::{the_result_arrives_before_the_background_work_ends, a_restart_after_the_result_completes_the_pending_background_work, the_invocation_and_tail_work_limits_do_not_bound_the_drain}` |
 | "Rewinding the cursor recreates the worker." | Only the outer loop recreates metadata/revision context. | `tests/hot_update.rs::snapshot_after_auto_update_recovers_with_updated_component_context` |
 | "The stream bus / socket is where stream items live; losing a reader loses items." | Producer oplog is authoritative; the bus is a live-tail optimization over committed records; consumers resume by offset. | `durable_streaming_output_recovers_after_executor_restart`, `callee_recovery_continues_output_after_committed_item` |
 | "A stream reference stays valid as long as the target agent id exists." | Liveness is bound to the durable `AgentFingerprint`; a recreated agent is a different producer. | Fingerprint-mismatch unit tests in `durable_session.rs` / `durable_stream/mod.rs` |

@@ -26,15 +26,22 @@ machine. Timeouts bound failures; they do not establish ordering.
   carries (`TestExecutorOverrides::wrap_rpc`), assert equality, and assert one
   `AgentInvocationStarted` for it in the target oplog.
 - **Crash at named windows.** Gate the crash before `Start`, after the effect but before `End`,
-  after `End` before delivery, after `AgentInvocationFinished`, during snapshot load, and during
-  an update, using `simulated_crash`, wrapped services, or a guest method that effects-then-traps.
+  after `End` before delivery, after `AgentInvocationFinished`, during the drain before
+  `AgentInvocationSettled`, during snapshot load, and during an update, using `simulated_crash`,
+  wrapped services, or a guest method that effects-then-traps.
 - **Restart for real.** Drop the executor and `start_with_overrides` again (in-process executor
   teardown and recreation over the same storage — a genuine reconstruction, not OS process
   death), or `simulated_crash`; a cursor reset or `resume` on a resident worker is not a restart.
   Then check both guest-visible state and oplog shape (`get_oplog`, `search_oplog`): one
   `Finished` per key; every `Start` in successfully settled history has a terminal (an
   incomplete `Start` is expected only where the crash was injected); no positional `Start`/`End`
-  after the last `Finished`.
+  of an invocation after its `AgentInvocationSettled`, or after its terminal
+  (`AgentInvocationFinished` or `AgentInvocationFailed`) when it writes no `Settled`
+  (methods that use streams, through stream inputs or a stream result, snapshot save and load
+  including a manual update's, oplog-processor batches and external-tool invocations). `Start`/`End` entries between an invocation's terminal
+  and its `Settled` are its background work and are expected. The exception is the terminal of a
+  retained call or deferred destructor that a later invocation drives, or a task parked at a safe
+  park point (see `src/worker/AGENTS.md`).
 - **Prove no repeated effect on completed replay.** Stop or count the dependency before the
   restart; replay of a completed call must not touch it.
 - **Use asymmetric concurrent orderings.** Completion order must differ from initiation order in

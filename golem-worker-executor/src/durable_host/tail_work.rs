@@ -21,8 +21,10 @@
 //! future resolves, leaving these tasks suspended wherever their last poll
 //! left them. The invocation completion path must keep the store's event
 //! loop running until none of them is still *active* — otherwise a task's
-//! durable `Start`/`End` entries could land after `AgentInvocationFinished`
-//! (breaking positional replay), or never be appended at all.
+//! durable `Start`/`End` entries could land after the invocation settled
+//! (`AgentInvocationSettled` for a result recorded at the export's return,
+//! `AgentInvocationFinished` otherwise), breaking positional replay, or never
+//! be appended at all.
 //!
 //! A spawned task counts as **active** from the moment it is spawned until
 //! it finishes, *except* while it is parked at a designated **safe park
@@ -44,7 +46,8 @@
 //!   Its cursor transactions stay active, and it cannot perform a missing live
 //!   effect until the normal replay-to-live transition authorizes continuation;
 //! * passive replay-progress notification for a recorded delivery marker while an
-//!   `AgentInvocationFinished` lies between the cursor and the marker. A reader
+//!   invocation boundary (a terminal, an `AgentInvocationSettled` or an
+//!   `AgentInvocationStarted`) lies between the cursor and the marker. A reader
 //!   retained across invocations is consumed in a later invocation, which cannot
 //!   replay until this one settles.
 //!
@@ -52,8 +55,9 @@
 //! live network / file I/O, ordinary replay-resolver waits, queued or running cursor
 //! transactions, and waits for a delivery marker recorded in the current
 //! invocation — keep the task active:
-//! the completion path waits for them (bounded by the invocation tail-drain
-//! timeout).
+//! the completion path waits for them (bounded by `tail_work_settle_timeout` on
+//! the settled path; the drain after a result recorded at the export's return is
+//! unbounded).
 
 use std::future::Future;
 use std::sync::Arc;

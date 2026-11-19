@@ -251,11 +251,37 @@ Failure to load a manual-update snapshot is terminal and retains the underlying 
 Tasks spawned on the store (`tail_work.rs`) may park across invocation settlement at guest-driven
 waits, passive markerless-completion replay-tail waits after durable finalization, or a destructor's
 passive wait for sibling history. A recorded-marker wait also parks its passive progress wait
-while an `AgentInvocationFinished` lies between the cursor and the marker: a reader retained across
+while an invocation boundary (a terminal, an `AgentInvocationSettled` or another invocation's
+`AgentInvocationStarted`) lies between the cursor and the marker: a reader retained across
 invocations is consumed in a later invocation, which cannot replay until this one settles. Cursor
 operations and waits for a marker in the current invocation remain active.
 A destructor whose terminal is missing can repair only after the natural replay-to-live transition;
 if recovery returns before its Store task resumes, the next invocation can drive that repair.
 The task becomes active before performing effects or appending a terminal, and settlement waits
-for it before finishing that invocation. Work that must survive a restart belongs in the oplog,
-not in a task.
+for it before settling that invocation: before `AgentInvocationSettled` for an invocation that
+records its result at the export's return, before `AgentInvocationFinished` for the others. Work
+that must survive a restart belongs in the oplog, not in a task.
+
+## Invocation anchors and the authority cut-off
+
+The result of a successful constructor and of an agent method that uses no streams is recorded
+when the guest calls `task.return`; the invocation's background work drains after it. Replay mirrors this: the
+invocation's replay anchor opens at its `AgentInvocationStarted`, replay consumes its terminal at
+the return, and the anchor closes at its `AgentInvocationSettled` or at the replay tail, where
+the Store settles it live. The invocation's `Start`/`End` entries may follow its terminal, so
+abandoned-`Start` checks and the closed-anchor rule run when the anchor closes, never at the
+terminal.
+
+The return also ends the invocation's lent authority. The export call's return signal marks the
+invocation's `ExportReturned` inside `task.return`, and the Store's `CallingHost` hook applies the
+final outcome before the next host call. From then on the authority view (`authority()`) hides
+the lent scope card: a call made after the return sees no lent card, and refuses a handle to that
+card, or to a card derived from it, for lending or as a derivation parent. Cards the agent
+derived from its own wallet stay usable. A call made before the return keeps its admitted
+authority after its awaits: read authority only through the view, and run every synchronous
+Store access of an accessor's host code that can follow an await through `with_import_access`,
+so store tasks it spawns capture the same cut-off state
+(`CapturedAttribution`). Attribution is not cut off: `invocation-id()` and the invocation key of
+background work stay the method's, and the scope card stays installed until the drain ends.
+Code that must see the installed card regardless of the caller, such as replay application of
+root cards, uses the admitted card explicitly.
