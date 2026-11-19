@@ -326,10 +326,11 @@ impl CompiledMcpToolExport {
     }
 }
 
-/// Projects the commands of `definition` that the export selects to MCP tools.
+/// Projects the commands of `definition` that `include` and `exclude` select to MCP tools.
 ///
-/// `mcp_name`, when present, is used in place of the tool name and its root aliases in each
-/// projected tool name. The reserved-argument check runs only on the selected commands.
+/// `name_override` is the `mcp.name` of the export. When it is present, it replaces the tool
+/// name and its root aliases in each projected tool name. The reserved-argument check runs only
+/// on the selected commands.
 pub fn compile_native_tool_exports(
     owner_component_id: ComponentId,
     owner_component_name: ComponentName,
@@ -337,7 +338,7 @@ pub fn compile_native_tool_exports(
     definition: &Tool,
     include: Option<&[String]>,
     exclude: Option<&[String]>,
-    mcp_name: Option<&str>,
+    name_override: Option<&str>,
 ) -> Result<Vec<CompiledMcpToolExport>, String> {
     if include.is_some() && exclude.is_some() {
         return Err("include and exclude are mutually exclusive".to_string());
@@ -358,8 +359,8 @@ pub fn compile_native_tool_exports(
     walk_paths(definition, 0, vec![], vec![vec![]], &mut candidates)?;
     let mut names = HashMap::new();
     let mut result = Vec::new();
-    let root_names: Box<[&str]> = match mcp_name {
-        Some(mcp_name) => Box::new([mcp_name]),
+    let root_names: Box<[&str]> = match name_override {
+        Some(name_override) => Box::new([name_override]),
         None => std::iter::once(tool_name.as_str())
             .chain(
                 definition.commands.nodes[0]
@@ -442,7 +443,7 @@ pub fn compile_native_tool_exports(
                 }
                 result.push(CompiledMcpToolExport {
                     mcp_name: name,
-                    description: if root_name == tool_name.as_str() || mcp_name.is_some() {
+                    description: if root_name == tool_name.as_str() || name_override.is_some() {
                         description.clone()
                     } else {
                         format!(
