@@ -2842,9 +2842,17 @@ async fn trapped_output_closes_without_the_cancelled_header(
         selected[0].1
     );
 
-    for recovered in [false, true] {
-        if recovered {
-            agent.user.simulated_crash(&worker).await?;
+    for after_refused_crash in [false, true] {
+        if after_refused_crash {
+            // The trap leaves the agent Failed, and a failed agent does not recover, so the
+            // simulated crash is refused.
+            let Err(error) = agent.user.simulated_crash(&worker).await else {
+                anyhow::bail!("expected the simulated crash of the failed agent to be refused");
+            };
+            assert!(
+                format!("{error:#}").contains("the agent is Failed"),
+                "unexpected refusal: {error:#}"
+            );
         }
         for method in [Method::GET, Method::HEAD] {
             let response = agent
@@ -2856,7 +2864,7 @@ async fn trapped_output_closes_without_the_cancelled_header(
             assert_eq!(header(&response, "stream-closed"), "true");
             assert!(
                 !response.headers().contains_key("stream-cancelled"),
-                "a producer trap is not consumer cancellation (recovered={recovered})"
+                "a producer trap is not consumer cancellation (after_refused_crash={after_refused_crash})"
             );
             if method == Method::GET {
                 assert_eq!(
@@ -2869,7 +2877,7 @@ async fn trapped_output_closes_without_the_cancelled_header(
     assert_eq!(
         stream_terminals(agent.user.get_oplog(&worker, OplogIndex::INITIAL).await?)?,
         before,
-        "reading the failed output after crash must not replace or repeat its terminal"
+        "reading the failed output again must not replace or repeat its terminal"
     );
     Ok(())
 }

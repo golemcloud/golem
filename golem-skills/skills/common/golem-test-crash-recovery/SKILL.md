@@ -13,6 +13,8 @@ The `<AGENT_ID>` format depends on the agent's language — refer to the languag
 
 Simulates a crash on an agent for testing purposes. The agent starts recovering and resuming immediately by replaying its operation log.
 
+The command fails for an agent that failed or exited and for an idle ephemeral agent.
+
 This is useful for verifying that an agent's durable state is correctly persisted and that it can recover from unexpected failures without data loss.
 
 ```shell
