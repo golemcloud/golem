@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_service_base::headers::TraceContextHeaders;
 
 /// Everything needed to re-issue a recorded p3 `client::send` after a restart
 /// (the P3 counterpart of P2's `rebuild_request_after_replay`): the request
@@ -76,12 +77,28 @@ pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers<Ctx: Worker
 ) -> Result<Vec<(String, String)>, WorkerExecutorError> {
     store.with(|mut access| {
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        golem_managed_http_headers(
-            ctx,
-            span_id,
-            start_index,
+        let trace_headers = if ctx.state.forward_trace_context_headers {
+            let invocation_context = ctx
+                .state
+                .invocation_state()
+                .invocation_context
+                .get_stack(span_id)
+                .map_err(|err| {
+                    WorkerExecutorError::runtime(format!(
+                        "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
+                    ))
+                })?;
+            TraceContextHeaders::from_invocation_context(invocation_context).to_raw_headers_map()
+        } else {
+            Vec::new()
+        };
+        let plan = golem_managed_http_headers(
+            trace_headers,
+            ctx.state.set_outgoing_http_idempotency_key,
             guest_headers.contains_key("idempotency-key"),
-        )
+            start_index,
+        );
+        Ok(plan.resolve(|index| ctx.derive_idempotency_key(index)))
     })
 }
 

@@ -15,14 +15,10 @@
 //! Policy for durable outgoing HTTP: transparent retries,
 //! Golem-managed headers and Range-based response-body resumption.
 
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::durability::{DurableExecutionState, HostFailureKind};
-use crate::workerctx::WorkerCtx;
-use golem_common::model::invocation_context::SpanId;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::SerializableHttpErrorCode;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use wasmtime_wasi_http::FieldMap;
 
@@ -173,40 +169,40 @@ pub(crate) fn classify_resume_response(
     }
 }
 
-/// Computes the Golem-managed headers to inject into an outgoing HTTP request:
-/// the trace-context headers of the request's invocation span (when
-/// `forward_trace_context_headers` is enabled) and an `idempotency-key`
-/// derived from the send's own `Start` index (when
-/// `set_outgoing_http_idempotency_key` is enabled and the guest did not set
-/// the header itself). The send's `Start` index is stable across live execution
-/// and replay, so a retried send reuses the same key.
-pub(crate) fn golem_managed_http_headers<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    span_id: &SpanId,
-    start_index: OplogIndex,
+pub(crate) struct ManagedHttpHeaders {
+    headers: Vec<(String, String)>,
+    idempotency_key_start: Option<OplogIndex>,
+}
+
+/// Selects the managed headers and whether the send needs a derived key.
+/// A guest key or disabled injection suppresses derivation.
+pub(crate) fn golem_managed_http_headers(
+    trace_headers: Vec<(String, String)>,
+    set_outgoing_http_idempotency_key: bool,
     guest_has_idempotency_key: bool,
-) -> Result<Vec<(String, String)>, WorkerExecutorError> {
-    let mut headers = Vec::new();
-    if ctx.state.forward_trace_context_headers {
-        let invocation_context =
-            ctx.state
-                .invocation_state()
-                .invocation_context
-                .get_stack(span_id)
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
-                    ))
-                })?;
-        let trace_context_headers =
-            TraceContextHeaders::from_invocation_context(invocation_context);
-        headers.extend(trace_context_headers.to_raw_headers_map());
+    start_index: OplogIndex,
+) -> ManagedHttpHeaders {
+    ManagedHttpHeaders {
+        headers: trace_headers,
+        idempotency_key_start: (set_outgoing_http_idempotency_key && !guest_has_idempotency_key)
+            .then_some(start_index),
     }
-    if ctx.state.set_outgoing_http_idempotency_key && !guest_has_idempotency_key {
-        let idempotency_key = ctx.derive_idempotency_key(start_index);
-        headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
+}
+
+impl ManagedHttpHeaders {
+    pub(crate) fn resolve(
+        self,
+        derive: impl FnOnce(OplogIndex) -> IdempotencyKey,
+    ) -> Vec<(String, String)> {
+        let Self {
+            mut headers,
+            idempotency_key_start,
+        } = self;
+        if let Some(start) = idempotency_key_start {
+            headers.push(("idempotency-key".to_string(), derive(start).to_string()));
+        }
+        headers
     }
-    Ok(headers)
 }
 
 /// Applies the Golem-managed headers to a request's header map, replacing any
@@ -258,6 +254,7 @@ pub(crate) fn apply_managed_http_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::HeaderMap;
     use test_r::test;
 
     fn live_exec_state() -> DurableExecutionState {
@@ -267,6 +264,32 @@ mod tests {
             max_in_function_retry_delay: std::time::Duration::from_secs(1),
             durable_wait: false,
         }
+    }
+
+    #[test]
+    fn guest_idempotency_key_is_preserved_without_derivation() {
+        let mut hooks: [(); 0] = [];
+        let mut request = HeaderMap::new();
+        request.insert("idempotency-key", HeaderValue::from_static("guest-key"));
+        let mut request = FieldMap::new_immutable(&mut hooks, request);
+        let managed = golem_managed_http_headers(
+            vec![("traceparent".to_string(), "trace-value".to_string())],
+            true,
+            true,
+            OplogIndex::from_u64(41),
+        )
+        .resolve(|_| panic!("a guest key must not consume a logical key position"));
+
+        apply_managed_http_headers(&mut request, &mut hooks, 4096, &managed).unwrap();
+
+        assert_eq!(request["idempotency-key"], "guest-key");
+        assert_eq!(request.get_all("idempotency-key").iter().count(), 1);
+        assert_eq!(request["traceparent"], "trace-value");
+        assert!(
+            golem_managed_http_headers(Vec::new(), false, false, OplogIndex::from_u64(41))
+                .resolve(|_| panic!("disabled injection must not derive a key"))
+                .is_empty()
+        );
     }
 
     #[test]
