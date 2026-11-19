@@ -3599,8 +3599,8 @@ impl WorkerService {
         })
     }
 
-    /// REST lookup: the keyed agent of the parameters, which this never creates. An agent at the
-    /// keyed ID that does not own the key is not found.
+    /// REST lookup: the keyed agent of the parameters, which this never creates. An occupied
+    /// address with another key returns a collision after authorization.
     pub async fn lookup_agent_rest(
         &self,
         environment_id: EnvironmentId,
@@ -3633,7 +3633,11 @@ impl WorkerService {
             )
             .await?;
         if agent.metadata.canonical_key.as_deref() != Some(key.to_string().as_str()) {
-            return Err(WorkerServiceError::AgentNotFound(agent_id));
+            return Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key: key.to_string(),
+            }
+            .into());
         }
         Ok(AgentReference {
             agent_id,
@@ -6752,6 +6756,53 @@ mod tests {
                 .created_targets()
                 .iter()
                 .all(RoutedTarget::creates)
+        );
+    }
+
+    #[test]
+    async fn lookup_distinguishes_an_authorized_key_collision_from_absence() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let lookup = |auth| {
+            harness.worker_service.lookup_agent_rest(
+                harness.environment_id,
+                &harness.agent_type_name,
+                AgentKeyRequest {
+                    parameters: empty_json_tuple(),
+                },
+                auth,
+            )
+        };
+        assert!(matches!(
+            lookup(AuthCtx::system()).await,
+            Err(WorkerServiceError::AgentNotFound(_))
+        ));
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+            Some(harness.agent_key().to_string());
+        let reference = lookup(AuthCtx::system()).await.unwrap();
+        assert_eq!(reference.agent_id, harness.keyed_agent_id());
+        assert_eq!(
+            reference.agent_fingerprint,
+            harness.worker_client.fingerprint
+        );
+        let denied = lookup(auth_ctx_with_permissions(vec![])).await.unwrap_err();
+
+        *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+            Some("weather-agent(1)".into());
+        assert!(matches!(lookup(AuthCtx::system()).await,
+            Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentKeyCollision { agent_id, .. }))
+            if agent_id == harness.keyed_agent_id()));
+        let denied_collision = lookup(auth_ctx_with_permissions(vec![])).await.unwrap_err();
+        assert_eq!(
+            denied_collision.to_string(),
+            denied.to_string(),
+            "denied callers must not learn about a collision"
+        );
+        assert!(
+            harness.worker_client.created_targets().is_empty(),
+            "lookup must not create"
         );
     }
 
