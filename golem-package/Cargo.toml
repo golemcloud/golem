@@ -1,0 +1,27 @@
+[package]
+name = "golem-package"
+version = "0.0.0"
+edition = "2024"
+license-file = "../LICENSE"
+
+[lints]
+workspace = true
+
+[lib]
+harness = false
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+golem-common = { workspace = true, features = ["full"] }
+golem-schema = { workspace = true }
+semver = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
+tokio = { workspace = true }

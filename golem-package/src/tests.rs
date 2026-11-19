@@ -22,6 +22,7 @@ use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
 use golem_common::schema::{SchemaGraph, SchemaType};
 use golem_schema::Empty;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use test_r::test;
 
 fn sample() -> (PackageConfig, BTreeMap<String, Vec<u8>>) {
@@ -90,10 +91,143 @@ fn sample() -> (PackageConfig, BTreeMap<String, Vec<u8>>) {
     (
         PackageConfig {
             application: "example".into(),
+            package: PackageIdentity {
+                name: "example".into(),
+                version: "1.2.3".into(),
+            },
             components,
         },
         layers,
     )
+}
+
+#[test]
+fn lock_checks_missing_extra_version_source_and_digest() {
+    let manifest = Pins::from([(
+        "example".into(),
+        FilePin {
+            source: "example.tar".into(),
+            version: "1.2.3".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+        },
+    )]);
+    assert!(check_lock(&manifest, &manifest).is_ok());
+    let missing = check_lock(&manifest, &Pins::new()).unwrap_err();
+    assert!(matches!(missing, LockError::Missing(_)));
+    let extra = check_lock(&Pins::new(), &manifest).unwrap_err();
+    assert!(matches!(extra, LockError::Extra(_)));
+    assert!(
+        extra
+            .to_string()
+            .contains("delete this entry from golem.lock")
+    );
+    for err in [missing, extra] {
+        assert!(err.to_string().contains("golem install"));
+    }
+    for field in ["version", "source", "digest"] {
+        let mut lock = manifest.clone();
+        let pin = lock.get_mut("example").unwrap();
+        match field {
+            "version" => pin.version = "2.0.0".into(),
+            "source" => pin.source = "other.tar".into(),
+            _ => pin.digest = format!("sha256:{}", "b".repeat(64)),
+        }
+        let err = check_lock(&manifest, &lock).unwrap_err();
+        assert!(matches!(err, LockError::Mismatch(_, f) if f == field));
+        assert!(err.to_string().contains("golem install"));
+    }
+}
+
+#[derive(Default)]
+struct MemoryEffects {
+    cache: BTreeMap<String, Vec<u8>>,
+    source: Option<Vec<u8>>,
+    files: BTreeMap<PathBuf, Vec<u8>>,
+    deny_source: bool,
+}
+
+#[async_trait::async_trait]
+impl PackageEffects for MemoryEffects {
+    fn authorize_file(&self, _: &str, _: &FilePin) -> anyhow::Result<()> {
+        ensure!(!self.deny_source, "Source denied");
+        Ok(())
+    }
+    async fn cached(&mut self, digest: &str, _: u64) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self.cache.get(digest).cloned())
+    }
+    async fn fetch_file(&mut self, _: &FilePin, _: u64) -> anyhow::Result<Vec<u8>> {
+        self.source.take().context("Source is unavailable")
+    }
+    async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
+        self.cache.insert(digest.into(), bytes.into());
+        Ok(())
+    }
+    async fn create_dir(&mut self, root: &Path, relative: &Path) -> anyhow::Result<()> {
+        assert_eq!(root, Path::new("unpack"));
+        assert!(
+            relative
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+        );
+        Ok(())
+    }
+    async fn write_file(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> anyhow::Result<()> {
+        self.create_dir(root, relative).await?;
+        assert!(
+            self.files
+                .insert(relative.to_owned(), bytes.into())
+                .is_none()
+        );
+        Ok(())
+    }
+}
+
+#[test]
+async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
+    let (mut spec, blobs) = sample();
+    let (digest, bytes) = pack(&spec, &blobs).unwrap();
+    spec.package.version = "3.2.1".into();
+    let (_, wrong) = pack(&spec, &blobs).unwrap();
+    let pin = FilePin {
+        source: "one.tar".into(),
+        version: "1.2.3".into(),
+        digest: digest.clone(),
+    };
+    let pins = Pins::from([("example".into(), pin)]);
+    let root = Path::new("unpack");
+    let mut effects = MemoryEffects {
+        cache: BTreeMap::from([(digest.clone(), wrong)]),
+        source: Some(bytes.clone()),
+        ..Default::default()
+    };
+    let expanded = expand(&pins, &pins, root, &mut effects).await.unwrap();
+    assert_eq!(effects.cache[&digest], bytes);
+    assert!(effects.source.is_none());
+    let declaration = serde_json::to_value(expanded.declarations).unwrap();
+    for (name, byte) in [("first", 1), ("second", 2)] {
+        let component = &declaration["components"][name];
+        assert_eq!(component["config"], json!({"setting": name}));
+        let path = Path::new(component["componentWasm"].as_str().unwrap());
+        assert!(path.starts_with("example/wasm"));
+        assert_eq!(effects.files[path], [byte]);
+    }
+    effects.files.clear();
+    assert!(expand(&pins, &pins, root, &mut effects).await.is_ok());
+    effects.files.clear();
+    effects.deny_source = true;
+    assert!(
+        expand(&pins, &pins, root, &mut effects)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Source denied")
+    );
+    assert!(effects.files.is_empty());
 }
 
 #[test]
@@ -336,6 +470,8 @@ fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
     for (path, kind, link, repeat) in [
         ("/escape", tar::EntryType::Regular, "", false),
         ("blobs/../escape", tar::EntryType::Regular, "", false),
+        ("blobs/.. /escape", tar::EntryType::Regular, "", false),
+        ("blobs/NUL.txt", tar::EntryType::Regular, "", false),
         ("index.json", tar::EntryType::Symlink, "../outside", false),
         ("index.json", tar::EntryType::Link, "../outside", false),
         ("index.json", tar::EntryType::Regular, "", true),

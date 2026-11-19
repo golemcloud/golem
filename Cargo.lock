@@ -4071,6 +4071,7 @@ dependencies = [
  "golem-mcp-import",
  "golem-model-mock",
  "golem-native-tool",
+ "golem-package",
  "golem-schema",
  "heck",
  "hmac 0.12.1",
@@ -4420,6 +4421,24 @@ dependencies = [
  "serde",
  "serde_yaml",
  "test-r",
+]
+
+[[package]]
+name = "golem-package"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "golem-common",
+ "golem-schema",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "test-r",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
