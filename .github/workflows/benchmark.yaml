@@ -17,6 +17,22 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
+      - name: Check benchmark publisher access
+        env:
+          BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
+        run: |
+          if [[ -z "$BENCHMARK_RESULTS_TOKEN" ]]; then
+            echo "::error::BENCHMARK_RESULTS_TOKEN is missing. Configure a token with contents write access to golemcloud/benchmark-results."
+            exit 1
+          fi
+          if ! curl --fail --silent --show-error \
+            -H "Authorization: Bearer $BENCHMARK_RESULTS_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/golemcloud/benchmark-results \
+            | jq -e '.permissions.push == true' > /dev/null; then
+            echo "::error::BENCHMARK_RESULTS_TOKEN cannot access golemcloud/benchmark-results with write permission. Check its expiration, repository access, and contents write permission."
+            exit 1
+          fi
       - uses: ./.github/actions/setup-rust
         with:
           cache-prefix-key: 'v3-rust'
@@ -32,6 +48,7 @@ jobs:
 
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
+          node-version: '24'
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
