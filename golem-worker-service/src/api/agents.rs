@@ -218,7 +218,7 @@ impl AgentsApi {
     /// | Property    | Comparator             | Description                   | Example                            |
     /// |-------------|------------------------|-------------------------------|------------------------------------|
     /// | key         | StringFilterComparator | Canonical key of the agent    | `key == Counter("a")`              |
-    /// | id          | StringFilterComparator | ID of the agent               | `id == 00000007-…`                 |
+    /// | id          | FilterComparator       | Full UUID of the agent        | `id == 00000007-0000-8000-8000-000000000001` |
     /// | version     | FilterComparator       | Component revision            | `version >= 0`                     |
     /// | status      | FilterComparator       | Status of the agent           | `status = Running`                 |
     /// | env.\[key\] | StringFilterComparator | Environment variable          | `env.var1 = value`                 |
@@ -292,7 +292,7 @@ impl AgentsApi {
     /// | Type      | Comparator             | Description                  | Example                                                                             |
     /// |-----------|------------------------|------------------------------|-------------------------------------------------------------------------------------|
     /// | Key       | StringFilterComparator | Canonical key of the agent   | `{ "type": "Key", "comparator": "Equal", "value": "Counter(\"a\")" }`              |
-    /// | Id        | StringFilterComparator | ID of the agent              | `{ "type": "Id", "comparator": "Equal", "value": "00000007-…" }`                   |
+    /// | Id        | FilterComparator       | Full UUID of the agent       | `{ "type": "Id", "comparator": "Equal", "value": "00000007-0000-8000-8000-000000000001" }` |
     /// | Version   | FilterComparator       | Component revision           | `{ "type": "Version", "comparator": "GreaterEqual", "value": 0 }`                  |
     /// | Status    | FilterComparator       | Status of the agent          | `{ "type": "Status", "comparator": "Equal", "value": "Running" }`                  |
     /// | Env       | StringFilterComparator | Environment variable         | `{ "type": "Env", "name": "var1", "comparator": "Equal", "value": "value" }`       |
