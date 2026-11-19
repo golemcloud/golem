@@ -40,9 +40,10 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
-    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicConfigEntry,
-    PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation,
-    PublicServerMessage, PublicStreamDirection, PublicStreamError, PublicStreamOutcome,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicAgentTarget, PublicClientMessage,
+    PublicConfigEntry, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
+    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamError,
+    PublicStreamOutcome,
 };
 use golem_common::schema::agent::{
     AgentMethodSchema, AgentTypeSchema, FieldSource, OutputSchema, ParsedAgentKey,
@@ -241,7 +242,7 @@ pub(super) struct InvocationSessionArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentKey,
+    pub target: PublicAgentTarget,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,
@@ -302,12 +303,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 })
         },
     )?;
-    let selector = invocation_selector(
-        &args.application_name,
-        &args.environment_name,
-        &args.parsed_agent_id,
-        &args.method_name,
-    )?;
+    let selector = InvocationSelector {
+        agent_type: args.agent_type.type_name.to_string(),
+        application: args.application_name.clone(),
+        target: args.target.clone(),
+        environment: args.environment_name.clone(),
+        method: args.method_name.clone(),
+    };
     let schema_evidence = schema_evidence(&args.agent_type, &method)?;
     let config = args
         .config
@@ -900,6 +902,16 @@ fn invocation_selector(
     parsed_agent_id: &ParsedAgentKey,
     method_name: &str,
 ) -> anyhow::Result<InvocationSelector> {
+    Ok(InvocationSelector {
+        agent_type: parsed_agent_id.agent_type.to_string(),
+        application: application_name.to_string(),
+        target: key_target(parsed_agent_id)?,
+        environment: environment_name.to_string(),
+        method: method_name.to_string(),
+    })
+}
+
+pub(super) fn key_target(parsed_agent_id: &ParsedAgentKey) -> anyhow::Result<PublicAgentTarget> {
     let constructor_parameters = encode_public_schema_value(
         parsed_agent_id.parameters.graph(),
         &parsed_agent_id.parameters.graph().root,
@@ -911,12 +923,8 @@ fn invocation_selector(
             ))
         },
     )?;
-    Ok(InvocationSelector {
-        agent_type: parsed_agent_id.agent_type.to_string(),
-        application: application_name.to_string(),
+    Ok(PublicAgentTarget::Key {
         constructor_parameters,
-        environment: environment_name.to_string(),
-        method: method_name.to_string(),
     })
 }
 
@@ -3113,7 +3121,9 @@ mod public_tests {
             selector: InvocationSelector {
                 agent_type: "counter".to_string(),
                 application: "app".to_string(),
-                constructor_parameters: serde_json::json!({}),
+                target: PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
                 environment: "prod".to_string(),
                 method: "run".to_string(),
             },
@@ -3158,6 +3168,14 @@ mod public_tests {
             load_checkpoint(&path).unwrap().delivered_output_cursors,
             BTreeMap::from([("opaque-stream-token".to_string(), "new-cursor".to_string(),)])
         );
+        expected.selector.target = PublicAgentTarget::Id {
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
+            expected_fingerprint: Some(golem_common::model::AgentFingerprint(
+                uuid::Uuid::from_u128(8),
+            )),
+        };
+        write_checkpoint(&path, &expected).unwrap();
+        assert_eq!(load_checkpoint(&path).unwrap().selector, expected.selector);
         let encoded = std::fs::read_to_string(path).unwrap();
         for private_name in [
             "attachmentId",

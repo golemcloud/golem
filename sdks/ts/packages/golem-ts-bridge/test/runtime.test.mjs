@@ -14,6 +14,8 @@ import {
   encodeStreamSessionBinaryEnvelope,
   encodeStreamSessionTextFrame,
   getAgent,
+  GolemConflictError,
+  GolemServiceError,
   invokeAgent,
   lookupAgent,
   parseStreamSessionTextFrame,
@@ -1441,7 +1443,7 @@ test('createAgent posts keyed, config and env to the agents of the agent type', 
   ]);
 });
 
-test('createAgent reports a keyed conflict as a GolemServiceError', async () => {
+test('createAgent reports a keyed conflict as a GolemConflictError', async () => {
   await withFetch(
     async () =>
       Response.json(
@@ -1453,11 +1455,27 @@ test('createAgent reports a keyed conflict as a GolemServiceError', async () => 
         () => assert.fail('a conflicting keyed create succeeded'),
         (error) => error,
       );
-      assert.equal(error.name, 'GolemServiceError');
+      assert.ok(error instanceof GolemConflictError);
+      assert.ok(error instanceof GolemServiceError);
+      assert.equal(error._tag, 'GolemConflictError');
       assert.equal(error.operation, 'createAgent');
       assert.equal(error.status, 409);
       assert.deepEqual(error.body, { code: 'conflict', error: 'the keyed agent exists' });
       assert.match(error.message, /^Agent creation failed: 409 Conflict/u);
+    },
+  );
+});
+
+test('createAgent does not classify an idempotency conflict as a keyed conflict', async () => {
+  await withFetch(
+    async () => Response.json({ code: 'idempotency-conflict' }, { status: 422 }),
+    async () => {
+      await assert.rejects(createAgent(restServer, { ...agentKey, keyed: true }), (error) => {
+        assert.ok(error instanceof GolemServiceError);
+        assert.ok(!(error instanceof GolemConflictError));
+        assert.equal(error.status, 422);
+        return true;
+      });
     },
   );
 });
@@ -1802,7 +1820,7 @@ const descriptor = {
   application: 'app',
   environment: 'env',
   agentType: 'agent',
-  constructorParameters: {},
+  target: { kind: 'key', constructorParameters: {} },
   config: [],
   method: 'run',
 };
@@ -1875,9 +1893,33 @@ test('a session opens on the environment of its descriptor and selects the agent
       application: 'app',
       environment: 'env',
       agentType: 'agent',
-      constructorParameters: {},
+      target: { kind: 'key', constructorParameters: {} },
       method: 'run',
     });
+  } finally {
+    await local.close();
+  }
+});
+
+test('a session targets an ID and fingerprint without constructor parameters', async () => {
+  let start;
+  const local = await server((socket) => {
+    socket.once('message', (data) => {
+      start = JSON.parse(data);
+      finishWith(socket, start, 7);
+    });
+  });
+  const target = { kind: 'id', agentId: TEST_AGENT_ID, expectedFingerprint: TEST_FINGERPRINT };
+  try {
+    const invoke = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => ({ ...descriptor, target }),
+      () => ({}),
+      (value) => value.value.value,
+    );
+    assert.equal(await invoke(), 7);
+    assert.deepEqual(start.selector.target, target);
+    assert.ok(!('constructorParameters' in start.selector));
   } finally {
     await local.close();
   }
@@ -4676,7 +4718,7 @@ const lookupDescriptor = {
   application: 'app',
   environment: 'env',
   agentType: 'agent',
-  constructorParameters: {},
+  target: { kind: 'key', constructorParameters: {} },
   config: [],
   method: 'run',
 };
