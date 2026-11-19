@@ -11,7 +11,8 @@ import {
   type TypedImplementation,
 } from "../src/Middleware.js"
 import { byteItems, startMiddleware, type ByteStreamItem } from "./tool-middleware-test-support.js"
-import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { __resetCaller, __setCaller, withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { accountPrincipal, userPrincipal } from "./callers.js"
 import * as Durability from "../src/Durability.js"
 import { DurabilityLive } from "../src/host/DurabilityClient.js"
 import { CustomInvocationContextLive } from "../src/host/CustomInvocationContextClient.js"
@@ -269,6 +270,51 @@ describe("typed tool middleware", () => {
         handler: () => Effect.succeed({}),
       }),
     ).toThrow(/secret/)
+  })
+
+  it("keeps the caller of the call for a stream that the handler returns", async () => {
+    const presented = toolDefinition("presented").body((body) =>
+      body.returns(WitTypes.AgentStream(Schema.String)),
+    )
+    typed({
+      name: "stream-caller",
+      parameters: Schema.Struct({}),
+      presented,
+      handler: {
+        presented: (_input, context) =>
+          Effect.succeed(Stream.fromEffect(Effect.sync(() => context.caller.original.kind))),
+      },
+    })
+    try {
+      __setCaller(userPrincipal("ana"))
+      const result = startMiddleware(
+        toolMiddlewareGuest.invokeToolMiddleware,
+        "stream-caller",
+        "ignored",
+        {
+          version: "0.1.0",
+          requiresFilesystem: false,
+          commands: { nodes: [] },
+          schema: { root: 0, typeNodes: [], defs: [] },
+        },
+        wire(Schema.Struct({}), {}),
+        [],
+        wire(Schema.Struct({}), {}),
+        undefined,
+        undefined,
+        { invoke: vi.fn() } as never,
+      )
+      const completion = await result.completion
+      // The call has returned, so the host reports the caller of the next invocation now.
+      __setCaller(accountPrincipal())
+      const output = Effect.runSync(compile(WitTypes.AgentStream(Schema.String)))
+      const stream = (await Effect.runPromise(
+        output.decode(completion.result!.value) as Effect.Effect<unknown, unknown>,
+      )) as Stream.Stream<string>
+      expect([...(await Effect.runPromise(Stream.runCollect(stream)))]).toEqual(["user"])
+    } finally {
+      __resetCaller()
+    }
   })
 
   it("decodes, transforms, invokes the typed underlying command, and encodes output", async () => {

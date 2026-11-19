@@ -37,8 +37,16 @@ pub async fn invoke_tool_middleware(
   )
   let context = @caller.InvocationContext::current()
   defer context.end()
-  @toolMiddleware.invoke_registered_tool_middleware_wire(
+  let result = @toolMiddleware.invoke_registered_tool_middleware_wire(
     middleware_name, tool_name, tool_metadata, parameters, command_path, input, stdin,
     stdout, stderr, context, underlying,
   )
+  // A result that holds a stream keeps the caller for its producer.
+  context.end(
+    returned_stream=result is Ok(invocation) &&
+      (invocation.stdout is Some(_) ||
+      invocation.stderr is Some(_) ||
+      (invocation.result is Some(typed) && @caller.holds_stream(typed.value))),
+  )
+  result
 }
