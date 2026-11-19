@@ -591,6 +591,25 @@ async fn the_result_arrives_before_the_background_work_ends(
         "the next invocation runs after the background work ended"
     );
     assert_eq!(agents.total(&executor).await?, 5);
+    let oplog = executor
+        .get_oplog(&agents.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let settled = settled_of(&oplog, &method_starts(&oplog, "add_after_release")[0]);
+    let next_started = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(params)
+            if matches!(&params.invocation, PublicAgentInvocation::AgentMethodInvocation(call)
+                if call.method_name == "completions"))
+        })
+        .map(|entry| entry.oplog_index)
+        .expect("the next invocation is started");
+    assert_eq!(settled.len(), 1, "the background work settles once");
+    assert!(
+        next_started > settled[0],
+        "the next invocation starts at {next_started}, after the background work settled at {}",
+        settled[0]
+    );
     agents
         .assert_executed_once(&executor, "add_after_release")
         .await?;
@@ -1518,13 +1537,14 @@ async fn a_timer_in_the_drain_resumes_the_suspended_agent_by_itself(
     Ok(())
 }
 
-/// The maximum invocation duration bounds an invocation until its result. It does not bound the
-/// background work after the result: the background work waits for a timer longer than the
-/// limit, and completes without a failure.
+/// The maximum invocation duration bounds an invocation until its result, and the tail-work
+/// settlement timeout bounds the cleanup of an invocation that does not record its result at the
+/// export's return. Neither bounds the background work after the result: the background work
+/// waits for a timer longer than both limits, and completes without a failure.
 #[test]
 #[timeout("180s")]
 #[tracing::instrument]
-async fn the_maximum_invocation_duration_does_not_bound_the_drain(
+async fn the_invocation_and_tail_work_limits_do_not_bound_the_drain(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
@@ -1535,6 +1555,7 @@ async fn the_maximum_invocation_duration_does_not_bound_the_drain(
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
             config.limits.max_invocation_duration = Some(Duration::from_secs(2));
+            config.limits.tail_work_settle_timeout = Duration::from_secs(1);
             config.suspend.wait_suspend_grace = Duration::from_secs(600);
         })),
         ..Default::default()
@@ -1572,6 +1593,17 @@ async fn the_maximum_invocation_duration_does_not_bound_the_drain(
     assert!(
         stops.is_empty(),
         "the drain runs to its end without a timeout: {stops:?}"
+    );
+    agents
+        .assert_result_kept(&executor, "add_after_timer")
+        .await?;
+    assert_ne!(
+        executor
+            .get_worker_metadata(&agents.worker_id)
+            .await?
+            .status,
+        AgentStatus::Failed,
+        "the agent does not fail after its drain"
     );
 
     assert_eq!(agents.completions(&executor).await?, 1);
