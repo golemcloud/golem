@@ -1513,6 +1513,25 @@ async fn mcp_serve_exports_one_bounded_oplog_report() {
     .await;
     assert_eq!(error_code(&outside), "outside-environment");
 
+    // An agent ID that does not resolve fails without quoting the ID.
+    let marker = "CUSTOMER-MARKER";
+    for agent_id in [
+        format!("a/b/c/d/{marker}"),
+        format!(r#"Counter("{marker}")"#),
+    ] {
+        let unresolved = call(
+            &client,
+            "agent_oplog_export",
+            json!({"agent_id": agent_id, "from": 1, "to": 2}),
+        )
+        .await;
+        assert_eq!(unresolved.is_error, Some(true), "{unresolved:?}");
+        assert!(
+            !format!("{unresolved:?}").contains(marker),
+            "{unresolved:?}"
+        );
+    }
+
     // A cancelled call returns nothing, and the next call is complete on its own.
     let handle = send_call(
         &client,

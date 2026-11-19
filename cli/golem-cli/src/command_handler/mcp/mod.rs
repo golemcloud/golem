@@ -925,7 +925,6 @@ pub(super) async fn serve<Hooks: CommandHandlerHooks + 'static>(
                     }
                     CallWork::OplogExport(arguments) => {
                         run_oplog_export_call(
-                            global_flags,
                             ctx,
                             environment,
                             capture,
@@ -1077,7 +1076,13 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
 
     let ctx = match server_ctx.for_tool_call(confirmed, environment.clone(), cancellation) {
         Ok(ctx) => Arc::new(ctx),
-        Err(error) => return context_failure(error, Some(tool)),
+        Err(error) => {
+            let tool_error = classify(&error, Some(tool));
+            let message = tool_error
+                .message
+                .unwrap_or_else(|| error_message_for_output(&error));
+            return error_envelope(&tool_error.code, message, tool_error.details);
+        }
     };
     let mut lazy = LazyContext::with_context(global_flags.clone(), hooks, ctx.clone());
     let result = CommandHandler::<Hooks>::handle_subcommand(&mut lazy, command.subcommand).await;
@@ -1091,30 +1096,20 @@ async fn run_call<Hooks: CommandHandlerHooks + 'static>(
     }
 }
 
-/// The error of a call whose [`Context`] could not be made.
-fn context_failure(error: anyhow::Error, tool: Option<&ManagementTool>) -> CallToolResult {
-    let tool_error = classify(&error, tool);
-    let message = tool_error
-        .message
-        .unwrap_or_else(|| error_message_for_output(&error));
-    error_envelope(&tool_error.code, message, tool_error.details)
-}
-
 /// Runs one call of `agent_oplog_export` with the call's own [`Context`]. The report is printed
 /// as one document, so that the output capture checks its size as for every other call.
 async fn run_oplog_export_call(
-    global_flags: &GolemCliGlobalFlags,
     server_ctx: &Context,
     environment: &ResolvedEnvironmentIdentity,
     capture: &OutputCapture,
     arguments: OplogExportArguments,
     cancellation: Cancellation,
 ) -> CallToolResult {
-    let ctx = match server_ctx.for_tool_call(false, environment.clone(), cancellation) {
-        Ok(ctx) => Arc::new(ctx),
-        Err(error) => return context_failure(error, None),
+    let result = match server_ctx.for_tool_call(false, environment.clone(), cancellation) {
+        Ok(ctx) => oplog_export::run(Arc::new(ctx), arguments, OUTPUT_CAPTURE_LIMIT).await,
+        Err(error) => Err(error),
     };
-    match oplog_export::run(ctx.clone(), arguments, OUTPUT_CAPTURE_LIMIT).await {
+    match result {
         Ok(document) => {
             print_line(document);
             discard_held_log();
@@ -1129,16 +1124,35 @@ async fn run_oplog_export_call(
                 ),
             }
         }
-        Err(error) => match oplog_export::export_failure(&error) {
-            Some((code, message, details)) => {
-                set_log_output(Output::Stderr);
-                discard_held_log();
-                let _ = capture.take();
-                error_envelope(code, message, details)
-            }
-            None => failure(error, &ctx, global_flags, capture, None),
-        },
+        Err(error) => {
+            set_log_output(Output::Stderr);
+            discard_held_log();
+            let _ = capture.take();
+            oplog_export_failure(&error)
+        }
     }
+}
+
+/// The error of a failed `agent_oplog_export` call. An error of the export itself has its own
+/// code and message. Another error, such as when the CLI could not make the call's [`Context`] or
+/// resolve the agent, keeps only its code, and the service and the HTTP status of a service error:
+/// its message, its log and its other details can quote the agent ID or data of the agent.
+fn oplog_export_failure(error: &anyhow::Error) -> CallToolResult {
+    if let Some((code, message, details)) = oplog_export::export_failure(error) {
+        return error_envelope(code, message, details);
+    }
+    let tool_error = classify(error, None);
+    let details = tool_error
+        .details
+        .into_iter()
+        .filter(|(key, _)| key == "service" || key == "status")
+        .collect();
+    let message = format!(
+        "`{OPLOG_EXPORT_TOOL}` failed with `{}`. The message of the error is not shown, because \
+         it can contain the agent ID or data of the agent.",
+        tool_error.code
+    );
+    error_envelope(&tool_error.code, message, details)
 }
 
 /// The JSON documents that a command printed, one per line.
@@ -1248,7 +1262,7 @@ mod tests {
     use super::{
         ArgumentKind, CONFIRM_ARGUMENT, CallWork, ClientInput, ManagementTool, ResultShape,
         SERVICE_END_GRACE, ToolCall, classify, error_envelope, execute_calls, failure_envelope,
-        management_tools, run_until_cancelled, success, tool_call_argv,
+        management_tools, oplog_export_failure, run_until_cancelled, success, tool_call_argv,
     };
     use crate::command::{GolemCliCommand, GolemCliCommandParseResult};
     use crate::command_handler::agent::invocation_session::InvocationFailure;
@@ -1257,7 +1271,8 @@ mod tests {
     use crate::context::Cancellation;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
     use crate::error::{
-        LoginRequired, NonSuccessfulExit, PipedExitCode, ProfileMissing, PromptAnswer,
+        LoginRequired, NonSuccessfulExit, OutsideEnvironment, PipedExitCode, ProfileMissing,
+        PromptAnswer,
     };
     use crate::model::format::Format;
     use golem_common::model::invocation_session_public::PublicErrorCode;
@@ -1474,6 +1489,58 @@ mod tests {
             reported(anyhow::anyhow!("anything else"), "agent_get")["error"],
             "command-failed"
         );
+    }
+
+    #[test]
+    fn an_oplog_export_failure_outside_the_export_keeps_only_its_code() {
+        let marker = "CUSTOMER-MARKER";
+        let mut additional_fields = serde_json::Map::new();
+        additional_fields.insert(
+            "workerError".to_string(),
+            json!({"cause": marker, "stderr": marker}),
+        );
+        let service = ServiceError {
+            service_name: "Worker",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 404,
+                errors: vec![format!("agent {marker} does not exist")],
+                code: Some("AGENT_NOT_FOUND".to_string()),
+                additional_fields,
+            }),
+        };
+        let report = envelope(&oplog_export_failure(
+            &anyhow::Error::from(service).context(format!("resolving {marker}")),
+        ));
+        assert_eq!(report["error"], "agent-not-found");
+        assert_eq!(
+            report["payload"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["message", "service", "status"],
+            "{report}"
+        );
+        assert_eq!(report["payload"]["status"], 404);
+        assert!(!report.to_string().contains(marker), "{report}");
+
+        let outside = anyhow::Error::new(OutsideEnvironment {
+            requested: marker.to_string(),
+            environment: "local".to_string(),
+        });
+        let failures = [
+            (outside, "outside-environment"),
+            (anyhow::anyhow!("{marker}"), "command-failed"),
+            (
+                anyhow::Error::new(NonSuccessfulExit).context(marker),
+                "command-failed",
+            ),
+        ];
+        for (error, code) in failures {
+            let report = envelope(&oplog_export_failure(&error));
+            assert_eq!(report["error"], code, "{report}");
+            assert!(!report.to_string().contains(marker), "{report}");
+        }
     }
 
     #[test]
