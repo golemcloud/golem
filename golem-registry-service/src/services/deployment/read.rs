@@ -127,6 +127,19 @@ impl DeploymentService {
             .collect()
     }
 
+    pub async fn list_retained_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+    ) -> Result<Vec<DeployedRegisteredAgentType>, DeploymentError> {
+        self.deployment_repo
+            .list_retained_agent_types(environment_id.0, &name.0)
+            .await?
+            .into_iter()
+            .map(|record| record.try_into().map_err(Into::into))
+            .collect()
+    }
+
     pub async fn authorize_environment(
         &self,
         environment_id: EnvironmentId,

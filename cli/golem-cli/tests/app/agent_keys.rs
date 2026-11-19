@@ -29,6 +29,7 @@ inherit_test_dep!(Tracing);
 
 const APP_NAME: &str = "agent-keys";
 const COMPONENT_NAME: &str = "agent-keys:rust-main";
+const MOVED_COMPONENT_NAME: &str = "agent-keys:rust-moved";
 
 /// Deploys an app whose component has two durable agent types: `CounterAgent`, which reads a
 /// config value and an environment variable, and `OtherAgent`.
@@ -141,6 +142,52 @@ async fn deploy_app(ctx: &mut TestContext) {
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+}
+
+fn move_types_to_second_component(ctx: &TestContext, source: &str) {
+    fs::create_dir_all(ctx.cwd_path_join("moved/src")).unwrap();
+    fs::copy(
+        ctx.cwd_path_join("src/lib.rs"),
+        ctx.cwd_path_join("moved/src/lib.rs"),
+    )
+    .unwrap();
+    fs::write_str(ctx.cwd_path_join("moved/src/counter_agent.rs"), source).unwrap();
+    let cargo = fs::read_to_string(ctx.cwd_path_join("Cargo.toml")).unwrap();
+    let mut moved_cargo = cargo.replace("agent_keys_rust_main", "agent_keys_rust_moved");
+    if !moved_cargo.contains("[workspace]") {
+        moved_cargo.push_str("\n[workspace]\n");
+    }
+    fs::write_str(ctx.cwd_path_join("moved/Cargo.toml"), moved_cargo).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            #[agent_definition]
+            pub trait RemainingAgent {
+                fn new() -> Self;
+                fn ping(&self) -> String;
+            }
+            struct RemainingImpl;
+            #[agent_implementation]
+            impl RemainingAgent for RemainingImpl {
+                fn new() -> Self { Self }
+                fn ping(&self) -> String { "remaining".to_string() }
+            }
+        "# },
+    )
+    .unwrap();
+    let path = ctx.cwd_path_join("golem.yaml");
+    let manifest = fs::read_to_string(&path).unwrap();
+    fs::write_str(
+        &path,
+        manifest
+            .replace(
+                &format!("{COMPONENT_NAME}:\n    templates: rust"),
+                &format!("{COMPONENT_NAME}:\n    dir: .\n    templates: rust\n  {MOVED_COMPONENT_NAME}:\n    dir: moved\n    templates: rust"),
+            )
+            .replace("mark: ''", "mark: 'b-default'"),
+    )
+    .unwrap();
 }
 
 async fn cli_json<'a>(ctx: &TestContext, args: impl IntoIterator<Item = &'a str>) -> Output {
@@ -297,6 +344,70 @@ async fn keyed_create_conflicts_upsert_reaches_it_and_a_stale_fingerprint_is_rej
         "0",
     )
     .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn moved_types_keep_old_component_agents_reachable_and_out_of_a_new_component_redeploy() {
+    let mut ctx = TestContext::new();
+    deploy_app(&mut ctx).await;
+    let old_key = r#"CounterAgent("pinned-a")"#;
+    let old = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::CREATE, old_key, "--keyed"]).await,
+        "agent.create",
+    );
+    let (old_id, old_fingerprint) = reference(&old);
+    invoke_ok(&ctx, &[old_key, "increment"], "1").await;
+    let old_defaults = get_metadata(&ctx, &old_id).await["defaultConfig"].clone();
+
+    let source = fs::read_to_string(ctx.cwd_path_join("src/counter_agent.rs")).unwrap();
+    move_types_to_second_component(&ctx, &source);
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let new_key = r#"CounterAgent("pinned-b")"#;
+    let new = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::CREATE, new_key, "--keyed"]).await,
+        "agent.create",
+    );
+    let (new_id, _) = reference(&new);
+    for (component, expected) in [(COMPONENT_NAME, &old_id), (MOVED_COMPONENT_NAME, &new_id)] {
+        let listed = document(
+            &cli_json(
+                &ctx,
+                [cmd::AGENT, cmd::LIST, flag::COMPONENT_NAME, component],
+            )
+            .await,
+            "agent.list",
+        );
+        let agents = listed["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), 1, "{listed}");
+        assert_eq!(agents[0]["agentId"], expected.as_str());
+    }
+    assert_eq!(
+        get_metadata(&ctx, &old_id).await["fingerprint"],
+        old_fingerprint
+    );
+    assert_eq!(
+        get_metadata(&ctx, &old_id).await["defaultConfig"],
+        old_defaults
+    );
+    assert_ne!(
+        get_metadata(&ctx, &new_id).await["defaultConfig"],
+        old_defaults
+    );
+    let redeployed = document(
+        &cli_json(&ctx, ["redeploy-agents", MOVED_COMPONENT_NAME]).await,
+        "agent.redeploy",
+    );
+    assert_eq!(redeployed["errors"], json!([]), "{redeployed}");
+    let agents = redeployed["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 1, "{redeployed}");
+    assert_eq!(agents[0]["agentId"], new_id);
+    assert_eq!(
+        get_metadata(&ctx, &old_id).await["fingerprint"],
+        old_fingerprint
+    );
+    invoke_ok(&ctx, &[&old_id, "value"], "1").await;
+    invoke_ok(&ctx, &[&new_id, "value"], "0").await;
 }
 
 #[test]

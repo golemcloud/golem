@@ -892,6 +892,43 @@ impl WorkerService {
         Ok((registered, component))
     }
 
+    /// Authorizes the retained namespace before scanning agents, without requiring its
+    /// current implementer. Every returned agent still needs its recorded owner's permission.
+    async fn retained_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+        auth: &AuthCtx,
+    ) -> WorkerResult<Vec<(RegisteredAgentType, Component)>> {
+        let mut allowed = Vec::new();
+        for registered in self.agent_types.retained(environment_id, name).await? {
+            let component = self
+                .component_service
+                .get_revision(
+                    registered.implemented_by.component_id,
+                    registered.implemented_by.component_revision,
+                )
+                .await?;
+            if authorize_agent_type(
+                auth,
+                &component,
+                name,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )
+            .is_ok()
+            {
+                allowed.push((registered, component));
+            }
+        }
+        if allowed.is_empty() {
+            return Err(
+                RegistryServiceError::NotFound(format!("Agent type {name} not found")).into(),
+            );
+        }
+        Ok(allowed)
+    }
+
     /// The fingerprint of the incarnation a streaming invocation reaches. An expected
     /// fingerprint must match the existing agent; otherwise the agent is created or joined.
     #[allow(clippy::too_many_arguments)]
@@ -1266,7 +1303,7 @@ impl WorkerService {
         Ok(agent.metadata)
     }
 
-    /// Lists the agents of one agent type of the environment's current deployment.
+    /// Lists existing agents of a retained type, including removed declarations.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_metadata(
         &self,
@@ -1279,14 +1316,14 @@ impl WorkerService {
         precise: bool,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        let (registered, _) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth_ctx)
+        let registered = self
+            .retained_agent_types(environment_id, agent_type_name, &auth_ctx)
             .await?;
 
         let (cursor, agents) = self
             .worker_client
             .find_metadata(
-                registered.type_id,
+                registered[0].0.type_id,
                 filter,
                 cursor,
                 count,
@@ -1304,13 +1341,17 @@ impl WorkerService {
             if component_name.is_some_and(|name| name != component.component_name.0) {
                 continue;
             }
-            authorize_agent_type(
+            if authorize_agent_type(
                 &auth_ctx,
                 &component,
                 agent_type_name,
                 AgentVerb::View,
                 AgentResourcePattern::Empty,
-            )?;
+            )
+            .is_err()
+            {
+                continue;
+            }
             metadata.push(agent.metadata);
         }
         Ok((cursor, metadata))
@@ -3638,9 +3679,26 @@ impl WorkerService {
         request: AgentKeyRequest,
         auth: AuthCtx,
     ) -> WorkerResult<AgentReference> {
-        let (registered, component) = self
-            .deployed_agent_type(environment_id, agent_type_name, &auth)
+        let mut retained = self
+            .retained_agent_types(environment_id, agent_type_name, &auth)
             .await?;
+        let (registered, component) = match self
+            .agent_types
+            .deployed(environment_id, agent_type_name)
+            .await?
+        {
+            Some(registered) => {
+                let component = self
+                    .component_service
+                    .get_revision(
+                        registered.implemented_by.component_id,
+                        registered.implemented_by.component_revision,
+                    )
+                    .await?;
+                (registered.as_ref().clone(), component)
+            }
+            None => retained.remove(0),
+        };
         if registered.agent_type.mode == AgentMode::Ephemeral {
             return Err(WorkerServiceError::TypeChecker(
                 "An ephemeral agent has no key".to_string(),
@@ -4412,6 +4470,7 @@ mod tests {
     #[derive(Clone)]
     struct TestRegistryService {
         resolved: ResolvedAgentType,
+        removed: bool,
     }
 
     #[async_trait]
@@ -4590,13 +4649,27 @@ mod tests {
             )
         }
 
+        async fn resolve_agent_type_name(
+            &self,
+            environment_id: EnvironmentId,
+            name: &AgentTypeName,
+        ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+            let registered = &self.resolved.registered_agent_type;
+            Ok((environment_id == self.resolved.environment_id
+                && *name == registered.agent_type.type_name)
+                .then(|| registered.clone())
+                .into_iter()
+                .collect())
+        }
+
         async fn get_deployed_agent_type(
             &self,
             environment_id: EnvironmentId,
             agent_type_name: &AgentTypeName,
         ) -> Result<Option<RegisteredAgentType>, RegistryServiceError> {
             let registered = &self.resolved.registered_agent_type;
-            Ok((environment_id == self.resolved.environment_id
+            Ok((!self.removed
+                && environment_id == self.resolved.environment_id
                 && *agent_type_name == registered.agent_type.type_name)
                 .then(|| registered.clone()))
         }
@@ -5526,6 +5599,7 @@ mod tests {
             ));
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
+                removed: false,
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -5619,6 +5693,7 @@ mod tests {
             ));
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
+                removed: false,
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -5969,6 +6044,95 @@ mod tests {
             verb: Some(verb),
             resource: FilesystemResourcePattern::Path(FilesystemPathPattern::parse(path).unwrap()),
         })
+    }
+
+    #[test]
+    async fn removed_type_lookup_and_listing_use_retained_declarations() {
+        let mut harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        *harness.worker_client.metadata_canonical_key.lock().unwrap() =
+            Some(harness.agent_key().to_string());
+        let component = harness
+            .worker_service
+            .component_service
+            .get_revision(harness.component_id, harness.component_revision)
+            .await
+            .unwrap();
+        harness.worker_service.agent_types = agent_type_resolver(Arc::new(TestRegistryService {
+            removed: true,
+            resolved: ResolvedAgentType {
+                registered_agent_type: RegisteredAgentType {
+                    type_id: harness.type_id,
+                    agent_type: component.metadata.agent_types()[0].clone(),
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: component.id,
+                        component_revision: component.revision,
+                        component_name: component.component_name.0.clone(),
+                        account_id: component.account_id,
+                        account_email: component.account_email.clone(),
+                    },
+                },
+                environment_id: harness.environment_id,
+                deployment_revision: DeploymentRevision::INITIAL,
+                current_deployment_revision: None,
+            },
+        }));
+        let reference = harness
+            .worker_service
+            .lookup_agent_rest(
+                harness.environment_id,
+                &harness.agent_type_name,
+                AgentKeyRequest {
+                    parameters: empty_json_tuple(),
+                },
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reference.agent_id, harness.keyed_agent_id());
+        let existing = harness
+            .worker_client
+            .get_metadata(
+                &reference.agent_id,
+                harness.environment_id,
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        *harness.worker_client.listed_agents.lock().unwrap() = (None, vec![existing]);
+        let (_, agents) = harness
+            .worker_service
+            .find_metadata(
+                harness.environment_id,
+                &harness.agent_type_name,
+                None,
+                None,
+                ScanCursor::default(),
+                10,
+                false,
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].agent_id, reference.agent_id);
+        assert!(
+            harness
+                .worker_service
+                .upsert_agent_rest(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    AgentKeyRequest {
+                        parameters: empty_json_tuple()
+                    },
+                    AuthCtx::system(),
+                )
+                .await
+                .is_err(),
+            "creates still require a deployed type"
+        );
     }
 
     #[test]
@@ -7843,6 +8007,7 @@ mod tests {
             ));
             components.get_current_by_id(a.id).await.unwrap();
             let agent_types = agent_type_resolver(Arc::new(TestRegistryService {
+                removed: false,
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),

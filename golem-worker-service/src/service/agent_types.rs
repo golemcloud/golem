@@ -85,6 +85,17 @@ impl AgentTypeResolver {
             .await
     }
 
+    /// Retained declarations for management, including past implementing components.
+    pub async fn retained(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        self.registry_service
+            .resolve_agent_type_name(environment_id, name)
+            .await
+    }
+
     /// The agent type of the environment's current deployment that has the name.
     pub async fn deployed(
         &self,

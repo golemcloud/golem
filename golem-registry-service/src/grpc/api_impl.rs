@@ -86,6 +86,10 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_mcp_runtime_credential_response, mcp_runtime_credential,
     report_mcp_resource_unauthorized_response, resolve_mcp_import_response,
 };
+use golem_api_grpc::proto::golem::registry::v1::{
+    ResolveAgentTypeNameRequest, ResolveAgentTypeNameResponse, ResolveAgentTypeNameSuccessResponse,
+    resolve_agent_type_name_response,
+};
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
@@ -862,6 +866,26 @@ impl RegistryServiceGrpcApi {
         Ok(golem_schema::proto::golem::common::Empty {})
     }
 
+    async fn resolve_agent_type_name_internal(
+        &self,
+        request: ResolveAgentTypeNameRequest,
+    ) -> Result<ResolveAgentTypeNameSuccessResponse, GrpcApiError> {
+        let environment_id = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let agent_types = self
+            .deployment_service
+            .list_retained_agent_types(environment_id, &AgentTypeName(request.agent_type_name))
+            .await?;
+        Ok(ResolveAgentTypeNameSuccessResponse {
+            agent_types: agent_types
+                .into_iter()
+                .map(|agent_type| RegisteredAgentType::from(agent_type).into())
+                .collect(),
+        })
+    }
+
     async fn resolve_type_id_internal(
         &self,
         request: ResolveTypeIdRequest,
@@ -1519,6 +1543,30 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
             Err(error) => authorize_environment_response::Result::Error(error.into()),
         };
         Ok(Response::new(AuthorizeEnvironmentResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn resolve_agent_type_name(
+        &self,
+        request: Request<ResolveAgentTypeNameRequest>,
+    ) -> Result<Response<ResolveAgentTypeNameResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "resolve_agent_type_name",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            agent_type = %request.agent_type_name,
+        );
+        let response = match self
+            .resolve_agent_type_name_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|result| record.result(result))
+        {
+            Ok(result) => resolve_agent_type_name_response::Result::Success(result),
+            Err(error) => resolve_agent_type_name_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ResolveAgentTypeNameResponse {
             result: Some(response),
         }))
     }

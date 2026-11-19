@@ -13249,6 +13249,15 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
                     .unwrap()
                     .is_empty()
             );
+            let retained = deps
+                .full_deployment_repo
+                .list_retained_agent_types(env.environment_id, "shared-name")
+                .await
+                .unwrap();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(retained[0].type_id, Some(agent_id));
+            assert_eq!(retained[0].component_id, expected_agent.component_id);
+            assert_eq!(retained[0].deployment_revision_id, 2);
         }
         let retained = deps
             .full_deployment_repo
@@ -13260,6 +13269,54 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
             assert!(retained.contains(row));
         }
     }
+
+    let component = deps
+        .component_repo
+        .create(
+            env.environment_id,
+            "new-implementer",
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(env.owner_account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    vec![],
+                    vec![],
+                    BTreeMap::new(),
+                )),
+                object_store_key: "".to_string(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let mut moved = type_id_deployment(deps, &env, 5, "shared-name").await;
+    moved.registered_agent_types[0].component_id = component.revision.component_id;
+    moved.registered_agent_types[0].component_revision_id = component.revision.revision_id;
+    deps.full_deployment_repo
+        .deploy_current(moved, false)
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let retained = deps
+        .full_deployment_repo
+        .list_retained_agent_types(env.environment_id, "shared-name")
+        .await
+        .unwrap();
+    assert_eq!(retained.len(), 2);
+    assert_eq!(retained[0].component_id, component.revision.component_id);
+    assert_eq!(retained[0].deployment_revision_id, 5);
+    assert_eq!(retained[1].component_id, expected_agent.component_id);
+    assert_eq!(retained[1].deployment_revision_id, 4);
+    assert!(
+        retained
+            .iter()
+            .all(|declaration| declaration.type_id == Some(agent_id))
+    );
 }
 
 pub async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {

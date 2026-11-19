@@ -51,6 +51,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     resolve_component_response, resolve_mcp_import_response, resolve_type_id_response,
     revoke_card_response, update_worker_connection_limit_response,
 };
+use golem_api_grpc::proto::golem::registry::v1::{
+    ResolveAgentTypeNameRequest, resolve_agent_type_name_response,
+};
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
@@ -359,6 +362,17 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "resolve_type_id is not supported by this registry service",
+        ))
+    }
+
+    /// Resolves a retained agent type name on every historical implementing component.
+    async fn resolve_agent_type_name(
+        &self,
+        _environment_id: EnvironmentId,
+        _name: &AgentTypeName,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "resolve_agent_type_name is not supported by this registry service",
         ))
     }
 
@@ -1471,6 +1485,33 @@ impl RegistryService for GrpcRegistryService {
                 payload.resolved.map(ResolvedTypeId::try_from).transpose()
             }
             Some(resolve_type_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn resolve_agent_type_name(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+    ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+        let name = name.0.clone();
+        let response = self
+            .client
+            .call("resolve_agent_type_name", move |client| {
+                Box::pin(client.resolve_agent_type_name(ResolveAgentTypeNameRequest {
+                    environment_id: Some(environment_id.into()),
+                    agent_type_name: name.clone(),
+                }))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_agent_type_name_response::Result::Success(payload)) => payload
+                .agent_types
+                .into_iter()
+                .map(|agent_type| agent_type.try_into().map_err(Into::into))
+                .collect(),
+            Some(resolve_agent_type_name_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
