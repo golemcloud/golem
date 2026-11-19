@@ -11,7 +11,7 @@ condition = { env_not_set = ["MAIN_VALIDATION_PARALLEL"] }
 
 [tasks.main-validation]
 description = "Validate the selected main source on a dedicated Linux executor"
-env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_BACKGROUND_TASKS = "check main-validation-bash", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
+env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
 run_task = { name = ["main-validation-prepare", "main-validation-parallel", "main-validation-exclusive", "main-validation-result"] }
 
 [tasks.main-validation-parallel]
@@ -34,10 +34,6 @@ for endpoint in ${endpoints}
     if not is_empty ${value}
         trigger_error "Unset ${endpoint}: Main validation owns isolated dependency ports"
     end
-end
-background = split ${MAIN_VALIDATION_BACKGROUND_TASKS} " "
-for task in ${background}
-    rm ${MAIN_VALIDATION_REPORT_DIR}/${task}.status
 end
 rm ${MAIN_VALIDATION_REPORT_DIR}/service-build.status
 temporary = exec --fail-on-error python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='golem-main-validation-'))"
@@ -201,8 +197,8 @@ end
 [tasks.main-validation-service-and-cli]
 private = true
 run_task = [
-    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-recovery-tests", "main-validation-background-checks"], fork = true, parallel = true, condition = { env_true = ["MAIN_VALIDATION_PARALLEL"] } },
-    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-recovery-tests", "main-validation-background-checks"], condition = { env_false = ["MAIN_VALIDATION_PARALLEL"] } },
+    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-recovery-tests"], fork = true, parallel = true, condition = { env_true = ["MAIN_VALIDATION_PARALLEL"] } },
+    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-recovery-tests"], condition = { env_false = ["MAIN_VALIDATION_PARALLEL"] } },
 ]
 
 [tasks.main-validation-workers-complete]
@@ -218,28 +214,6 @@ while not is_path_exists ${MAIN_VALIDATION_REPORT_DIR}/worker.status
     end
     sleep 1000
     attempt = calc ${attempt} + 1
-end
-'''
-
-[tasks.main-validation-background-checks]
-private = true
-dependencies = ["main-validation-workers-complete"]
-script_runner = "@duckscript"
-script = '''
-temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
-set_env TMPDIR ${temporary}/exclusive
-tasks = split ${MAIN_VALIDATION_BACKGROUND_TASKS} " "
-for task in ${tasks}
-    target = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
-    if eq ${task} main-validation-bash
-        target = set ${target}/main-validation-bash-target
-    end
-    if eq ${MAIN_VALIDATION_PARALLEL} true
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
-    else
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} ${task}
-    end
-    writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
 end
 '''
 
@@ -305,28 +279,21 @@ env = { MAIN_VALIDATION_TASKS = "dev-tools-tests check-shared-crates-versioning 
 script_runner = "@duckscript"
 script = '''
 failed = set 0
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+set_env TMPDIR ${temporary}/exclusive
 tasks = split ${MAIN_VALIDATION_TASKS} " "
 for task in ${tasks}
-    background = contains " ${MAIN_VALIDATION_BACKGROUND_TASKS} " " ${task} "
-    if ${background}
-        file = set ${MAIN_VALIDATION_REPORT_DIR}/${task}.status
-        if is_path_exists ${file}
-            code = readfile ${file}
-        else
-            producer = readfile ${MAIN_VALIDATION_REPORT_DIR}/service-build.status
-            if not eq ${producer} 0
-                # A failed service producer never starts the independent checks.
-                cm_run_task main-validation-background-checks
-                code = readfile ${file}
-            else
-                echo "Missing background check completion: ${task}"
-                code = set 1
-            end
+    bounded = contains " check main-validation-bash " " ${task} "
+    if ${bounded}
+        target = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
+        if eq ${task} main-validation-bash
+            target = set ${target}/main-validation-bash-target
         end
+        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
     else
         code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
-        writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
     end
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
     if not eq ${code} 0
         failed = set 1
     end
