@@ -912,7 +912,10 @@ pub(crate) fn fold_invocation_result_entries(
                     );
                 }
             }
-            OplogEntry::Interrupted { .. } | OplogEntry::Suspend { .. } => {
+            OplogEntry::Interrupted { .. }
+            | OplogEntry::Suspend { .. }
+            | OplogEntry::Resumed { .. }
+            | OplogEntry::Jump { .. } => {
                 if let Some(running) = &mut requests.current {
                     running.last_change = *oplog_idx;
                     running.last_change_at = changed_at;

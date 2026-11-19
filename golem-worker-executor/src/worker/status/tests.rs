@@ -10003,7 +10003,7 @@ fn every_result_entry_gives_its_end() {
 }
 
 #[test]
-fn a_retry_marker_and_a_suspension_change_the_running_invocation_without_ending_it() {
+fn a_retry_marker_a_suspension_and_a_resume_change_the_running_invocation_without_ending_it() {
     let key = InvocationId(Uuid::new_v4());
     let started = started_invocation(&key);
     let suspended = OplogEntry::suspend();
@@ -10018,6 +10018,13 @@ fn a_retry_marker_and_a_suspension_change_the_running_invocation_without_ending_
     assert_eq!(running.last_change, OplogIndex::from_u64(3));
     assert_eq!(running.last_change_at, suspended.timestamp());
     assert_eq!(results.len(), 1);
+
+    // Startup writes `Resumed` when it resumes an interrupted invocation.
+    let resumed = OplogEntry::resumed();
+    let (_, running) = fold_positions(&[started, OplogEntry::interrupted(), resumed.clone()]);
+    let running = running.expect("the invocation still runs");
+    assert_eq!(running.last_change, OplogIndex::from_u64(3));
+    assert_eq!(running.last_change_at, resumed.timestamp());
 }
 
 #[test]
