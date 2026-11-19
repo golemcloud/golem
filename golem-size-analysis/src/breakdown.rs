@@ -435,8 +435,10 @@ fn moonbit_package(name: &str) -> Option<std::borrow::Cow<'_, str>> {
         Some(core) => ("moonbitlang/core/", core),
         None => ("", rest),
     };
+    // The count and the first length are adjacent digits. A segment can contain digits, so a short
+    // count can wrongly fit by reading later lengths as text; the longest count that fits wins.
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-    (1..=digits.min(3)).find_map(|split| {
+    (1..=digits.min(3)).rev().find_map(|split| {
         let count: usize = rest[..split].parse().ok()?;
         let segments = moonbit_segments(&rest[split..], count)?;
         Some(format!("{prefix}{}", segments.join("/")).into())
@@ -1016,6 +1018,14 @@ mod tests {
             )
             .as_deref(),
             Some("username/hello/a/b/c/d/e/f/g/h/i/j/k")
+        );
+        assert_eq!(
+            owner(SymbolNaming::Moonbit, "_M0FP112ab1c1d1e1f1g1h1i1j1k1l3fun").as_deref(),
+            Some("ab/c/d/e/f/g/h/i/j/k/l")
+        );
+        assert_eq!(
+            owner(SymbolNaming::Moonbit, "_M0FP112abcdefghijkl3fun").as_deref(),
+            Some("abcdefghijkl")
         );
     }
 
