@@ -105,9 +105,15 @@ trait GolemAutoRegister extends ScalaJSConfigModule {
    */
   private def singleLinkedModule(report: mill.scalajslib.api.Report): String = {
     val sourceMaps = report.publicModules.flatMap(_.sourceMapName).toSet
-    val files = os.list(report.dest.path).map(_.last).filterNot(sourceMaps.contains).sorted
+    val files = os.list(report.dest.path).map(_.last)
+      .filterNot(name => name == ".DS_Store" || name.startsWith("._") || sourceMaps.contains(name))
+      .sorted
     report.publicModules.map(_.jsFileName).toList match {
       case Nil                                => throw new RuntimeException("[golem] No public Scala.js modules were linked.")
+      case List(main) if !os.isFile(report.dest.path / main) =>
+        throw new RuntimeException(
+          s"[golem] Scala.js linker output not found at ${report.dest.path / main}; try running 'clean' then build again."
+        )
       case List(main) if files == Seq(main) => main
       case _                                  =>
         throw new RuntimeException(

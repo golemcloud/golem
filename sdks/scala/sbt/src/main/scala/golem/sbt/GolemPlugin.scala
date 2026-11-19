@@ -70,9 +70,16 @@ object GolemPlugin extends AutoPlugin {
    */
   private def singleLinkedJsFile(report: Report, outDir: File): File = {
     val sourceMaps = report.publicModules.flatMap(_.sourceMapName).toSet
-    val files      = Option(outDir.list()).toList.flatten.filterNot(sourceMaps.contains).sorted
+    val files      =
+      Option(outDir.list()).toList.flatten
+        .filterNot(name => name == ".DS_Store" || name.startsWith("._") || sourceMaps.contains(name))
+        .sorted
     report.publicModules.map(_.jsFileName).toList match {
-      case Nil                               => sys.error("[golem] No public Scala.js modules were linked.")
+      case Nil                                   => sys.error("[golem] No public Scala.js modules were linked.")
+      case List(main) if !(outDir / main).isFile =>
+        sys.error(
+          s"[golem] Scala.js linker output not found at ${outDir / main}; try running 'clean' then build again."
+        )
       case List(main) if files == List(main) => outDir / main
       case _                                 =>
         sys.error(

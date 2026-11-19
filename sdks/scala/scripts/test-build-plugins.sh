@@ -21,7 +21,15 @@ fail() {
 sbt_run() { sbt -batch -no-colors -Dsbt.supershell=false "$@"; }
 mill_run() { (cd mill && mill --no-daemon --ticker false "$@"); }
 
-describe() { echo "$(wc -c <"$1") bytes, sha256 $(sha256sum "$1" | cut -d' ' -f1)"; }
+describe() {
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(sha256sum "$1")
+  else
+    digest=$(shasum -a 256 "$1")
+  fi
+  echo "$(wc -c <"$1") bytes, sha256 ${digest%% *}"
+}
 
 # Checks that the bundle equals the fullLinkJS module and differs from the fastLinkJS module.
 expect_full_link() {
@@ -45,8 +53,10 @@ expect_full_link() {
 # Checks that a split linker output fails golemBuildComponent with an error naming every module.
 expect_split_rejected() {
   local tool=$1 status=$2 log=$3 linker_dir=$4 bundle=$5
-  local modules
-  modules=$(find "$linker_dir" -maxdepth 1 -type f -name '*.js' -printf '%f\n' 2>/dev/null | sort)
+  local modules file
+  modules=$(for file in "$linker_dir"/*.js; do
+    [[ ! -f "$file" ]] || printf '%s\n' "${file##*/}"
+  done | sort)
   if (($(grep -c . <<<"$modules") < 2)); then
     fail "$tool: the dynamic import fixture did not link into several modules in $linker_dir"
   fi
@@ -60,12 +70,25 @@ expect_split_rejected() {
   done
 }
 
+# Filesystem metadata must not turn a cached single-module link into a split output.
+expect_cached_output() (
+  local linker_dir=$1 bundle=$2
+  shift 2
+  local metadata="$linker_dir/._golem-build-check-$$"
+  trap 'rm -f "$metadata"' EXIT
+  touch "$metadata" || return 1
+  "$@" && cmp -s "$bundle" "$linker_dir/main.js"
+)
+
 echo "==> sbt: single module fixture"
 sbt_run "singleModuleFixture/fastLinkJS" "singleModuleFixture/golemBuildComponent single $out/sbt.js" ||
   fail "sbt: golemBuildComponent failed on the single module fixture"
 sbt_target=test-build-plugins/single-module/target/scala-3.3.7
 expect_full_link sbt "$out/sbt.js" "$sbt_target/singlemodulefixture-opt/main.js" \
   "$sbt_target/singlemodulefixture-fastopt/main.js"
+expect_cached_output "$sbt_target/singlemodulefixture-opt" "$out/sbt-cached.js" \
+  sbt_run "singleModuleFixture/golemBuildComponent single $out/sbt-cached.js" ||
+  fail "sbt: filesystem metadata changed the cached single-module build"
 
 echo "==> Mill: single module fixture"
 mill_run singleModuleFixture.fastLinkJS + \
@@ -73,10 +96,33 @@ mill_run singleModuleFixture.fastLinkJS + \
   fail "Mill: golemBuildComponent failed on the single module fixture"
 expect_full_link Mill "$out/mill.js" mill/out/singleModuleFixture/fullLinkJS.dest/main.js \
   mill/out/singleModuleFixture/fastLinkJS.dest/main.js
+expect_cached_output mill/out/singleModuleFixture/fullLinkJS.dest "$out/mill-cached.js" \
+  mill_run singleModuleFixture.golemBuildComponent --component single --outPath "$out/mill-cached.js" ||
+  fail "Mill: filesystem metadata changed the cached single-module build"
+
+echo "==> Mill: missing cached module"
+(
+  main=mill/out/singleModuleFixture/fullLinkJS.dest/main.js
+  trap 'mv "$out/mill-main.js" "$main"' EXIT
+  mv "$main" "$out/mill-main.js" || exit 1
+  log=$(mill_run singleModuleFixture.golemBuildComponent --component single --outPath "$out/mill-missing.js" 2>&1)
+  status=$?
+  echo "$log"
+  ((status != 0)) && [[ ! -e "$out/mill-missing.js" ]] &&
+    grep -q "linker output not found" <<<"$log" && grep -q "clean" <<<"$log" &&
+    ! grep -q "needs a single module" <<<"$log"
+) || fail "Mill: missing cached output did not report how to rebuild it"
 
 if [[ -f "$out/sbt.js" && -f "$out/mill.js" ]] && ! cmp -s "$out/sbt.js" "$out/mill.js"; then
   fail "sbt and Mill bundles of the same source differ: sbt $(describe "$out/sbt.js"), Mill $(describe "$out/mill.js")"
 fi
+
+echo "==> sbt: dot-prefixed module"
+sbt_run 'set singleModuleFixture / scalaJSLinkerConfig ~= (c => c.withOutputPatterns(c.outputPatterns.withJSFile(".%s.js")))' \
+  "singleModuleFixture/golemBuildComponent hidden $out/sbt-hidden.js" ||
+  fail "sbt: golemBuildComponent rejected a dot-prefixed JavaScript module"
+cmp -s "$out/sbt-hidden.js" "$sbt_target/singlemodulefixture-opt/.main.js" ||
+  fail "sbt: the dot-prefixed module was not copied to the bundle"
 
 echo "==> sbt: dynamic import fixture"
 log=$(sbt_run "dynamicImportFixture/golemBuildComponent dynamic $out/sbt-dynamic.js" 2>&1)
