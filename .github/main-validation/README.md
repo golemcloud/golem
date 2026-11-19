@@ -3,7 +3,9 @@
 Merging this cutover activates scheduled main validation and the exact-source
 release gate without repository activation variables. Main PRs run no tests.
 Ordinary main pushes no longer run full platform CI or heavy built-in Bash CI.
-Maintenance branches (`N.N.x`) retain full CI. Manual and reusable CI entry points remain.
+Existing maintenance branches (`N.N.x`) retain their own full CI workflows.
+Main no longer contains the legacy platform and built-in Bash workflows or their
+manual/reusable entry points. New branches from main do not inherit those workflows.
 Docs, CLA and Vouch checks remain. Billing tests and Bash oracle checks retain
 their main-push paths but no longer run on main PRs. Skill-harness checks run in
 Main validation and maintenance CI, not main PRs. This does not add optional PR
@@ -142,7 +144,12 @@ normal tool concurrency. The background branch joins before privileged checks.
 
 Groups within each stateful subflow remain serial. The ceiling is three stateful
 subflows and one bounded checks branch, not another executor or a dynamic
-scheduler. Each fork collects ordinary failures before joining; the final task
+scheduler. Once workers finish, their slot runs service group 4 with its own
+listener block and temporary root. That group retains its SQLite API, streaming
+recovery and fault-matrix invocations, their single-thread settings and their
+service-producer binaries. It runs once and keeps its existing progress identity.
+Other service groups no longer wait for group 4. Each fork collects ordinary
+failures before joining; the final task
 rejects failed or missing branch completion records. Conflicting privileged
 checks follow the join. Set `MAIN_VALIDATION_PARALLEL=false` locally or the manual
 acceptance `parallel` input to false for a serial diagnostic run. Production
@@ -152,16 +159,22 @@ local contract tests alone do not establish isolation or resource headroom.
 General workers retain test-r's hardware-derived concurrency. Keep the dedicated
 storage-quota single-thread and tool-streaming eight-thread limits. Service
 invocations share fixed dependency ports and include cluster restarts, so their
-single-thread limits are not an invitation to remove them globally. CLI's four
-concurrent tests each start servers and can run parallel compilers. Evaluate any
-increase using CPU and memory samples, not the number of test threads alone.
+single-thread limits are not an invitation to remove them globally. PostgreSQL
+API group 2 uses two threads after repeated full-selection qualification with
+fresh dependencies; the SQLite API and recovery invocations stay single-threaded.
+CLI's four concurrent tests each start servers and can run parallel compilers.
+Evaluate any increase using CPU and memory samples, not the number of test threads alone.
 The current 20-job native Cargo cap is not the main observed bottleneck: general
 and executor compilation used fewer than 20 host CPUs in over 90% of samples in
 acceptance 44267744093. Keep heavy native producers ordered and preserve their
 different feature selections. Metadata listing uses `--tests`, not `--bins`, so
 nextest does not force additional test-mode builds of `test = false` binaries.
 
-Offsets are 0 for worker tests, 10000 for service tests, and 20000 for CLI tests.
+Offsets are 0 for worker tests, 10000 for the main service branch, 20000 for CLI
+tests and 23000 for the isolated group 4 branch. Group 4's default listener range
+is 29379–32195, above the CLI defaults and below Linux's default ephemeral range
+starting at 32768. Main validation rejects absolute
+`REDIS_PORT` and `REGISTRY_HTTP_PORT` overrides because they bypass these blocks.
 Preparation creates a unique root in the runner's system temporary directory.
 Each subflow receives its own absolute `TMPDIR` below that root. Keep the system
 temporary directory outside the checkout: generated Rust applications must not
@@ -173,6 +186,12 @@ temporary directory. Explicit endpoint overrides remain absolute.
 CLI integration tests start their own server on dynamic ports rather than using
 the framework defaults, so the CLI offset is not a claim of extra isolation.
 Real overlap must still establish independent Redis, files, containers and ports.
+
+Embedded-artifact validation retains its registry-only embedded feature selection.
+It records Cargo fingerprint diagnostics in its task log and publishes
+`embedded-cargo-timing.html` with the other Linux evidence, including when tests
+fail after compilation. These distinguish alternate dependency-feature builds
+from build-script and linking costs. They do not establish warm reuse by themselves.
 
 `Makefile.sdk-validation.toml` contains the existing Scala, TypeScript, Effect,
 MoonBit, Rust, Go and inexpensive skill-harness commands. The source-level mapping

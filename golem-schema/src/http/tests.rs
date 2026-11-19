@@ -99,6 +99,32 @@ fn http_openapi_variants_have_distinct_wire_tags() {
 }
 
 #[test]
+fn managed_response_headers_are_case_insensitive_and_leave_application_headers() {
+    for name in [
+        "Cache-Control",
+        "VARY",
+        "Golem-Invocation-Id",
+        "golem-environment-id",
+        "Golem-Token",
+        "Set-Cookie",
+        "WWW-Authenticate",
+        "Access-Control-Allow-Origin",
+        "aCcEsS-CoNtRoL-Custom",
+    ] {
+        assert!(is_managed_response_header(name), "{name}");
+    }
+    for name in [
+        "Content-Security-Policy",
+        "Referrer-Policy",
+        "Content-Disposition",
+        "X-Cache-Control",
+        "X-Application",
+    ] {
+        assert!(!is_managed_response_header(name), "{name}");
+    }
+}
+
+#[test]
 fn shared_request_path_corpus() {
     let corpus: Value = serde_json::from_str(include_str!(
         "../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"

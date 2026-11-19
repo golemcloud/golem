@@ -295,7 +295,7 @@ The SDK is schema-driven: method inputs and return values are described with [St
 
 Golem **automatically retries** retryable host-operation failures using durable execution and the applicable retry policy. **Do not add manual retry loops, `while` retry patterns, or backoff utilities around host operations** — let Golem apply the retry policy. The default retry policy applies when no user-defined policy matches.
 
-Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. An uncaught thrown error or rejected promise is a deterministic guest trap and fails the invocation without retry. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
+Retryable failures in outgoing HTTP requests (`fetch`), RPC calls between agents, and database / storage calls (`golem:rdbms/*`, keyvalue, blobstore) are handled transparently. A method's thrown error or rejected promise fails only that invocation, without automatic retry or rollback. Earlier mutations remain, and a durable agent can run its next invocation. Constructor errors and actual Wasm traps remain agent-fatal. Sagas compensate caught failures in reverse order; partial rollback retains both failures. Recovery repairs eligible incomplete calls at their original `Start`. New saga attempts append history without rewinding; after complete rollback, infallible sagas use the bounded host policy and durable backoff. Exhaustion and policy errors retain the original failure.
 
 Only customize when the *strategy* needs to change — see `golem-retry-policies-ts`.
 
@@ -470,18 +470,17 @@ Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{
 
 Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
-- `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
+- `durable(spec, request, body)` — run a synchronous non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy. `durableAsync(spec, request, body)` does the same for a body that awaits.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.
 
-**Custom durability is sequential-only.** `durable` supports properly nested calls and an async
-body that awaits host calls when no unrelated guest work runs during the wait. Do not overlap it
-with other promises or callbacks, including ordinary host calls: sibling effects can acquire the
-wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably detected.
-Await each nested operation; do not detach work. Stop and join outstanding work before the body
-exits, including on failure. `Promise.all` rejection does not join surviving siblings, and joining
-at the end does not make concurrent custom operations supported. Ordinary built-in durability is
-not subject to this restriction when no custom operation is active.
+**Custom durable operations.** A `durable` body is synchronous; a body that returns a promise
+throws a `TypeError`. `durableAsync` runs its body in its own scope: host calls after an `await`,
+and in timers and callbacks that the body registers, belong to the operation, and concurrent
+operations (for example in `Promise.all`) stay apart. An operation finishes only after the
+operations that started inside it have settled. Await or join the work that the body starts:
+detached work that runs after the operation finished belongs to the enclosing operation or to the
+invocation, not to the finished operation.
 
 ## Available Libraries
 
@@ -634,7 +633,7 @@ Retryable failures in the following operations are handled transparently:
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `golem:rdbms/ignite2`, `wasi:blobstore`, `wasi:keyvalue`
 
-An uncaught `raise`, abort, or panic is a deterministic guest trap and fails the invocation without retry. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
+A method that raises an `AgentError` fails only that invocation, without automatic retry or rollback. Earlier mutations remain, and a durable agent can run its next invocation. Constructor errors, aborts, panics and actual Wasm traps remain agent-fatal. Recovery replays completed outcomes and repairs only an eligible incomplete call at its own `Start`. MoonBit has no public saga helper. For domain compensation, implement ordinary guest control flow that compensates completed steps before appending fresh calls. Such an application loop has no SDK-provided attempt bound or backoff guarantee.
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-moonbit` skill.
 
