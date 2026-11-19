@@ -45,12 +45,12 @@ The supported settings are shared by all binaries:
 | `blob_store`, `data_disk.blob_root` | Select `data_disk` or `s3`. A failed external store stops startup; it does not select local storage. |
 | `object_storage.*` | S3 region, endpoint, path style, credentials, components bucket, artifacts bucket and data bucket. `public_endpoint_url` is optional and names the public download endpoint. |
 | `cache.type`, `cache.config.*` | Select `Disabled` or `Redis`. Redis holds cache namespaces and HTTP sessions, not the selected state store. |
-| `recovery_location`, `recovery_horizon` | Optional location and retention duration for recovery records. Recovery services consume these values. |
+| `recovery_location`, `recovery_horizon` | Inputs retained for the recovery feature. They do not yet enable recovery records or retention. |
 | `retained_update_snapshots` | Number of update snapshots to keep, default `2`. |
-| `package_mirror_url` | Optional URL of the `/golem/` package mirror. Package clients consume this value. |
+| `package_mirror_url` | URL retained for the package-mirror feature. It does not yet change package downloads. |
 | `internal_grpc_tls.*` | `enabled`, `cert_file`, `key_file`, `ca_cert_file` and optional `server_name`. Internal mTLS is off by default. |
 | `etcd.tls.*` | Paths to the CA certificate, client certificate and key for etcd. The shard manager's etcd backend remains an advanced setting. |
-| `outgoing_proxy` | Optional proxy URL for outgoing HTTP clients. |
+| `outgoing_proxy` | Input only. No transport uses it, so it does not route outgoing traffic through a proxy. |
 | `logging.*`, `otlp.*` | Logging and OTLP export settings. |
 | `outbound_sockets` | Allow outbound agent sockets, default `false`. |
 | `filesystem_snapshots.*` | Enable and configure filesystem snapshots. |

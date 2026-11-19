@@ -129,10 +129,7 @@ pub fn reference(service: &str, input: &Figment) -> Figment {
         "blob_store": "data_disk",
         "data_dir": "/var/lib/golem",
         "cache": {"type": "Disabled", "config": {}},
-        "postgres": {
-            "host": "localhost", "port": 5432, "database": "golem",
-            "username": "golem", "password": "", "max_connections": 10,
-        },
+        "postgres": postgres_defaults(),
         "object_storage": {
             "region": "us-east-1", "object_prefix": "",
             "components_bucket": "golem-components", "artifacts_bucket": "golem-artifacts",
@@ -170,7 +167,7 @@ pub fn reference(service: &str, input: &Figment) -> Figment {
                     .and_then(Value::as_object_mut)
                 {
                     common["outbound_sockets"] =
-                        sockets.remove("enabled").unwrap_or_else(|| json!(false));
+                        sockets.remove("enabled").unwrap_or(Value::Bool(false));
                 }
                 common["filesystem_snapshots"] = config
                     .remove("filesystem_snapshots")
@@ -443,6 +440,13 @@ fn transport(service: &str, input: &Value, projected: Figment) -> figment::Resul
     Ok(projected)
 }
 
+fn postgres_defaults() -> Value {
+    json!({
+        "host": "localhost", "port": 5432, "database": "golem",
+        "username": "golem", "password": "", "max_connections": 10,
+    })
+}
+
 fn storage(service: &str, input: &Value) -> figment::Result<Figment> {
     let stores: &[(&str, &str, &str)] = match service {
         "registry_service" => &[("db", "golem_registry_service", "registry.db")],
@@ -482,10 +486,7 @@ fn storage(service: &str, input: &Value) -> figment::Result<Figment> {
         let mut fields = match state_store {
             None => return Ok(config),
             Some("postgres") => {
-                let fields = Figment::from(Serialized::defaults(json!({
-                    "host": "localhost", "port": 5432, "database": "golem",
-                    "username": "golem", "password": "", "max_connections": 10,
-                })))
+                let fields = Figment::from(Serialized::defaults(postgres_defaults()))
                 .merge(Serialized::defaults(input.get("postgres").cloned().unwrap_or_else(|| json!({}))))
                 .merge(Serialized::default("schema", schema));
                 json!({"type": "Postgres", "config": fields.extract::<Value>()?})
@@ -523,6 +524,11 @@ fn storage(service: &str, input: &Value) -> figment::Result<Figment> {
             match service {
                 "worker_executor" => {
                     let persistent = projected.extract_inner::<Value>("key_value_storage")?;
+                    let projected = if state_store == Some("sqlite") {
+                        projected.merge(Serialized::default("indexed_storage", &persistent))
+                    } else {
+                        projected
+                    };
                     projected.merge(Serialized::default("key_value_storage", json!({
                         "type": "NamespaceRouted", "config": {"cache": {"type": "Redis", "config": redis}, "persistent": persistent},
                     })))
@@ -601,6 +607,43 @@ mod tests {
     use super::*;
     use figment::providers::{Format, Toml};
     use test_r::test;
+
+    #[test]
+    fn sqlite_with_a_redis_cache_has_independent_indexed_storage() {
+        let input = Figment::from(Toml::string(
+            r#"
+            state_store = "sqlite"
+            data_dir = "/state"
+            [cache]
+            type = "Redis"
+            "#,
+        ));
+        let executor = project("worker_executor", &input);
+        assert_eq!(
+            executor
+                .extract_inner::<String>("key_value_storage.type")
+                .unwrap(),
+            "NamespaceRouted"
+        );
+        assert_eq!(
+            executor
+                .extract_inner::<String>("indexed_storage.type")
+                .unwrap(),
+            "MultiSqlite"
+        );
+        assert_eq!(
+            executor
+                .extract_inner::<String>("indexed_storage.config.root_dir")
+                .unwrap(),
+            "/state/kv-store"
+        );
+        assert_eq!(
+            executor
+                .extract_inner::<String>("key_value_storage.config.persistent.type")
+                .unwrap(),
+            "MultiSqlite"
+        );
+    }
 
     #[test]
     fn postgres_and_s3_reach_every_store_without_changing_service_schemas() {

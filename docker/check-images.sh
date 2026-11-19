@@ -35,11 +35,11 @@ fi
 
 # <directory of the Dockerfile> <binary> <directories that uid 65534 must write>
 services=(
-    "golem-worker-executor worker-executor /home/golem /data /data/blob_storage"
-    "golem-registry-service golem-registry-service /home/golem /data /data/blob_storage /app/builtin-artifacts"
-    "golem-shard-manager golem-shard-manager /home/golem /data /data/blob_storage"
-    "golem-worker-service golem-worker-service /home/golem /data /data/blob_storage"
-    "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage"
+    "golem-worker-executor worker-executor /home/golem /data /data/blob_storage /var/lib/golem"
+    "golem-registry-service golem-registry-service /home/golem /data /data/blob_storage /var/lib/golem /app/builtin-artifacts"
+    "golem-shard-manager golem-shard-manager /home/golem /data /data/blob_storage /var/lib/golem"
+    "golem-worker-service golem-worker-service /home/golem /data /data/blob_storage /var/lib/golem"
+    "golem-component-compilation-service golem-component-compilation-service /home/golem /data /data/blob_storage /var/lib/golem"
     "cli/golem golem /home/golem /var/lib/golem"
     "golem-xfs-quotad golem-xfs-quotad /run/golem-quota"
     "golem-router - /home/golem"
