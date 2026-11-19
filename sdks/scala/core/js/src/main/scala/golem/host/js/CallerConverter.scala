@@ -16,7 +16,7 @@
 
 package golem.host.js
 
-import golem.{Caller, Principal, PrincipalRef, TokenProvenance}
+import golem.{AgentId, Caller, Principal, PrincipalRef, TokenProvenance}
 
 import java.time.Instant
 import scala.scalajs.js
@@ -57,8 +57,7 @@ object CallerConverter {
           val p = dynamic.selectDynamic("val")
           Principal.Agent(
             pair = refFromJs(p.pair),
-            componentId = uuidFromJs(p.agentId.componentId.uuid),
-            agentId = p.agentId.agentId.asInstanceOf[String],
+            agentId = AgentId(uuidFromJs(p.agentId.uuid)),
             agentType = p.agentType.asInstanceOf[String],
             environmentId = uuidFromJs(p.environmentId.uuid)
           )
