@@ -2439,8 +2439,12 @@ Terminals name their invocation. Replay rejects an `AgentInvocationFinished` who
 the started invocation (`replay_state/cursor/reads.rs::get_oplog_entry_agent_invocation_finished`).
 An invocation `Error` is a hint: a background retry task can outlive its invocation, so an `Error`
 naming a finished invocation is legal. The status fold attributes it only while that invocation
-runs, or for the agent's `PermissionDenied` rejection of a cancelled pending invocation
-(`worker/status/fields.rs`). A `Recovery` error never names an invocation (`check_well_formed`).
+runs, or for the agent's `PermissionDenied` or `InvalidRequest` rejection of a cancelled pending
+invocation (`worker/status/fields.rs`). Rejection commits the cancellation and keyed error as an
+atomic pair before publishing failure. Cold result lookup preserves the typed rejection instead
+of returning generic cancellation. The durable agent reconstructs its torn-down runtime and
+continues with remaining queued work without retrying the rejected key. A `Recovery` error never
+names an invocation (`check_well_formed`) and does not use this per-invocation rejection policy.
 
 Guests read their identity and caller through `golem:agent/invocation-context`
 (`durable_host/golem/agent_invocation_context.rs`). `invocation-id()` and `caller()` read what the

@@ -1332,6 +1332,8 @@ pub(crate) enum MethodFailureSettlementError {
 pub enum InvocationFailureDecision {
     /// Retry the invocation, or stop, as the retry decision says.
     Retry(RetryDecision),
+    /// The cancellation and typed rejection were committed. The rejected key must not run again.
+    Rejected,
     /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
     /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
     /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the

@@ -8524,8 +8524,20 @@ async fn invoke_with_non_existing_function(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::caller::Caller;
+    use golem_common::model::oplog::{AgentError, OplogEntry};
+    use golem_worker_executor::model::LookupResult;
+
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 1;
+            config.invocation_results.hydrated_cache_capacity = 0;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
@@ -8537,7 +8549,49 @@ async fn invoke_with_non_existing_function(
         .start_agent(&component.id, counter_id.clone())
         .await?;
 
-    // First we invoke a function that does not exist and expect a failure
+    // Bypass ingress validation so the loaded Store rejects this queued method.
+    let rejected_key = InvocationId(uuid::Uuid::new_v4());
+    let cancelled_key = InvocationId(uuid::Uuid::new_v4());
+    let invocation = |key, method_name: &str| AgentInvocation::AgentMethod {
+        idempotency_key: key,
+        method_name: method_name.to_string(),
+        input: SchemaValue::Record { fields: vec![] },
+        invocation_context: InvocationContextStack::fresh(),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    };
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    let rejection = worker
+        .clone()
+        .invoke_and_await(invocation(rejected_key, "WRONG"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&rejection, WorkerExecutorError::InvalidRequest { details }
+        if details.contains("WRONG") && details.contains("not found"))
+    );
+    let oplog = executor.stored_oplog(&worker_id.agent_id).await;
+    assert!(oplog.windows(2).any(|pair| matches!(
+        (&pair[0], &pair[1]),
+        (
+            OplogEntry::CancelPendingInvocation { invocation_id: cancelled, .. },
+            OplogEntry::Error {
+                kind: OplogErrorKind::Invocation,
+                invocation_id: Some(rejected),
+                error: AgentError::InvalidRequest(details),
+                ..
+            }
+        ) if *cancelled == rejected_key && *rejected == rejected_key && details.contains("WRONG")
+    )));
+    worker
+        .schedule_invocation(
+            invocation(cancelled_key, "increment"),
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await?;
+    worker.cancel_invocation(cancelled_key).await?;
+
+    // The public ingress still returns a typed error for the same invalid method.
     let failure = executor
         .invoke_and_await_agent(&component, &counter_id, "WRONG", data_value!())
         .await;
@@ -8550,6 +8604,54 @@ async fn invoke_with_non_existing_function(
     assert!(failure.is_err());
     assert_eq!(success.into_typed::<u32>()?, 1);
 
+    drop(worker);
+    executor.release().await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        2
+    );
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    assert_eq!(
+        worker.lookup_invocation_result(&rejected_key).await,
+        LookupResult::Complete(Err(rejection.clone()))
+    );
+    let rejected_entries = |entries: Vec<OplogEntry>| {
+        entries
+            .into_iter()
+            .filter(|entry| match entry {
+                OplogEntry::PendingAgentInvocation { invocation_id, .. }
+                | OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
+                    *invocation_id == rejected_key
+                }
+                OplogEntry::Error { invocation_id, .. } => {
+                    invocation_id.as_ref() == Some(&rejected_key)
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>()
+    };
+    let before_retry = rejected_entries(executor.stored_oplog(&worker_id.agent_id).await);
+    assert_eq!(
+        worker
+            .clone()
+            .invoke_and_await(invocation(rejected_key, "WRONG"))
+            .await,
+        Err(rejection)
+    );
+    assert_eq!(
+        rejected_entries(executor.stored_oplog(&worker_id.agent_id).await),
+        before_retry
+    );
+    assert_eq!(
+        worker.lookup_invocation_result(&cancelled_key).await,
+        LookupResult::Complete(Err(WorkerExecutorError::invalid_request(
+            "Invocation was cancelled before execution"
+        )))
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }

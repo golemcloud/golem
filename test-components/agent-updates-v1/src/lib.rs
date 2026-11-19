@@ -157,6 +157,7 @@ pub trait SnapshotUpdateTest {
     fn suffix_trap(&self) -> u32;
     fn suffix_exit(&self) -> u32;
     fn accumulated_value(&self) -> u32;
+    fn revision_one_only(&self) -> u32;
     fn write_file(&mut self, path: String, content: String);
     fn read_file(&self, path: String) -> Option<String>;
 }
@@ -224,6 +225,10 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
 
     fn accumulated_value(&self) -> u32 {
         self.accumulated_value
+    }
+
+    fn revision_one_only(&self) -> u32 {
+        1
     }
 
     fn write_file(&mut self, path: String, content: String) {

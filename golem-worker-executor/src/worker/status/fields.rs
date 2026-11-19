@@ -631,7 +631,7 @@ pub(super) fn calculate_invocation_results(
     let mut requests = requests;
 
     fold_invocation_result_entries(&mut requests, deleted_regions, entries, |key, position| {
-        // A permission-denied `Error` names its cancelled request only when the cancellation was
+        // A rejection `Error` names its cancelled request only when the cancellation was
         // folded with it; otherwise the earlier fold has recorded the request.
         let request = position.request.or_else(|| {
             invocation_results
@@ -659,7 +659,7 @@ pub struct InvocationRequests {
     pub current_started_at: Option<OplogIndex>,
     pub pending: HashMap<InvocationId, OplogIndex>,
     /// The last invocation cancelled before it started, with its `PendingAgentInvocation` entry.
-    /// A permission-denied `Error` can follow the cancellation and name the same invocation.
+    /// A rejection `Error` can follow the cancellation and name the same invocation.
     pub cancelled: Option<(InvocationId, OplogIndex)>,
 }
 
@@ -699,10 +699,10 @@ impl InvocationRequests {
 ///
 /// `AgentInvocationFinished` entries name their invocation, so they are attributed by that name
 /// and not by their position. An invocation `Error` is attributed to the invocation it names only
-/// while that invocation runs, or when it is the agent's `PermissionDenied` rejection of a
-/// cancelled pending invocation. A retry error of a background task that outlives its invocation, or of an
-/// entity body, therefore never replaces a finished result. `Exited` names no invocation and is
-/// attributed to the running one.
+/// while that invocation runs, or when it is the agent's `PermissionDenied` or `InvalidRequest`
+/// rejection of a cancelled pending invocation. A retry error of a background task that outlives
+/// its invocation, or of an entity body, therefore never replaces a finished result. `Exited`
+/// names no invocation and is attributed to the running one.
 pub(crate) fn fold_invocation_result_entries(
     requests: &mut InvocationRequests,
     deleted_regions: &DeletedRegions,
@@ -764,7 +764,10 @@ pub(crate) fn fold_invocation_result_entries(
                 ..
             } if requests.current.as_ref() == Some(invocation_id)
                 || (entity_parent_start_index.is_none()
-                    && matches!(error, AgentError::PermissionDenied(_))) =>
+                    && matches!(
+                        error,
+                        AgentError::PermissionDenied(_) | AgentError::InvalidRequest(_)
+                    )) =>
             {
                 observe_result(invocation_id, position(requests.request_of(invocation_id)));
             }

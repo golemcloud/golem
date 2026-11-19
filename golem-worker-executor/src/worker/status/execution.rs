@@ -68,7 +68,10 @@ pub(super) fn calculate_latest_worker_status(
         {
             last_error_kind = Some(*kind);
             if *kind == OplogErrorKind::Invocation
-                && matches!(error, AgentError::PermissionDenied(_))
+                && matches!(
+                    error,
+                    AgentError::PermissionDenied(_) | AgentError::InvalidRequest(_)
+                )
             {
                 current_status = AgentStatus::Idle;
                 last_error_kind = None;

@@ -641,6 +641,7 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
   <li>The invocation loop pops it, appends <code>AgentInvocationStarted</code>, runs the guest export in a Wasmtime Store, and every host call the guest makes is recorded through the durable host context.</li>
   <li><code>AgentInvocationFinished</code> is appended, then completion waits for the state actor's commit receipt before notifying waiters. Durable agents use <code>Always</code> (storage first); ephemeral agents use <code>Deferred</code> (ordered writer handoff).</li>
 </ol>
+<p id="invocation-rejection">A request rejected with <code>InvalidRequest</code> or <code>PermissionDenied</code> commits <code>CancelPendingInvocation</code> and a keyed <code>Error</code> as an atomic pair before notifying its caller. Reconstruction keeps the typed error and the original request position for same-key retries, rather than reporting generic cancellation. Only that invocation fails; the durable agent reconstructs its torn-down runtime and continues with the remaining queued work, without retrying the rejected key. Operator cancellation stays distinct. A <code>Recovery</code> error remains an agent recovery failure, not a request rejection.</p>
 
 <!-- ===================== 3. ACTORS ===================== -->
 <h2 id="s-actors"><span class="num">3</span>Who is who: agents, entities, streams, peers</h2>

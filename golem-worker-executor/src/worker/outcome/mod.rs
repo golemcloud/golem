@@ -977,6 +977,18 @@ pub(in crate::worker) fn lookup_result_from_cached_result(
         InvocationResult::Cached {
             result:
                 Err(FailedInvocationResult::Trap {
+                    trap_type:
+                        TrapType::Error {
+                            error: AgentError::InvalidRequest(details),
+                            ..
+                        },
+                    ..
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::invalid_request(details))),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult::Trap {
                     trap_type: TrapType::Error { error, .. },
                     stderr,
                 }),

@@ -468,6 +468,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .await
                 {
                     InvocationFailureDecision::Retry(decision) => decision,
+                    InvocationFailureDecision::Rejected => RetryDecision::None,
                     InvocationFailureDecision::Infrastructure(error) => {
                         return self.invocation_failure_recovery(&error);
                     }
@@ -682,19 +683,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             trap_type,
             Some(TrapType::Interrupt(InterruptKind::ShardLost))
         );
-        let decision = match trap_type {
+        let (decision, rejection_persisted) = match trap_type {
             Some(trap_type) => match self
                 .store
                 .data_mut()
                 .on_invocation_failure(full_function_name, &trap_type)
                 .await
             {
-                InvocationFailureDecision::Retry(decision) => decision,
+                InvocationFailureDecision::Retry(decision) => (decision, false),
+                InvocationFailureDecision::Rejected => (RetryDecision::None, true),
                 InvocationFailureDecision::Infrastructure(error) => {
                     return self.invocation_failure_recovery(&error);
                 }
             },
-            None => RetryDecision::None,
+            None => (RetryDecision::None, false),
         };
         // A lost shard writes nothing more: a terminal streaming-session failure would end an
         // invocation the shard's new owner resumes.
@@ -716,6 +718,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .durable_stream_producer
                 .changed()
                 .notify_waiters();
+        }
+
+        // Failure teardown closes this Store's stream runtime. Reconstruct only after the
+        // rejection committed, so remaining queued work runs without retrying the rejected key.
+        if rejection_persisted
+            && self.parent.agent_mode() == AgentMode::Durable
+            && !self.parent.retired_for_lost_shard()
+        {
+            return CommandOutcome::BreakInnerLoop(RetryDecision::Immediate);
         }
 
         failed_agent_invocation_outcome(self.parent.agent_mode(), decision, oplog_failure.as_ref())

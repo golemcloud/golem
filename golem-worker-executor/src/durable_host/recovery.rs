@@ -410,6 +410,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             .await
                                         {
                                             InvocationFailureDecision::Retry(decision) => decision,
+                                            InvocationFailureDecision::Rejected => RetryDecision::None,
                                             // The start retries the replay when the storage
                                             // answers again.
                                             InvocationFailureDecision::Infrastructure(error) => {

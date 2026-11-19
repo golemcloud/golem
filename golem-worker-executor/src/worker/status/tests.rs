@@ -1829,32 +1829,37 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
 }
 
 #[test]
-async fn recovery_permission_denied_is_not_treated_as_an_invocation_rejection() {
+async fn recovery_errors_are_not_treated_as_invocation_rejections() {
     let retry_from = OplogIndex::from_u64(1);
-    let test_case = TestCase::builder(0)
-        .add(
-            OplogEntry::error(
-                None,
-                OplogErrorKind::Recovery,
-                None,
-                AgentError::PermissionDenied("startup denied".to_string()),
-                retry_from,
-                Some(RetryPolicyState::Terminal),
-                None,
-                None,
-            ),
-            move |mut status| {
-                status.status = AgentStatus::Failed;
-                status.last_error_kind = Some(OplogErrorKind::Recovery);
-                status
-                    .current_retry_state
-                    .insert(retry_from, RetryPolicyState::Terminal);
-                status
-            },
-        )
-        .build();
+    for error in [
+        AgentError::PermissionDenied("startup denied".to_string()),
+        AgentError::InvalidRequest("invalid startup".to_string()),
+    ] {
+        let test_case = TestCase::builder(0)
+            .add(
+                OplogEntry::error(
+                    None,
+                    OplogErrorKind::Recovery,
+                    None,
+                    error,
+                    retry_from,
+                    Some(RetryPolicyState::Terminal),
+                    None,
+                    None,
+                ),
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.last_error_kind = Some(OplogErrorKind::Recovery);
+                    status
+                        .current_retry_state
+                        .insert(retry_from, RetryPolicyState::Terminal);
+                    status
+                },
+            )
+            .build();
 
-    run_test_case(test_case).await;
+        run_test_case(test_case).await;
+    }
 }
 
 #[test]
@@ -2159,40 +2164,45 @@ fn invocation_error_naming_a_finished_invocation_keeps_its_result() {
 }
 
 #[test]
-fn permission_denied_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
+fn rejection_error_is_attributed_to_the_cancelled_invocation_while_another_runs() {
     let running = InvocationId(Uuid::new_v4());
     let denied = InvocationId(Uuid::new_v4());
 
     // A hint separates the cancellation from the error, so the error is not positionally adjacent
     // to the `CancelPendingInvocation` of the invocation it names.
-    let (results, current) = fold_results(vec![
-        pending_invocation_entry(&denied),
-        started_invocation(&running),
-        OplogEntry::cancel_pending_invocation(denied),
-        OplogEntry::log(
-            None,
-            golem_common::model::oplog::LogLevel::Stderr,
-            String::new(),
-            "denied\n".to_string(),
-            None,
-        ),
-        OplogEntry::error(
-            None,
-            OplogErrorKind::Invocation,
-            Some(denied),
-            AgentError::PermissionDenied("permission denied".to_string()),
-            OplogIndex::INITIAL,
-            None,
-            None,
-            None,
-        ),
-    ]);
+    for error in [
+        AgentError::PermissionDenied("permission denied".to_string()),
+        AgentError::InvalidRequest("method not found".to_string()),
+    ] {
+        let (results, current) = fold_results(vec![
+            pending_invocation_entry(&denied),
+            started_invocation(&running),
+            OplogEntry::cancel_pending_invocation(denied),
+            OplogEntry::log(
+                None,
+                golem_common::model::oplog::LogLevel::Stderr,
+                String::new(),
+                "denied\n".to_string(),
+                None,
+            ),
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                Some(denied),
+                error,
+                OplogIndex::INITIAL,
+                None,
+                None,
+                None,
+            ),
+        ]);
 
-    assert_eq!(
-        results,
-        vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
-    );
-    assert_eq!(current, Some(running));
+        assert_eq!(
+            results,
+            vec![(denied, result(3, Some(1))), (denied, result(5, Some(1))),]
+        );
+        assert_eq!(current, Some(running));
+    }
 }
 
 #[test]
@@ -3490,7 +3500,10 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
             caller: Caller::anonymous(),
             scope_card: None,
         })
-        .permission_denied_pending_invocation(idempotency_key)
+        .rejected_pending_invocation(
+            idempotency_key,
+            AgentError::PermissionDenied("permission denied".to_string()),
+        )
         .build();
     let expected = test_case.entries.last().unwrap().expected_status.clone();
     let pending_baseline = test_case.entries[1].expected_status.clone();
@@ -3522,6 +3535,48 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
         expected.invocation_results.get(&idempotency_key),
         Some(&expected.oplog_idx)
     );
+}
+
+#[test]
+async fn invalid_request_rejection_survives_status_reconstruction() {
+    let idempotency_key = InvocationId(Uuid::new_v4());
+    let test_case = TestCase::builder(0)
+        .pending_invocation(AgentInvocation::AgentMethod {
+            idempotency_key,
+            method_name: "removed_method".to_string(),
+            input: SchemaValue::Record { fields: vec![] },
+            invocation_context: InvocationContextStack::fresh(),
+            caller: Caller::anonymous(),
+            scope_card: None,
+        })
+        .rejected_pending_invocation(
+            idempotency_key,
+            AgentError::InvalidRequest("method not found".to_string()),
+        )
+        .build();
+    let expected = test_case.entries.last().unwrap().expected_status.clone();
+    for baseline in [
+        None,
+        Some(test_case.entries[1].expected_status.clone()),
+        Some(test_case.entries[2].expected_status.clone()),
+    ] {
+        let actual = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            baseline,
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.status, AgentStatus::Idle);
+        assert!(actual.pending_invocations.is_empty());
+        assert_eq!(actual.current_idempotency_key, None);
+        assert_eq!(
+            actual.invocation_results.get(&idempotency_key),
+            Some(&actual.oplog_idx)
+        );
+    }
 }
 
 #[test]
@@ -5387,13 +5442,17 @@ impl TestCaseBuilder {
         })
     }
 
-    pub fn permission_denied_pending_invocation(self, idempotency_key: InvocationId) -> Self {
+    pub fn rejected_pending_invocation(
+        self,
+        idempotency_key: InvocationId,
+        error: AgentError,
+    ) -> Self {
         self.cancel_pending_invocation(idempotency_key).add(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
                 Some(idempotency_key),
-                AgentError::PermissionDenied("permission denied".to_string()),
+                error,
                 OplogIndex::INITIAL,
                 None,
                 None,
