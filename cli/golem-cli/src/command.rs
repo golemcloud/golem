@@ -1905,16 +1905,22 @@ pub mod worker {
         /// Structured formats emit one output document per oplog entry; with `--page`, one
         /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
         /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
+        /// With `--output`, the entries go to a file as JSON Lines instead.
         #[command(after_help = crate::command_examples::AGENT_OPLOG)]
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query and --cursor.
-            #[arg(long, conflicts_with_all = ["query", "cursor"])]
+            /// Index of the first oplog entry to get. If missing, the read starts at the first
+            /// entry. Mutually exclusive with --cursor.
+            #[arg(long, conflicts_with = "cursor")]
             from: Option<u64>,
+            /// Index of the last oplog entry to get. If missing, or after the end of the oplog,
+            /// the read goes to the end of the oplog. With --query, only the matching entries up
+            /// to this index are returned.
+            #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
+            to: Option<u64>,
             #[arg(
                 long,
-                conflicts_with = "from",
                 help = crate::command_glossary::OPLOG_QUERY_SHORT,
                 long_help = crate::command_glossary::OPLOG_QUERY_LONG,
                 verbatim_doc_comment,
@@ -1924,8 +1930,19 @@ pub mod worker {
             /// Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by
             /// default), for example an entry with a large snapshot, invocation input or host call
             /// response. By default the CLI reads each omitted entry in full.
-            #[arg(long, conflicts_with = "obfuscate")]
+            #[arg(long, conflicts_with_all = ["obfuscate", "output"])]
             omit_payloads: bool,
+            /// Export the entries to FILE as JSON Lines: one `agent.oplog` document per line, in
+            /// index order, as `--format json` prints them. The export reads the oplog page by
+            /// page to the end of the range and writes each page before it reads the next, so it
+            /// works for oplogs of any size. Each entry is exported in full, also the entries that
+            /// oplog pages omit for their size.
+            #[arg(
+                long,
+                value_name = "FILE",
+                conflicts_with_all = ["html", "serve", "obfuscate", "page"]
+            )]
+            output: Option<std::path::PathBuf>,
             /// Read one page of at most the HTTP batch size (50) entries and print it as one
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
             /// entries after the page. A search page ends early when the server's scan budget ends
@@ -3415,6 +3432,7 @@ mod test {
             ("pretty-json", Format::PrettyJson),
             ("pretty-yaml", Format::PrettyYaml),
             ("toon", Format::Toon),
+            ("jsonl", Format::Json),
         ] {
             let command = GolemCliCommand::try_parse_from(["golem", "--format", name, "build"])
                 .unwrap_or_else(|error| panic!("--format {name}: {error}"));
@@ -3450,6 +3468,26 @@ mod test {
                 subcommand: crate::command::worker::AgentSubcommand::Oplog { export, .. },
             } => export,
             _ => panic!("expected agent oplog"),
+        }
+    }
+
+    #[test]
+    fn oplog_query_combines_with_a_range_and_the_file_export_excludes_the_other_outputs() {
+        assert!(parse_oplog(&["--query", "error", "--from", "3", "--to", "9"]).is_ok());
+        assert!(parse_oplog(&["--to", "9", "--format", "jsonl", "--output", "f.jsonl"]).is_ok());
+        for conflicting in [
+            vec!["--output", "f.jsonl", "--page"],
+            vec!["--output", "f.jsonl", "--html", "f.html"],
+            vec!["--output", "f.jsonl", "--serve"],
+            vec!["--output", "f.jsonl", "--obfuscate"],
+            vec!["--output", "f.jsonl", "--omit-payloads"],
+            vec!["--to", "9", "--obfuscate"],
+        ] {
+            assert_eq!(
+                parse_oplog(&conflicting).unwrap_err().kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{conflicting:?}"
+            );
         }
     }
 
@@ -3496,6 +3534,7 @@ mod test {
         for extra in [
             vec!["--from", "5"],
             vec!["--query", "error"],
+            vec!["--from", "5", "--query", "error"],
             vec!["--html", "report.html", "--open"],
             vec!["--serve", "--port", "0", "--no-open"],
             vec![
@@ -3512,7 +3551,6 @@ mod test {
             }));
             assert!(export.obfuscate);
         }
-        assert!(parse_oplog(&["--obfuscate", "--from", "5", "--query", "x"]).is_err());
         assert!(parse_oplog(&["--obfuscate", "--html", "a.html", "--serve"]).is_err());
     }
 

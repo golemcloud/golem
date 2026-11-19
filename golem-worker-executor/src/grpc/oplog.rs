@@ -18,7 +18,7 @@ use super::{
     PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, check_oplog_cursor_query,
     extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page, golem, min,
-    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
+    oplog_page_cursor, oplog_page_start, oplog_read_end, search_public_oplog_page,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -57,6 +57,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         let cursor = request.cursor.map(Into::into);
         check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), None)?;
+        let from = OplogIndex::from_u64(request.from_oplog_index).max(OplogIndex::INITIAL);
+        let end = oplog_read_end(from, request.to_oplog_index.map(OplogIndex::from_u64))?;
 
         let component_service = self.component_service();
         let identity = self
@@ -77,7 +79,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             agent_mode,
             cursor,
-            OplogIndex::from_u64(request.from_oplog_index),
+            from,
         )
         .await?;
         let chunk = get_public_oplog_page(
@@ -90,6 +92,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             start_component_revision,
             start,
+            end,
             limits,
         )
         .await
@@ -177,6 +180,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         let cursor = request.cursor.map(Into::into);
         check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), Some(&request.query))?;
+        let from = request
+            .from_oplog_index
+            .map_or(OplogIndex::INITIAL, OplogIndex::from_u64)
+            .max(OplogIndex::INITIAL);
+        let end = oplog_read_end(from, request.to_oplog_index.map(OplogIndex::from_u64))?;
 
         let component_service = self.component_service();
         let identity = self
@@ -197,7 +205,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &owned_agent_id,
             agent_mode,
             cursor,
-            OplogIndex::INITIAL,
+            from,
         )
         .await?;
         let chunk = search_public_oplog_page(
@@ -210,6 +218,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             start_component_revision,
             start,
+            end,
             limits,
             &request.query,
             self.services.config().limits.scan_budget,

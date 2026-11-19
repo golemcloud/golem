@@ -1576,6 +1576,24 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     assert_eq!(result2.len(), 3, "imported-function");
     assert_eq!(result3.len(), 2, "id:G1001 OR id:G1000");
 
+    // A query combines with a range: only the matches in the range are returned.
+    let (first, second) = (result1[0].oplog_index, result1[1].oplog_index);
+    let before_second = OplogIndex::from_u64(second.as_u64() - 1);
+    let in_range = user
+        .read_oplog(&agent_id, Some(first), Some(before_second), Some("G1002"))
+        .await?;
+    assert_eq!(in_range, vec![result1[0].clone()]);
+    let range = user
+        .read_oplog(&agent_id, Some(first), Some(second), None)
+        .await?;
+    assert_eq!(
+        range
+            .iter()
+            .map(|entry| entry.oplog_index.as_u64())
+            .collect::<Vec<_>>(),
+        (first.as_u64()..=second.as_u64()).collect::<Vec<_>>()
+    );
+
     Ok(())
 }
 

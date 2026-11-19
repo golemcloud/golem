@@ -23,7 +23,7 @@ use crate::durable_host::agent_monomorphization_context;
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     PublicOplogPageLimits, check_oplog_cursor_query, get_public_oplog_entry, get_public_oplog_page,
-    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
+    oplog_page_cursor, oplog_page_start, oplog_read_end, search_public_oplog_page,
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::rpc::DurableStreamRemoteError;

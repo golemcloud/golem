@@ -528,6 +528,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         _: &AgentId,
         _: OplogIndex,
+        _: Option<OplogIndex>,
         _: Option<OplogCursor>,
         _: u64,
         _: EnvironmentId,
@@ -539,6 +540,8 @@ impl WorkerClient for RecordingWorkerClient {
     async fn search_oplog(
         &self,
         _: &AgentId,
+        _: Option<OplogIndex>,
+        _: Option<OplogIndex>,
         _: Option<OplogCursor>,
         _: u64,
         _: String,

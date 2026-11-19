@@ -136,6 +136,57 @@ impl StructuredOutput for AgentOplogPageView {
     const KIND: &'static str = "agent.oplog-page";
 }
 
+/// Writes an oplog export as JSON Lines: each entry is the `agent.oplog` document that
+/// `--format json` prints for it, on its own line. The entries must come in index order, each
+/// once; an entry at or before the last written index is refused, so that a read that repeats or
+/// reorders entries at a page boundary fails the export instead of writing a wrong file.
+pub struct OplogJsonlWriter<W: std::io::Write> {
+    writer: W,
+    masking: crate::model::masking::MaskingConfig,
+    last_index: Option<u64>,
+    written: u64,
+}
+
+impl<W: std::io::Write> OplogJsonlWriter<W> {
+    pub fn new(writer: W, masking: crate::model::masking::MaskingConfig) -> Self {
+        Self {
+            writer,
+            masking,
+            last_index: None,
+            written: 0,
+        }
+    }
+
+    pub fn write(&mut self, entry: AgentOplogEntryView) -> anyhow::Result<()> {
+        if let Some(last_index) = self.last_index
+            && entry.index <= last_index
+        {
+            anyhow::bail!(
+                "the oplog read returned the entry at index {} after the entry at index {last_index}",
+                entry.index
+            );
+        }
+        let index = entry.index;
+        let document =
+            crate::model::cli_output::to_structured_output_value_masked(entry, self.masking)?;
+        serde_json::to_writer(&mut self.writer, &document)?;
+        self.writer.write_all(b"\n")?;
+        self.last_index = Some(index);
+        self.written += 1;
+        Ok(())
+    }
+
+    /// The count of the written entries.
+    pub fn written(&self) -> u64 {
+        self.written
+    }
+
+    pub fn finish(mut self) -> anyhow::Result<W> {
+        self.writer.flush()?;
+        Ok(self.writer)
+    }
+}
+
 impl TextOutput for AgentOplogPageView {
     fn log(&self) {
         for entry in &self.entries {
@@ -1473,6 +1524,64 @@ mod tests {
 
     fn timestamp() -> Timestamp {
         Timestamp::from(0)
+    }
+
+    fn log_view(index: u64, message: &str) -> AgentOplogEntryView {
+        AgentOplogEntryView {
+            index,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(PublicOplogEntry::Log(
+                golem_common::model::oplog::public_oplog_entry::LogParams {
+                    timestamp: timestamp(),
+                    level: golem_common::model::oplog::LogLevel::Info,
+                    context: String::new(),
+                    message: message.to_string(),
+                    trace_context: None,
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn the_jsonl_writer_writes_one_agent_oplog_document_per_line_and_refuses_repeated_indices() {
+        let mut writer = OplogJsonlWriter::new(
+            Vec::new(),
+            crate::model::masking::MaskingConfig::hide_secrets(),
+        );
+        // Two pages; the second, last page starts right after the first one.
+        for page in [vec![(1, "a"), (2, "b")], vec![(3, "c")]] {
+            for (index, message) in page {
+                writer.write(log_view(index, message)).unwrap();
+            }
+        }
+        assert_eq!(writer.written(), 3);
+        // A page that starts again at the last entry of the previous page is refused.
+        assert!(writer.write(log_view(3, "c")).is_err());
+        assert!(writer.write(log_view(2, "b")).is_err());
+        let written = String::from_utf8(writer.finish().unwrap()).unwrap();
+
+        let lines = written.lines().collect::<Vec<_>>();
+        assert!(written.ends_with('\n'));
+        assert_eq!(lines.len(), 3);
+        let documents = lines
+            .iter()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            documents
+                .iter()
+                .map(|document| (
+                    document["$type"].as_str().unwrap(),
+                    document["index"].as_u64().unwrap(),
+                    document["entry"]["message"].as_str().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("agent.oplog", 1, "a"),
+                ("agent.oplog", 2, "b"),
+                ("agent.oplog", 3, "c")
+            ]
+        );
     }
 
     fn agent_metadata(agent_id: &str) -> AgentMetadataView {

@@ -140,6 +140,8 @@ async fn search_page(
             count: 100,
             query: RARE_QUERY.to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
+            from_oplog_index: None,
+            to_oplog_index: None,
         })
         .await?
         .into_inner();
@@ -614,6 +616,7 @@ async fn get_oplog(
             cursor,
             count,
             auth_ctx: Some(executor.auth_ctx().into()),
+            to_oplog_index: None,
         })
         .await?
         .into_inner()
@@ -638,6 +641,8 @@ async fn search_oplog(
             count,
             query: query.to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
+            from_oplog_index: None,
+            to_oplog_index: None,
         })
         .await?
         .into_inner()

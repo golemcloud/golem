@@ -653,10 +653,12 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(())
     }
 
-    async fn get_oplog(
+    async fn read_oplog(
         &self,
         agent_id: &AgentId,
-        from: OplogIndex,
+        from: Option<OplogIndex>,
+        to: Option<OplogIndex>,
+        query: Option<&str>,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let client = self
             .deps
@@ -672,13 +674,16 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 .get_oplog(
                     &agent_id.component_id.0,
                     &agent_id.agent_id,
-                    Some(from.as_u64()),
+                    from.map(u64::from),
+                    to.map(u64::from),
                     100,
                     cursor.as_ref(),
-                    None,
+                    query,
                 )
                 .await
-                .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
+                .map_err(|e| {
+                    anyhow!("get_oplog failed for agent {agent_id}, query={query:?}: {e}")
+                })?;
 
             result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
             match response.next {
@@ -688,6 +693,22 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         }
 
         Ok(result)
+    }
+
+    async fn get_oplog(
+        &self,
+        agent_id: &AgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_oplog(agent_id, Some(from), None, None).await
+    }
+
+    async fn search_oplog(
+        &self,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_oplog(agent_id, None, None, Some(query)).await
     }
 
     async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
@@ -702,6 +723,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &agent_id.component_id.0,
                 &agent_id.agent_id,
                 Some(OplogIndex::INITIAL.as_u64()),
+                None,
                 1,
                 None,
                 None,
@@ -710,45 +732,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
 
         Ok(response.last_index)
-    }
-
-    async fn search_oplog(
-        &self,
-        agent_id: &AgentId,
-        query: &str,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let client = self
-            .deps
-            .worker_service()
-            .worker_http_client(&self.token)
-            .await;
-
-        let mut result = Vec::new();
-        let mut cursor: Option<golem_client::model::OplogCursor> = None;
-
-        loop {
-            let response = client
-                .get_oplog(
-                    &agent_id.component_id.0,
-                    &agent_id.agent_id,
-                    None,
-                    100,
-                    cursor.as_ref(),
-                    Some(query),
-                )
-                .await
-                .map_err(|e| {
-                    anyhow!("search_oplog failed for agent {agent_id}, query={query}: {e}")
-                })?;
-
-            result.extend(full_oplog_entries(&client, agent_id, response.entries).await?);
-            match response.next {
-                None => break,
-                Some(next_cursor) => cursor = Some(next_cursor),
-            }
-        }
-
-        Ok(result)
     }
 
     async fn interrupt_with_optional_recovery(

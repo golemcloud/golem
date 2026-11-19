@@ -1121,3 +1121,94 @@ async fn oplog_export_serves_obfuscated_pages() {
     server.start_kill().unwrap();
     server.wait().await.unwrap();
 }
+
+#[test]
+#[timeout("40 minutes")]
+async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
+    let mut ctx = TestContext::new();
+    let _proxy = setup_probe_app(&mut ctx).await;
+
+    // The long probe has more entries than one page of the HTTP batch size (50).
+    let plain = plain_dump(&ctx, LONG_PROBE).await;
+    let last = plain.len() as u64;
+    assert!(last > 120, "the long probe has only {last} entries");
+    let to = last - 3;
+    let path = ctx.cwd_path_join("export/oplog.jsonl");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            "--to",
+            &to.to_string(),
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let written = fs::read_to_string(&path).unwrap();
+    let lines = written
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len() as u64, to);
+    assert_eq!(lines, plain[..to as usize].to_vec());
+
+    // A query combines with a range: only the matches in the range are exported.
+    const QUERY: &str = "agent-invocation-started";
+    let plain = plain_dump(&ctx, PROBE).await;
+    let started = plain
+        .iter()
+        .filter(|document| document["entry"]["type"] == "AgentInvocationStarted")
+        .map(|document| document["index"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(started.len() >= 5, "{started:?}");
+    let (from, to) = (started[1] + 1, started[3]);
+    let query_path = ctx.cwd_path_join("export/query.jsonl");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            PROBE,
+            "--query",
+            QUERY,
+            "--from",
+            &from.to_string(),
+            "--to",
+            &to.to_string(),
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            query_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let exported = fs::read_to_string(&query_path)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["index"]
+                .as_u64()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(exported, started[2..=3].to_vec());
+
+    // A file export needs the JSON Lines format, and a range must not end before it starts.
+    let text = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            PROBE,
+            "--output",
+            ctx.cwd_path_join("export/text.jsonl").to_str().unwrap(),
+        ])
+        .await;
+    assert!(!text.success(), "{}", text.stdout_text());
+    let reversed = ctx
+        .cli([cmd::AGENT, "oplog", PROBE, "--from", "5", "--to", "4"])
+        .await;
+    assert!(!reversed.success(), "{}", reversed.stdout_text());
+}

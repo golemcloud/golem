@@ -700,6 +700,33 @@ async fn start_lookup_with_a_query_sends_no_query() {
 }
 
 #[test]
+async fn a_query_from_an_index_exports_only_the_later_matches() {
+    let reads = FakeReads::new(vec![
+        create(),
+        log_entry(2, "MARKER-R"),
+        log_entry(3, "other"),
+        log_entry(4, "MARKER-R"),
+        log_entry(5, "MARKER-R"),
+    ]);
+    let mut options = options();
+    options.from = Some(3);
+    options.query = Some("MARKER-R".to_string());
+    options.page_size = 1;
+    let (result, sink, log) = run(reads, options).await;
+    result.unwrap();
+    let indices: Vec<u64> = sink.entries.iter().map(|e| e.index).collect();
+    assert_eq!(indices, vec![4, 5]);
+    assert!(page_reads(&log).iter().any(|event| matches!(
+        event,
+        Event::Page {
+            from: Some(3),
+            query: Some(_),
+            ..
+        }
+    )));
+}
+
+#[test]
 async fn coverage_lists_are_capped() {
     let n = 150u64;
     let mut entries = vec![

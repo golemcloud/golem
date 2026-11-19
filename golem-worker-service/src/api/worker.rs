@@ -626,6 +626,11 @@ impl WorkerApi {
     }
 
     /// Get the oplog of a worker
+    ///
+    /// Reads the oplog entries from `from` to `to`, both included. Without `from`, the read starts
+    /// at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
+    /// the oplog ends the read at the end, and a `to` before `from` is refused. With `query`, the
+    /// page holds only the entries in the range that match the query.
     #[oai(
         path = "/:component_id/workers/:agent_name/oplog",
         method = "get",
@@ -636,6 +641,7 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         agent_name: Path<String>,
         from: Query<Option<u64>>,
+        to: Query<Option<u64>>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
@@ -650,7 +656,7 @@ impl WorkerApi {
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
         let response = self
-            .get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, auth)
+            .get_oplog_internal(agent_id, from.0, to.0, count.0, cursor.0, query.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -661,33 +667,29 @@ impl WorkerApi {
         &self,
         agent_id: AgentId,
         from: Option<u64>,
+        to: Option<u64>,
         count: u64,
         cursor: Option<OplogCursor>,
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        let mut response = match (from, query) {
-            (Some(_), Some(_)) => {
-                return Err(ApiEndpointError::bad_request(
-                    api::error_code::INVALID_OPLOG_QUERY_PARAMS,
-                    golem_common::safe(
-                        "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                    ),
-                ));
-            }
-            (Some(from), None) => {
+        let (from, to) = oplog_range(from, to)?;
+        let mut response = match query {
+            Some(query) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
+                    .search_oplog(&agent_id, from, to, cursor, count, query, auth)
                     .await?
             }
-            (None, Some(query)) => {
+            None => {
                 self.worker_service
-                    .search_oplog(&agent_id, cursor, count, query, auth)
-                    .await?
-            }
-            (None, None) => {
-                self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
+                    .get_oplog(
+                        &agent_id,
+                        from.unwrap_or(OplogIndex::INITIAL),
+                        to,
+                        cursor,
+                        count,
+                        auth,
+                    )
                     .await?
             }
         };
@@ -1291,9 +1293,29 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
     })
 }
 
+/// The `from` and `to` parameters of an oplog read as oplog indices. A range that ends before it
+/// starts is refused; a read without `from`, or from index 0, starts at the first entry.
+fn oplog_range(
+    from: Option<u64>,
+    to: Option<u64>,
+) -> Result<(Option<OplogIndex>, Option<OplogIndex>)> {
+    let start = from
+        .unwrap_or(OplogIndex::INITIAL.into())
+        .max(OplogIndex::INITIAL.into());
+    match to {
+        Some(to) if to < start => Err(ApiEndpointError::bad_request(
+            api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+            golem_common::safe(format!(
+                "The 'to' parameter ({to}) is before the start of the range ({start})"
+            )),
+        )),
+        _ => Ok((from.map(OplogIndex::from_u64), to.map(OplogIndex::from_u64))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_agent_name_with_latest_component;
+    use super::{normalize_agent_name_with_latest_component, oplog_range};
     use chrono::Utc;
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
@@ -1407,5 +1429,21 @@ mod tests {
                 .unwrap();
 
         assert_eq!(agent_id.agent_id, "custom-worker");
+    }
+
+    #[test]
+    fn an_oplog_range_refuses_an_end_before_its_start_and_accepts_open_ends() {
+        let index = golem_common::model::oplog::OplogIndex::from_u64;
+        assert!(oplog_range(Some(5), Some(4)).is_err());
+        // Without `from`, or from index 0, the range starts at the first entry.
+        assert!(oplog_range(None, Some(0)).is_err());
+        assert!(oplog_range(Some(0), Some(0)).is_err());
+        assert_eq!(
+            oplog_range(Some(5), Some(5)).unwrap(),
+            (Some(index(5)), Some(index(5)))
+        );
+        assert_eq!(oplog_range(None, Some(1)).unwrap(), (None, Some(index(1))));
+        assert_eq!(oplog_range(Some(7), None).unwrap(), (Some(index(7)), None));
+        assert_eq!(oplog_range(None, None).unwrap(), (None, None));
     }
 }

@@ -2335,6 +2335,7 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
                 count: 1,
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
+                to_oplog_index: None,
             },
         )
         .await?

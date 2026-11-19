@@ -23,6 +23,8 @@ use strum_macros::EnumIter;
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]
 pub enum Format {
+    #[serde(alias = "jsonl")]
+    #[clap(alias = "jsonl")]
     Json,
     #[serde(alias = "pretty")]
     #[clap(alias = "pretty")]

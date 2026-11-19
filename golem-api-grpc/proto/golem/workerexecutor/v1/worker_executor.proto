@@ -331,6 +331,7 @@ message GetOplogRequest {
   uint64 count = 5;
   golem.common.EnvironmentId environment_id = 6;
   golem.auth.AuthCtx auth_ctx = 7;
+  optional uint64 to_oplog_index = 8;
 }
 
 message GetOplogResponse {
@@ -374,6 +375,8 @@ message SearchOplogRequest {
   uint64 count = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
+  optional uint64 from_oplog_index = 7;
+  optional uint64 to_oplog_index = 8;
 }
 
 message SearchOplogResponse {

@@ -564,6 +564,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         from_oplog_index: OplogIndex,
+        to_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
@@ -573,6 +574,8 @@ pub trait WorkerClient: Send + Sync {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
+        from_oplog_index: Option<OplogIndex>,
+        to_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1467,6 +1470,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         from_oplog_index: OplogIndex,
+        to_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
@@ -1482,6 +1486,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
                         agent_id: Some(agent_id.into()),
                         from_oplog_index: from_oplog_index.into(),
+                        to_oplog_index: to_oplog_index.map(Into::into),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.into()),
@@ -1593,6 +1598,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
+        from_oplog_index: Option<OplogIndex>,
+        to_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1613,7 +1620,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        from_oplog_index: from_oplog_index.map(Into::into),
+                        to_oplog_index: to_oplog_index.map(Into::into),
                     }),
                 )
             },
