@@ -984,6 +984,107 @@ fn classify_guest_call_settlement<R>(
     })
 }
 
+struct ToolInitiationRun<'a, 's, Ctx: WorkerCtx> {
+    store: &'a mut StoreContextMut<'s, Ctx>,
+    owner: std::sync::Arc<crate::durable_host::concurrent::initiation_owner::InitiationOwner<Ctx>>,
+    interrupted: bool,
+}
+
+impl<Ctx: WorkerCtx> Drop for ToolInitiationRun<'_, '_, Ctx> {
+    fn drop(&mut self) {
+        if self.interrupted {
+            self.store
+                .data()
+                .durable_ctx()
+                .begin_stream_runtime_teardown();
+            self.owner.close();
+        }
+    }
+}
+
+/// Returns at the host-observed export result without draining guest tasks.
+pub(crate) async fn run_tool_guest_call<Ctx: WorkerCtx, R>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    fun: impl AsyncFnOnce(&Accessor<Ctx>) -> wasmtime::Result<R>,
+) -> Result<wasmtime::Result<R>, GuestCallSettlementError> {
+    let initiations = crate::durable_host::concurrent::initiation_owner::InitiationOwner::new();
+    store.data_mut().durable_ctx_mut().host_initiations = Some(initiations.clone());
+    let mut run = ToolInitiationRun {
+        store,
+        owner: initiations.clone(),
+        interrupted: true,
+    };
+    let store = &mut *run.store;
+    let service = initiations.clone();
+    let ctx = store.data().durable_ctx();
+    let runtime = ctx.runtime_suspension.clone();
+    let root_runtime = runtime.clone();
+    let entity = ctx
+        .entity_invocation_scope()
+        .map(|scope| scope.invocation_id().clone());
+    let policy = ctx.suspension_policy();
+    let driver = store
+        .as_context_mut()
+        .run_concurrent(async move |accessor| {
+            if let (Some(runtime), Some(activity)) = (&root_runtime, accessor.runtime_activity()) {
+                runtime.certify_root(activity);
+            }
+            tokio::select! {
+                result = fun(accessor) => result,
+                result = service.serve(accessor, |ctx: &mut Ctx| ctx.durable_ctx_mut()) => {
+                    result?;
+                    Err(wasmtime::Error::msg("tool initiation service stopped before return"))
+                }
+            }
+        });
+    let result = match runtime {
+        Some(runtime) => runtime.drive(driver, entity.as_ref(), policy).await,
+        None => driver.await,
+    };
+    let ctx = store.data().durable_ctx();
+    if matches!(&result, Ok(Ok(_))) {
+        ctx.entity_body_finalization.begin_guest_return();
+    }
+    if matches!(&result, Ok(Ok(_))) {
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let _deadline = ctx.arm_tail_work_deadline(started.clone());
+        let interrupt = ctx.create_interrupt_signal();
+        started.notify_one();
+        let drained = tokio::select! {
+            drained = initiations.drain(store.data_mut().durable_ctx_mut()) => drained,
+            interruption = interrupt => Err(interruption.into()),
+        };
+        if let Err(error) = drained {
+            let ctx = store.data().durable_ctx();
+            if matches!(
+                &error,
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::EntityCancellation
+                }
+            ) {
+                ctx.tool_trap_disposal
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            ctx.begin_stream_runtime_teardown();
+            initiations.close();
+            initiations.wait_closed().await;
+            return Err(match error {
+                WorkerExecutorError::Interrupted { kind } => {
+                    GuestCallSettlementError::Interrupted(kind.into())
+                }
+                error => GuestCallSettlementError::Infrastructure(error),
+            });
+        }
+        initiations.close();
+    }
+    let ctx = store.data().durable_ctx();
+    let interrupted = ctx.is_interrupting() || ctx.invocation_deadline_exceeded();
+    let result = classify_guest_call_settlement(store.data().agent_id(), result, None, interrupted);
+    // Normal errors retain the service until Store disposal selects trap versus teardown cleanup.
+    run.interrupted = false;
+    result
+}
+
 /// Runs a guest export call on the store's event loop, draining Golem-spawned tail work before
 /// returning.
 ///

@@ -93,6 +93,12 @@ fn expand_struct(
     serde: &SerdeTypeAttrs,
     data: &DataStruct,
 ) -> syn::Result<TokenStream> {
+    if serde.tag.is_some() || serde.content.is_some() {
+        return Err(syn::Error::new_spanned(
+            ident,
+            "PoemSchema does not support `#[serde(tag)]` or `#[serde(content)]` on structs",
+        ));
+    }
     match &data.fields {
         Fields::Named(named) => {
             if serde.transparent {
@@ -105,8 +111,22 @@ fn expand_struct(
                      structs (e.g. `struct TypeId(String)`)",
                 ));
             }
-            let schema_body = object_schema_block(&named.named, serde.rename_all)?;
-            Ok(emit_registered(ident, name, &schema_body, true))
+            let (registers, object_schema) = object_schema_parts(&named.named, serde.rename_all)?;
+            let schema_body = quote! {{
+                #(#registers)*
+                Self::__golem_poem_object_schema()
+            }};
+            let registered = emit_registered(ident, name, &schema_body, true);
+            Ok(quote! {
+                impl #ident {
+                    #[doc(hidden)]
+                    pub fn __golem_poem_object_schema() -> ::poem_openapi::registry::MetaSchema {
+                        #object_schema
+                    }
+                }
+
+                #registered
+            })
         }
         Fields::Unnamed(unnamed) => {
             if unnamed.unnamed.len() == 1 {
@@ -293,8 +313,9 @@ fn expand_adjacent_enum(
                 // The enum's `rename_all` applies to variant names only, never
                 // to struct-variant field names (serde uses `rename_all_fields`
                 // for that, which this derive rejects).
-                let content_obj = object_schema_block(&named.named, None)?;
+                let (registers, content_obj) = object_schema_parts(&named.named, None)?;
                 quote! {{
+                    #(#registers)*
                     let mut __vprops: ::std::vec::Vec<(
                         &'static str,
                         ::poem_openapi::registry::MetaSchemaRef,
@@ -337,8 +358,9 @@ fn expand_adjacent_enum(
 /// Internally-tagged enum (`#[serde(tag = "...")]` without `content`): each
 /// variant serializes as an object that carries the tag property inline
 /// alongside the variant's own fields (`{ "tag": "<case>", ...fields }`).
-/// serde only supports struct and unit variants in this representation, so
-/// newtype/tuple variants are rejected.
+/// Newtype payloads must be named structs derived with `PoemSchema`. Their
+/// object schemas are available without registering dependencies, so tag-field
+/// checks never inspect recursive registration placeholders.
 fn expand_internal_enum(
     ident: &Ident,
     name: &str,
@@ -407,11 +429,54 @@ fn expand_internal_enum(
                     ));
                 }}
             }
+            Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                let field = &fields.unnamed[0];
+                if let Some(attr) = field
+                    .attrs
+                    .iter()
+                    .find(|attr| attr.path().is_ident("serde"))
+                {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "PoemSchema does not support serde attributes on internally tagged newtype payloads",
+                    ));
+                }
+                let inner = &field.ty;
+                reject_tuple_type(inner)?;
+                quote! {{
+                    let __payload = <#inner>::__golem_poem_object_schema();
+                    assert!(
+                        !__payload.properties.iter().any(|(name, _)| *name == #tag_lit),
+                        "PoemSchema internally tagged newtype payload declares discriminator `{}`",
+                        #tag_lit,
+                    );
+                    <#inner as ::poem_openapi::types::Type>::register(registry);
+                    let mut __props: ::std::vec::Vec<(
+                        &'static str,
+                        ::poem_openapi::registry::MetaSchemaRef,
+                    )> = ::std::vec::Vec::new();
+                    #tag_prop
+                    __one_of.push(::poem_openapi::registry::MetaSchemaRef::Inline(
+                        ::std::boxed::Box::new(::poem_openapi::registry::MetaSchema {
+                            all_of: ::std::vec![
+                                ::poem_openapi::registry::MetaSchemaRef::Inline(
+                                    ::std::boxed::Box::new(::poem_openapi::registry::MetaSchema {
+                                        required: ::std::vec![#tag_lit],
+                                        properties: __props,
+                                        ..::poem_openapi::registry::MetaSchema::new("object")
+                                    }),
+                                ),
+                                <#inner as ::poem_openapi::types::Type>::schema_ref(),
+                            ],
+                            ..::poem_openapi::registry::MetaSchema::new("object")
+                        }),
+                    ));
+                }}
+            }
             Fields::Unnamed(_) => {
                 return Err(syn::Error::new_spanned(
                     &variant.ident,
-                    "PoemSchema does not support newtype/tuple variants in \
-                     internally-tagged enums; serde requires struct or unit variants",
+                    "PoemSchema only supports single-field newtype variants in internally-tagged enums",
                 ));
             }
         };
@@ -434,16 +499,15 @@ fn expand_internal_enum(
 
 // --- shared codegen ------------------------------------------------------
 
-/// Build a block expression that registers every field type and evaluates to
-/// an object `MetaSchema` describing the given named fields.
-fn object_schema_block(
+/// Separate dependency registration from the immutable object shape. The shape
+/// only uses schema references and is safe to inspect during recursive registration.
+fn object_schema_parts(
     fields: &Punctuated<Field, Comma>,
     rename_all: Option<RenameRule>,
-) -> syn::Result<TokenStream> {
+) -> syn::Result<(Vec<TokenStream>, TokenStream)> {
     let (registers, prop_pushes, req_pushes) = field_schema_parts(fields, rename_all)?;
 
-    Ok(quote! {{
-        #(#registers)*
+    let shape = quote! {{
         let mut __props: ::std::vec::Vec<(
             &'static str,
             ::poem_openapi::registry::MetaSchemaRef,
@@ -456,7 +520,8 @@ fn object_schema_block(
             properties: __props,
             ..::poem_openapi::registry::MetaSchema::new("object")
         }
-    }})
+    }};
+    Ok((registers, shape))
 }
 
 /// Build, for a set of named fields, the per-field token fragments shared by

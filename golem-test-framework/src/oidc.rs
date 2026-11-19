@@ -47,11 +47,13 @@ struct FixtureState {
     wrong_private_key: Arc<RsaPrivateKey>,
     transactions: Arc<Mutex<HashMap<String, String>>>,
     next_failure: Arc<Mutex<OidcTokenFailure>>,
+    subject: Arc<Mutex<String>>,
 }
 
 pub struct OidcFixture {
     pub issuer: Url,
     next_failure: Arc<Mutex<OidcTokenFailure>>,
+    subject: Arc<Mutex<String>>,
     abort: AbortHandle,
 }
 
@@ -69,12 +71,14 @@ impl OidcFixture {
         })
         .await??;
         let next_failure = Arc::new(Mutex::new(OidcTokenFailure::None));
+        let subject = Arc::new(Mutex::new("fixture-user".to_owned()));
         let state = FixtureState {
             issuer: issuer.clone(),
             private_key: Arc::new(private_key),
             wrong_private_key: Arc::new(wrong_private_key),
             transactions: Arc::new(Mutex::new(HashMap::new())),
             next_failure: next_failure.clone(),
+            subject: subject.clone(),
         };
         let app = Router::new()
             .route("/.well-known/openid-configuration", get(discovery))
@@ -88,12 +92,17 @@ impl OidcFixture {
         Ok(Self {
             issuer: Url::parse(&issuer)?,
             next_failure,
+            subject,
             abort: task.abort_handle(),
         })
     }
 
     pub fn fail_next_token(&self, failure: OidcTokenFailure) {
         *self.next_failure.lock().unwrap() = failure;
+    }
+
+    pub fn set_subject(&self, subject: &str) {
+        *self.subject.lock().unwrap() = subject.to_owned();
     }
 
     pub fn client_without_redirects() -> reqwest::Client {
@@ -195,6 +204,7 @@ async fn token(State(state): State<FixtureState>, Form(form): Form<TokenForm>) -
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let subject = state.subject.lock().unwrap().clone();
     let claims = Claims {
         iss: if matches!(failure, OidcTokenFailure::InvalidIssuer) {
             "https://invalid.example".into()
@@ -206,7 +216,7 @@ async fn token(State(state): State<FixtureState>, Form(form): Form<TokenForm>) -
         } else {
             "fixture-client".into()
         },
-        sub: "fixture-user".into(),
+        sub: subject.clone(),
         exp: if matches!(failure, OidcTokenFailure::Expired) {
             now - 60
         } else {
@@ -218,7 +228,7 @@ async fn token(State(state): State<FixtureState>, Form(form): Form<TokenForm>) -
         } else {
             nonce
         },
-        email: "fixture-user@example.com".into(),
+        email: format!("{subject}@example.com"),
     };
     let key = if matches!(failure, OidcTokenFailure::InvalidSignature) {
         &state.wrong_private_key

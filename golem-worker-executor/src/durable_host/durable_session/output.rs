@@ -236,7 +236,11 @@ impl StreamSession {
                     Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None if registered_transport_id.is_some() => (None, None),
                     None => (
-                        Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                        Some(
+                            stream
+                                .take_host_endpoint::<LiveStreamEndpoint>()?
+                                .into_recording(),
+                        ),
                         None,
                     ),
                 };
@@ -1287,7 +1291,11 @@ impl StreamSession {
                             let (endpoint, forwarded) = match forwarded {
                                 Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                                 None => (
-                                    Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
+                                    Some(
+                                        stream
+                                            .take_host_endpoint::<LiveStreamEndpoint>()?
+                                            .into_recording(),
+                                    ),
                                     None,
                                 ),
                             };

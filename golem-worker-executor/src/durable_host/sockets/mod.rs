@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod dns;
 pub mod instance_network;
 pub mod ip_name_lookup;
 pub mod network;

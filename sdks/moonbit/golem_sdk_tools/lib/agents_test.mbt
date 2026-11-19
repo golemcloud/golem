@@ -8,6 +8,25 @@ fn[T] capture_agent_parse_error(
 }
 
 ///|
+test "agents reject tool-only endpoint options" {
+  for
+    annotation in [
+      "#derive.endpoint(post=\"/run\", route_id=\"ignored\")", "#derive.endpoint(post=\"/run\", prefix=\"/ignored\")",
+      "#derive.endpoint_response_header(\"X-Result\", \"ignored\")",
+    ] {
+    let source = "#derive.agent\nstruct Runner {}\nfn Runner::new() -> Runner { {} }\n" +
+      annotation +
+      "\npub fn Runner::run(self : Self) -> Unit { () }"
+    match
+      capture_agent_parse_error(fn() { parse_agents([("runner.mbt", source)]) }) {
+      Err(AgentParseError(message)) =>
+        assert_true(message.contains("Tool-only endpoint option"))
+      Ok(_) => fail("expected tool-only option rejection")
+    }
+  }
+}
+
+///|
 test "parse_agents finds simple agent struct" {
   let content =
     #|///| A counter agent
@@ -2176,7 +2195,7 @@ test "durable stream all-options source emits route metadata" {
     #|#derive.endpoint(post="/events", mode="sse")
     #|#derive.durable_stream_slot(input="input", name="messages")
     #|#derive.durable_stream_slot(output="$result", name="results", content_type="application/vnd.golem.events")
-    #|#derive.durable_streams(max_concurrent_readers_per_stream=8, max_append_requests_per_second_per_stream=25)
+    #|#derive.durable_streams(max_concurrent_readers_per_stream="8", max_append_requests_per_second_per_stream="25")
     #|pub fn Streams::events(self : Self, input : String) -> String { input }
   let agents = parse_agents([("streams.mbt", source)])
   let endpoint = agents[0].methods[0].http_endpoint.unwrap()
@@ -2247,7 +2266,7 @@ test "durable stream limits preserve u32 maximum and reject overflow" {
     #|struct Streams {}
     #|fn Streams::new() -> Streams { {} }
     #|#derive.endpoint(post="/events")
-    #|#derive.durable_streams(max_append_requests_per_second_per_stream=4294967295)
+    #|#derive.durable_streams(max_append_requests_per_second_per_stream="4294967295")
     #|pub fn Streams::events(self : Self, input : String) -> Unit {}
   let route = parse_agents([("streams.mbt", source)])[0].methods[0].http_endpoint.unwrap().durable_streams.unwrap()
   assert_eq(route.max_append_requests_per_second_per_stream, Some(4294967295U))
@@ -2284,7 +2303,7 @@ test "durable stream attributes reject conflicts, duplicates, and malformed prop
   let attributes = [
     "#derive.durable_stream_slot(input=\"input\", output=\"$result\")", "#derive.durable_streams()\n#derive.durable_streams()",
     "#derive.durable_stream_slot(input=\"input\", mystery=\"x\")", "#derive.durable_streams(allow_stream_delete=maybe)",
-    "#derive.durable_streams(max_concurrent_readers_per_stream=\"8\")", "#derive.durable_streams(max_concurrent_readers_per_stream=4294967296)",
+    "#derive.durable_streams(max_concurrent_readers_per_stream=\"-1\")", "#derive.durable_streams(max_concurrent_readers_per_stream=\"4294967296\")",
   ]
   for attribute in attributes {
     let source = "#derive.agent\nstruct Streams {}\nfn Streams::new() -> Streams { {} }\n#derive.endpoint(post=\"/events\")\n" +

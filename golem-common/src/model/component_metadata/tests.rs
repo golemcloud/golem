@@ -203,11 +203,13 @@ fn component_metadata_grpc_roundtrip_preserves_shared_memory_flag() {
 fn sample_tool() -> Tool {
     Tool {
         requires_filesystem: false,
+        http_mount: None,
         version: "1.2.3".to_string(),
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "grep".to_string(),
                 aliases: vec!["search".to_string()],
+                http: None,
                 doc: Doc {
                     summary: "Search files".to_string(),
                     description: "Searches files recursively".to_string(),

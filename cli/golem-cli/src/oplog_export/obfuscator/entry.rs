@@ -962,11 +962,14 @@ impl Walker<'_, '_> {
                 error,
                 retry_from,
                 retry_policy_state,
+                retry_at: _,
+                retrying_start_index,
                 invocation_id,
             }) => Fields::new()
                 .add("kind", name(kind))
                 .add("error", self.agent_error_message(error))
                 .add("retryFrom", idx(retry_from))
+                .opt("retryingStartIndex", retrying_start_index.as_ref().map(idx))
                 .opt(
                     "retryPolicyState",
                     retry_policy_state.as_ref().map(retry_state),

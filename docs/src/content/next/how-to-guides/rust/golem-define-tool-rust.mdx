@@ -25,3 +25,21 @@ Use `IntoSchema` and `FromSchema` for custom inputs, outputs, and error payload 
 declared command error in `Result<T, E>`, derive `golem_rust::ToolError` on `E` and annotate its
 variants with `#[tool_error(...)]`. Keep the definition and implementation in provider source;
 never edit macro-generated bindings. A tool component can provide tools without defining an agent.
+
+## Declare HTTP routes
+
+```rust
+#[tool_definition(mount = "/reports")]
+pub trait Report {
+    #[endpoint(get = "/status/{id}")]
+    fn status(&self, id: String) -> String;
+}
+```
+
+This declares `GET /reports/status/{id}`. Use `#[endpoint(prefix = "/admin")]` on a subtree method to supply a prefix without emitting a route. Every nonroot ancestor needs an endpoint or prefix; command names and aliases never supply path segments. A body-bearing parent endpoint supplies its suffix to children too. Grafting keeps the parent mount, discards the child's standalone mount, and retains the child-root HTTP declaration unless the graft site overrides it.
+
+Endpoint arguments include `route_id = "status"`, `headers("X-Token" = "token")`, `response_headers("X-Result" = "ready")`, `mode = "plain"`, and `durable_streams(...)`. Query templates such as `/status/{id}?format={format}` bind declared inputs. Durable Streams options accept `input("stdin", name = "upload", content_type = "text/plain")`, `output("stdout", name = "download")`, `max_concurrent_readers_per_stream`, and `max_append_requests_per_second_per_stream`.
+
+Path bindings require scalar inputs; query/header sources reject body-only complex values. GET, HEAD and DELETE implicitly bind remaining eligible inputs from query parameters. Mount and prefix captures must name globals in scope at that node. Plain stdin routes cannot leave required inputs in the JSON body. Tools reject agent auth/CORS/system variables and platform-managed response headers.
+
+Omitted mode means `durableStreams` when the command is non-idempotent and declares any standard stream, otherwise `plain`. Only the command's own annotation controls idempotence; explicit mode wins. Default route IDs use the dot-separated canonical command path. HTTP declarations do not change CLI/MCP invocation compatibility or implement serving.

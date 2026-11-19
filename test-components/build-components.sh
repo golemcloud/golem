@@ -289,6 +289,22 @@ build_rust_apps() {
   done
 }
 
+build_retention_fixtures() {
+  if [ "$clean_only" = true ] || [ "$check_only" = true ]; then
+    return 0
+  fi
+  # Named, unstripped components for the reflection retention test in golem-size-analysis.
+  echo "Building retention fixtures..."
+  local manifest="${SCRIPT_DIR}/size-analysis/fixtures/Cargo.toml"
+  cargo build --locked --manifest-path "$manifest" --target wasm32-wasip2 --release \
+    -p retention-empty -p retention-non-reflective -p retention-reflection
+  local release_dir
+  release_dir="$(resolve_target_dir "${SCRIPT_DIR}/size-analysis/fixtures")/wasm32-wasip2/release"
+  for fixture in retention_empty retention_non_reflective retention_reflection; do
+    cp "${release_dir}/${fixture}.wasm" "${SCRIPT_DIR}/${fixture}.wasm"
+  done
+}
+
 build_go_apps() {
   local apps=("$@")
   if [ "$clean_only" = true ]; then
@@ -436,8 +452,12 @@ if [[ "$group" =~ ^rust-([0-9]+)$ ]]; then
   get_chunk chunk_apps rust_test_apps "$chunk_idx" "$RUST_CHUNKS"
   echo "Rust chunk $chunk_idx/$RUST_CHUNKS: ${chunk_apps[*]}"
   build_rust_apps "${chunk_apps[@]}"
+  if [ "$chunk_idx" -eq 1 ]; then
+    build_retention_fixtures
+  fi
 elif [ "$single_group" = "false" ] || [ "$group" = "rust" ]; then
   build_rust_apps "${rust_test_apps[@]}"
+  build_retention_fixtures
 fi
 
 if [[ "$group" =~ ^ts-([0-9]+)$ ]]; then

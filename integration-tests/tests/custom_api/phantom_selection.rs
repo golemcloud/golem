@@ -168,13 +168,19 @@ async fn unbound_http_selection_policies_are_preserved(
             .error_for_status()?
             .json::<String>()
             .await?;
-        let second = agent
+        let unknown_selector = agent
             .client
             .get(
                 agent
                     .base_url
                     .join(&format!("{path}?instance={}", Uuid::new_v4()))?,
             )
+            .send()
+            .await?;
+        assert_eq!(unknown_selector.status(), StatusCode::BAD_REQUEST);
+        let second = agent
+            .client
+            .get(agent.base_url.join(&path)?)
             .send()
             .await?
             .error_for_status()?

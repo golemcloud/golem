@@ -36,6 +36,403 @@ use test_r::test;
 mod live_files;
 
 #[test]
+async fn authenticated_finalization_preserves_repeated_no_store() {
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+
+    for kind in ["typed", "router", "filesystem"] {
+        for no_store_first in [false, true] {
+            let mut route = test_route(
+                1,
+                "/",
+                if kind == "typed" { Some("GET") } else { None },
+                kind,
+            );
+            route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                header_name: "x-session".into(),
+            });
+            let resolver = test_resolver(vec![route]);
+            let request = Request::builder()
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("x-session", "{}")
+                .finish();
+            let selected = resolver.resolve_matching_route(&request).await.unwrap();
+            let mut request = RichRequest::new(request);
+            apply_session_from_header_security_middleware(&mut request, &selected).unwrap();
+            assert!(request.authenticated_session().is_some());
+            let mut response = Response::default();
+            let values = if no_store_first {
+                ["No-StOrE", "public, max-age=600"]
+            } else {
+                ["public, max-age=600", "No-StOrE"]
+            };
+            for value in values {
+                response
+                    .headers_mut()
+                    .append(http::header::CACHE_CONTROL, value.parse().unwrap());
+            }
+            response.headers_mut().insert(
+                http::header::EXPIRES,
+                "Thu, 01 Dec 2094 16:00:00 GMT".parse().unwrap(),
+            );
+            let response = finish_selected_response(Ok(response), &request, &selected).unwrap();
+            let directives = response
+                .headers()
+                .get_all(http::header::CACHE_CONTROL)
+                .iter()
+                .flat_map(|value| value.to_str().unwrap().split(','))
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            assert!(
+                directives
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case("private"))
+            );
+            assert!(
+                directives
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case("no-store"))
+            );
+            assert!(!directives.iter().any(|value| value.starts_with("max-age=")));
+            assert!(!response.headers().contains_key(http::header::EXPIRES));
+        }
+    }
+}
+
+#[test]
+async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::{CachePolicy, CachePolicyTtl, ReadOnlyConfig};
+    use golem_common::model::{AgentFingerprint, OplogIndex};
+
+    for authenticated in [false, true] {
+        for uses_principal in [false, true] {
+            for no_store in [false, true] {
+                let harness = InvocationHarness::new(
+                    AgentInvocationOutput {
+                        result: golem_common::model::AgentInvocationResult::AgentMethod {
+                            output: golem_common::schema::SchemaValue::Tuple { elements: vec![] },
+                        },
+                        consumed_fuel: None,
+                        invocation_status: None,
+                        component_revision: None,
+                        agent_id: None,
+                        idempotency_key: None,
+                        oplog_index: Some(OplogIndex::from_u64(17)),
+                        agent_fingerprint: Some(AgentFingerprint(uuid::Uuid::new_v4())),
+                    },
+                    AgentConstructorSchema {
+                        name: None,
+                        description: String::new(),
+                        prompt_hint: None,
+                        input_schema: InputSchema::Parameters(vec![]),
+                    },
+                    vec![golem_common::schema::AgentMethodSchema {
+                        name: "run".into(),
+                        description: String::new(),
+                        prompt_hint: None,
+                        input_schema: InputSchema::Parameters(vec![]),
+                        output_schema: OutputSchema::Unit,
+                        http_endpoint: vec![],
+                        read_only: None,
+                    }],
+                );
+                let mut route = test_route(1, "/cache", Some("GET"), "typed");
+                if authenticated {
+                    route.security =
+                        RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                            header_name: "x-session".into(),
+                        });
+                }
+                let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                    unreachable!()
+                };
+                call.component_id = harness.component_id;
+                call.agent_type = AgentTypeName("mcp-agent".into());
+                call.read_only = Some(ReadOnlyConfig {
+                    uses_principal,
+                    cache_policy: if no_store {
+                        CachePolicy::NoCache(Empty {})
+                    } else {
+                        CachePolicy::Ttl(CachePolicyTtl {
+                            duration_nanos: 90_500_000_000,
+                        })
+                    },
+                });
+                let mut post = test_route(2, "/cache", Some("POST"), "typed");
+                post.behavior = RouteBehaviour::CallAgent(call.clone());
+                let mut head = test_route(3, "/cache", Some("HEAD"), "typed");
+                head.behavior = RouteBehaviour::CallAgent(call.clone());
+                post.security = route.security.clone();
+                head.security = route.security.clone();
+                let endpoint = CustomApiPoemEndpoint::new(Arc::new(request_handler_with_worker(
+                    test_resolver(vec![route, post, head]),
+                    Arc::new(InitialAgentFilesService::new(Arc::new(
+                        golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                    ))),
+                    harness.worker_service.clone(),
+                )));
+                for method in [http::Method::GET, http::Method::HEAD, http::Method::POST] {
+                    let response = endpoint
+                        .execute(
+                            Request::builder()
+                                .method(method.clone())
+                                .uri("/cache".parse().unwrap())
+                                .header("host", "example.com")
+                                .header("x-session", "{}")
+                                .finish(),
+                        )
+                        .await;
+                    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                    let eligible = method != http::Method::POST;
+                    let expected = match (authenticated, no_store, eligible) {
+                        (true, true, true) => Some("private, no-store"),
+                        (true, _, _) => Some("private, no-cache"),
+                        (false, true, true) => Some("no-store"),
+                        (false, false, true) => Some("public, max-age=90"),
+                        (false, _, false) => None,
+                    };
+                    assert_eq!(
+                        response
+                            .headers()
+                            .get(http::header::CACHE_CONTROL)
+                            .map(|v| v.to_str().unwrap()),
+                        expected
+                    );
+                    assert_eq!(
+                        response.headers().contains_key(http::header::ETAG),
+                        eligible && !no_store
+                    );
+                    if !authenticated {
+                        assert_eq!(
+                            response.headers()[http::header::VARY],
+                            "Authorization, Cookie, Golem-Token"
+                        );
+                    }
+                    assert!(response.into_body().into_vec().await.unwrap().is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+    use golem_common::schema::{AutoInjectedKind, NamedField};
+    use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
+    use golem_service_base::model::SafeIndex;
+
+    let mut failures = Vec::new();
+    for durable in [false, true] {
+        for binding in ["query", "header", "path", "map", "optional-map"] {
+            if durable && binding == "path" {
+                continue;
+            }
+            let harness = invocation_harness();
+            let mut route = test_route(
+                1,
+                if binding == "path" { "/{wire}" } else { "/run" },
+                Some(if durable { "PUT" } else { "GET" }),
+                "typed",
+            );
+            let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                unreachable!()
+            };
+            let map = binding.ends_with("map");
+            let input_type = if map {
+                let ty = SchemaType::map(SchemaType::string(), SchemaType::bool());
+                if binding == "optional-map" {
+                    SchemaType::option(SchemaType::option(ty))
+                } else {
+                    ty
+                }
+            } else {
+                SchemaType::U32 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(2)),
+                        max: None,
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                }
+            };
+            call.method_input = CompiledInputSchema {
+                graph: SchemaGraph::empty(),
+                input_schema: InputSchema::parameters([
+                    NamedField::auto_injected(
+                        "principal",
+                        AutoInjectedKind::Principal,
+                        SchemaType::string(),
+                    ),
+                    NamedField::user_supplied("amount", input_type),
+                ]),
+            };
+            call.method_parameters = vec![match binding {
+                "map" | "optional-map" => {
+                    let ty = QueryOrHeaderType::Map {
+                        key: PathSegmentType::Str,
+                        value: PathSegmentType::Bool,
+                    };
+                    MethodParameter::Query {
+                        query_parameter_name: "wire".into(),
+                        parameter_type: if binding == "optional-map" {
+                            QueryOrHeaderType::Option {
+                                owner: None,
+                                name: None,
+                                inner: Box::new(QueryOrHeaderType::Option {
+                                    owner: None,
+                                    name: None,
+                                    inner: Box::new(ty),
+                                }),
+                            }
+                        } else {
+                            ty
+                        },
+                    }
+                }
+                "query" => MethodParameter::Query {
+                    query_parameter_name: "wire".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                },
+                "header" => MethodParameter::Header {
+                    header_name: "x-wire".into(),
+                    parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+                },
+                _ => MethodParameter::Path {
+                    path_segment_index: SafeIndex::new(0),
+                    parameter_type: PathSegmentType::U32,
+                },
+            }];
+            if durable {
+                call.route_mode = AgentRouteMode::DurableStreams;
+                call.durable_streams = Some(DurableStreamRoutePolicy {
+                    family_id: 1,
+                    slots: vec![DurableStreamSlot {
+                        canonical_name: "events".into(),
+                        public_name: "events".into(),
+                        direction: DurableStreamSlotDirection::Output,
+                        content_type: "application/json".into(),
+                        representation: DurableStreamRepresentation::Json,
+                    }],
+                    allow_external_writes: false,
+                    allow_stream_delete: false,
+                    allow_invocation_delete: false,
+                    load: None,
+                });
+            }
+            let handler = request_handler_with_worker(
+                test_resolver(vec![route]),
+                Arc::new(InitialAgentFilesService::new(Arc::new(
+                    golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                ))),
+                harness.worker_service.clone(),
+            );
+            let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+            let cases: &[(&str, &[&str], &str, &str)] = match binding {
+                "map" | "optional-map" => &[
+                    ("/run?wire=x", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?w%69re=x&wire[env]=true",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
+                ],
+                "query" => &[
+                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
+                    (
+                        "/run?wire=3&wire=4",
+                        &[],
+                        "REQUEST_TOO_MANY_VALUES",
+                        "amount",
+                    ),
+                    (
+                        "/run?wire=bad",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "amount",
+                    ),
+                    ("/run?wire=1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    (
+                        "/run?surprise=3",
+                        &[],
+                        "REQUEST_VALUE_PARSING_FAILED",
+                        "surprise",
+                    ),
+                ],
+                "header" => &[
+                    ("/run", &[], "REQUEST_MISSING_VALUE", "amount"),
+                    ("/run", &["3", "4"], "REQUEST_TOO_MANY_VALUES", "amount"),
+                    ("/run", &["bad"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/run", &["1"], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                ],
+                _ => &[
+                    ("/bad", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                    ("/1", &[], "REQUEST_VALUE_PARSING_FAILED", "amount"),
+                ],
+            };
+            for (target, headers, code, detail) in cases {
+                let mut request = Request::builder()
+                    .method(if durable {
+                        http::Method::PUT
+                    } else {
+                        http::Method::GET
+                    })
+                    .uri(target.parse().unwrap())
+                    .header("host", "example.com");
+                for value in *headers {
+                    request = request.header("x-wire", *value);
+                }
+                let response = endpoint.execute(request.finish()).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{durable} {binding} {target}"
+                );
+                if durable {
+                    let has_content_type =
+                        response.headers().contains_key(http::header::CONTENT_TYPE);
+                    let body = response.into_body().into_bytes().await.unwrap();
+                    if has_content_type || !body.is_empty() {
+                        failures.push(format!(
+                            "DurableStreams {binding} {target}: expected empty 400, got {body:?}"
+                        ));
+                    }
+                } else {
+                    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                    if body["code"] != *code {
+                        failures.push(format!("{binding} {target}: expected {code}, got {body}"));
+                    }
+                    assert!(
+                        body["errors"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|error| error.as_str().unwrap().contains(detail)),
+                        "{body}"
+                    );
+                    if map {
+                        assert!(
+                            body["errors"].as_array().unwrap().iter().any(|error| {
+                                error.as_str().unwrap().contains("maps require name[key]")
+                            }),
+                            "{body}"
+                        );
+                    }
+                }
+            }
+            assert!(harness.contexts.lock().unwrap().is_empty());
+            assert!(harness.metadata_reads.lock().unwrap().is_empty());
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
 async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
@@ -107,6 +504,7 @@ async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
             )
             .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-cache");
         assert!(
             response.headers()[http::header::CONTENT_TYPE]
                 .to_str()
@@ -386,6 +784,9 @@ async fn phantom_selector_runs_after_auth_and_before_etag_revalidation() {
         )
     };
     for (query, authorized, expected) in [
+        ("v=3".into(), false, StatusCode::UNAUTHORIZED),
+        ("v=3".into(), true, StatusCode::BAD_REQUEST),
+        (format!("instance={p}&v=3"), true, StatusCode::BAD_REQUEST),
         ("instance=invalid".into(), false, StatusCode::UNAUTHORIZED),
         ("instance=invalid".into(), true, StatusCode::BAD_REQUEST),
         ("instance=".into(), true, StatusCode::BAD_REQUEST),
@@ -907,6 +1308,33 @@ fn request(body: &'static str, session: bool, origin: bool) -> Request {
 }
 
 #[test]
+async fn early_rejections_are_not_fresh_and_do_not_authenticate() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    let endpoint = CustomApiPoemEndpoint::new(Arc::new(request_handler()));
+    for (method, path, expect, status) in [
+        ("CONNECT", "/stream", "100-continue", 501),
+        ("TRACE", "/stream", "100-continue", 501),
+        ("GET", "/stream", "unsupported", 417),
+        ("GET", "/%2funsafe", "100-continue", 400),
+        ("GET", "/missing", "100-continue", 404),
+    ] {
+        let response = endpoint
+            .execute(
+                Request::builder()
+                    .method(method.parse().unwrap())
+                    .uri(format!("http://ds.example{path}").parse().unwrap())
+                    .header("host", "ds.example")
+                    .header("expect", expect)
+                    .header("x-golem-session", "invalid session must not be parsed")
+                    .finish(),
+            )
+            .await;
+        assert_eq!(response.status().as_u16(), status, "{method} {path}");
+        assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-cache");
+    }
+}
+
+#[test]
 async fn typed_route_can_decline_h2c_upgrade_and_dispatch_over_http1() {
     let mut request = request("not-json", true, false);
     request
@@ -964,7 +1392,15 @@ async fn durable_stream_route_is_guarded_at_the_request_handler_boundary() {
     );
     assert_eq!(
         response.headers().get(http::header::VARY),
-        Some(&"Origin".parse().unwrap())
+        Some(
+            &"Origin, Authorization, Cookie, Golem-Token, x-golem-session"
+                .parse()
+                .unwrap()
+        )
+    );
+    assert_eq!(
+        response.headers()[http::header::CACHE_CONTROL],
+        "private, no-store"
     );
 }
 
@@ -1198,7 +1634,7 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 } else {
                     format!(
                         "{target}?{}",
-                        root.map(|id| format!("instance={}&count=17", id.to_uppercase()))
+                        root.map(|id| format!("instance={}", id.to_uppercase()))
                             .unwrap_or_default()
                     )
                 };

@@ -14,10 +14,9 @@
 //
 //! HTTP cache-header helpers used when binding read-only `AgentMethod` HTTP routes.
 //!
-//! The worker-service emits `Cache-Control`, `ETag`, and (when the read-only
-//! method depends on the caller's principal) `Vary: Authorization` for every
-//! cacheable HTTP method (`GET` / `HEAD`) that resolves to an `AgentMethod`
-//! whose `read-only` config is `Some(_)`.
+//! The worker-service emits ETags for eligible read-only GET/HEAD responses.
+//! Cache-Control and credential-related Vary headers use the shared response
+//! cache policy, independently of the executor's principal-aware cache key.
 //!
 //! Conversely, for `If-None-Match` revalidation requests, the worker-service
 //! can produce a `304 Not Modified` response without invoking the executor
@@ -29,35 +28,6 @@
 
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex};
-use http::header;
-
-/// `Cache-Control` visibility for a read-only method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CacheVisibility {
-    /// Caches may be shared across users (e.g. a CDN). Set when the method
-    /// does **not** depend on the caller's principal.
-    Public,
-    /// Only per-user caches (e.g. a browser cache) may store this response.
-    /// Set when the method depends on the caller's principal.
-    Private,
-}
-
-impl CacheVisibility {
-    pub fn for_read_only(read_only: &ReadOnlyConfig) -> Self {
-        if read_only.uses_principal {
-            Self::Private
-        } else {
-            Self::Public
-        }
-    }
-
-    pub fn as_token(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Private => "private",
-        }
-    }
-}
 
 /// Build the value for the `ETag` response header for a read-only invocation.
 ///
@@ -101,33 +71,6 @@ pub fn agent_id_etag_token(agent_id: &AgentId, fingerprint: AgentFingerprint) ->
 /// so we must not emit an `ETag` or short-circuit on `If-None-Match` for it.
 pub fn supports_http_revalidation(read_only: &ReadOnlyConfig) -> bool {
     !matches!(read_only.cache_policy, CachePolicy::NoCache(_))
-}
-
-/// Build the `Cache-Control` header value for the given read-only config.
-///
-/// Mapping:
-/// - [`CachePolicy::NoCache`] → `no-store`
-/// - [`CachePolicy::UntilWrite`] → `<vis>, no-cache`
-/// - [`CachePolicy::Ttl(d)`] → `<vis>, max-age=<floor(d, 1s)>`
-///
-/// Sub-second TTL values floor to `max-age=0`, which causes downstream caches
-/// to revalidate via `ETag` on every request. The deploy-time validator emits
-/// a warning in that case so the agent author can pick a different TTL.
-pub fn build_cache_control_value(read_only: &ReadOnlyConfig) -> String {
-    let visibility = CacheVisibility::for_read_only(read_only);
-    match &read_only.cache_policy {
-        CachePolicy::NoCache(_) => "no-store".to_string(),
-        CachePolicy::UntilWrite(_) => format!("{}, no-cache", visibility.as_token()),
-        CachePolicy::Ttl(ttl) => {
-            let seconds = ttl_seconds_floor(ttl.duration_nanos);
-            format!("{}, max-age={}", visibility.as_token(), seconds)
-        }
-    }
-}
-
-/// Floor the TTL value (in nanoseconds) to whole seconds.
-pub fn ttl_seconds_floor(duration_nanos: u64) -> u64 {
-    duration_nanos / 1_000_000_000
 }
 
 /// Parse a header value containing one or more `If-None-Match` ETag tokens,
@@ -184,40 +127,7 @@ pub mod headers {
     use http::HeaderName;
 
     pub const ETAG: HeaderName = http::header::ETAG;
-    pub const CACHE_CONTROL: HeaderName = http::header::CACHE_CONTROL;
     pub const IF_NONE_MATCH: HeaderName = http::header::IF_NONE_MATCH;
-}
-
-/// Append `header_name` to the `Vary` value already present in `existing`
-/// (if any), preserving duplicates / casing of previous entries. Returns the
-/// new combined value. Match is case-insensitive, so an existing
-/// `Vary: authorization` is preserved as-is when adding `Authorization`.
-pub fn merge_vary_with_header(existing: Option<&str>, header_name: &str) -> String {
-    let mut tokens: Vec<String> = match existing {
-        Some(value) => value
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect(),
-        None => Vec::new(),
-    };
-    if !tokens.iter().any(|t| t.eq_ignore_ascii_case(header_name)) {
-        tokens.push(header_name.to_string());
-    }
-    tokens.join(", ")
-}
-
-/// Insert a `Vary: <header_name>` header into a header map, merging with any
-/// existing `Vary` value. Call repeatedly to add multiple varying headers.
-pub fn add_vary_header(headers: &mut http::HeaderMap, header_name: &str) {
-    let existing = headers
-        .get(&header::VARY)
-        .and_then(|value| value.to_str().ok());
-    let new_value = merge_vary_with_header(existing, header_name);
-    headers.insert(
-        header::VARY,
-        http::HeaderValue::from_str(&new_value).unwrap(),
-    );
 }
 
 #[cfg(test)]
@@ -247,13 +157,6 @@ mod tests {
         }
     }
 
-    fn private_no_cache() -> ReadOnlyConfig {
-        ReadOnlyConfig {
-            cache_policy: CachePolicy::UntilWrite(Empty {}),
-            uses_principal: true,
-        }
-    }
-
     fn ttl_public(nanos: u64) -> ReadOnlyConfig {
         ReadOnlyConfig {
             cache_policy: CachePolicy::Ttl(CachePolicyTtl {
@@ -268,43 +171,6 @@ mod tests {
             cache_policy: CachePolicy::NoCache(Empty {}),
             uses_principal: false,
         }
-    }
-
-    #[test]
-    fn cache_control_no_store_for_no_cache_policy() {
-        assert_eq!(build_cache_control_value(&no_store_public()), "no-store");
-    }
-
-    #[test]
-    fn cache_control_until_write_public_when_principal_unaware() {
-        assert_eq!(
-            build_cache_control_value(&public_no_cache()),
-            "public, no-cache"
-        );
-    }
-
-    #[test]
-    fn cache_control_until_write_private_when_principal_aware() {
-        assert_eq!(
-            build_cache_control_value(&private_no_cache()),
-            "private, no-cache"
-        );
-    }
-
-    #[test]
-    fn cache_control_ttl_floors_to_seconds() {
-        assert_eq!(
-            build_cache_control_value(&ttl_public(2_500_000_000)),
-            "public, max-age=2"
-        );
-    }
-
-    #[test]
-    fn cache_control_sub_second_ttl_renders_as_max_age_zero() {
-        assert_eq!(
-            build_cache_control_value(&ttl_public(500_000_000)),
-            "public, max-age=0"
-        );
     }
 
     #[test]
@@ -421,31 +287,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_vary_appends_header_when_missing() {
-        let merged = merge_vary_with_header(Some("Accept-Encoding"), "Authorization");
-        assert_eq!(merged, "Accept-Encoding, Authorization");
-    }
-
-    #[test]
-    fn merge_vary_keeps_header_unique_case_insensitive() {
-        let merged =
-            merge_vary_with_header(Some("Accept-Encoding, authorization"), "Authorization");
-        assert_eq!(merged, "Accept-Encoding, authorization");
-    }
-
-    #[test]
-    fn merge_vary_creates_value_when_absent() {
-        let merged = merge_vary_with_header(None, "Authorization");
-        assert_eq!(merged, "Authorization");
-    }
-
-    #[test]
-    fn merge_vary_supports_custom_header_names() {
-        let merged = merge_vary_with_header(None, "X-Tenant");
-        assert_eq!(merged, "X-Tenant");
-    }
-
-    #[test]
     fn supports_http_revalidation_is_false_for_no_cache() {
         assert!(!supports_http_revalidation(&no_store_public()));
     }
@@ -470,21 +311,6 @@ mod tests {
     // the H1..H5 behaviours and which the executor's `oplog_index` plumbing
     // is consumed by.
     // ----------------------------------------------------------------
-
-    /// H1: `GET` on a read-only method emits both `ETag` and `Cache-Control`.
-    #[test]
-    fn h1_get_returns_etag_and_cache_control_for_until_write() {
-        let read_only = public_no_cache();
-        let agent_id = agent_id_for_test();
-        let fingerprint = fingerprint_for_test();
-
-        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
-        let cache_control = build_cache_control_value(&read_only);
-
-        assert!(etag.starts_with('"') && etag.ends_with('"'));
-        assert_eq!(cache_control, "public, no-cache");
-        assert!(supports_http_revalidation(&read_only));
-    }
 
     /// H2: an `If-None-Match` whose ETag matches the agent's current oplog
     /// index revalidates with `304 Not Modified` and does not invoke the
@@ -530,51 +356,6 @@ mod tests {
         ));
     }
 
-    /// H4: a read-only method whose `uses_principal == false` is cacheable by
-    /// shared caches (CDNs) — emit `Cache-Control: public, ...`.
-    #[test]
-    fn h4_principal_unaware_uses_public_cache_directive() {
-        let read_only = public_no_cache();
-        let cache_control = build_cache_control_value(&read_only);
-
-        assert!(cache_control.starts_with("public,"));
-        assert_eq!(
-            CacheVisibility::for_read_only(&read_only),
-            CacheVisibility::Public
-        );
-    }
-
-    /// H4 (counterpart): a read-only method whose `uses_principal == true`
-    /// must mark its response `private`, so a shared cache cannot serve one
-    /// user's representation for another.
-    #[test]
-    fn h4_principal_aware_uses_private_cache_directive() {
-        let read_only = private_no_cache();
-        let cache_control = build_cache_control_value(&read_only);
-
-        assert!(cache_control.starts_with("private,"));
-        assert_eq!(
-            CacheVisibility::for_read_only(&read_only),
-            CacheVisibility::Private
-        );
-    }
-
-    /// H5: a `CachePolicy::Ttl(d)` method's `Cache-Control` ends in
-    /// `max-age=<floor(d, 1s)>`.
-    #[test]
-    fn h5_ttl_method_returns_max_age_floored_to_seconds() {
-        // 2.5s -> floors to max-age=2
-        assert_eq!(
-            build_cache_control_value(&ttl_public(2_500_000_000)),
-            "public, max-age=2"
-        );
-        // exactly 1s -> max-age=1
-        assert_eq!(
-            build_cache_control_value(&ttl_public(1_000_000_000)),
-            "public, max-age=1"
-        );
-    }
-
     /// `CachePolicy::NoCache` must not emit `ETag` and must not be
     /// revalidatable via `If-None-Match`. This is what
     /// `add_read_only_cache_headers` and `try_handle_if_none_match` short
@@ -582,7 +363,6 @@ mod tests {
     #[test]
     fn no_cache_policy_opts_out_of_http_revalidation() {
         let read_only = no_store_public();
-        assert_eq!(build_cache_control_value(&read_only), "no-store");
         assert!(!supports_http_revalidation(&read_only));
     }
 

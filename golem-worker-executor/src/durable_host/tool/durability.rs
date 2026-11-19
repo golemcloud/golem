@@ -8,6 +8,8 @@ use super::attachment::{
     AttachmentController, AttachmentObserver, AttachmentWriteAcceptance, AttachmentWriteBody,
     AttachmentWriter, PreparedAttachmentTerminal, StagedAttachmentWrite,
 };
+use crate::durable_host::call_coordinator::process_pending_replay_events_initiation;
+use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessorContext, Cancellable, CompletionDelivery,
     DeferredCallReplayOutcome, DurableAccess, DurableCallSession, DurableContext, OrderedAppend,
@@ -417,6 +419,7 @@ where
     let (result, delivery) = write_started(
         &mut AccessorContext::new(accessor, accessor.getter()),
         call,
+        true,
         writer,
         controller,
         request,
@@ -476,6 +479,7 @@ pub(crate) async fn write_native<Ctx: WorkerCtx>(
     let (result, mut delivery) = write_started(
         ctx,
         call,
+        false,
         writer.clone(),
         writer.controller(),
         request,
@@ -554,6 +558,7 @@ where
     let (result, mut delivery) = terminal_started(
         ctx,
         call,
+        false,
         writer.clone(),
         writer.controller(),
         request.into(),
@@ -578,6 +583,7 @@ where
 async fn write_started<Pair, Ctx: WorkerCtx>(
     context: &mut impl DurableContext<Ctx>,
     mut call: DurableCallSession<Pair, Cancellable>,
+    guest_import: bool,
     writer: AttachmentWriter,
     controller: AttachmentController,
     request: ToolAttachmentWriteRequest,
@@ -612,7 +618,12 @@ where
                 "regenerated tool output differs from its recorded write at {start}"
             )));
         }
-        match call.replay_deferred(context).await? {
+        let replay = if guest_import {
+            call.replay_guest_deferred(context).await?
+        } else {
+            call.replay_deferred(context).await?
+        };
+        match replay {
             DeferredCallReplayOutcome::Replayed(response, delivery) => {
                 anyhow::ensure!(
                     response.outcome.validate(&request),
@@ -932,6 +943,7 @@ where
     let (result, delivery) = terminal_started(
         &mut AccessorContext::new(accessor, accessor.getter()),
         call,
+        true,
         writer,
         controller,
         expected,
@@ -945,6 +957,7 @@ where
 async fn terminal_started<Pair, Ctx: WorkerCtx>(
     context: &mut impl DurableContext<Ctx>,
     mut call: DurableCallSession<Pair, Cancellable>,
+    guest_import: bool,
     writer: AttachmentWriter,
     controller: AttachmentController,
     expected: golem_common::model::oplog::HostRequest,
@@ -981,7 +994,12 @@ where
                 "tool output terminal request differs at {start}"
             )));
         }
-        match call.replay_deferred(context).await? {
+        let replay = if guest_import {
+            call.replay_guest_deferred(context).await?
+        } else {
+            call.replay_deferred(context).await?
+        };
+        match replay {
             DeferredCallReplayOutcome::Replayed(response, delivery) => {
                 if let ToolAttachmentTerminalOutcome::Selected(selected) = &response.outcome {
                     anyhow::ensure!(
@@ -1138,14 +1156,26 @@ impl ProducerDisposal {
         &mut self,
         access: &mut impl DurableContext<Ctx>,
     ) -> Result<(), WorkerExecutorError> {
-        if self.pending.is_none() && access.with_ctx(|ctx| ctx.producer_disposal_tasks.is_none()) {
+        self.finish_initiation(&mut InlineInitiationAccess::new(access))
+            .await
+    }
+
+    pub(crate) async fn finish_initiation<Ctx: WorkerCtx>(
+        &mut self,
+        access: &mut impl InitiationAccess<Ctx>,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.pending.is_none()
+            && access
+                .window(|ctx| ctx.producer_disposal_tasks.is_none())
+                .await?
+        {
             return Ok(());
         }
         if let Some(error) = &self.admission_error {
             return Err(error.clone());
         }
         if self.primary_transition {
-            access.process_replay_events().await?;
+            process_pending_replay_events_initiation(access).await?;
             self.primary_transition = false;
         }
         if self.pending.is_none() && self.controller.producer_disposal_owned_elsewhere() {

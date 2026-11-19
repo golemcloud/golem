@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { writeFileSync } from "node:fs";
 import {
   defineAgent,
   method,
   http,
   s,
+  KeyValue,
   Result,
   createWebhook,
 } from "@golemcloud/golem-ts-sdk";
@@ -21,11 +23,72 @@ const ResourceResponse = z.object({
   method: z.string(),
 });
 
+function queryEcho(
+  values: number[] | undefined,
+  labels: Map<number, boolean> | undefined,
+): string[] {
+  return [
+    `values:${values === undefined ? "none" : values.join(",")}`,
+    `labels:${
+      labels === undefined
+        ? "none"
+        : [...labels]
+            .sort(([a], [b]) => a - b)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(",")
+    }`,
+  ];
+}
+
 export const HttpAgent = defineAgent({
   name: "HttpAgent",
   id: { agentName: z.string() },
-  http: http.mount("/http-agents/{agentName}"),
+  http: http.mount("/http-agents/{agentName}", {
+    exposeFiles: [{ route: "/query-file", path: "/query.txt" }],
+  }),
   methods: {
+    queryValues: method({
+      input: {
+        values: z.array(z.number().int().nonnegative()),
+        item: z.string(),
+        search: z.string(),
+        trace: z.string(),
+        labels: KeyValue(z.boolean(), { keySchema: s.u32() }),
+      },
+      returns: z.array(z.string()),
+      http: http.get("/query/{item}?q={search}", {
+        headers: { "x-request-id": "trace" } as const,
+      }),
+    }),
+    queryExplicit: method({
+      input: {
+        values: z.array(z.number().int().nonnegative()),
+        labels: KeyValue(z.boolean(), { keySchema: s.u32() }),
+      },
+      returns: z.array(z.string()),
+      http: http.post("/query-explicit?values={values}&labels={labels}"),
+    }),
+    queryOptional: method({
+      input: {
+        values: s.option(z.array(z.number().int().nonnegative())),
+        labels: s.option(KeyValue(z.boolean(), { keySchema: s.u32() })),
+      },
+      returns: z.array(z.string()),
+      http: http.get("/query-optional"),
+    }),
+    queryScalar: method({
+      input: { value: s.u32() },
+      returns: s.u32(),
+      http: [http.head("/query-head"), http.del("/query-delete")],
+    }),
+    queryBody: method({
+      input: {
+        values: z.array(z.number().int().nonnegative()),
+        labels: KeyValue(z.boolean(), { keySchema: s.u32() }),
+      },
+      returns: z.array(z.string()),
+      http: http.post("/query-body"),
+    }),
     stringPathVar: method({
       input: { pathVar: z.string() },
       returns: z.object({ value: z.string() }),
@@ -139,8 +202,26 @@ export const HttpAgent = defineAgent({
 });
 
 export const HttpAgentImpl = HttpAgent.implement({
-  init: ({ id }) => ({ agentName: id.agentName }),
+  init: ({ id }) => {
+    writeFileSync("/query.txt", "query file");
+    return { agentName: id.agentName };
+  },
   methods: {
+    queryValues({ values, item, search, trace, labels }) {
+      return [item, search, trace, ...queryEcho(values, labels)];
+    },
+    queryExplicit({ values, labels }) {
+      return queryEcho(values, labels);
+    },
+    queryOptional({ values, labels }) {
+      return queryEcho(values, labels);
+    },
+    queryScalar({ value }) {
+      return value;
+    },
+    queryBody({ values, labels }) {
+      return queryEcho(values, labels);
+    },
     stringPathVar({ pathVar }) {
       return { value: pathVar };
     },
@@ -305,6 +386,18 @@ export const PrincipalAgent = defineAgent({
       returns: z.object({ value: s.principal() }),
       http: http.get("/authed-principal", { auth: true }),
     }),
+    authedReadonly: method({
+      input: {},
+      returns: z.string(),
+      readOnly: true,
+      http: http.get("/authed-readonly", { auth: true }),
+    }),
+    authedReadonlyPrincipal: method({
+      input: { caller: s.principal() },
+      returns: z.object({ value: s.principal() }),
+      readOnly: true,
+      http: http.get("/authed-readonly-principal", { auth: true }),
+    }),
   },
 });
 
@@ -321,6 +414,12 @@ export const PrincipalAgentImpl = PrincipalAgent.implement({
       return { value: caller, foo, bar };
     },
     authedPrincipal({ caller }) {
+      return { value: caller };
+    },
+    authedReadonly() {
+      return this.agentName;
+    },
+    authedReadonlyPrincipal({ caller }) {
       return { value: caller };
     },
   },

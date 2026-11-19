@@ -1698,7 +1698,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use golem_common::model::AgentId;
     use golem_common::model::account::{AccountEmail, AccountId};
@@ -1840,6 +1840,7 @@ mod tests {
         Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         }
@@ -1963,6 +1964,18 @@ mod tests {
                 activation: tool_activation(),
             },
         ])
+        .unwrap()
+    }
+
+    pub(crate) fn middleware_position() -> ResolvedEntityInvocationPosition {
+        resolve_recorded_plan_from_root_payload(
+            OplogIndex::from_u64(42),
+            &AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            EntityInvocationPlanReference::Root {
+                plan: three_layer_plan(),
+            },
+            None,
+        )
         .unwrap()
     }
 
