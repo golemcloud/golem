@@ -21,7 +21,6 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvocationKind, InvocationLifecycleState, InvocationSummary, ListInvocationsRequest,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AgentInvocation, IdempotencyKey, InvocationId, OwnedAgentId};
 use golem_common::{agent_id, data_value};
@@ -29,7 +28,7 @@ use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    WorkerExecutorTestDependencies, callers, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -80,9 +79,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
         method_name: "inc_global_by".to_string(),
         input: data_value!(1u64).into_parts().1,
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.clone(),
-        }),
+        caller: callers::agent(owner.clone()),
         scope_card: None,
     };
     executor

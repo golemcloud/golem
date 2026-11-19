@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetInvocationRequest, InvocationLifecycleState, InvocationSummary, ListInvocationsRequest,
     ListInvocationsSuccess, LookupInvocationsRequest,
 };
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::{
     AgentFingerprint, IdempotencyKey, InvocationId, InvocationRequestKey, OplogIndex, Timestamp,
 };
@@ -199,7 +199,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(owned_agent_id)?;
         Self::validate_auth_ctx(auth_ctx)?;
         self.ensure_not_being_deleted(owned_agent_id).await?;
-        self.get_existing_for_management(owned_agent_id, Principal::anonymous(), operation)
+        self.get_existing_for_management(owned_agent_id, Caller::anonymous(), operation)
             .await
     }
 
