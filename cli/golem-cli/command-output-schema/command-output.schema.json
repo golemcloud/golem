@@ -2160,7 +2160,7 @@
     },
     "agent.oplog": {
       "type": "object",
-      "description": "One document emitted per oplog entry by `golem agent oplog` without `--obfuscate` in structured formats. Parse stdout as a sequence of documents, not as one array or object.",
+      "description": "One document emitted per oplog entry by `golem agent oplog` without `--obfuscate` in structured formats. Parse stdout as a sequence of documents, not as one array or object. With `--output FILE --format jsonl`, the same documents go to FILE instead, one per line in index order.",
       "x-golem-output-mode": "stream",
       "x-golem-command": "agent oplog",
       "required": [

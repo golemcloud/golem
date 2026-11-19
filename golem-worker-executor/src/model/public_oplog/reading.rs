@@ -140,7 +140,8 @@ pub async fn get_public_oplog_chunk(
 
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
-/// `limits.max_bytes`.
+/// `limits.max_bytes`. The page reads no entry after `last_oplog_index`, and its `last_index` is
+/// the end of the read: the last index of the oplog, or `last_oplog_index` when that is earlier.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -151,9 +152,16 @@ pub async fn get_public_oplog_page(
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
     limits: PublicOplogPageLimits,
 ) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
-    let (chunk, _) = read_public_oplog_chunk(
+    let count = last_oplog_index.map_or(limits.count, |last| {
+        let to_last = (last.as_u64() + 1).saturating_sub(initial_oplog_index.as_u64());
+        limits
+            .count
+            .min(usize::try_from(to_last).unwrap_or(usize::MAX))
+    });
+    let (mut chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
         owned_agent_id,
@@ -163,11 +171,14 @@ pub async fn get_public_oplog_page(
         agent_type_name,
         initial_component_revision,
         initial_oplog_index,
-        limits.count,
+        count,
         None,
         &mut RemotePage::new(limits),
     )
     .await?;
+    if let Some(last) = last_oplog_index {
+        chunk.last_index = chunk.last_index.min(last);
+    }
     Ok(chunk)
 }
 
@@ -371,7 +382,7 @@ pub async fn search_public_oplog(
 
 /// Searches the oplog for a remote reader. The result is an oplog page with the limits of
 /// `get_public_oplog_page`; only the matching entries count against the limits. The search
-/// stops early when `budget` is spent.
+/// reads no entry after `last_oplog_index`, and stops early when `budget` is spent.
 pub async fn search_public_oplog_page(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -382,6 +393,7 @@ pub async fn search_public_oplog_page(
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
     limits: PublicOplogPageLimits,
     query: &str,
     budget: ScanBudget,
@@ -396,7 +408,7 @@ pub async fn search_public_oplog_page(
         agent_type_name,
         initial_component_revision,
         initial_oplog_index,
-        None,
+        last_oplog_index,
         limits.count,
         query,
         budget,
@@ -527,6 +539,21 @@ pub fn oplog_page_cursor(
         current_component_revision: current_component_revision.into(),
         query_hash: OplogCursor::query_hash(query),
     })
+}
+
+/// The last index of an oplog read from `from` to `to`. A read without `to` goes to the end of the
+/// oplog, and a `to` after the end of the oplog ends the read at the end. A range that ends before
+/// it starts is refused.
+pub fn oplog_read_end(
+    from: OplogIndex,
+    to: Option<OplogIndex>,
+) -> Result<Option<OplogIndex>, WorkerExecutorError> {
+    match to {
+        Some(to) if to < from => Err(WorkerExecutorError::invalid_request(format!(
+            "the oplog range ends at {to}, before its start at {from}"
+        ))),
+        to => Ok(to),
+    }
 }
 
 /// Refuses a cursor of the pages of another query as stale, because continuing it would mix the

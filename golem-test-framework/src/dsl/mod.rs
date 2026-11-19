@@ -518,6 +518,19 @@ pub trait TestDsl {
 
     async fn revert(&self, agent_id: &AgentId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
+    /// Reads the oplog entries from `from` to `to` that match `query`, in full and in index order.
+    /// The read follows the cursor of each page to the end of the range, so neither the page size
+    /// nor the scan budget of a search page limits it. Without `from`, the read starts at the
+    /// first entry; without `to`, it goes to the end of the oplog; without `query`, it returns
+    /// every entry.
+    async fn read_oplog(
+        &self,
+        agent_id: &AgentId,
+        from: Option<OplogIndex>,
+        to: Option<OplogIndex>,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
     async fn get_oplog(
         &self,
         agent_id: &AgentId,

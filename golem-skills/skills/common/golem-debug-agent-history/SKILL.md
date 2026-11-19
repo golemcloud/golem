@@ -23,8 +23,10 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 
 | Flag | Description |
 |------|-------------|
-| `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--query` or `--cursor`. |
-| `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Cannot be combined with `--from`. |
+| `--from <INDEX>` | Start from a specific oplog entry index. Cannot be combined with `--cursor`. |
+| `--to <INDEX>` | End at a specific oplog entry index, included. A `--to` after the end of the oplog ends the read at the end; a `--to` before `--from` is refused. Cannot be combined with `--html`, `--serve` or `--obfuscate`. |
+| `--query <LUCENE_QUERY>` | Search oplog entries using a Lucene query string. Combines with `--from` and `--to`: only the matching entries in the range are returned. |
+| `--output <FILE>` | Export the entries to `FILE` as JSON Lines, one `agent.oplog` document per line in index order. Requires `--format jsonl` (an alias of `--format json`). The export follows the cursors to the end of the range and writes each page before it reads the next, so it works for oplogs of any size, and the scan budget of a search does not end it. Every entry is exported in full. Combines with `--from`, `--to` and `--query`. |
 | `--omit-payloads` | Show the entries that oplog pages omit only by their type, timestamp and size. Oplog pages omit an entry whose encoded form is larger than a server limit (1 MiB by default), for example an entry with a large snapshot, invocation input or host call response. Without this flag the CLI reads each omitted entry in full. |
 | `--serve` | Serve an interactive HTML viewer on a local port and open it in the default browser. The viewer loads the oplog page by page through the API, runs Lucene queries on the server and can follow a running agent, so it works for oplogs of any size. `--from` and `--query` set the initial position and query. Runs until interrupted. |
 | `--port <PORT>` | Port of the served viewer. A free port is chosen when omitted. Requires `--serve`. |
@@ -39,7 +41,7 @@ golem agent oplog <AGENT_ID> [OPTIONS]
 | `--page` | Read one page of at most 50 entries (the HTTP batch size) and print it as one `agent.oplog-page` document, with a `cursor` when the oplog has entries after the page. A search page can end early at the server's scan budget, so it can have fewer entries, or none, and still have a cursor. Cannot be combined with `--html`, `--serve` or `--obfuscate`. |
 | `--cursor <CURSOR>` | With `--page`: read the page after the one that returned `CURSOR`. Pass the cursor back unchanged, with the same `--query`. The server refuses a cursor of another query, or one past the end of the oplog, with `STALE_CURSOR`. |
 
-If neither `--from` nor `--query` is provided, the entire oplog is streamed. Without `--page`, the CLI follows the cursors to the end of the oplog.
+If none of `--from`, `--to` and `--query` is provided, the entire oplog is streamed. Without `--page`, the CLI follows the cursors to the end of the oplog.
 
 ### Obfuscated export
 
@@ -112,6 +114,17 @@ golem agent oplog <AGENT_ID> --from 100
 Search for specific entries:
 ```shell
 golem agent oplog <AGENT_ID> --query "error"
+```
+
+Search for specific entries in a range:
+```shell
+golem agent oplog <AGENT_ID> --query "error" --from 100 --to 200
+```
+
+Export the complete oplog, or the entries up to index 500, to a JSON Lines file:
+```shell
+golem agent oplog <AGENT_ID> --format jsonl --output oplog.jsonl
+golem agent oplog <AGENT_ID> --to 500 --format jsonl --output oplog.jsonl
 ```
 
 Read a search page by page, passing back the `cursor` of each page until a page has none:

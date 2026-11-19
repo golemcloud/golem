@@ -62,6 +62,7 @@ impl OplogReads for RestOplogReads {
                 &self.component_id,
                 &self.agent_name,
                 from,
+                None,
                 count,
                 cursor,
                 query,

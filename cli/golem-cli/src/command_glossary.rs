@@ -385,7 +385,7 @@ For full lists see each provider's docs, e.g.:
 // ── agent oplog --query ──────────────────────────────────────────────────────
 
 pub const OPLOG_QUERY_SHORT: &str = "Lucene-style query against oplog entries (case-insensitive terms, AND/OR/NOT, phrases, regex). \
-     Mutually exclusive with --from. See --help for matchable terms.";
+     Combines with --from and --to. See --help for matchable terms.";
 
 pub const OPLOG_QUERY_LONG: &str = "Lucene-style query against the agent's oplog.
 

@@ -45,13 +45,14 @@ use crate::model::agent::action_result::{
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
+use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView, OplogJsonlWriter};
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
 };
 use crate::model::agent::{AgentCreateView, AgentGetView, format_agent_id_match, format_timestamp};
 use crate::model::component::ComponentNameMatchKind;
 use crate::model::deploy::{AgentUpdateMeta, TryUpdateAllWorkersView};
+use crate::model::format::Format;
 use crate::model::help::{
     AgentNameHelp, ArgumentError, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
     ParameterErrorTableView,
@@ -276,18 +277,23 @@ impl AgentCommandHandler {
                 AgentSubcommand::Oplog {
                     agent_id,
                     from,
+                    to,
                     query,
                     omit_payloads,
+                    output,
                     page,
                     cursor,
                     viewer,
                     export,
                 } => {
                     if page {
-                        self.cmd_oplog_page(agent_id, from, cursor, query, omit_payloads)
+                        self.cmd_oplog_page(agent_id, from, to, cursor, query, omit_payloads)
+                            .await
+                    } else if let Some(output) = output {
+                        self.cmd_oplog_jsonl_export(agent_id, from, to, query, &output)
                             .await
                     } else {
-                        self.cmd_oplog(agent_id, from, query, omit_payloads, viewer, export)
+                        self.cmd_oplog(agent_id, from, to, query, omit_payloads, viewer, export)
                             .await
                     }
                 }
@@ -917,6 +923,7 @@ impl AgentCommandHandler {
         &self,
         agent_id: AgentIdArgs,
         from: Option<u64>,
+        to: Option<u64>,
         query: Option<String>,
         omit_payloads: bool,
         viewer: OplogViewerArgs,
@@ -997,6 +1004,7 @@ impl AgentCommandHandler {
                         &component.id.0,
                         &agent_id.0,
                         from,
+                        to,
                         batch_size,
                         cursor.as_ref(),
                         query.as_deref(),
@@ -1076,11 +1084,96 @@ impl AgentCommandHandler {
         Ok(())
     }
 
+    /// Exports the oplog entries from `from` to `to` that match `query` to `path` as JSON Lines.
+    /// The export follows the cursor of each page to the end of the range and writes each page
+    /// before it reads the next, so its memory does not grow with the oplog. A search page that
+    /// the scan budget of the server ends early still has a cursor, so the budget does not end
+    /// the export. Each entry that a page omits for its size is read in full.
+    async fn cmd_oplog_jsonl_export(
+        &self,
+        agent_id: AgentIdArgs,
+        from: Option<u64>,
+        to: Option<u64>,
+        query: Option<String>,
+        path: &Path,
+    ) -> anyhow::Result<()> {
+        if self.ctx.format() != Format::Json {
+            log_error(format!(
+                "{} writes JSON Lines; pass {}",
+                "--output".log_color_highlight(),
+                "--format jsonl".log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        }
+        self.ctx.silence_app_context_init().await;
+        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
+        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
+
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let file =
+            File::create(path).with_context(|| format!("Failed to create {}", path.display()))?;
+        let mut writer =
+            OplogJsonlWriter::new(std::io::BufWriter::new(file), self.ctx.masking_config());
+
+        let batch_size = self.ctx.http_batch_size();
+        let mut cursor = Option::<OplogCursor>::None;
+        loop {
+            let page = self
+                .ctx
+                .golem_clients()
+                .await?
+                .worker
+                .get_oplog(
+                    &component.id.0,
+                    &agent_id.0,
+                    from,
+                    to,
+                    batch_size,
+                    cursor.as_ref(),
+                    query.as_deref(),
+                )
+                .await
+                .map_service_error()?;
+            for entry in page.entries {
+                writer.write(
+                    oplog_page_entry_view(&self.ctx, &component.id.0, &agent_id.0, entry, false)
+                        .await?,
+                )?;
+            }
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        let written = writer.written();
+        writer
+            .finish()?
+            .into_inner()
+            .map_err(|error| error.into_error())
+            .and_then(|file| file.sync_all())
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+
+        log_action(
+            "Exported",
+            format!(
+                "{written} oplog entries of agent {} to {}",
+                format_agent_id_match(&agent_id_match),
+                path.display().to_string().log_color_highlight()
+            ),
+        );
+        Ok(())
+    }
+
     /// One server page of the oplog, as one `agent.oplog-page` document.
     async fn cmd_oplog_page(
         &self,
         agent_id: AgentIdArgs,
         from: Option<u64>,
+        to: Option<u64>,
         cursor: Option<OplogCursor>,
         query: Option<String>,
         omit_payloads: bool,
@@ -1098,6 +1191,7 @@ impl AgentCommandHandler {
                 &component.id.0,
                 &agent_id.0,
                 from,
+                to,
                 self.ctx.http_batch_size(),
                 cursor.as_ref(),
                 query.as_deref(),

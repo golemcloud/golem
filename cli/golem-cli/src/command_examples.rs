@@ -350,9 +350,16 @@ pub const AGENT_OPLOG: &str = "Examples:
   # Continue from a specific oplog index
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --from 100
 
-  # Filter using a Lucene query
+  # Read the entries from index 100 to index 200
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --from 100 --to 200
+
+  # Filter using a Lucene query, optionally within a range
   golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'error'
-  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment'
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --query 'function_name:increment' --from 100 --to 200
+
+  # Export the complete oplog, or a range of it, to a JSON Lines file
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --format jsonl --output oplog.jsonl
+  golem-cli agent oplog 'CounterAgent(\"my-counter\")' --to 500 --format jsonl --output oplog.jsonl
 
   # In structured formats, each oplog entry is emitted as a separate document
   golem-cli --format json agent oplog 'CounterAgent(\"my-counter\")'

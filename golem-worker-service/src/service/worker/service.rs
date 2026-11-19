@@ -1220,6 +1220,7 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         from_oplog_index: OplogIndex,
+        to_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         auth_ctx: AuthCtx,
@@ -1233,7 +1234,11 @@ impl WorkerService {
             .as_ref()
             .map(|cursor| cursor.next_oplog_index)
             .unwrap_or_else(|| from_oplog_index.into());
-        let end = start.checked_add(count.saturating_sub(1));
+        let end = match (start.checked_add(count.saturating_sub(1)), to_oplog_index) {
+            (Some(end), Some(to)) => Some(end.min(to.into())),
+            (end, None) => end,
+            (None, to) => to.map(Into::into),
+        };
         authorize_oplog_permission(
             &auth_ctx,
             &component,
@@ -1246,6 +1251,7 @@ impl WorkerService {
             .get_oplog(
                 agent_id,
                 from_oplog_index,
+                to_oplog_index,
                 cursor,
                 count,
                 component.environment_id,
@@ -1292,6 +1298,8 @@ impl WorkerService {
     pub async fn search_oplog(
         &self,
         agent_id: &AgentId,
+        from_oplog_index: Option<OplogIndex>,
+        to_oplog_index: Option<OplogIndex>,
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
@@ -1308,6 +1316,8 @@ impl WorkerService {
             .worker_client
             .search_oplog(
                 agent_id,
+                from_oplog_index,
+                to_oplog_index,
                 cursor,
                 count,
                 query,
@@ -4854,6 +4864,7 @@ mod tests {
             &self,
             _: &AgentId,
             _: OplogIndex,
+            _: Option<OplogIndex>,
             _: Option<OplogCursor>,
             _: u64,
             _: EnvironmentId,
@@ -4899,6 +4910,8 @@ mod tests {
         async fn search_oplog(
             &self,
             _: &AgentId,
+            _: Option<OplogIndex>,
+            _: Option<OplogIndex>,
             _: Option<OplogCursor>,
             _: u64,
             _: String,
@@ -5961,6 +5974,7 @@ mod tests {
                 &agent_id,
                 OplogIndex::from_u64(5),
                 None,
+                None,
                 3,
                 auth_ctx.clone(),
             )
@@ -6046,6 +6060,36 @@ mod tests {
             )],
             "a denied oplog entry read reached the worker client"
         );
+    }
+
+    #[test]
+    async fn an_oplog_page_with_an_end_needs_permission_only_up_to_its_end() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        let auth_ctx = auth_ctx_with_permissions(vec![oplog_target(
+            &agent_id,
+            OplogResourcePattern::range(Some(5), Some(7)),
+        )]);
+        let get_oplog = |to: Option<u64>| {
+            harness.worker_service.get_oplog(
+                &agent_id,
+                OplogIndex::from_u64(5),
+                to.map(OplogIndex::from_u64),
+                None,
+                50,
+                auth_ctx.clone(),
+            )
+        };
+
+        get_oplog(Some(7)).await.unwrap();
+        assert!(
+            get_oplog(None).await.is_err(),
+            "a page of 50 entries from index 5 reads past the permitted index 7"
+        );
+        assert!(get_oplog(Some(8)).await.is_err());
     }
 
     #[test]

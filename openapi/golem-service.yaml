@@ -938,6 +938,11 @@ paths:
       tags:
       - Worker
       summary: Get the oplog of a worker
+      description: |-
+        Reads the oplog entries from `from` to `to`, both included. Without `from`, the read starts
+        at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
+        the oplog ends the read at the end, and a `to` before `from` is refused. With `query`, the
+        page holds only the entries in the range that match the query.
       operationId: get_oplog
       parameters:
       - in: path
@@ -959,6 +964,14 @@ paths:
         style: simple
       - in: query
         name: from
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: to
         deprecated: false
         schema:
           type: integer

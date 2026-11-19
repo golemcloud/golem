@@ -180,6 +180,7 @@ async fn oplog_page(
             &server.component_id,
             &server.agent_id,
             params.from,
+            None,
             count,
             cursor.as_ref(),
             query.as_deref(),

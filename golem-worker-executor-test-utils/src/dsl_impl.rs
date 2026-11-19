@@ -772,56 +772,82 @@ impl TestDsl for TestWorkerExecutor {
         }
     }
 
-    #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
-    async fn get_oplog(
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, ?from, ?to, ?query))]
+    async fn read_oplog(
         &self,
         agent_id: &AgentId,
-        from: OplogIndex,
+        from: Option<OplogIndex>,
+        to: Option<OplogIndex>,
+        query: Option<&str>,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
             .await?;
+        let environment_id = latest_version.environment_id;
 
         let mut result = Vec::new();
         let mut cursor = None;
-
         loop {
-            let chunk = self
-                .client
-                .clone()
-                .get_oplog(workerexecutor::v1::GetOplogRequest {
-                    agent_id: Some(agent_id.clone().into()),
-                    environment_id: Some(latest_version.environment_id.into()),
-                    from_oplog_index: from.into(),
-                    cursor,
-                    count: 100,
-                    auth_ctx: Some(self.auth_ctx().into()),
-                })
-                .await?
-                .into_inner();
-
-            if let Some(chunk) = chunk.result {
-                match chunk {
-                    get_oplog_response::Result::Success(chunk) => {
-                        result.extend(
-                            self.full_oplog_entries(
-                                agent_id,
-                                latest_version.environment_id,
-                                chunk.entries,
-                            )
-                            .await?,
-                        );
-                        match chunk.next {
-                            Some(next) => cursor = Some(next),
-                            None => break,
+            let (entries, next) = match query {
+                None => {
+                    let response = self
+                        .client
+                        .clone()
+                        .get_oplog(workerexecutor::v1::GetOplogRequest {
+                            agent_id: Some(agent_id.clone().into()),
+                            environment_id: Some(environment_id.into()),
+                            from_oplog_index: from.unwrap_or(OplogIndex::INITIAL).into(),
+                            to_oplog_index: to.map(Into::into),
+                            cursor,
+                            count: 100,
+                            auth_ctx: Some(self.auth_ctx().into()),
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        Some(get_oplog_response::Result::Success(page)) => {
+                            (page.entries, page.next)
                         }
-                    }
-                    get_oplog_response::Result::Failure(error) => {
-                        return Err(anyhow!("Failed to get oplog: {error:?}"));
+                        Some(get_oplog_response::Result::Failure(error)) => {
+                            return Err(anyhow!("Failed to get oplog: {error:?}"));
+                        }
+                        None => break,
                     }
                 }
-            } else {
-                break;
+                Some(query) => {
+                    let response = self
+                        .client
+                        .clone()
+                        .search_oplog(SearchOplogRequest {
+                            agent_id: Some(agent_id.clone().into()),
+                            environment_id: Some(environment_id.into()),
+                            from_oplog_index: from.map(Into::into),
+                            to_oplog_index: to.map(Into::into),
+                            cursor,
+                            count: 100,
+                            query: query.to_string(),
+                            auth_ctx: Some(self.auth_ctx().into()),
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        Some(search_oplog_response::Result::Success(page)) => {
+                            (page.entries, page.next)
+                        }
+                        Some(search_oplog_response::Result::Failure(error)) => {
+                            return Err(anyhow!("Failed to search oplog: {error:?}"));
+                        }
+                        None => break,
+                    }
+                }
+            };
+            result.extend(
+                self.full_oplog_entries(agent_id, environment_id, entries)
+                    .await?,
+            );
+            match next {
+                Some(next) => cursor = Some(next),
+                None => break,
             }
         }
 
@@ -829,6 +855,22 @@ impl TestDsl for TestWorkerExecutor {
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
+    async fn get_oplog(
+        &self,
+        agent_id: &AgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_oplog(agent_id, Some(from), None, None).await
+    }
+
+    async fn search_oplog(
+        &self,
+        agent_id: &AgentId,
+        query: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_oplog(agent_id, None, None, Some(query)).await
+    }
+
     async fn get_oplog_last_index(&self, agent_id: &AgentId) -> anyhow::Result<u64> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -844,6 +886,7 @@ impl TestDsl for TestWorkerExecutor {
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
+                to_oplog_index: None,
             })
             .await?
             .into_inner();
@@ -855,61 +898,6 @@ impl TestDsl for TestWorkerExecutor {
             }
             None => Err(anyhow!("Failed to get oplog last index: empty response")),
         }
-    }
-
-    async fn search_oplog(
-        &self,
-        agent_id: &AgentId,
-        query: &str,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        let latest_version = self
-            .get_latest_component_revision(&agent_id.component_id)
-            .await?;
-
-        let mut result = Vec::new();
-        let mut cursor = None;
-
-        loop {
-            let chunk = self
-                .client
-                .clone()
-                .search_oplog(SearchOplogRequest {
-                    agent_id: Some(agent_id.clone().into()),
-                    environment_id: Some(latest_version.environment_id.into()),
-                    cursor,
-                    count: 100,
-                    query: query.to_string(),
-                    auth_ctx: Some(self.auth_ctx().into()),
-                })
-                .await?
-                .into_inner();
-
-            if let Some(chunk) = chunk.result {
-                match chunk {
-                    search_oplog_response::Result::Success(chunk) => {
-                        result.extend(
-                            self.full_oplog_entries(
-                                agent_id,
-                                latest_version.environment_id,
-                                chunk.entries,
-                            )
-                            .await?,
-                        );
-                        match chunk.next {
-                            Some(next) => cursor = Some(next),
-                            None => break,
-                        }
-                    }
-                    search_oplog_response::Result::Failure(error) => {
-                        return Err(anyhow!("Failed to search oplog: {error:?}"));
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        Ok(result)
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, recover_immediately))]
