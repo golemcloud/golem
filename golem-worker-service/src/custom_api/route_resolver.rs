@@ -550,10 +550,12 @@ fn validate_reserved_bindings(
     }
 
     for route in typed {
-        if matches!(route.behavior, RichRouteBehaviour::CallAgent(_))
-            && reserved
-                .iter()
-                .any(|reserved| bindings_overlap(reserved, route, false))
+        if matches!(
+            route.behavior,
+            RichRouteBehaviour::CallAgent(_) | RichRouteBehaviour::CreateAgent(_)
+        ) && reserved
+            .iter()
+            .any(|reserved| bindings_overlap(reserved, route, false))
         {
             return Err(());
         }
@@ -696,6 +698,33 @@ pub(super) mod tests {
         let component_revision = ComponentRevision::INITIAL;
         let agent_type = AgentTypeName(format!("agent{id}"));
         let behavior = match kind {
+            "create-path" | "create-query" => {
+                use golem_service_base::custom_api::{AgentSelection, CreateAgentBehaviour};
+                let mut location = vec![PathSegment::Literal {
+                    value: "agents".into(),
+                }];
+                let agent_selection = if kind == "create-path" {
+                    location.push(PathSegment::Variable {
+                        display_name: "instance".into(),
+                    });
+                    AgentSelection::Path { index: 0.into() }
+                } else {
+                    AgentSelection::Query {
+                        name: "instance".into(),
+                    }
+                };
+                RouteBehaviour::CreateAgent(CreateAgentBehaviour {
+                    agent: MountAgent {
+                        component_id,
+                        component_revision,
+                        agent_type,
+                        constructor_input: input(),
+                        constructor_parameters: vec![],
+                        agent_selection,
+                    },
+                    location,
+                })
+            }
             "router" | "filesystem" => RouteBehaviour::Mount(MountBehaviour {
                 handler: None,
                 openapi_provider: None,
@@ -706,6 +735,7 @@ pub(super) mod tests {
                         agent_type,
                         constructor_input: input(),
                         constructor_parameters: vec![],
+                        agent_selection: golem_service_base::custom_api::AgentSelection::Key,
                     };
                     if kind == "router" {
                         MountFileSource::Router {
@@ -733,9 +763,7 @@ pub(super) mod tests {
                 agent_mode: AgentMode::Durable,
                 constructor_input: input(),
                 constructor_parameters: vec![],
-                phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
-                    phantom: false,
-                },
+                agent_selection: golem_service_base::custom_api::AgentSelection::Key,
                 method_name: "run".into(),
                 method_input: input(),
                 body: RequestBodySchema::Unused,
@@ -764,11 +792,15 @@ pub(super) mod tests {
             route_id: id,
             route_match: method
                 .map(|method| RouteMatch::Method {
-                    method: HttpMethod::Method(golem_schema::http::HttpMethod::Custom(
-                        golem_schema::http::CustomHttpMethod {
-                            value: method.into(),
-                        },
-                    )),
+                    method: if method == "POST" {
+                        HttpMethod::Method(golem_schema::http::HttpMethod::Post(Default::default()))
+                    } else {
+                        HttpMethod::Method(golem_schema::http::HttpMethod::Custom(
+                            golem_schema::http::CustomHttpMethod {
+                                value: method.into(),
+                            },
+                        ))
+                    },
                     trailing_slash: path.len() > 1 && path.ends_with('/'),
                 })
                 .unwrap_or(RouteMatch::MountPrefix),
@@ -800,6 +832,105 @@ pub(super) mod tests {
             cors: CorsOptions {
                 allowed_patterns: vec![],
             },
+        }
+    }
+
+    #[test]
+    async fn create_routes_are_exact_typed_routes_and_conflict_with_reserved_bindings() {
+        for kind in ["create-path", "create-query"] {
+            let resolver = test_resolver(vec![
+                test_route(1, "/agents/create", Some("POST"), kind),
+                test_route(2, "/agents", None, "router"),
+            ]);
+            for (method, path, expected) in [
+                ("POST", "/agents/create", 1),
+                ("GET", "/agents/create", 2),
+                ("POST", "/agents/create/child", 2),
+                ("POST", "/agents/create/", 2),
+            ] {
+                let request = poem::Request::builder()
+                    .method(method.parse().unwrap())
+                    .uri(path.parse().unwrap())
+                    .header("host", "example.com")
+                    .finish();
+                let selected = resolver.resolve_matching_route(&request).await.unwrap();
+                assert_eq!(selected.route.route_id, expected, "{kind}: {method} {path}");
+                assert!(selected.captured_path_parameters.is_empty());
+            }
+            let resolver = test_resolver(vec![
+                test_route(1, "/agents/create", Some("POST"), kind),
+                test_route(2, "/agents/create", Some("POST"), "reserved"),
+            ]);
+            assert!(
+                resolver
+                    .get_or_build_domain_api(&Domain("example.com".into()))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    async fn malformed_create_snapshots_are_rejected_before_admission() {
+        use golem_service_base::custom_api::AgentSelection;
+        for case in [
+            "get",
+            "prefix",
+            "capture",
+            "catch-all",
+            "key",
+            "fresh",
+            "index",
+            "empty-query",
+            "location-catch-all",
+            "extra-location-capture",
+        ] {
+            let kind = if case == "empty-query" {
+                "create-query"
+            } else {
+                "create-path"
+            };
+            let mut route = test_route(1, "/agents/create", Some("POST"), kind);
+            let RouteBehaviour::CreateAgent(create) = &mut route.behavior else {
+                unreachable!()
+            };
+            match case {
+                "get" => {
+                    route.route_match =
+                        HttpMethod::Method(golem_schema::http::HttpMethod::Get(Default::default()))
+                            .into()
+                }
+                "prefix" => route.route_match = RouteMatch::MountPrefix,
+                "capture" => route.path.push(PathSegment::Variable {
+                    display_name: "id".into(),
+                }),
+                "catch-all" => route.path.push(PathSegment::CatchAll {
+                    display_name: "all".into(),
+                }),
+                "key" => create.agent.agent_selection = AgentSelection::Key,
+                "fresh" => create.agent.agent_selection = AgentSelection::Fresh,
+                "index" => create.agent.agent_selection = AgentSelection::Path { index: 1.into() },
+                "empty-query" => {
+                    create.agent.agent_selection = AgentSelection::Query { name: "".into() }
+                }
+                "location-catch-all" => {
+                    create.location[1] = PathSegment::CatchAll {
+                        display_name: "all".into(),
+                    }
+                }
+                "extra-location-capture" => create.location.push(PathSegment::Variable {
+                    display_name: "extra".into(),
+                }),
+                _ => unreachable!(),
+            }
+            let resolver = test_resolver(vec![route]);
+            assert!(
+                resolver
+                    .get_or_build_domain_api(&Domain("example.com".into()))
+                    .await
+                    .is_err(),
+                "{case}"
+            );
         }
     }
 

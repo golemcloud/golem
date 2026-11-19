@@ -11,7 +11,7 @@ HTTP mounting is **metadata only**: you declare, on the agent's definition, a UR
 
 Two pieces, both on the **definition**:
 
-1. `Spec.HTTP = &golem.Mount{Path: "…"}` — the agent-level prefix. Its `{var}` segments bind the agent's user-supplied constructor (`ID`) fields, so a request URL selects the instance. **Every user-supplied `ID` field must appear as a `{var}`; exclude auto-injected `golem.Principal` fields.**
+1. `Spec.HTTP = &golem.Mount{Path: "…"}` — the agent-level prefix. On a key mount, its `{var}` segments bind the agent's user-supplied constructor (`ID`) fields, so a request URL selects the instance. **Every user-supplied `ID` field must appear as a `{var}` on a key mount; exclude auto-injected `golem.Principal` fields.** An ID mount instead binds only the required agent ID.
 2. `golem.HTTP(golem.GET("/suffix"), …)` as a method option — one or more routes per method, with request data bound to the method's input fields.
 
 ## Steps
@@ -49,6 +49,24 @@ var (
 ```
 
 The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-specific in the impl.
+
+## Required Agent ID Mounts and Creation
+
+Use an ID mount to address an existing durable, non-router agent without constructor inputs in the URL:
+
+```go
+HTTP: &golem.Mount{
+    Path:        "/tasks/{instance}",
+    AgentID:     golem.AgentIDPath("instance"),
+    CreateRoute: "/tasks/create",
+},
+```
+
+For query addressing, use `Path: "/tasks"` and `AgentID: golem.AgentIDQuery("instance")`. The ID is required; there is no optional binding or keyed fallback. ID mounts cannot bind constructor fields or combine with `PhantomAgent` or ephemeral mode. The query ID name is reserved from explicit and implicit method query bindings and protocol controls. Keep fresh-per-request `PhantomAgent` and ephemeral lifecycle policies on key mounts.
+
+`CreateRoute` declares a full exact POST path, not a mount suffix, and requires `AgentID`. Only literals and system variables are allowed in this path. Send the existing create envelope: `parameters` in canonical tagged SchemaValue JSON, optional `config` and `env`, and omitted or false `keyed`. `keyed: true` is rejected. Creation inherits mount authentication/CORS, waits for the constructor, and returns `201 Created` with `agentId`/`agentFingerprint` JSON and an ID-mounted `Location`. Current HTTP callers have no caller scope, even with authentication, so `Idempotency-Key` is ignored; retries create new unkeyed agents.
+
+ID selection never creates an agent. File serving supports both key and ID mounts but is lookup-only: missing keys and unknown, deleted, wrong-type or wrong-environment IDs return terminal `404`, without creation or handler fallback. Missing files on an existing target retain normal mapping fallback.
 
 ## Binding request data to input fields
 
@@ -116,7 +134,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 ```
 
-- The agent must be durable and not a phantom, and every user-supplied `ID` field must be a scalar captured exactly once by `Mount.Path` (no `{*rest}`), so a request names exactly one agent. Exclude auto-injected `golem.Principal` fields.
+- The agent must be durable and not fresh-per-request. Use either `Mount.AgentID` or a key mount whose user-supplied `ID` fields are scalars captured exactly once by `Mount.Path` (no `{*rest}`). Exclude auto-injected `golem.Principal` fields. File reads look up an existing agent and never create one.
 - Mappings are tried in order; repeating a route with another path gives a fallback. A subtree route ends in `/*` and its path in `/$1`.
 - Only `GET` and `HEAD` are served, with ranges and conditional requests. There is no directory listing, implicit index file or symlink following — expose only directories meant for HTTP.
 - Files the constructor or a method writes (with `os.WriteFile`) are served as they change.
@@ -124,7 +142,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 ## Key Constraints
 
-- Every user-supplied `ID` field must appear as a `{var}` in `Mount.Path` (else the platform can't identify the instance), excluding auto-injected `golem.Principal`. Mount segments may be literals or named variables, but never a catch-all. A trailing `{*rest}` is allowed only in an endpoint suffix.
+- On a key mount, every user-supplied `ID` field must appear as a `{var}` in `Mount.Path`, excluding auto-injected `golem.Principal`. An ID mount binds only the agent ID. Mount segments may be literals or named variables, but never a catch-all. A trailing `{*rest}` is allowed only in an endpoint suffix.
 - A method with an HTTP endpoint but no agent-level `Spec.HTTP` mount is a definition error — set the mount.
 - Serving the routes requires an HTTP API deployment (see the manifest `httpApi` configuration); mounting alone only advertises the routes.
 

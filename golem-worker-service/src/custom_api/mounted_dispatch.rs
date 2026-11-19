@@ -12,21 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::call_agent::CallAgentHandler;
+use super::call_agent::{CallAgentHandler, route_agent_binding};
 use super::error::RequestHandlerError;
 use super::raw_handler::RawHandler;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
+use crate::api::agents::CreateAgentRequest;
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::component::ComponentId;
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_schema::http::{FileMapping, FileResponseHeader};
-use golem_service_base::custom_api::{MountFileSource, MountTarget, RouterFileIndexEntry};
+use golem_service_base::custom_api::{
+    AgentSelection, CreateAgentBehaviour, MountAgent, MountFileSource, MountTarget, PathSegment,
+    RouterFileIndexEntry,
+};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::{HeaderName, HeaderValue, Method, StatusCode};
 use std::sync::Arc;
 
 use crate::config::HttpSessionLimits;
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AgentBinding, WorkerService};
 
 /// Owns mounted-route selection and both mounted storage backends. Guest HTTP value/body
 /// adaptation remains in [`RawHandler`], while invocation transport/recovery remains in
@@ -74,6 +78,95 @@ impl MountedDispatch {
             dispatch.await
         }
     }
+
+    pub(super) async fn create(
+        &self,
+        request: &mut RichRequest,
+        selected: &ResolvedRouteEntry,
+        behavior: &CreateAgentBehaviour,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        if let Some(name) = request.query_params().keys().min() {
+            return Err(RequestHandlerError::UnknownQueryParameter { name: name.clone() });
+        }
+        let body = request
+            .underlying
+            .take_body()
+            .into_json::<CreateAgentRequest>()
+            .await
+            .map_err(|error| RequestHandlerError::BodyIsNotValidJson {
+                error: error.to_string(),
+            })?;
+        if body.keyed {
+            return Err(RequestHandlerError::InvalidParameter {
+                name: "keyed".into(),
+                error: "HTTP create routes create an agent without a key".into(),
+            });
+        }
+        let key = request
+            .headers()
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| IdempotencyKey::new(value.to_owned()));
+        let agent = self
+            .worker_service
+            .create_mounted_agent(
+                behavior.agent.component_id,
+                selected.route.environment_id,
+                &behavior.agent.agent_type,
+                body,
+                key,
+                super::call_agent::caller_from_request(request)?,
+            )
+            .await?;
+        let location = create_location(behavior, agent.agent_id)?;
+        Ok(RouteExecutionResult {
+            status: StatusCode::CREATED,
+            headers: http::HeaderMap::from_iter([(
+                http::header::LOCATION,
+                HeaderValue::from_str(&location).map_err(anyhow::Error::from)?,
+            )]),
+            body: ResponseBody::PoemBody {
+                body: poem::Body::from_json(agent).map_err(anyhow::Error::from)?,
+                content_type: Some("application/json"),
+            },
+        })
+    }
+}
+
+fn create_location(
+    behavior: &CreateAgentBehaviour,
+    agent_id: AgentId,
+) -> Result<String, RequestHandlerError> {
+    let mut capture = 0usize;
+    let mut parts = Vec::with_capacity(behavior.location.len());
+    for segment in &behavior.location {
+        let value = match segment {
+            PathSegment::Literal { value } => value.clone(),
+            PathSegment::Variable { .. }
+                if matches!(&behavior.agent.agent_selection,
+                AgentSelection::Path { index } if usize::from(*index) == capture) =>
+            {
+                capture += 1;
+                agent_id.to_string()
+            }
+            _ => {
+                return Err(RequestHandlerError::invariant_violated(
+                    "Invalid create Location template",
+                ));
+            }
+        };
+        parts.push(urlencoding::encode(&value).into_owned());
+    }
+    let mut location = format!("/{}", parts.join("/"));
+    if let AgentSelection::Query { name } = &behavior.agent.agent_selection {
+        location.push('?');
+        location.push_str(
+            &url::form_urlencoded::Serializer::new(String::new())
+                .append_pair(name, &agent_id.to_string())
+                .finish(),
+        );
+    }
+    Ok(location)
 }
 
 struct MountedBackend<'a> {
@@ -100,8 +193,9 @@ impl MountBackend for MountedBackend<'_> {
             .await
             .map(Some),
             MountFile::Live {
-                component_id,
+                agent,
                 constructor,
+                binding,
                 path,
                 directory_request,
             } => {
@@ -109,8 +203,9 @@ impl MountBackend for MountedBackend<'_> {
                     &self.owner.worker_service,
                     request,
                     selected,
-                    component_id,
+                    agent,
                     constructor,
+                    binding,
                     &path,
                     directory_request,
                     self.file_deadline,
@@ -134,10 +229,11 @@ impl MountBackend for MountedBackend<'_> {
 #[allow(dead_code)]
 pub(super) enum MountFile<'a> {
     Initial(&'a RouterFileIndexEntry),
-    /// A file of the keyed agent of the constructor, whose type the component implements.
+    /// A file of an existing agent selected by its key or ID.
     Live {
-        component_id: ComponentId,
-        constructor: &'a ParsedAgentKey,
+        agent: &'a MountAgent,
+        constructor: Option<&'a ParsedAgentKey>,
+        binding: AgentBinding,
         path: String,
         directory_request: bool,
     },
@@ -197,15 +293,22 @@ pub(super) async fn dispatch_mount(
     };
     let agent = match &mount.files {
         MountFileSource::Router { .. } => None,
-        MountFileSource::Live { agent } => Some((
-            agent.component_id,
-            CallAgentHandler::route_constructor(
-                selected,
-                &agent.agent_type,
-                &agent.constructor_input,
-                &agent.constructor_parameters,
-            )?,
-        )),
+        MountFileSource::Live { agent } => {
+            let binding = route_agent_binding(request, selected, &agent.agent_selection, |_| {
+                AgentBinding::Fresh
+            })?;
+            let constructor = if matches!(binding, AgentBinding::Id(_)) {
+                None
+            } else {
+                Some(CallAgentHandler::route_constructor(
+                    selected,
+                    &agent.agent_type,
+                    &agent.constructor_input,
+                    &agent.constructor_parameters,
+                )?)
+            };
+            Some((constructor, binding))
+        }
     };
     let relative = &selected.request_target.segments()[selected.route.path.len()..];
     let directory_request = !relative.is_empty() && selected.request_target.trailing_slash();
@@ -232,11 +335,12 @@ pub(super) async fn dispatch_mount(
                         continue;
                     }
                 }
-                MountFileSource::Live { .. } => {
-                    let (component_id, constructor) = agent.as_ref().unwrap();
+                MountFileSource::Live { agent: target } => {
+                    let (constructor, binding) = agent.as_ref().unwrap();
                     MountFile::Live {
-                        component_id: *component_id,
-                        constructor,
+                        agent: target,
+                        constructor: constructor.as_ref(),
+                        binding: binding.clone(),
                         path,
                         directory_request,
                     }
@@ -343,11 +447,18 @@ mod tests {
                 MountFile::Initial(entry) => (entry.path.clone(), false),
                 MountFile::Live {
                     constructor,
+                    binding,
                     path,
                     directory_request,
                     ..
                 } => {
-                    self.agents.push(constructor.to_string());
+                    self.agents.push(match binding {
+                        AgentBinding::Id(id) => {
+                            assert!(constructor.is_none());
+                            id.to_string()
+                        }
+                        _ => constructor.unwrap().to_string(),
+                    });
                     (path, directory_request)
                 }
             };
@@ -359,6 +470,7 @@ mod tests {
                 .unwrap_or("absent")
             {
                 "absent" | "missing-blob" => Ok(None),
+                "missing-agent" => Ok(Some(empty_response(StatusCode::NOT_FOUND))),
                 "permission" | "directory" | "symlink" => {
                     Ok(Some(empty_response(StatusCode::FORBIDDEN)))
                 }
@@ -406,6 +518,79 @@ mod tests {
                 },
             },
         })
+    }
+
+    #[test]
+    async fn id_files_do_not_require_constructor_values_and_target_misses_are_terminal() {
+        let id = AgentId(uuid::Uuid::new_v4());
+        for query in [false, true] {
+            for method in [Method::GET, Method::HEAD] {
+                let mut route = test_route(
+                    1,
+                    if query { "/users" } else { "/users/{id}" },
+                    None,
+                    "filesystem",
+                );
+                let RouteBehaviour::Mount(mount) = &mut route.behavior else {
+                    unreachable!()
+                };
+                let MountFileSource::Live { agent } = &mut mount.files else {
+                    unreachable!()
+                };
+                agent.agent_selection = if query {
+                    AgentSelection::Query {
+                        name: "instance".into(),
+                    }
+                } else {
+                    AgentSelection::Path { index: 0.into() }
+                };
+                agent.constructor_input = CompiledInputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                        golem_common::schema::NamedFieldType {
+                            name: "required".into(),
+                            body: SchemaType::string(),
+                            metadata: Default::default(),
+                        },
+                    ])),
+                    input_schema: InputSchema::parameters([
+                        golem_common::schema::NamedField::user_supplied(
+                            "required",
+                            SchemaType::string(),
+                        ),
+                    ]),
+                };
+                mount.file_bindings =
+                    FileMapping::compile_list([("/*", "/public/$1"), ("/*", "/fallback/$1")])
+                        .unwrap();
+                let resolver = test_resolver(vec![route]);
+                let target = if query {
+                    format!("/users/file?instance={id}")
+                } else {
+                    format!("/users/{id}/file")
+                };
+                let request = poem::Request::builder()
+                    .uri(target.parse().unwrap())
+                    .method(method)
+                    .header("host", "example.com")
+                    .finish();
+                let selected = resolver.resolve_matching_route(&request).await.unwrap();
+                let mut backend = Backend {
+                    states: HashMap::from([
+                        ("/public/file".into(), "missing-agent".into()),
+                        ("/fallback/file".into(), "found".into()),
+                    ]),
+                    ..Default::default()
+                };
+                let response =
+                    dispatch_mount(&mut RichRequest::new(request), &selected, &mut backend)
+                        .await
+                        .unwrap();
+                assert_eq!(response.status, StatusCode::NOT_FOUND);
+                assert_eq!(backend.attempts.len(), 1);
+                assert_eq!(backend.agents, [id.to_string()]);
+                assert_eq!(backend.handler_calls, 0);
+            }
+        }
     }
 
     #[test]

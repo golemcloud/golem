@@ -208,6 +208,11 @@ impl RequestHandler {
                     .handle_call_agent_behaviour(request, resolved_route, behaviour)
                     .await
             }
+            RichRouteBehaviour::CreateAgent(behaviour) => {
+                self.mounted_dispatch
+                    .create(request, resolved_route, behaviour)
+                    .await
+            }
 
             RichRouteBehaviour::CorsPreflight(_) => Err(RequestHandlerError::invariant_violated(
                 "OpenAPI preflight projection selected for dispatch",

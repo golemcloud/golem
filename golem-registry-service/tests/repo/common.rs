@@ -20,8 +20,8 @@ use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::agent::{
-    AgentMode, AgentTypeName, CorsOptions, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    PathSegment, Snapshotting,
+    AgentIdBinding, AgentIdBindingDetails, AgentMode, AgentTypeName, CorsOptions,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, Snapshotting,
 };
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
@@ -9860,7 +9860,8 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         )],
         auth_details: None,
         phantom_agent: false,
-        phantom_id_binding: None,
+        agent_id_binding: None,
+        create_route: None,
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },
@@ -9953,7 +9954,38 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
     ));
     router.validate().expect("router fixture must be valid");
     regular.validate().expect("regular fixture must be valid");
-    vec![router, regular]
+    let mut agents = vec![router, regular.clone()];
+    for query in [false, true] {
+        let mut selected = regular.clone();
+        let name = if query {
+            "PersistenceQuery"
+        } else {
+            "PersistencePath"
+        };
+        selected.type_name = AgentTypeName(name.to_string());
+        let mount = selected.http_mount.as_mut().unwrap();
+        let binding = AgentIdBindingDetails {
+            name: "instance".to_string(),
+        };
+        mount.agent_id_binding = Some(if query {
+            AgentIdBinding::Query(binding)
+        } else {
+            mount.path_prefix.push(PathSegment::Segment(
+                golem_schema::http::PathSegment::PathVariable(golem_schema::http::PathVariable {
+                    variable_name: "instance".to_string(),
+                }),
+            ));
+            AgentIdBinding::Path(binding)
+        });
+        mount.create_route = Some(vec![PathSegment::Segment(
+            golem_schema::http::PathSegment::Literal(LiteralSegment {
+                value: format!("create-{}", name.to_kebab_case()),
+            }),
+        )]);
+        selected.validate().expect("ID fixture must be valid");
+        agents.push(selected);
+    }
+    agents
 }
 
 pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
@@ -15016,6 +15048,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                                 input_schema: InputSchema::Parameters(vec![]),
                             },
                             constructor_parameters: vec![],
+                            agent_selection: golem_service_base::custom_api::AgentSelection::Key,
                         },
                         file_index: if protected {
                             vec![]

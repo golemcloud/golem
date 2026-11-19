@@ -75,9 +75,27 @@ trait CatalogAgent extends BaseAgent {
 
 Rules:
 - Path must start with `/`
-- Every constructor parameter must appear as a `{variable}` in the mount path
-- Every `{variable}` must exactly match a constructor parameter name (same casing)
+- On a key mount, every user-supplied constructor parameter must appear as a `{variable}` in the mount path
+- On a key mount, every ordinary `{variable}` must exactly match a constructor parameter name (same casing)
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
+
+## Required Agent ID Mounts and Creation
+
+Use an ID mount to address an existing durable, non-router agent without constructor inputs in the URL:
+
+```scala
+@agentDefinition(
+  mount = "/tasks/{instance}",
+  agentIdPath = "instance",
+  createRoute = "/tasks/create"
+)
+```
+
+For query addressing, use `mount = "/tasks"` and `agentIdQuery = "instance"` instead of `agentIdPath`. The ID is required; there is no optional binding or keyed fallback. ID mounts cannot bind constructor fields or combine with `phantomAgent` or ephemeral mode. The query ID name is reserved from explicit and implicit method query bindings and protocol controls. Keep fresh-per-request `phantomAgent` and ephemeral lifecycle policies on key mounts.
+
+`createRoute` declares a full exact POST path, not a mount suffix, and requires an ID mount. Only literals and system variables are allowed in this path. Send the existing create envelope: `parameters` in canonical tagged SchemaValue JSON, optional `config` and `env`, and omitted or false `keyed`. `keyed: true` is rejected. Creation inherits mount authentication/CORS, waits for the constructor, and returns `201 Created` with `agentId`/`agentFingerprint` JSON and an ID-mounted `Location`. Current HTTP callers have no caller scope, even with authentication, so `Idempotency-Key` is ignored; retries create new unkeyed agents.
+
+ID selection never creates an agent. File serving supports both key and ID mounts but is lookup-only: missing keys and unknown, deleted, wrong-type or wrong-environment IDs return terminal `404`, without creation or handler fallback. Missing files on an existing target retain normal mapping fallback.
 
 ## Endpoint Annotation
 
@@ -270,7 +288,7 @@ httpApi:
 ## Key Constraints
 
 - A `mount` path is required on `@agentDefinition` before any `@endpoint` annotations can be used
-- All constructor parameters (from `class Id`) must be provided via mount path variables
+- Key mounts bind user-supplied constructor parameters (from `class Id`) via mount path variables; ID mounts bind only the agent ID
 - Path/query variable names must exactly match method parameter names
 - Header parameters use `@header("Header-Name")` annotation on individual method parameters
 - Catch-all path variables `{*name}` can only appear as the last path segment

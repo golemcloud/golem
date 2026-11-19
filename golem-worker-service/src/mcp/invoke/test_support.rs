@@ -425,6 +425,23 @@ pub(crate) struct FileReadMock {
     pub responses: Mutex<VecDeque<BoxFuture<'static, WorkerResult<FileReadResponse>>>>,
 }
 
+pub(crate) struct CreateCall {
+    pub target: RoutedTarget,
+    pub auth: AuthCtx,
+    pub caller: Caller,
+    pub idempotency_key: Option<IdempotencyKey>,
+    pub environment_id: EnvironmentId,
+    pub environment_variables: HashMap<String, String>,
+    pub config: Vec<AgentConfigEntryDto>,
+    pub ignore_already_existing: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct CreateMock {
+    pub calls: Mutex<Vec<CreateCall>>,
+    pub responses: Mutex<VecDeque<BoxFuture<'static, WorkerResult<AgentFingerprint>>>>,
+}
+
 pub(crate) struct RecordedInvocationContext {
     pub auth: AuthCtx,
     pub caller: golem_api_grpc::proto::golem::component::Caller,
@@ -479,6 +496,7 @@ struct RecordingWorkerClient {
     contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     invocation_output: AgentInvocationOutput,
     file_reads: Arc<FileReadMock>,
+    creates: Arc<CreateMock>,
     native_sessions: Arc<Mutex<NativeSessionLog>>,
 }
 
@@ -515,18 +533,37 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn create(
         &self,
-        _: &RoutedTarget,
-        _: HashMap<String, String>,
-        _: Vec<AgentConfigEntryDto>,
-        _: bool,
+        target: &RoutedTarget,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
         _: AccountId,
-        _: EnvironmentId,
-        _: AuthCtx,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
         _: Option<InvocationContext>,
-        _: golem_api_grpc::proto::golem::component::Caller,
-        _: Option<IdempotencyKey>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
+        idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
-        unimplemented!()
+        self.creates.calls.lock().unwrap().push(CreateCall {
+            target: target.clone(),
+            auth,
+            caller: Caller::try_from(caller).unwrap(),
+            idempotency_key,
+            environment_id,
+            environment_variables,
+            config,
+            ignore_already_existing,
+        });
+        let response = self
+            .creates
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("a scripted worker create response");
+        response
+            .await
+            .map(|fingerprint| (target.agent_id, fingerprint))
     }
 
     async fn connect(
@@ -982,6 +1019,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) account_id: AccountId,
     pub(crate) account_email: AccountEmail,
     pub(crate) file_reads: Arc<FileReadMock>,
+    pub(crate) creates: Arc<CreateMock>,
     pub(crate) metadata: Arc<Mutex<HashMap<AgentId, AgentMetadataDto>>>,
     pub(crate) metadata_reads: Arc<Mutex<Vec<AgentId>>>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
@@ -1007,6 +1045,42 @@ pub(crate) struct InvocationHarness {
 }
 
 impl InvocationHarness {
+    pub(crate) fn add_keyed_agent(&self, key: &golem_common::model::agent::AgentKey) -> AgentId {
+        let agent_id = AgentId::keyed(self.environment_id, self.type_id, key);
+        self.metadata.lock().unwrap().insert(
+            agent_id,
+            AgentMetadataDto {
+                agent_id,
+                owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+                agent_type_name: Some(key.agent_type().clone()),
+                canonical_key: Some(key.to_string()),
+                constructor_parameters: Some(key.canonical_params().to_string()),
+                environment_id: self.environment_id,
+                created_by: self.account_id,
+                env: Default::default(),
+                config: vec![],
+                status: golem_common::model::AgentStatus::Idle,
+                underlying_status: None,
+                component_revision: ComponentRevision::INITIAL,
+                retry_count: 0,
+                pending_invocation_count: 0,
+                updates: vec![],
+                created_at: golem_common::model::Timestamp::now_utc(),
+                last_error: None,
+                last_error_kind: None,
+                component_size: 0,
+                total_linear_memory_size: 0,
+                exported_resource_instances: vec![],
+                active_plugins: Default::default(),
+                skipped_regions: vec![],
+                deleted_regions: vec![],
+                last_oplog_index: OplogIndex::INITIAL,
+                fingerprint: AgentFingerprint::new(),
+            },
+        );
+        agent_id
+    }
+
     pub(crate) fn new(
         invocation_output: AgentInvocationOutput,
         constructor: AgentConstructorSchema,
@@ -1121,6 +1195,7 @@ impl InvocationHarness {
         let durable_stream_fork_result = Arc::new(Mutex::new(None));
         let durable_stream_reads = Arc::new(Mutex::new(VecDeque::new()));
         let file_reads = Arc::new(FileReadMock::default());
+        let creates = Arc::new(CreateMock::default());
         let contexts = Arc::new(Mutex::new(Vec::new()));
         let native_sessions = Arc::new(Mutex::new(NativeSessionLog {
             mode: NativeSessions::Refuse,
@@ -1144,6 +1219,7 @@ impl InvocationHarness {
             contexts: contexts.clone(),
             invocation_output,
             file_reads: file_reads.clone(),
+            creates: creates.clone(),
             native_sessions: native_sessions.clone(),
         });
 
@@ -1200,6 +1276,7 @@ impl InvocationHarness {
             account_id,
             account_email,
             file_reads,
+            creates,
             metadata,
             metadata_reads,
             agent_ids,

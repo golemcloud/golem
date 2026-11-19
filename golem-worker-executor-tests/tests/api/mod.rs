@@ -1060,8 +1060,9 @@ async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
     _tracing: &Tracing,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{file_system_node_is_not_found, read_head};
-    use golem_common::model::filesystem::FileReadHead;
+    use crate::filesystem_inspection::{
+        assert_read_agent_not_found, file_system_node_is_not_found,
+    };
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1121,15 +1122,11 @@ async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
             let result = deleting.take().unwrap().await?;
             assert!(result.is_err(), "{name}: injected failure ignored");
         }
-        assert_eq!(
-            tokio::time::timeout(
-                Duration::from_secs(10),
-                read_head(&executor, &agent, "/a.txt")
-            )
-            .await??,
-            FileReadHead::Absent,
-            "{name}"
-        );
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            assert_read_agent_not_found(&executor, &agent, "/a.txt"),
+        )
+        .await??;
         assert!(
             file_system_node_is_not_found(&executor, &agent, "/").await?,
             "{name}"
@@ -1144,11 +1141,7 @@ async fn reads_and_management_racing_each_deletion_stage_find_no_agent(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{name}: a read racing the delete recreated the agent"
         );
-        assert_eq!(
-            read_head(&executor, &agent, "/a.txt").await?,
-            FileReadHead::Absent,
-            "{name}"
-        );
+        assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
         assert!(
             executor.get_worker_metadata_opt(&agent).await?.is_none(),
             "{name}"
@@ -1169,9 +1162,8 @@ async fn reads_after_a_delete_failed_before_removing_state_keep_the_deletion_err
     _tracing: &Tracing,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use crate::filesystem_inspection::{assert_read_agent_not_found, first_read_frame};
     use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
-    use golem_common::model::filesystem::FileReadHead;
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
@@ -1213,10 +1205,7 @@ async fn reads_after_a_delete_failed_before_removing_state_keep_the_deletion_err
 
     executor.delete_worker(&agent).await?;
     assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
-    assert_eq!(
-        read_head(&executor, &agent, "/a.txt").await?,
-        FileReadHead::Absent
-    );
+    assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
     Ok(())
 }
 
@@ -1233,9 +1222,8 @@ async fn ephemeral_reads_after_a_delete_failed_before_removing_state_keep_the_de
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{first_read_frame, read_head};
+    use crate::filesystem_inspection::{assert_read_agent_not_found, first_read_frame};
     use golem_api_grpc::proto::golem::workerexecutor::v1::get_file_contents_response;
-    use golem_common::model::filesystem::FileReadHead;
     use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
     use golem_worker_executor::storage::keyvalue::fault_injecting::{
         FaultInjectingKeyValueStorage, KeyValueStorageFaults,
@@ -1310,10 +1298,7 @@ async fn ephemeral_reads_after_a_delete_failed_before_removing_state_keep_the_de
 
     executor.delete_worker(&agent).await?;
     assert!(executor.get_worker_metadata_opt(&agent).await?.is_none());
-    assert_eq!(
-        read_head(&executor, &agent, "/a.txt").await?,
-        FileReadHead::Absent
-    );
+    assert_read_agent_not_found(&executor, &agent, "/a.txt").await?;
     Ok(())
 }
 
@@ -1328,11 +1313,12 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
     _tracing: &Tracing,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use crate::filesystem_inspection::{file_system_node_is_not_found, read_head};
+    use crate::filesystem_inspection::{
+        assert_read_agent_not_found, file_system_node_is_not_found,
+    };
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         GetAgentWalletRequest, get_agent_wallet_response,
     };
-    use golem_common::model::filesystem::FileReadHead;
     use golem_common::model::oplog::PublicAgentInvocation;
 
     let context = TestContext::new(last_unique_id);
@@ -1384,7 +1370,7 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
     let read = tokio::spawn({
         let executor = executor.clone();
         let agent = agent.clone();
-        async move { read_head(&executor, &agent, "/a.txt").await }
+        async move { assert_read_agent_not_found(&executor, &agent, "/a.txt").await }
     });
     let listing = tokio::spawn({
         let executor = executor.clone();
@@ -1426,7 +1412,7 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
 
     executor.delete_worker(&agent).await?;
 
-    assert_eq!(read.await??, FileReadHead::Absent);
+    read.await??;
     assert!(listing.await??);
     let wallet = wallet.await??.into_inner();
     let Some(get_agent_wallet_response::Result::Failure(error)) = wallet.result else {
