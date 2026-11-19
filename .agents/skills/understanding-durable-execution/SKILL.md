@@ -3438,13 +3438,27 @@ linked one. Only lookups that replay returns again link: lookups in snapshotting
 physical calls of a custom durable invocation do not. A P2 lookup links when its call returns, a
 P3 lookup when its completion reaches the guest (its `CompletionDelivered` marker): the DNS call
 sets a deferred link that the delivery observer's `Delivered` branch adds, so a P3 completion that
-the guest discards, also after the host call returned it, links nothing. Replay fills the index again from the recorded lookups. A snapshot
-recovery skips the history before the snapshot, so `rebuild_resolved_names` scans it twice: once
-for the regions that no replay runs (deleted, jumped and failed update attempts), then for the
-completed lookups of the primary Store, which go into the bounded index at their link point. It
-leaves out entity bodies and observational calls, and keeps only open lookups and scopes. The
-links of a core initializer whose bootstrap range lies in the scanned history are already in the
-result; only an initializer after the snapshot, such as an update target's, adds newer links. The lookup itself is
+the guest discards, also after the host call returned it, links nothing. The oplog is never
+scanned for the links: the status fold keeps them in `AgentStatusRecord::resolved_names`
+(`worker/status/resolved_names.rs`), with the same bound and LRU order. It folds a lookup's
+`Start`, its `End` and its delivery marker by `Start` index, opens a `golem:network/dns` query only
+for A and AAAA records (an answer holds only the queried type), loads external lookup payloads
+before the fold as it does for `StreamSession` records (the revert fold too), and leaves out
+entity bodies, observational calls
+and history that no replay runs (`RegionFold::unreplayed`: deleted, jumped and failed update
+attempts; a `Jump`, `Revert` or `FailedUpdate` over folded history refolds the status from the
+start). The index uses `im` collections, so a status clone shares it. The status cache keeps the
+links in their own `resolved-names` field and the lookups and entity scopes that the fold still
+follows in `followed-lookups`; each is written only when it changes, so a call that links nothing
+does not rewrite the links. The primary Store starts with the folded links at construction and links only the lookups
+whose link point it records itself (a live `End`, or a `CompletionDelivered` marker that it
+appends): every replayed lookup, also one that a bootstrap cursor replays, is in the folded links
+already, and linking it again would refresh its LRU position. So every path that continues live,
+also an accessor or incomplete call that resolves against history, reads the links of the whole
+history, and replayed connects return the decision recorded in their `Start`. A snapshot-based
+update keeps the links of the history before its `PendingUpdate`, which the agent ran, and its
+target initializer's lookups link after them. A tool entity Store keeps its own index, starts
+empty, and links on replay too. The lookup itself is
 checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
 a port needs a portless grant for the lookup too.
 
@@ -3459,7 +3473,7 @@ and has no cache, so every live guest query is one upstream query. With agent so
 lookup fails with `permanent-resolver-failure`. The A and AAAA records of an answer link to the
 queried name in `ResolvedNames` as a P3 address lookup does: when the answer reaches the guest. Live
 and on replay the lookup builds a hook from the answer that the delivery observer runs only as
-`Delivered`, and `rebuild_resolved_names` links the records at the call's `CompletionDelivered` marker, and a discarded or
+`Delivered`, the status fold links the records at the call's `CompletionDelivered` marker, and a discarded or
 undelivered answer links nothing. Tests: `tests/scope_cards/dns_records.rs`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic

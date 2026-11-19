@@ -7894,6 +7894,7 @@ fn manual_update_baseline(authoritative: &Option<AuthoritativeSnapshot>) -> Opti
 fn regions_without_updates(deleted: DeletedRegions) -> super::FoldedRegions<'static> {
     static NO_STEPS: BTreeMap<OplogIndex, super::update_queue::UpdateStep> = BTreeMap::new();
     super::FoldedRegions {
+        unreplayed: deleted.clone(),
         deleted,
         skipped: DeletedRegions::new(),
         steps: &NO_STEPS,

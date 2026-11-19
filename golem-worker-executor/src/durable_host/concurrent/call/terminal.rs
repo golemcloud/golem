@@ -143,7 +143,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|| {}))
+        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|_| {}))
             .await
     }
 
