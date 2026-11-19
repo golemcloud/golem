@@ -2807,15 +2807,13 @@ impl AgentCommandHandler {
             )));
         }
         let keyed = agent_metadata.canonical_key.is_some();
-        let parameters =
-            ParsedAgentKey::parse_parameters(&agent_type, constructor_parameters, component_metadata)
-                .map_err(|error| {
-                    anyhow!(
-                        "the constructor parameters do not match the constructor of agent type {agent_type}: {error}"
-                    )
-                })
-                .and_then(|key| key_parameters(&key))
-                .map_err(RedeployAgentError::InvalidParameters)?;
+        let parameters = redeploy_parameters(
+            &agent_type,
+            constructor_parameters,
+            keyed,
+            component_metadata,
+        )
+        .map_err(RedeployAgentError::InvalidParameters)?;
 
         log_warn_action(
             "Redeploying",
@@ -3111,6 +3109,28 @@ pub(crate) fn parse_agent_key(text: &str, component: &ComponentDto) -> Option<Pa
 /// The constructor parameters of a key in the REST wire form.
 fn key_parameters(key: &ParsedAgentKey) -> anyhow::Result<ExternalSchemaValue> {
     ExternalSchemaValue::try_from(key.parameters.value().clone()).map_err(anyhow::Error::msg)
+}
+
+fn redeploy_parameters(
+    agent_type: &AgentTypeName,
+    constructor_parameters: &str,
+    keyed: bool,
+    component_metadata: &ComponentMetadata,
+) -> anyhow::Result<ExternalSchemaValue> {
+    let parsed =
+        ParsedAgentKey::parse_parameters(agent_type, constructor_parameters, component_metadata)
+            .map_err(|error| {
+                anyhow!(
+                    "the constructor parameters do not match the constructor of agent type {agent_type}: {error}"
+                )
+            })?;
+    if keyed && parsed.canonical_parameters().map_err(anyhow::Error::msg)? != constructor_parameters
+    {
+        anyhow::bail!(
+            "the current constructor changes the canonical parameters of agent type {agent_type}; redeploy would change its key"
+        );
+    }
+    key_parameters(&parsed)
 }
 
 impl AgentCommandHandler {
@@ -3951,14 +3971,14 @@ mod tests {
         AgentListCursor, AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter,
         is_selected_update_attempt, parse_agent_id_address, parse_agent_key,
         parse_method_argument_schema_value, parse_method_parameters_with_error_table,
-        pending_update_progress, read_page, render_revert_command, split_agent_id,
-        validate_ordinary_agent_type,
+        pending_update_progress, read_page, redeploy_parameters, render_revert_command,
+        split_agent_id, validate_ordinary_agent_type,
     };
     use crate::agent_id_display::SourceLanguage;
     use crate::context::GlobalEnvironmentSelector;
     use crate::model::environment::EnvironmentReference;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
+    use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{
         ComponentDto, ComponentId, ComponentName, ComponentRevision,
@@ -4431,6 +4451,29 @@ mod tests {
                 "{not_a_key} must not parse as a key"
             );
         }
+    }
+
+    #[test]
+    fn keyed_redeploy_rejects_constructor_rounding_before_mutation() {
+        let name = AgentTypeName("Meter".to_string());
+        let component = |field_type| {
+            let mut ty = test_agent_type_schema(AgentMode::Durable);
+            ty.type_name = name.clone();
+            ty.constructor.input_schema =
+                InputSchema::Parameters(vec![NamedField::user_supplied("reading", field_type)]);
+            ComponentMetadata::from_parts(Default::default(), vec![], vec![ty], BTreeMap::new())
+        };
+        let old = component(SchemaType::f64());
+        let stored = ParsedAgentKey::parse_parameters(&name, "16777217.0", &old)
+            .unwrap()
+            .canonical_parameters()
+            .unwrap();
+        let new = component(SchemaType::f32());
+        let error = redeploy_parameters(&name, &stored, true, &new).unwrap_err();
+        assert!(error.to_string().contains("redeploy would change its key"));
+        assert!(redeploy_parameters(&name, &stored, true, &old).is_ok());
+        assert!(redeploy_parameters(&name, "16777216.0", true, &new).is_ok());
+        assert!(redeploy_parameters(&name, &stored, false, &new).is_ok());
     }
 
     #[test]
