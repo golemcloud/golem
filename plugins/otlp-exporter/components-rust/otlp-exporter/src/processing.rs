@@ -2041,6 +2041,8 @@ mod tests {
                         error: WorkerError::Unknown("boom".to_string()),
                         retry_from: 0,
                         retry_policy_state: None,
+                        retry_at: None,
+                        retrying_start_index: None,
                     }),
                 ],
             );

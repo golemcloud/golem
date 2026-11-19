@@ -307,6 +307,10 @@ interface oplog {
         retry-from: oplog-index,
         /// Persistent retry policy state, if a semantic retry policy is active.
         retry-policy-state: option<retry-policy-state>,
+        /// When the failed host call retries, for an in-function retry.
+        retry-at: option<datetime>,
+        /// The start of the host call that waits until `retry-at`.
+        retrying-start-index: option<oplog-index>,
     }
 
     record oplog-region {
@@ -987,6 +991,10 @@ interface oplog {
         retry-from: oplog-index,
         /// Persistent retry policy state, if a semantic retry policy is active.
         retry-policy-state: option<retry-policy-state>,
+        /// When the failed host call retries, for an in-function retry.
+        retry-at: option<datetime>,
+        /// The start of the host call that waits until `retry-at`.
+        retrying-start-index: option<oplog-index>,
     }
 
     record raw-pending-agent-invocation-parameters {

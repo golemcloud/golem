@@ -2255,6 +2255,7 @@ async fn resolve_components_from_name(
 
 #[test]
 #[tracing::instrument]
+#[timeout("4m")]
 async fn agent_promise_await(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

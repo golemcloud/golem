@@ -398,22 +398,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
-        if let Err(error) = store
-            .as_context_mut()
-            .data_mut()
-            .durable_ctx_mut()
-            .rebuild_resolved_names(snapshot_index)
-            .await
-        {
-            Self::emit_snapshot_recovery_event(
-                store,
-                snapshot_index,
-                false,
-                Some(error.to_string()),
-            );
-            return SnapshotRecoveryResult::Unavailable(error);
-        }
-
         if let Err(error) = load_load_snapshot_guest(&mut store.as_context_mut(), instance) {
             Self::emit_snapshot_recovery_event(
                 store,
@@ -731,44 +715,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 bootstrap,
             )
             .await?;
-        Ok(())
-    }
-}
-
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// Rebuilds the links of the Store's address lookups from the history up to `through`, which a
-    /// start from the snapshot at `through` skips, merged with the links of the core initializer
-    /// as [`sockets::resolved_names::ResolvedNames::after_rebuild`] describes. Without agent sockets no
-    /// connect reads the links, so the history is not scanned.
-    pub(in crate::durable_host) async fn rebuild_resolved_names(
-        &mut self,
-        through: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        if !self.state.config.agent_sockets.enabled {
-            return Ok(());
-        }
-        let deleted_regions = self
-            .public_state
-            .worker()
-            .get_last_known_status()
-            .await
-            .deleted_regions
-            .clone();
-        let rebuilt = sockets::resolved_names::ResolvedNames::rebuild(
-            self.state.oplog.as_ref(),
-            through,
-            &deleted_regions,
-        )
-        .await?;
-        let bootstrap_range = self.state.bootstrap_range.clone();
-        self.state.resolved_names.with(|names| {
-            *names = sockets::resolved_names::ResolvedNames::after_rebuild(
-                rebuilt,
-                std::mem::take(names),
-                bootstrap_range.as_ref(),
-                through,
-            )
-        });
         Ok(())
     }
 }

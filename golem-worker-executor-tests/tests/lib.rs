@@ -68,7 +68,7 @@ pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
 mod panic_watch;
 pub mod permission_cards_scala;
-pub mod rdbms;
+pub mod rdbms_guest;
 pub mod rdbms_service;
 pub mod readonly;
 pub mod resource_limits;
@@ -132,7 +132,7 @@ tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
 tag_suite!(external_durable_stream, group1);
-tag_suite!(rdbms, group1);
+tag_suite!(rdbms_guest, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(instance_layer, group2);

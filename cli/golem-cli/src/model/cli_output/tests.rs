@@ -2783,6 +2783,8 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             error: "generated error".to_string(),
             retry_from: OplogIndex::INITIAL,
             retry_policy_state: Some(retry_policy_state),
+            retry_at: Some(timestamp()),
+            retrying_start_index: Some(OplogIndex::from_u64(4)),
         }),
         PublicOplogEntry::AgentInvocationFailed(AgentInvocationFailedParams {
             timestamp: timestamp(),

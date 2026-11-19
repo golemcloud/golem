@@ -1,0 +1,47 @@
+manifestVersion: 2.0.0
+
+app: scala-sbt-mill
+
+# One Scala component with two build tools: the `sbt` preset builds it with the sbt plugin and the
+# `mill` preset with the Mill plugin, into separate bundles.
+componentTemplates:
+  scala-sbt-mill:
+    guestLanguage: scala
+    presets:
+      sbt:
+        default: true
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent scala-sbt-mill:app .golem/sbt.js .generated/agent_guest.wasm"
+          sources:
+          - src
+          - build.sbt
+          - project
+          targets:
+          - .golem/sbt.js
+        - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+          module: .golem/sbt.js
+          into: "{{ golemTempDir }}/agents/sbt.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/sbt.dynamic.wasm"
+      mill:
+        build:
+        - command: mill --no-daemon --ticker false golemBuildComponent --component scala-sbt-mill:app --outPath .golem/mill.js
+          sources:
+          - src
+          - build.mill
+          - mill-build
+          targets:
+          - .golem/mill.js
+        - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+          module: .golem/mill.js
+          into: "{{ golemTempDir }}/agents/mill.dynamic.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/mill.dynamic.wasm"
+
+components:
+  scala-sbt-mill:app:
+    dir: .
+    templates: scala-sbt-mill
+
+environments:
+  local:
+    server: local
+    componentPresets: sbt

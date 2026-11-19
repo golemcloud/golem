@@ -23563,6 +23563,12 @@ components:
           format: uint64
         retryPolicyState:
           $ref: '#/components/schemas/PublicRetryPolicyState'
+        retryAt:
+          type: string
+          format: date-time
+        retryingStartIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - kind

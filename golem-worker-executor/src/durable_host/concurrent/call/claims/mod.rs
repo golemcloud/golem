@@ -301,6 +301,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
                     is_live: true,
                     snapshotting_mode: previous.snapshotting_mode,
                     max_in_function_retry_delay: previous.max_in_function_retry_delay,
+                    durable_wait: previous.durable_wait,
                 },
                 Pair::FQFN,
             )

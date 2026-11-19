@@ -38,8 +38,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
     ) -> wasmtime::Result<Result<Vec<types::IpAddress>, ip_name_lookup::ErrorCode>> {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
         let custom_invocation = store.guest_task_context::<GuestTaskContext>()?;
-        // The link waits for the guest to receive the result, as the rebuild after a snapshot
-        // reads it from the delivery marker: a result that the guest discards links nothing.
+        // The link waits for the guest to receive the result, as the status fold reads it from
+        // the delivery marker: a result that the guest discards links nothing.
         let links = store.with(|mut access| {
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             ctx.lookup_links(custom_invocation.as_deref())
@@ -85,9 +85,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> ip_name_lookup::HostWithStore<U> for Dur
                         let name = name.clone();
                         let addresses: Vec<IpAddr> =
                             addresses.0.iter().cloned().map(IpAddr::from).collect();
-                        Box::new(move || names.with(|names| names.insert(&name, addresses)))
+                        Box::new(move |delivery| names.link(&name, addresses, delivery.recorded))
                     }
-                    _ => Box::new(|| {}),
+                    _ => Box::new(|_| {}),
                 }
             },
             || async {
