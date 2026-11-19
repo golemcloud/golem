@@ -171,6 +171,9 @@ enum Slot {
         output: p2::OutputStream,
         socket: p2::TcpSocket,
     },
+    P2TcpConnecting {
+        socket: p2::TcpSocket,
+    },
     P2Udp {
         incoming: p2::IncomingDatagramStream,
         outgoing: p2::OutgoingDatagramStream,
@@ -272,6 +275,12 @@ pub trait SocketSession {
     /// Connects a P2 TCP socket like `p2_tcp_connect`, but calls `finish-connect` again at once
     /// after its first two `would-block` results. Returns the number of `would-block` results.
     fn p2_tcp_connect_counting(&self, slot: String, port: u16) -> Result<u32, String>;
+    /// Starts the connect of a P2 TCP socket, waits on its pollable until the native connect
+    /// completes, and keeps the socket in `slot` without calling `finish-connect`.
+    fn p2_tcp_start_connect(&self, slot: String, port: u16) -> Result<(), String>;
+    /// Calls `finish-connect` on the socket that `p2_tcp_start_connect` kept in `slot`, and keeps
+    /// the socket with its streams there.
+    fn p2_tcp_finish_connect(&self, slot: String) -> Result<(), String>;
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String>;
     fn p2_tcp_send(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
@@ -858,6 +867,34 @@ impl SocketSession for SocketSessionImpl {
             },
         );
         Ok(would_block)
+    }
+
+    fn p2_tcp_start_connect(&self, slot: String, port: u16) -> Result<(), String> {
+        let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_connect(&p2::instance_network(), p2_loopback(port))
+            .map_err(error)?;
+        socket.subscribe().block();
+        self.insert(slot, Slot::P2TcpConnecting { socket });
+        Ok(())
+    }
+
+    fn p2_tcp_finish_connect(&self, slot: String) -> Result<(), String> {
+        let socket = match self.slots.borrow_mut().remove(&slot) {
+            Some(Slot::P2TcpConnecting { socket }) => socket,
+            _ => return Err(format!("slot {slot} holds no connecting P2 TCP socket")),
+        };
+        let (input, output) = socket.finish_connect().map_err(error)?;
+        self.insert(
+            slot,
+            Slot::P2Tcp {
+                input,
+                output,
+                socket,
+            },
+        );
+        Ok(())
     }
 
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String> {

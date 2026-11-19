@@ -1033,6 +1033,89 @@ async fn p2_tcp_connect_with_would_block_results_replays(
     session.finish().await
 }
 
+/// A peer that resets a P2 connection after the native connect and before `finish-connect` does
+/// not trap the call. The guest waits on the pollable in one invocation and calls `finish-connect`
+/// in the next, after the peer reset the connection with a zero linger. `finish-connect` returns
+/// the connection with the recorded connect target as its remote address, and the reset reaches
+/// the guest as an error of the connection, without an `Error` entry. Another P2 connection of the
+/// agent keeps working.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_peer_reset_before_finish_connect_does_not_trap(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let other = TcpPeer::start(b"", Reply::Silent).await?;
+    let resetting = TcpListener::bind("127.0.0.1:0").await?;
+    let resetting_port = resetting.local_addr()?.port();
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-reset-before-finish",
+    )
+    .await?;
+
+    let connected: Result<(), String> = session
+        .call(
+            "p2_tcp_connect",
+            data_value!("other".to_string(), other.port),
+        )
+        .await?;
+    assert_eq!(connected, Ok(()));
+
+    let started: Result<(), String> = session
+        .call(
+            "p2_tcp_start_connect",
+            data_value!("reset".to_string(), resetting_port),
+        )
+        .await?;
+    assert_eq!(started, Ok(()));
+    let (stream, _) = tokio::time::timeout(WAIT, resetting.accept()).await??;
+    stream.set_zero_linger()?;
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let finished: Result<(), String> = session
+        .call("p2_tcp_finish_connect", data_value!("reset".to_string()))
+        .await?;
+    if finished.is_ok() {
+        let received: Result<Vec<u8>, String> = session
+            .call("p2_tcp_receive", data_value!("reset".to_string(), 1u32))
+            .await?;
+        assert!(
+            received.is_err(),
+            "the reset reaches the guest: {received:?}"
+        );
+    }
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "finish-connect after a peer reset does not trap"
+    );
+
+    let sent: Result<(), String> = session
+        .call(
+            "p2_tcp_send",
+            data_value!("other".to_string(), b"still-here\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()), "the other connection keeps working");
+    other
+        .wait_until("the other peer gets the bytes", |connections| {
+            connections.len() == 1 && connections[0].received == b"still-here\n"
+        })
+        .await?;
+    session.finish().await
+}
+
 /// S10 on P2: a read-only method cannot connect a P2 TCP socket. `start-connect` is a recorded
 /// write, so the read-only guard refuses it before any poll can drive the native connect.
 #[test]
