@@ -644,6 +644,13 @@ from|integer|No|-
 count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-
+to|integer|No|The last oplog index of a range read, inclusive. A range read reads no entry after
+it, and the response reports its scan in `scan`. It needs `from`, and no `query`.
+scanEntries|integer|No|The scan allowance that a range read may still spend: the number of oplog entries.
+It goes with `scanMillis`. Without them, the read gets the configured allowance of
+the server; the server never grants more than its configured allowance.
+scanMillis|integer|No|The scan allowance that a range read may still spend: the time in milliseconds. It
+goes with `scanEntries`.
 
 **Example Response JSON**
 
@@ -760,7 +767,16 @@ query|string|No|-
     "queryHash": "string"
   },
   "firstIndexInChunk": 0,
-  "lastIndex": 0
+  "lastIndex": 0,
+  "scan": {
+    "limit": {
+      "entries": 0,
+      "millis": 0
+    },
+    "chargedEntries": 0,
+    "chargedMillis": 0,
+    "exhausted": true
+  }
 }
 ```
 

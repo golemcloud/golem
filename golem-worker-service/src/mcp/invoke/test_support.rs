@@ -529,6 +529,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: Option<OplogCursor>,
         _: u64,
+        _: Option<crate::service::worker::OplogRangeRead>,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {

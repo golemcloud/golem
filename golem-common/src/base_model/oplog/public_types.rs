@@ -376,6 +376,50 @@ impl Display for OplogCursor {
     }
 }
 
+/// The scan allowance of an oplog range read: the number of oplog entries that it may read, and
+/// how long it may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OplogScanAllowance {
+    pub entries: u64,
+    pub millis: u64,
+}
+
+impl OplogScanAllowance {
+    /// The allowance that is left of `self` after `scan` charged it.
+    pub fn after(self, scan: &OplogScan) -> Self {
+        Self {
+            entries: self.entries.saturating_sub(scan.charged_entries),
+            millis: self.millis.saturating_sub(scan.charged_millis),
+        }
+    }
+
+    pub fn is_spent(&self) -> bool {
+        self.entries == 0 || self.millis == 0
+    }
+}
+
+/// The scan accounting of an oplog range read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OplogScan {
+    // The allowance that the read applied: the requested allowance, or the configured allowance
+    // of the server without one, clamped to the configured allowance.
+    pub limit: OplogScanAllowance,
+    /// The oplog entries that the read charged: the entries that it read to find the component
+    /// revision at the start of the range, and the entries that it read for the page, also those
+    /// that the byte limit of the page left out.
+    pub charged_entries: u64,
+    /// The time that the read charged, rounded up to a millisecond.
+    pub charged_millis: u64,
+    /// The read stopped before the end of the range because it spent the allowance.
+    pub exhausted: bool,
+}
+
 /// Parses the string form `<index>-<revision>-<query hash>` of `Display`.
 impl std::str::FromStr for OplogCursor {
     type Err = String;
