@@ -285,6 +285,9 @@ pub trait CallerReport {
     fn bump(&mut self);
 
     fn count(&self) -> u32;
+
+    /// Counts the call as a bump and reports its caller.
+    async fn report_and_bump(&mut self, context: InvocationContext) -> String;
 }
 
 struct CallerReportImpl {
@@ -307,6 +310,11 @@ impl CallerReport for CallerReportImpl {
 
     fn count(&self) -> u32 {
         self.count
+    }
+
+    async fn report_and_bump(&mut self, context: InvocationContext) -> String {
+        self.count += 1;
+        caller_text(context.caller())
     }
 }
 
@@ -2180,6 +2188,16 @@ impl Streaming for StreamingImpl {
         if let Some(name) = mode.strip_prefix("call-agent:") {
             let report = CallerReportClient::get(name.to_string()).report().await;
             return write_text(stdout, report).await;
+        }
+        if let Some(name) = mode.strip_prefix("call-agent-bump:") {
+            let report = CallerReportClient::get(name.to_string())
+                .report_and_bump()
+                .await;
+            return write_text(
+                stdout,
+                format!("{}\n{report}", caller_text(context.caller())),
+            )
+            .await;
         }
         if let Some(name) = mode.strip_prefix("schedule-bump:") {
             CallerReportClient::get(name.to_string())

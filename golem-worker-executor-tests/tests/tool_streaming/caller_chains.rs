@@ -17,9 +17,17 @@
 //! appears as a caller.
 
 use super::*;
+use async_trait::async_trait;
+use golem_common::model::agent::AgentTarget;
 use golem_common::model::caller::Principal;
+use golem_common::model::card::ScopeCard;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
+use golem_service_base::model::auth::AuthCtx;
+use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError};
 use golem_worker_executor_test_utils::callers;
+use std::sync::Mutex;
 use test_r::{test, timeout};
 
 /// The `ToolStreamingCaller` agents of the caller component get the `streaming` provider tools
@@ -104,6 +112,7 @@ struct ChainHarness {
     context: TestContext,
     caller_component: golem_common::model::component::ComponentDto,
     provider_component: golem_common::model::component::ComponentDto,
+    environment: Arc<TestEnvironmentStateService>,
 }
 
 impl ChainHarness {
@@ -114,6 +123,25 @@ impl ChainHarness {
         caller: &PrecompiledComponent,
         bash: &PrecompiledComponent,
     ) -> anyhow::Result<Self> {
+        Self::start_with(
+            last_unique_id,
+            deps,
+            streaming,
+            caller,
+            bash,
+            TestExecutorOverrides::default(),
+        )
+        .await
+    }
+
+    async fn start_with(
+        last_unique_id: &LastUniqueId,
+        deps: &WorkerExecutorTestDependencies,
+        streaming: &PrecompiledComponent,
+        caller: &PrecompiledComponent,
+        bash: &PrecompiledComponent,
+        overrides: TestExecutorOverrides,
+    ) -> anyhow::Result<Self> {
         let context = TestContext::new(last_unique_id);
         let environment = Arc::new(TestEnvironmentStateService::default());
         let executor = start_with_overrides(
@@ -121,7 +149,7 @@ impl ChainHarness {
             &context,
             TestExecutorOverrides {
                 environment_state_service: Some(environment.clone()),
-                ..Default::default()
+                ..overrides
             },
         )
         .await?;
@@ -149,7 +177,28 @@ impl ChainHarness {
             context,
             caller_component,
             provider_component,
+            environment,
         })
+    }
+
+    /// Drops the executor and starts another one on the same stores, as after a crash: every
+    /// agent is rebuilt from its oplog.
+    async fn restart(
+        mut self,
+        deps: &WorkerExecutorTestDependencies,
+        overrides: TestExecutorOverrides,
+    ) -> anyhow::Result<Self> {
+        drop(self.executor);
+        self.executor = start_with_overrides(
+            deps,
+            &self.context,
+            TestExecutorOverrides {
+                environment_state_service: Some(self.environment.clone()),
+                ..overrides
+            },
+        )
+        .await?;
+        Ok(self)
     }
 
     fn agent(&self, name: &str) -> AgentId {
@@ -191,6 +240,204 @@ impl ChainHarness {
             .into_typed()?;
         assert_eq!(evidence.completion, "ok", "{mode}: {evidence:?}");
         Ok(String::from_utf8(evidence.output)?)
+    }
+}
+
+/// Forwards every call and, once the first `report_and_bump` call has run on its target, never
+/// returns its answer to the caller: the call stays pending until the executor is dropped.
+struct HoldReportAnswerRpc {
+    inner: Arc<dyn Rpc>,
+    /// The idempotency key and the caller that each `report_and_bump` dispatch gives the target.
+    dispatches: Arc<Mutex<Vec<(Option<IdempotencyKey>, Caller)>>>,
+    answer_held: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl Rpc for HoldReportAnswerRpc {
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: golem_common::model::InvocationId,
+        receipt: golem_common::model::ScheduleId,
+        canceller: &Principal,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
+        invocation: golem_common::model::AgentInvocation,
+        scheduled_at: chrono::DateTime<chrono::Utc>,
+        self_agent_id: &AgentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                request_key,
+                invocation,
+                scheduled_at,
+                self_agent_id,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn create_and_initialize(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        caller: &Caller,
+        config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        self.inner
+            .create_and_initialize(
+                target,
+                environment_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                caller,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
+    async fn create_demand(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        method_name: &str,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        caller: &Caller,
+        config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        self.inner
+            .create_demand(
+                target,
+                environment_id,
+                method_name,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                caller,
+                config,
+                auth_ctx,
+                idempotency_key,
+                freshness_disposition,
+            )
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
+        method_name: String,
+        method_parameters: SchemaValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        caller: &Caller,
+        config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        scope_card: Option<ScopeCard>,
+    ) -> Result<SchemaValue, RpcError> {
+        let hold = method_name == "report_and_bump" && {
+            let mut dispatches = self.dispatches.lock().unwrap();
+            dispatches.push((idempotency_key.clone(), caller.clone()));
+            dispatches.len() == 1
+        };
+        let result = self
+            .inner
+            .invoke_and_await(
+                target,
+                environment_id,
+                idempotency_key,
+                freshness_disposition,
+                expected_callee_fingerprint,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                caller,
+                config,
+                auth_ctx,
+                scope_card,
+            )
+            .await;
+        if hold {
+            self.answer_held.notify_one();
+            std::future::pending::<()>().await;
+        }
+        result
+    }
+
+    async fn invoke(
+        &self,
+        target: AgentTarget,
+        environment_id: EnvironmentId,
+        idempotency_key: Option<IdempotencyKey>,
+        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<AgentFingerprint>,
+        method_name: String,
+        method_parameters: SchemaValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        caller: &Caller,
+        config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+    ) -> Result<(), RpcError> {
+        self.inner
+            .invoke(
+                target,
+                environment_id,
+                idempotency_key,
+                freshness_disposition,
+                expected_callee_fingerprint,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                caller,
+                config,
+                auth_ctx,
+            )
+            .await
     }
 }
 
@@ -450,5 +697,153 @@ async fn a_tool_cancels_the_call_that_it_scheduled(
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     assert_eq!(count().await?, 1);
+    Ok(())
+}
+
+/// U calls agent A, A calls tool T, and T calls agent B, but B's answer never reaches T: the
+/// executor is rebuilt while it is held. A and T are rebuilt from the oplog, T calls B again with
+/// the key of the lost call, and every call keeps the caller it had: T sees U and A, B sees U and
+/// T, the records are unchanged, and B's effect runs once.
+#[test]
+#[timeout("5m")]
+async fn a_restart_inside_the_tool_chain_keeps_every_recorded_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] streaming: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("bash")] bash: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let dispatches = Arc::new(Mutex::new(Vec::new()));
+    let answer_held = Arc::new(tokio::sync::Notify::new());
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let dispatches = dispatches.clone();
+            let answer_held = answer_held.clone();
+            move |rpc| {
+                Arc::new(HoldReportAnswerRpc {
+                    inner: rpc,
+                    dispatches: dispatches.clone(),
+                    answer_held: answer_held.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let harness = ChainHarness::start_with(
+        last_unique_id,
+        deps,
+        streaming,
+        caller,
+        bash,
+        overrides.clone(),
+    )
+    .await?;
+    let user = callers::account(AccountId::new());
+    let a = harness.agent("chain-a");
+    let b = AgentId {
+        component_id: harness.provider_component.id,
+        agent_id: agent_id!("CallerReport", "chain-b").to_string(),
+    };
+    let key = IdempotencyKey::fresh();
+    let mode = "call-agent-bump:chain-b";
+    let invoke = |executor: TestWorkerExecutor, component: ComponentDto| {
+        let user = user.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_impl(
+                    &component,
+                    &agent_id!("ToolStreamingCaller", "chain-a"),
+                    Some(&key),
+                    None,
+                    Some(user),
+                    "collect",
+                    data_value!(mode, Vec::<u8>::new(), 1u32),
+                )
+                .await
+        }
+    };
+    let call = tokio::spawn(invoke(
+        harness.executor.clone(),
+        harness.caller_component.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(60), answer_held.notified()).await?;
+
+    // B has run its effect and recorded its caller, and A has recorded the tool's caller in the
+    // tool invocation's `Start`, before the answer is lost.
+    let a_principal = harness.agent_principal(&a).await?;
+    let tool_caller = with_immediate(&user, a_principal);
+    let agent_caller = with_immediate(&user, harness.streaming_tool());
+    let tool_starts = |recorded: Vec<(String, Caller)>| {
+        recorded
+            .into_iter()
+            .filter(|(name, _)| name == "entity streaming")
+            .map(|(_, caller)| caller)
+            .collect::<Vec<_>>()
+    };
+    let tool_starts_before = tool_starts(harness.executor.recorded_callers(&a).await);
+    let b_before = harness.executor.recorded_callers(&b).await;
+    assert!(!tool_starts_before.is_empty());
+    assert!(
+        tool_starts_before
+            .iter()
+            .all(|caller| *caller == tool_caller),
+        "{tool_starts_before:?}"
+    );
+    assert!(
+        b_before.iter().any(|(name, _)| name == "report_and_bump"),
+        "{b_before:?}"
+    );
+
+    call.abort();
+    let _ = call.await;
+    let harness = harness.restart(deps, overrides).await?;
+
+    let result: StreamEvidence = tokio::time::timeout(
+        Duration::from_secs(120),
+        invoke(harness.executor.clone(), harness.caller_component.clone()),
+    )
+    .await??
+    .into_typed()?;
+    assert_eq!(result.completion, "ok", "{result:?}");
+    let output = String::from_utf8(result.output)?;
+    let (tool_view, agent_view) = output.split_once('\n').expect("two lines");
+    assert_eq!(tool_view, callers::caller_text(&tool_caller));
+    assert_eq!(agent_view, callers::caller_text(&agent_caller));
+
+    // The lost call was sent again with its key and the caller it had.
+    let dispatches = dispatches.lock().unwrap().clone();
+    assert_eq!(dispatches.len(), 2, "{dispatches:?}");
+    assert!(dispatches[0].0.is_some());
+    assert_eq!(dispatches[1].0, dispatches[0].0);
+    for (_, callee_caller) in &dispatches {
+        assert_eq!(
+            callers::caller_text(callee_caller),
+            callers::caller_text(&agent_caller)
+        );
+    }
+
+    // The records did not change.
+    let tool_starts_after = tool_starts(harness.executor.recorded_callers(&a).await);
+    assert_eq!(tool_starts_after, tool_starts_before);
+    let b_after = harness.executor.recorded_callers(&b).await;
+    assert_eq!(b_after, b_before);
+    for (name, recorded) in &b_after {
+        assert_eq!(*recorded, agent_caller, "{name}");
+    }
+
+    // B applied the bump once.
+    let count: u32 = harness
+        .executor
+        .invoke_and_await_agent(
+            &harness.provider_component,
+            &agent_id!("CallerReport", "chain-b"),
+            "count",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(count, 1);
     Ok(())
 }
