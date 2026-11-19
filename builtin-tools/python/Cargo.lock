@@ -947,6 +947,7 @@ dependencies = [
  "blake3",
  "chrono",
  "golem-schema-derive",
+ "http",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

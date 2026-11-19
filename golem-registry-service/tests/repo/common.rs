@@ -3255,11 +3255,13 @@ pub async fn test_component_stage(deps: &Deps) {
                     definition: Tool {
                         version: "1.0.0".to_string(),
                         requires_filesystem: false,
+                        http_mount: None,
                         commands: CommandTree {
                             nodes: vec![CommandNode {
                                 name: "grep".to_string(),
                                 aliases: Vec::new(),
                                 doc: Doc::default(),
+                                http: None,
                                 globals: Globals::default(),
                                 subcommands: Vec::new(),
                                 body: None,
@@ -10042,11 +10044,13 @@ fn make_test_tool(name: &str, version: &str) -> Tool {
     Tool {
         version: version.to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
                 aliases: Vec::new(),
                 doc: Doc::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: Vec::new(),
                 body: None,

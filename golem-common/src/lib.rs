@@ -42,6 +42,8 @@ pub mod cache;
 pub mod component_introspection;
 #[cfg(feature = "full")]
 pub mod config;
+#[cfg(feature = "javascript")]
+pub mod javascript;
 #[cfg(feature = "full")]
 pub mod json_yaml;
 #[cfg(feature = "full")]

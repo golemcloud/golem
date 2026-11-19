@@ -471,6 +471,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesTcpSocketReceiveAcquire => {
             pair::<host_functions::P3SocketsTypesTcpSocketReceiveAcquire>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesTcpSocketSendChunk => {
+            pair::<host_functions::P3SocketsTypesTcpSocketSendChunk>(Bare::Neither)
+        }
         HostFunctionName::P3SocketsTypesUdpSocketSend => {
             pair::<host_functions::P3SocketsTypesUdpSocketSend>(Bare::Neither)
         }

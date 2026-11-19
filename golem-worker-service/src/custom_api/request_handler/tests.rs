@@ -36,6 +36,188 @@ use test_r::test;
 mod live_files;
 
 #[test]
+async fn authenticated_finalization_preserves_repeated_no_store() {
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+
+    for kind in ["typed", "router", "filesystem"] {
+        for no_store_first in [false, true] {
+            let mut route = test_route(
+                1,
+                "/",
+                if kind == "typed" { Some("GET") } else { None },
+                kind,
+            );
+            route.security = RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                header_name: "x-session".into(),
+            });
+            let resolver = test_resolver(vec![route]);
+            let request = Request::builder()
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("x-session", "{}")
+                .finish();
+            let selected = resolver.resolve_matching_route(&request).await.unwrap();
+            let mut request = RichRequest::new(request);
+            apply_session_from_header_security_middleware(&mut request, &selected).unwrap();
+            assert!(request.authenticated_session().is_some());
+            let mut response = Response::default();
+            let values = if no_store_first {
+                ["No-StOrE", "public, max-age=600"]
+            } else {
+                ["public, max-age=600", "No-StOrE"]
+            };
+            for value in values {
+                response
+                    .headers_mut()
+                    .append(http::header::CACHE_CONTROL, value.parse().unwrap());
+            }
+            response.headers_mut().insert(
+                http::header::EXPIRES,
+                "Thu, 01 Dec 2094 16:00:00 GMT".parse().unwrap(),
+            );
+            let response = finish_selected_response(Ok(response), &request, &selected).unwrap();
+            let directives = response
+                .headers()
+                .get_all(http::header::CACHE_CONTROL)
+                .iter()
+                .flat_map(|value| value.to_str().unwrap().split(','))
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            assert!(
+                directives
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case("private"))
+            );
+            assert!(
+                directives
+                    .iter()
+                    .any(|value| value.eq_ignore_ascii_case("no-store"))
+            );
+            assert!(!directives.iter().any(|value| value.starts_with("max-age=")));
+            assert!(!response.headers().contains_key(http::header::EXPIRES));
+        }
+    }
+}
+
+#[test]
+async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::agent::{CachePolicy, CachePolicyTtl, ReadOnlyConfig};
+    use golem_common::model::{AgentFingerprint, OplogIndex};
+
+    for authenticated in [false, true] {
+        for uses_principal in [false, true] {
+            for no_store in [false, true] {
+                let harness = InvocationHarness::new(
+                    AgentInvocationOutput {
+                        result: golem_common::model::AgentInvocationResult::AgentMethod {
+                            output: golem_common::schema::SchemaValue::Tuple { elements: vec![] },
+                        },
+                        consumed_fuel: None,
+                        invocation_status: None,
+                        component_revision: None,
+                        agent_id: None,
+                        idempotency_key: None,
+                        oplog_index: Some(OplogIndex::from_u64(17)),
+                        agent_fingerprint: Some(AgentFingerprint(uuid::Uuid::new_v4())),
+                    },
+                    AgentConstructorSchema {
+                        name: None,
+                        description: String::new(),
+                        prompt_hint: None,
+                        input_schema: InputSchema::Parameters(vec![]),
+                    },
+                    vec![golem_common::schema::AgentMethodSchema {
+                        name: "run".into(),
+                        description: String::new(),
+                        prompt_hint: None,
+                        input_schema: InputSchema::Parameters(vec![]),
+                        output_schema: OutputSchema::Unit,
+                        http_endpoint: vec![],
+                        read_only: None,
+                    }],
+                );
+                let mut route = test_route(1, "/cache", Some("GET"), "typed");
+                if authenticated {
+                    route.security =
+                        RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                            header_name: "x-session".into(),
+                        });
+                }
+                let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                    unreachable!()
+                };
+                call.component_id = harness.component_id;
+                call.agent_type = AgentTypeName("mcp-agent".into());
+                call.read_only = Some(ReadOnlyConfig {
+                    uses_principal,
+                    cache_policy: if no_store {
+                        CachePolicy::NoCache(Empty {})
+                    } else {
+                        CachePolicy::Ttl(CachePolicyTtl {
+                            duration_nanos: 90_500_000_000,
+                        })
+                    },
+                });
+                let mut post = test_route(2, "/cache", Some("POST"), "typed");
+                post.behavior = RouteBehaviour::CallAgent(call.clone());
+                let mut head = test_route(3, "/cache", Some("HEAD"), "typed");
+                head.behavior = RouteBehaviour::CallAgent(call.clone());
+                post.security = route.security.clone();
+                head.security = route.security.clone();
+                let endpoint = CustomApiPoemEndpoint::new(Arc::new(request_handler_with_worker(
+                    test_resolver(vec![route, post, head]),
+                    Arc::new(InitialAgentFilesService::new(Arc::new(
+                        golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+                    ))),
+                    harness.worker_service.clone(),
+                )));
+                for method in [http::Method::GET, http::Method::HEAD, http::Method::POST] {
+                    let response = endpoint
+                        .execute(
+                            Request::builder()
+                                .method(method.clone())
+                                .uri("/cache".parse().unwrap())
+                                .header("host", "example.com")
+                                .header("x-session", "{}")
+                                .finish(),
+                        )
+                        .await;
+                    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                    let eligible = method != http::Method::POST;
+                    let expected = match (authenticated, no_store, eligible) {
+                        (true, true, true) => Some("private, no-store"),
+                        (true, _, _) => Some("private, no-cache"),
+                        (false, true, true) => Some("no-store"),
+                        (false, false, true) => Some("public, max-age=90"),
+                        (false, _, false) => None,
+                    };
+                    assert_eq!(
+                        response
+                            .headers()
+                            .get(http::header::CACHE_CONTROL)
+                            .map(|v| v.to_str().unwrap()),
+                        expected
+                    );
+                    assert_eq!(
+                        response.headers().contains_key(http::header::ETAG),
+                        eligible && !no_store
+                    );
+                    if !authenticated {
+                        assert_eq!(
+                            response.headers()[http::header::VARY],
+                            "Authorization, Cookie, Golem-Token"
+                        );
+                    }
+                    assert!(response.into_body().into_vec().await.unwrap().is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
@@ -324,6 +506,7 @@ async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
             )
             .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-cache");
         assert!(
             response.headers()[http::header::CONTENT_TYPE]
                 .to_str()
@@ -1202,6 +1385,33 @@ fn request(body: &'static str, session: bool, origin: bool) -> Request {
 }
 
 #[test]
+async fn early_rejections_are_not_fresh_and_do_not_authenticate() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    let endpoint = CustomApiPoemEndpoint::new(Arc::new(request_handler()));
+    for (method, path, expect, status) in [
+        ("CONNECT", "/stream", "100-continue", 501),
+        ("TRACE", "/stream", "100-continue", 501),
+        ("GET", "/stream", "unsupported", 417),
+        ("GET", "/%2funsafe", "100-continue", 400),
+        ("GET", "/missing", "100-continue", 404),
+    ] {
+        let response = endpoint
+            .execute(
+                Request::builder()
+                    .method(method.parse().unwrap())
+                    .uri(format!("http://ds.example{path}").parse().unwrap())
+                    .header("host", "ds.example")
+                    .header("expect", expect)
+                    .header("x-golem-session", "invalid session must not be parsed")
+                    .finish(),
+            )
+            .await;
+        assert_eq!(response.status().as_u16(), status, "{method} {path}");
+        assert_eq!(response.headers()[http::header::CACHE_CONTROL], "no-cache");
+    }
+}
+
+#[test]
 async fn typed_route_can_decline_h2c_upgrade_and_dispatch_over_http1() {
     let mut request = request("not-json", true, false);
     request
@@ -1259,7 +1469,15 @@ async fn durable_stream_route_is_guarded_at_the_request_handler_boundary() {
     );
     assert_eq!(
         response.headers().get(http::header::VARY),
-        Some(&"Origin".parse().unwrap())
+        Some(
+            &"Origin, Authorization, Cookie, Golem-Token, x-golem-session"
+                .parse()
+                .unwrap()
+        )
+    );
+    assert_eq!(
+        response.headers()[http::header::CACHE_CONTROL],
+        "private, no-store"
     );
 }
 

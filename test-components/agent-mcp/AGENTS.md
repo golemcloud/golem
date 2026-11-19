@@ -52,6 +52,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-config-rust` | Adding typed configuration to a Rust Golem agent |
 | `golem-add-secret-rust` | Adding secrets to Rust Golem agents |
 | `golem-quota-rust` | Adding resource quotas (rate limiting, capacity, concurrency) to Rust Golem agents using QuotaToken and reservations |
+| `golem-permission-card-rust` | Managing permission cards (delegated authority): deriving, inspecting, installing, revoking, and lending scope cards to agent calls |
 | `golem-retry-policies-rust` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |

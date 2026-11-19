@@ -114,6 +114,7 @@ fn sample_tool() -> @toolCommon.Tool raise {
   let def : ToolDef = {
     version: "1.0.0",
     requires_filesystem: true,
+    http_mount: None,
     commands: [
       {
         name: "grep",
@@ -136,6 +137,7 @@ fn sample_tool() -> @toolCommon.Tool raise {
           ],
         },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -144,6 +146,7 @@ fn sample_tool() -> @toolCommon.Tool raise {
         doc: doc("run grep"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: {
             fixed: [
@@ -228,6 +231,7 @@ test "forwarding matches short forms in their separate namespace" {
   let child : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "short-forward-child",
@@ -235,6 +239,7 @@ test "forwarding matches short forms in their separate namespace" {
         doc: doc("short forward child"),
         globals: { options: [], flags: [flag("child-verbose")], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [],
@@ -253,6 +258,7 @@ test "forwarding matches short forms in their separate namespace" {
   let parent : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "short-forward-parent",
@@ -260,6 +266,7 @@ test "forwarding matches short forms in their separate namespace" {
         doc: doc("short forward parent"),
         globals: { options: [], flags: [flag("parent-verbose")], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -311,6 +318,7 @@ test "forwarding keeps authored aliases separate from short forms" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "root",
@@ -318,6 +326,7 @@ test "forwarding keeps authored aliases separate from short forms" {
         doc: doc("root"),
         globals: { options: [option("format", ["f"], None)], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -326,6 +335,7 @@ test "forwarding keeps authored aliases separate from short forms" {
         doc: doc("run"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [option("file", [], Some('f'))],
@@ -386,6 +396,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
   let source : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "source",
@@ -393,6 +404,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
         doc: doc("source"),
         globals: { options: [option("format", None)], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [option("file", Some('f'))],
@@ -411,6 +423,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
   let target : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "target",
@@ -418,6 +431,7 @@ test "forwarding prefers an exact name over an unrelated short form" {
         doc: doc("target"),
         globals: { options: [option("format", Some('f'))], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -460,6 +474,7 @@ test "grafting rejects child short collision with strict ancestor" {
   let child : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "child",
@@ -467,6 +482,7 @@ test "grafting rejects child short collision with strict ancestor" {
         doc: doc("child"),
         globals: { options: [], flags: [flag("child-verbose")], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -474,6 +490,7 @@ test "grafting rejects child short collision with strict ancestor" {
   let parent : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "parent",
@@ -481,6 +498,7 @@ test "grafting rejects child short collision with strict ancestor" {
         doc: doc("parent"),
         globals: { options: [], flags: [flag("ancestor-verbose")], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -521,6 +539,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
   let parent : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "parent",
@@ -528,6 +547,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
         doc: doc("parent"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -535,6 +555,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
   let child : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "child",
@@ -542,6 +563,7 @@ test "grafting rejects distinct parent and child globals sharing only a short fo
         doc: doc("child"),
         globals: { options: [option("format")], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -582,6 +604,7 @@ test "grafting rejects a child global matching two inherited identities" {
   let parent : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "parent",
@@ -589,6 +612,7 @@ test "grafting rejects a child global matching two inherited identities" {
         doc: doc("parent"),
         globals: { options: [option("alpha", [])], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -596,6 +620,7 @@ test "grafting rejects a child global matching two inherited identities" {
   let child : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "child",
@@ -603,6 +628,7 @@ test "grafting rejects a child global matching two inherited identities" {
         doc: doc("child"),
         globals: { options: [option("alpha", ["beta"])], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -647,6 +673,7 @@ test "deprojected child global does not consume a descendant local input" {
   let child_raw : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "deproject-child",
@@ -657,6 +684,7 @@ test "deprojected child global does not consume a descendant local input" {
           flags: [],
         },
         subcommands: [1],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [],
@@ -676,6 +704,7 @@ test "deprojected child global does not consume a descendant local input" {
         doc: doc("run"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [option("format", [], None)],
@@ -695,6 +724,7 @@ test "deprojected child global does not consume a descendant local input" {
   let parent_base : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "deproject-parent",
@@ -702,6 +732,7 @@ test "deprojected child global does not consume a descendant local input" {
         doc: doc("deproject parent"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -763,6 +794,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
   let child_raw : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "ranked-forward-child",
@@ -770,6 +802,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
         doc: doc("ranked forward child"),
         globals: { options: [option("format", ["leaf"])], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -778,6 +811,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
         doc: doc("run"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [option("leaf", [])],
@@ -803,6 +837,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
   let parent_base : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "ranked-forward-parent",
@@ -810,6 +845,7 @@ test "bug finder forwarding prefers surviving descendant over ancestor alias" {
         doc: doc("ranked forward parent"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -880,6 +916,7 @@ test "reverse-alias deprojection retains the surviving canonical value" {
   let raw : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "reverse-alias",
@@ -887,6 +924,7 @@ test "reverse-alias deprojection retains the surviving canonical value" {
         doc: doc("reverse alias"),
         globals: { options: [option("format", [])], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -895,6 +933,7 @@ test "reverse-alias deprojection retains the surviving canonical value" {
         doc: doc("run"),
         globals: { options: [option("count", ["format"])], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [],
@@ -944,6 +983,7 @@ test "panic top-level registration rejects an existing private subtool name" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "registry-collision",
@@ -951,6 +991,7 @@ test "panic top-level registration rejects an existing private subtool name" {
         doc: doc("registry collision"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -1125,6 +1166,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "root",
@@ -1132,6 +1174,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
         doc: doc("root"),
         globals: { options: [option("alpha", [])], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -1140,6 +1183,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
         doc: doc("child"),
         globals: { options: [option("beta", [])], flags: [], },
         subcommands: [2],
+        http: None,
         body: None,
       },
       {
@@ -1148,6 +1192,7 @@ test "normalization rejects a local field overlapping two inherited globals" {
         doc: doc("leaf"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [option("alpha", ["beta"])],
@@ -1190,6 +1235,7 @@ test "normalization rejects distinct options sharing an inherited short form" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "root",
@@ -1197,6 +1243,7 @@ test "normalization rejects distinct options sharing an inherited short form" {
         doc: doc("root"),
         globals: { options: [option("format")], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -1205,6 +1252,7 @@ test "normalization rejects distinct options sharing an inherited short form" {
         doc: doc("child"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [option("file")],
@@ -1244,6 +1292,7 @@ test "normalization resolves value-is literals against inherited globals" {
   let child_raw : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "constraint-child",
@@ -1251,6 +1300,7 @@ test "normalization resolves value-is literals against inherited globals" {
         doc: doc("constraint child"),
         globals: { options: [], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -1259,6 +1309,7 @@ test "normalization resolves value-is literals against inherited globals" {
         doc: doc("run"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [],
@@ -1284,6 +1335,7 @@ test "normalization resolves value-is literals against inherited globals" {
   let parent_raw : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "constraint-parent",
@@ -1291,6 +1343,7 @@ test "normalization resolves value-is literals against inherited globals" {
         doc: doc("constraint parent"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: None,
       },
     ],
@@ -1327,6 +1380,7 @@ test "normalization does not resolve value-is literals by short form" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "root",
@@ -1334,6 +1388,7 @@ test "normalization does not resolve value-is literals by short form" {
         doc: doc("root"),
         globals: { options: [format], flags: [], },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -1342,6 +1397,7 @@ test "normalization does not resolve value-is literals by short form" {
         doc: doc("render"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: { fixed: [], tail: None, },
           options: [],
@@ -1410,6 +1466,7 @@ fn canonical_test_def() -> ToolDef raise {
   {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "root",
@@ -1429,6 +1486,7 @@ fn canonical_test_def() -> ToolDef raise {
           ],
         },
         subcommands: [1],
+        http: None,
         body: None,
       },
       {
@@ -1437,6 +1495,7 @@ fn canonical_test_def() -> ToolDef raise {
         doc: doc("leaf"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: {
             fixed: [
@@ -1770,6 +1829,7 @@ test "text-refined string canonical input round-trips through typed values" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "echo",
@@ -1777,6 +1837,7 @@ test "text-refined string canonical input round-trips through typed values" {
         doc: doc("echo"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: {
             fixed: [
@@ -1825,6 +1886,7 @@ test "optional canonical fields use option wire schemas" {
   let def : ToolDef = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       {
         name: "optional",
@@ -1832,6 +1894,7 @@ test "optional canonical fields use option wire schemas" {
         doc: doc("optional"),
         globals: { options: [], flags: [], },
         subcommands: [],
+        http: None,
         body: Some({
           positionals: {
             fixed: [

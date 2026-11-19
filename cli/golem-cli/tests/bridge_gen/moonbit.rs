@@ -404,6 +404,7 @@ fn tool_node(name: &str) -> CommandNode {
         name: name.to_string(),
         aliases: vec![],
         doc: tool_doc(name),
+        http: None,
         globals: Globals::default(),
         subcommands: vec![],
         body: None,
@@ -561,6 +562,7 @@ fn schema_complete_tool() -> Tool {
     Tool {
         version: "1".into(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![
                 root,

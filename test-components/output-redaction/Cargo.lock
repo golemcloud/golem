@@ -756,6 +756,7 @@ dependencies = [
  "blake3",
  "chrono",
  "golem-schema-derive",
+ "http",
  "regex",
  "serde",
  "serde_json",

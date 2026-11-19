@@ -589,7 +589,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         };
         match delivery {
             ExactExistingDelivery::WakeInvocation(key) => {
-                let status = worker.get_last_known_status().await;
+                // A deletion that failed after stopping the state actor leaves the generation
+                // cached. The wake then fails and stays scheduled.
+                let status = worker.try_get_last_known_status().await?;
                 let now = golem_common::model::Timestamp::now_utc();
                 let pending = status.pending_invocations.iter().find(|pending| {
                     pending.has_idempotency_key(&key) && pending.not_before.is_some()

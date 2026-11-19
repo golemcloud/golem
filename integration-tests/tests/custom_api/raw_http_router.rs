@@ -52,6 +52,116 @@ async fn raw_router_context(deps: &EnvBasedTestDependencies) -> HttpTestContext 
 
 #[test]
 #[timeout("60s")]
+async fn mounted_files_and_raw_responses_apply_cache_privacy(
+    #[dimension(db)] raw_router_context: &HttpTestContext,
+) -> anyhow::Result<()> {
+    use crate::custom_api::http_test_context::make_test_context_with_files;
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+    use golem_common::model::http_api_deployment::{
+        HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation, TestSessionHeaderAgentSecurity,
+    };
+    use golem_test_framework::model::IFSEntry;
+
+    for authenticated in [false, true] {
+        let agent_type = if authenticated {
+            "AuthenticatedHttpRouter"
+        } else {
+            "StaticHttpRouter"
+        };
+        let context = make_test_context_with_files(
+            &raw_router_context.user.deps,
+            vec![(
+                AgentTypeName(agent_type.into()),
+                HttpApiDeploymentAgentOptions {
+                    security: authenticated.then(|| {
+                        HttpApiDeploymentAgentSecurity::TestSessionHeader(
+                            TestSessionHeaderAgentSecurity {
+                                header_name: "x-session".into(),
+                            },
+                        )
+                    }),
+                },
+            )],
+            "golem_it_agent_rpc_rust_release",
+            "golem-it:agent-rpc-rust",
+            HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
+            &[(
+                agent_type,
+                vec![IFSEntry {
+                    source_path: "initial-file-system/files/foo.txt".into(),
+                    target_path: CanonicalFilePath::from_abs_str("/assets/asset.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                }],
+            )],
+        )
+        .await?;
+        for (path, anonymous_policy, body) in [
+            ("/raw/static/asset.txt", Some("no-cache"), "foo\n"),
+            ("/raw/static/missing.txt", None, ""),
+            (
+                "/raw/cache-public",
+                Some("public, max-age=60"),
+                "cache-body",
+            ),
+            ("/raw/cache-no-store", Some("no-store"), "cache-body"),
+        ] {
+            let response = context
+                .client
+                .get(context.base_url.join(path)?)
+                .header("x-session", "{}")
+                .send()
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let expected = if authenticated {
+                Some(if anonymous_policy == Some("no-store") {
+                    "private, no-store"
+                } else {
+                    "private, no-cache"
+                })
+            } else {
+                anonymous_policy
+            };
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .map(|v| v.to_str().unwrap()),
+                expected,
+                "{path}"
+            );
+            if !authenticated {
+                let vary = response.headers()["vary"].to_str()?;
+                for name in ["Authorization", "Cookie", "Golem-Token"] {
+                    assert!(
+                        vary.split(',')
+                            .any(|token| token.trim().eq_ignore_ascii_case(name))
+                    );
+                }
+            }
+            if path.contains("cache-") {
+                let vary = response.headers()["vary"].to_str()?;
+                assert!(
+                    vary.split(',')
+                        .any(|token| token.trim().eq_ignore_ascii_case("Accept-Language"))
+                );
+            }
+            assert_eq!(response.text().await?, body, "{path}");
+        }
+        if authenticated {
+            let denied = context
+                .client
+                .get(context.base_url.join("/raw/static/asset.txt")?)
+                .send()
+                .await?;
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(denied.headers()["cache-control"], "no-cache");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
 async fn raw_router_streams_duplex_and_preserves_request(
     #[dimension(db)] raw_router_context: &HttpTestContext,
 ) -> anyhow::Result<()> {

@@ -41,6 +41,22 @@ fn failing_stream(
 
 struct StaticHttpRouterImpl;
 
+struct AuthenticatedHttpRouterImpl;
+
+#[http_router(name = "AuthenticatedHttpRouter", mount = "/raw", auth = true,
+    static_files = [("/static/*", "/assets/$1")])]
+impl HttpRouter for AuthenticatedHttpRouterImpl {
+    type Config = ();
+
+    fn new(_: Config<()>) -> Self {
+        Self
+    }
+
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        RawHttpRouterImpl.handle(request).await
+    }
+}
+
 #[http_router(name = "StaticHttpRouter", mount = "/raw", auth = false,
     cors = ["https://allowed.test"],
     static_files = [("/favicon", "/assets/asset.txt"), ("/static/*", "/assets/$1")])]
@@ -96,6 +112,18 @@ impl HttpRouter for RawHttpRouterImpl {
         ];
         let local_path = request.path.strip_prefix("/raw").unwrap_or(&request.path);
         let (status, body) = match local_path {
+            "/cache-public" | "/cache-no-store" => {
+                headers.push(header(
+                    "cache-control",
+                    if local_path == "/cache-public" {
+                        b"public, max-age=60"
+                    } else {
+                        b"no-store"
+                    },
+                ));
+                headers.push(header("vary", b"Accept-Language"));
+                (200, stream(vec![b"cache-body".to_vec()]))
+            }
             "/catch-input" => {
                 headers.push(header(
                     "x-echo-agent",

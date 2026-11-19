@@ -883,9 +883,9 @@ use crate::model::oplog::{
     HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
     HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
-    HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponsePermissionCheck,
-    HostResponseRandomBytes, HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock,
-    host_functions,
+    HostResponseP3SocketsTcpSendChunk, HostResponseP3SocketsUdpReceive,
+    HostResponseP3SocketsUdpSend, HostResponsePermissionCheck, HostResponseRandomBytes,
+    HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OplogIndex};
 use crate::model::{ScanCursor, Timestamp};
@@ -1511,6 +1511,16 @@ fn p3_tcp_socket_host_payload_pairs_roundtrip() {
         HostRequestNoInput {},
         HostResponseP3SocketsTcpReceiveChunk {
             chunk: SerializableP3TcpChunk::End,
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpSendChunk { result: Ok(4096) },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendChunk>(
+        HostRequestNoInput {},
+        HostResponseP3SocketsTcpSendChunk {
+            result: Err(SerializableP3SocketErrorCode::ConnectionBroken),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::P3SocketsTypesTcpSocketSendAcquire>(
@@ -2325,11 +2335,13 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
         definition: Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: Vec::new(),
                     body: None,

@@ -1,6 +1,7 @@
-import { Effect, Schema, Stream } from "effect"
+import { Effect, Result, Schema, Stream } from "effect"
 import {
   Client,
+  BridgeTool,
   defineAgent,
   defineAgentClient,
   DynamicClient,
@@ -25,6 +26,13 @@ const tsTool = Tool.toolDefinition("ts-cross-streaming").body((body) =>
     .returns(Schema.String),
 )
 const tsToolClient = Tool.client(tsTool)
+
+const successfulCollection = <A, E, O>(collected: BridgeTool.CollectedToolInvocation<A, E, O>) => {
+  if (Result.isFailure(collected.result)) return Effect.fail(collected.result.failure)
+  if (Result.isFailure(collected.stdout)) return Effect.fail(collected.stdout.failure)
+  if (Result.isFailure(collected.stderr)) return Effect.fail(collected.stderr.failure)
+  return Effect.succeed({ result: collected.result.success, stdout: collected.stdout.success })
+}
 
 const TsPeer = defineAgent({
   name: "TsPeer",
@@ -261,18 +269,8 @@ defineAgent({
         Effect.gen(function* () {
           const input = Stream.make(new TextEncoder().encode(payload))
           const invocation = yield* TsCrossStreamingClient.create().ts_cross_streaming(name, input)
-          const [result, stdout] = yield* Effect.all(
-            [
-              invocation.result,
-              invocation.stdout.pipe(
-                Stream.decodeText(),
-                Stream.runCollect,
-                Effect.map((chunks) => Array.from(chunks).join("")),
-              ),
-            ],
-            { concurrency: "unbounded" },
-          )
-          return `${result}|${stdout}`
+          const collected = yield* invocation.collect.pipe(Effect.flatMap(successfulCollection))
+          return `${collected.result}|${new TextDecoder().decode(collected.stdout)}`
         }),
       ).pipe(Effect.orDie),
     reflectedTsTool: ({ payload }) =>
@@ -285,12 +283,12 @@ defineAgent({
             { label: name },
             Stream.succeed(new TextEncoder().encode(payload)),
           )
-          const json = yield* started.collect
+          const json = yield* started.collect.pipe(Effect.flatMap(successfulCollection))
           const nativeCall = yield* command.startValue(
             command.inputSchema!.packJson({ label: name }),
             Stream.succeed(new TextEncoder().encode(payload)),
           )
-          const native = yield* nativeCall.collect
+          const native = yield* nativeCall.collect.pipe(Effect.flatMap(successfulCollection))
           const codec = yield* WitCodec.compile(Schema.Struct({ label: Schema.String }))
           const dynamicCall = yield* new Reflection.DynamicToolClient("ts-cross-streaming").start(
             [],
@@ -298,7 +296,7 @@ defineAgent({
             Stream.succeed(new TextEncoder().encode(payload)),
             true,
           )
-          const dynamic = yield* dynamicCall.collect
+          const dynamic = yield* dynamicCall.collect.pipe(Effect.flatMap(successfulCollection))
           const invalidRejected = yield* command.startJson({ label: 7 }).pipe(
             Effect.as(false),
             Effect.catch((error) =>

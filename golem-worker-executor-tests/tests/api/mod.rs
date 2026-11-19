@@ -12422,6 +12422,477 @@ async fn expected_fingerprint_after_a_failed_deletion_gets_the_deletion_refusal(
     Ok(())
 }
 
+// A deletion that fails after stopping the incarnation's state actor leaves the stopped generation
+// resident. The management calls, a create that waits for initialization, and the scheduler's wake
+// of a delayed invocation resolve it and read its status before any deletion check. Each must get
+// the deletion's refusal instead of panicking on the stopped actor, which aborts an executor built
+// with panic = "abort". A cancel of a key that only the Bloom filter of the result index may contain
+// is the one that reads the status. The executor keeps serving: the retried deletion succeeds.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ActivatePluginRequest, CreateWorkerRequest, InterruptWorkerRequest,
+        activate_plugin_response, create_worker_response, interrupt_worker_response,
+    };
+    use golem_common::model::{
+        OwnedInvocationId, ScheduleId, ScheduledAction, ShardAssignment, ShardId,
+    };
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_worker_executor::storage::scheduler::{
+        ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
+    };
+
+    /// Claims nothing until armed, so a wake is delivered only to the generation the failed
+    /// deletion left. Counts the claims that follow the claim of the wake of `target`: the
+    /// scheduler processes what it claimed before it claims again. Records whether that wake was
+    /// acknowledged, which only a delivery to a live generation does.
+    #[derive(Debug)]
+    struct WakeAfterArming {
+        inner: Arc<dyn SchedulerStorage + Send + Sync>,
+        target: std::sync::OnceLock<AgentId>,
+        armed: AtomicBool,
+        wakes: std::sync::Mutex<Vec<ScheduleId>>,
+        wake_acked: AtomicBool,
+        processed: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl SchedulerStorage for WakeAfterArming {
+        async fn insert(
+            &self,
+            id: ScheduleId,
+            due: chrono::DateTime<Utc>,
+            shard: ShardId,
+            action: &[u8],
+        ) -> Result<(), SchedulerStorageError> {
+            self.inner.insert(id, due, shard, action).await
+        }
+
+        async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
+            self.inner.cancel(id).await
+        }
+
+        async fn claim_due(
+            &self,
+            now: chrono::DateTime<Utc>,
+            assignment: &ShardAssignment,
+            limit: u32,
+            ttl: Duration,
+        ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+            if !self.armed.load(Ordering::Acquire) {
+                return Ok(Vec::new());
+            }
+            if !self.wakes.lock().unwrap().is_empty() {
+                self.processed.add_permits(1);
+            }
+            let claimed = self.inner.claim_due(now, assignment, limit, ttl).await?;
+            self.wakes
+                .lock()
+                .unwrap()
+                .extend(claimed.iter().filter_map(|claimed| {
+                    matches!(&claimed.action, ScheduledAction::WakeInvocation { owned_agent_id, .. }
+                    if self.target.get() == Some(&owned_agent_id.agent_id))
+                    .then_some(claimed.schedule_id)
+                }));
+            Ok(claimed)
+        }
+
+        async fn count_due(
+            &self,
+            now: chrono::DateTime<Utc>,
+            assignment: &ShardAssignment,
+        ) -> Result<u64, SchedulerStorageError> {
+            self.inner.count_due(now, assignment).await
+        }
+
+        async fn extend_lease(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            until: chrono::DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.extend_lease(id, owner, until).await
+        }
+
+        async fn ack(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+        ) -> Result<bool, SchedulerStorageError> {
+            if self.wakes.lock().unwrap().contains(id) {
+                self.wake_acked.store(true, Ordering::Release);
+            }
+            self.inner.ack(id, owner).await
+        }
+    }
+
+    let name = "failed-delete-management";
+    crate::panic_watch::watch_panics_naming(name);
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let scheduler = Arc::new(std::sync::OnceLock::<Arc<WakeAfterArming>>::new());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            // The oldest results leave the exact index and stay only in its Bloom filter.
+            configure: Some(Arc::new(|config| {
+                config.invocation_results.recent_capacity = 1;
+                config.invocation_results.bloom_bits = 64;
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            wrap_scheduler_storage: Some(Arc::new({
+                let scheduler = scheduler.clone();
+                move |inner| {
+                    scheduler
+                        .get_or_init(|| {
+                            Arc::new(WakeAfterArming {
+                                inner,
+                                target: std::sync::OnceLock::new(),
+                                armed: AtomicBool::new(false),
+                                wakes: std::sync::Mutex::new(Vec::new()),
+                                wake_acked: AtomicBool::new(false),
+                                processed: tokio::sync::Semaphore::new(0),
+                            })
+                        })
+                        .clone()
+                }
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_key!("Counter", name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let mut oldest_key = None;
+    for _ in 0..8 {
+        let key = IdempotencyKey::fresh();
+        executor
+            .invoke_and_await_agent_with_key(
+                &component,
+                &agent_id,
+                &key,
+                "increment",
+                data_value!(),
+            )
+            .await?;
+        oldest_key.get_or_insert(key);
+    }
+    let oldest_invocation = OwnedInvocationId::external(
+        worker_id.agent_id,
+        fingerprint,
+        "increment",
+        executor.auth_ctx().idempotency_scope(),
+        oldest_key.as_ref(),
+    )
+    .id();
+
+    // Due before the deletion fails, and woken only once the scheduler is armed after it.
+    let scheduler = scheduler
+        .get()
+        .expect("the executor wraps its scheduler storage");
+    scheduler.target.set(worker_id.agent_id).unwrap();
+    executor
+        .invoke_agent_session(golem_api_grpc::proto::golem::worker::InvocationStart {
+            target: Some(crate::agent::id_target(&worker_id)),
+            method_name: Some("increment".to_string()),
+            input: Some(
+                SchemaValue::Record { fields: vec![] }
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?,
+            ),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+            schedule_at: Some(prost_types::Timestamp {
+                seconds: chrono::Utc::now().timestamp() + 1,
+                nanos: 0,
+            }),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition:
+                golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
+                    as i32,
+            request_key: Some(
+                golem_common::model::InvocationRequestKey::external(None, None).into(),
+            ),
+            ..Default::default()
+        })
+        .await?;
+
+    let hook = Arc::new(DeletionStageHook::new(
+        worker_id.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated()).await?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(30), deleting)
+            .await??
+            .is_err(),
+        "the injected failure has to fail the first delete"
+    );
+
+    // Called on the client, because the test DSL panics on a refused interrupt.
+    let interrupt = |worker_id: AgentId| {
+        let mut client = executor.client.clone();
+        let request = InterruptWorkerRequest {
+            agent_id: Some(worker_id.into()),
+            recover_immediately: false,
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        };
+        async move {
+            let response = client.interrupt_worker(request).await?.into_inner();
+            match response.result {
+                Some(interrupt_worker_response::Result::Success(_)) => Ok(()),
+                Some(interrupt_worker_response::Result::Failure(error)) => {
+                    Err(anyhow!("{error:?}"))
+                }
+                None => Err(anyhow!("no result")),
+            }
+        }
+    };
+    let activate_plugin = |worker_id: AgentId| {
+        let mut client = executor.client.clone();
+        let request = ActivatePluginRequest {
+            agent_id: Some(worker_id.into()),
+            plugin_priority: 0,
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+        };
+        async move {
+            let response = client.activate_plugin(request).await?.into_inner();
+            match response.result {
+                Some(activate_plugin_response::Result::Success(_)) => Ok(()),
+                Some(activate_plugin_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
+                None => Err(anyhow!("no result")),
+            }
+        }
+    };
+    let create = async {
+        let response = executor
+            .client
+            .clone()
+            .create_worker(CreateWorkerRequest {
+                constructor: Some(crate::agent::proto_agent_key(&agent_id)?),
+                component_id: Some(component.id.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                environment_id: Some(component.environment_id.into()),
+                ignore_already_existing: true,
+                auth_ctx: Some(executor.auth_ctx().into()),
+                ..Default::default()
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            Some(create_worker_response::Result::Success(_)) => Ok(()),
+            Some(create_worker_response::Result::Failure(error)) => Err(anyhow!("{error:?}")),
+            None => Err(anyhow!("no result")),
+        }
+    };
+    let answers = [
+        ("create", format!("{:?}", create.await)),
+        (
+            "interrupt",
+            format!("{:?}", interrupt(worker_id.agent_id).await),
+        ),
+        (
+            "resume",
+            format!("{:?}", executor.resume(&worker_id, false).await),
+        ),
+        (
+            "update",
+            format!(
+                "{:?}",
+                executor
+                    .auto_update_worker(&worker_id, component.revision, false)
+                    .await
+            ),
+        ),
+        (
+            "activate plugin",
+            format!("{:?}", activate_plugin(worker_id.agent_id).await),
+        ),
+        (
+            "cancel",
+            format!(
+                "{:?}",
+                executor
+                    .cancel_invocation(&worker_id, &oldest_invocation)
+                    .await
+            ),
+        ),
+    ];
+    let failures: Vec<_> = answers
+        .iter()
+        .filter(|(_, answer)| !answer.contains("being deleted"))
+        .collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+
+    scheduler.armed.store(true, Ordering::Release);
+    let woken = tokio::time::timeout(Duration::from_secs(30), scheduler.processed.acquire()).await;
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+    woken
+        .map_err(|_| anyhow!("the scheduler did not process the wake of the agent"))?
+        .unwrap()
+        .forget();
+    assert!(
+        !scheduler.wake_acked.load(Ordering::Acquire),
+        "the wake must reach the generation the failed deletion left, which refuses it"
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(
+        executor
+            .get_worker_metadata_opt(&worker_id)
+            .await?
+            .is_none()
+    );
+
+    // A deletion that fails before it stops the state actor gets the same refusal.
+    let early_worker_id = executor
+        .start_agent(
+            &component.id,
+            agent_key!("Counter", "failed-delete-management-early"),
+        )
+        .await?;
+    executor.set_worker_deletion_hook(Arc::new(DeletionStageHook::new(
+        early_worker_id.clone(),
+        None,
+        Some(WorkerDeletionStage::StreamsCleaned),
+    )));
+    assert!(
+        executor.delete_worker(&early_worker_id).await.is_err(),
+        "the injected failure has to fail the first delete"
+    );
+    let answers = [
+        (
+            "interrupt",
+            format!("{:?}", interrupt(early_worker_id.agent_id).await),
+        ),
+        (
+            "resume",
+            format!("{:?}", executor.resume(&early_worker_id, false).await),
+        ),
+        (
+            "update",
+            format!(
+                "{:?}",
+                executor
+                    .auto_update_worker(&early_worker_id, component.revision, false)
+                    .await
+            ),
+        ),
+        (
+            "activate plugin",
+            format!("{:?}", activate_plugin(early_worker_id.agent_id).await),
+        ),
+    ];
+    let failures: Vec<_> = answers
+        .iter()
+        .filter(|(_, answer)| !answer.contains("being deleted"))
+        .collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+    executor.delete_worker(&early_worker_id).await?;
+    assert!(
+        executor
+            .get_worker_metadata_opt(&early_worker_id)
+            .await?
+            .is_none()
+    );
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+    Ok(())
+}
+
+// A wallet read holds the worker without a task-scope bind. Once the invocation loop has taken
+// the read off the queue it answers it, and a deletion that stops the state actor before the
+// caller reads the status gets the deletion's refusal rather than a panic.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn wallet_read_answered_before_a_deletion_gets_the_deletion_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let name = "wallet-read-before-delete";
+    crate::panic_watch::watch_panics_naming(name);
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_key!("Counter", name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let worker = executor
+        .active_agents()
+        .try_get(&worker_id)
+        .await
+        .expect("the agent is resident");
+
+    let mut wallet = Box::pin(worker.get_wallet_cards());
+    assert!(futures::poll!(&mut wallet).is_pending());
+    // Taken off the queue, so the loop answers it before any stop does.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker.queued_command_count_for_test().await > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    executor.delete_worker(&worker_id).await?;
+
+    let wallet = wallet.await;
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+    let error = wallet.expect_err("the deletion stopped the state actor before the status read");
+    assert!(error.to_string().contains("being deleted"), "{error}");
+    Ok(())
+}
+
 // An external-tool lookup that names an incarnation is answered by the existing-only guard for
 // that incarnation: the matching incarnation is looked up, another one is not found, and one whose
 // deletion is running gets the deletion's refusal, for a lookup and for a call, rather than an
@@ -12750,4 +13221,55 @@ async fn measured_duplicate_reads(
         "{conflict}"
     );
     Ok(reads)
+}
+
+// A wallet read that the invocation loop answered before the executor shut down finds the status
+// actor stopped. It answers with the routing miss, which the worker service retries on the
+// agent's next owner, rather than with an error it would pass to the user.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn wallet_read_answered_before_an_executor_shutdown_is_retried_elsewhere(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let name = "wallet-read-before-shutdown";
+    crate::panic_watch::watch_panics_naming(name);
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent_id = agent_key!("Counter", name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let worker = executor
+        .active_agents()
+        .try_get(&worker_id)
+        .await
+        .expect("the agent is resident");
+    let mut wallet = Box::pin(worker.get_wallet_cards());
+    assert!(futures::poll!(&mut wallet).is_pending());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker.queued_command_count_for_test().await > 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    let wallet = wallet.await;
+    let panics = crate::panic_watch::panics_naming(name);
+    assert!(panics.is_empty(), "{panics:#?}");
+    assert!(
+        matches!(wallet, Err(WorkerExecutorError::ShardingNotReady)),
+        "{wallet:?}"
+    );
+    Ok(())
 }

@@ -11,7 +11,7 @@ condition = { env_not_set = ["MAIN_VALIDATION_PARALLEL"] }
 
 [tasks.main-validation]
 description = "Validate the selected main source on a dedicated Linux executor"
-env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_BACKGROUND_TASKS = "check main-validation-bash" }
+env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
 run_task = { name = ["main-validation-prepare", "main-validation-parallel", "main-validation-exclusive", "main-validation-result"] }
 
 [tasks.main-validation-parallel]
@@ -23,19 +23,23 @@ run_task = [
 
 [tasks.main-validation-prepare]
 private = true
-env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-general-native unit-tests-and-checks build-cli-test-bins validate-sdk-scala validate-sdk-ts validate-sdk-effect validate-sdk-moonbit main-validation-fixtures main-validation-executor-native" }
+env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-general-native unit-tests-and-checks build-cli-test-bins validate-sdk-scala validate-sdk-ts validate-sdk-effect main-validation-js-guests validate-sdk-moonbit main-validation-fixtures main-validation-executor-native" }
 script_runner = "@duckscript"
 script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
-background = split ${MAIN_VALIDATION_BACKGROUND_TASKS} " "
-for task in ${background}
-    rm ${MAIN_VALIDATION_REPORT_DIR}/${task}.status
+# Absolute endpoint overrides bypass the disjoint listener blocks.
+endpoints = array REDIS_PORT REGISTRY_HTTP_PORT
+for endpoint in ${endpoints}
+    value = get_env ${endpoint}
+    if not is_empty ${value}
+        trigger_error "Unset ${endpoint}: Main validation owns isolated dependency ports"
+    end
 end
 rm ${MAIN_VALIDATION_REPORT_DIR}/service-build.status
 temporary = exec --fail-on-error python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='golem-main-validation-'))"
 temporary = trim ${temporary.stdout}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt ${temporary}
-branches = array worker service cli exclusive checks
+branches = array worker service recovery cli exclusive checks
 for branch in ${branches}
     rm ${MAIN_VALIDATION_REPORT_DIR}/${branch}.status
     mkdir ${temporary}/${branch}
@@ -82,13 +86,19 @@ mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation
 metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --workspace --tests --list-type binaries-only --message-format json
 echo ${metadata.stderr}
 writefile ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json ${metadata.stdout}
-# Existing source generators consume debug paths, as in restore-binaries.
+# Existing source generators consume debug paths.
 mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug
 binaries = array golem golem-cli golem-registry-service golem-worker-service golem-shard-manager golem-component-compilation-service worker-executor golem-openapi-client-generator
 for binary in ${binaries}
     cp ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/dev-ci/${binary} ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/${binary}
 end
 '''
+
+[tasks.main-validation-js-guests]
+private = true
+description = "Validate real JS guests using freshly built SDK templates and local native binaries"
+env = { TEST_R_BUILD_OPTS = "--binaries-metadata ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json" }
+run_task = "js-guest-tests"
 
 [tasks.main-validation-executor-native]
 private = true
@@ -185,6 +195,7 @@ if eq ${code} 0
     cm_run_task main-validation-service-and-cli
 else
     writefile ${MAIN_VALIDATION_REPORT_DIR}/service.status ${code}
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/recovery.status blocked
     writefile ${MAIN_VALIDATION_REPORT_DIR}/cli.status blocked
 end
 '''
@@ -192,11 +203,11 @@ end
 [tasks.main-validation-service-and-cli]
 private = true
 run_task = [
-    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-background-checks"], fork = true, parallel = true, condition = { env_true = ["MAIN_VALIDATION_PARALLEL"] } },
-    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-background-checks"], condition = { env_false = ["MAIN_VALIDATION_PARALLEL"] } },
+    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-recovery-tests"], fork = true, parallel = true, condition = { env_true = ["MAIN_VALIDATION_PARALLEL"] } },
+    { name = ["main-validation-service-tests", "main-validation-cli-tests", "main-validation-recovery-tests"], condition = { env_false = ["MAIN_VALIDATION_PARALLEL"] } },
 ]
 
-[tasks.main-validation-background-checks]
+[tasks.main-validation-workers-complete]
 private = true
 script_runner = "@duckscript"
 script = '''
@@ -209,21 +220,6 @@ while not is_path_exists ${MAIN_VALIDATION_REPORT_DIR}/worker.status
     end
     sleep 1000
     attempt = calc ${attempt} + 1
-end
-temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
-set_env TMPDIR ${temporary}/exclusive
-tasks = split ${MAIN_VALIDATION_BACKGROUND_TASKS} " "
-for task in ${tasks}
-    target = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
-    if eq ${task} main-validation-bash
-        target = set ${target}/main-validation-bash-target
-    end
-    if eq ${MAIN_VALIDATION_PARALLEL} true
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
-    else
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} ${task}
-    end
-    writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
 end
 '''
 
@@ -238,13 +234,29 @@ set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/ser
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
-    code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${group}
-    writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${group}.status ${code}
-    if not eq ${code} 0
-        failed = set 1
+    if not eq ${group} ${MAIN_VALIDATION_RECOVERY_GROUP}
+        code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${group}
+        writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${group}.status ${code}
+        if not eq ${code} 0
+            failed = set 1
+        end
     end
 end
 writefile ${MAIN_VALIDATION_REPORT_DIR}/service.status ${failed}
+'''
+
+[tasks.main-validation-recovery-tests]
+private = true
+dependencies = ["main-validation-workers-complete"]
+env = { GOLEM_TEST_PORT_OFFSET = "23000", GOLEM_TEST_BIN_PROFILE = "dev-ci" }
+script_runner = "@duckscript"
+script = '''
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+set_env TMPDIR ${temporary}/recovery
+set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
+code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${MAIN_VALIDATION_RECOVERY_GROUP} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${MAIN_VALIDATION_RECOVERY_GROUP}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${MAIN_VALIDATION_RECOVERY_GROUP}.status ${code}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/recovery.status ${code}
 '''
 
 [tasks.main-validation-cli-tests]
@@ -273,28 +285,21 @@ env = { MAIN_VALIDATION_TASKS = "dev-tools-tests check-shared-crates-versioning 
 script_runner = "@duckscript"
 script = '''
 failed = set 0
+temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
+set_env TMPDIR ${temporary}/exclusive
 tasks = split ${MAIN_VALIDATION_TASKS} " "
 for task in ${tasks}
-    background = contains " ${MAIN_VALIDATION_BACKGROUND_TASKS} " " ${task} "
-    if ${background}
-        file = set ${MAIN_VALIDATION_REPORT_DIR}/${task}.status
-        if is_path_exists ${file}
-            code = readfile ${file}
-        else
-            producer = readfile ${MAIN_VALIDATION_REPORT_DIR}/service-build.status
-            if not eq ${producer} 0
-                # A failed service producer never starts the independent checks.
-                cm_run_task main-validation-background-checks
-                code = readfile ${file}
-            else
-                echo "Missing background check completion: ${task}"
-                code = set 1
-            end
+    bounded = contains " check main-validation-bash " " ${task} "
+    if ${bounded}
+        target = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
+        if eq ${task} main-validation-bash
+            target = set ${target}/main-validation-bash-target
         end
+        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
     else
         code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
-        writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
     end
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
     if not eq ${code} 0
         failed = set 1
     end
@@ -307,7 +312,7 @@ private = true
 script_runner = "@duckscript"
 script = '''
 failed = set false
-branches = array worker service cli exclusive checks
+branches = array worker service recovery cli exclusive checks
 for branch in ${branches}
     file = set ${MAIN_VALIDATION_REPORT_DIR}/${branch}.status
     if is_path_exists ${file}
@@ -364,8 +369,21 @@ cm_run_task test-builtin-bash-sweep
 
 [tasks.main-validation-embedded]
 private = true
-command = "cargo"
-args = ["test", "--profile", "dev-ci", "-p", "golem-registry-service", "--lib", "--features", "embed-builtin-artifacts", "--", "builtin_artifact", "--report-time"]
+script_runner = "@duckscript"
+script = '''
+set_env CARGO_LOG cargo::compiler::fingerprint=info
+timings = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/cargo-timings/cargo-timing.html
+rm ${timings}
+code = exec --get-exit-code cargo test --profile dev-ci -p golem-registry-service --lib --features embed-builtin-artifacts --timings -- builtin_artifact --report-time
+if is_path_exists ${timings}
+    cp ${timings} ${MAIN_VALIDATION_REPORT_DIR}/embedded-cargo-timing.html
+else
+    echo "Cargo did not produce embedded build timings; retain the fingerprint log"
+end
+if not eq ${code} 0
+    trigger_error "Embedded artifact validation failed"
+end
+'''
 
 [tasks.main-validation-scala]
 private = true

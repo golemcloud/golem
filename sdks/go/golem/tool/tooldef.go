@@ -68,6 +68,8 @@ type Spec struct {
 	// RequiresFilesystem declares that the tool cannot work without a
 	// filesystem binding. It does not grant filesystem access.
 	RequiresFilesystem bool
+	// HTTP declares the tool's path-only HTTP mount.
+	HTTP *golem.Mount
 }
 
 // toolEntry is one tool: defined here and exported, or declared for calling.
@@ -104,6 +106,7 @@ type toolNode struct {
 	globals  *globalsDecl
 	children []*toolNode
 	body     *commandEntry
+	http     *toolCommon.CommandHttp
 }
 
 func (n *toolNode) label() string { return commandLabel(n.path) }
@@ -252,8 +255,17 @@ func (g *Group[T]) Aliases(names ...string) *Group[T] {
 }
 
 // Group declares a group of subcommands under this one.
-func (g *Group[T]) Group(name string) *Group[T] {
-	return &Group[T]{node: g.node.child(name)}
+func (g *Group[T]) Group(name string, opts ...golem.MethodOpt) *Group[T] {
+	node := g.node.child(name)
+	if len(opts) != 0 {
+		decl, err := golem.ToolHTTPDeclaration(opts...)
+		if err != nil {
+			node.entry.fail("command %s: %s", node.label(), err)
+		} else {
+			node.http = &decl
+		}
+	}
+	return &Group[T]{node: node}
 }
 
 // Globals declares options and flags that every command at or below this node
@@ -351,6 +363,13 @@ func declareBody[A any, O any](n *toolNode, spec func(*A, *CommandSpec), outputs
 		n.doc = d
 	}
 	n.aliases = append(n.aliases, s.settings.aliases...)
+	if s.settings.http != nil {
+		if n.http != nil {
+			e.fail("command %s declares HTTP more than once", n.label())
+		} else {
+			n.http = s.settings.http
+		}
+	}
 	n.body = ce
 	e.changed()
 	return ce
@@ -814,6 +833,9 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 			Doc:     n.doc.toWit(),
 			Body:    witTypes.None[toolCommon.CommandBody](),
 		}
+		if n.http != nil {
+			cn.Http = witTypes.Some(*n.http)
+		}
 		if n.globals != nil {
 			args, gok := n.globals.resolve(n)
 			ok = ok && gok
@@ -853,6 +875,15 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 		RequiresFilesystem: e.spec.RequiresFilesystem,
 		Commands:           toolCommon.CommandTree{Nodes: nodes},
 		Schema:             g.Build(),
+	}
+	if e.spec.HTTP != nil {
+		mount, err := e.spec.HTTP.ToolDeclaration()
+		if err != nil {
+			e.fail("HTTP mount: %s", err)
+			ok = false
+		} else {
+			tool.HttpMount = witTypes.Some(mount)
+		}
 	}
 	e.built, e.builtOK = &tool, ok
 	return tool, ok

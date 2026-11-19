@@ -429,10 +429,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker = self
                 .get_existing_for_management(&owned_agent_id, principal, "cancel")
                 .await?;
-            match worker.lookup_invocation_result(&idempotency_key).await {
+            // A deletion, even one that failed later and left the generation cached, can have
+            // stopped its state actor. The lookup then fails, and the deletion answers instead.
+            let lookup = match worker.try_lookup_invocation_result(&idempotency_key).await {
+                Err(_)
+                    if !worker.retired_for_lost_shard()
+                        && worker.deletion_owns_retirement().await =>
+                {
+                    Err(WorkerExecutorError::invalid_request(
+                        "Worker is being deleted",
+                    ))
+                }
+                lookup => lookup,
+            };
+            let lookup = Self::not_found_if_deleting(&worker, lookup).await?;
+            match lookup {
                 LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
                 LookupResult::Pending => {
-                    let status = worker.get_last_known_status().await;
+                    let status = Self::not_found_if_deleting(
+                        &worker,
+                        worker.try_get_last_known_status().await,
+                    )
+                    .await?;
                     if status
                         .pending_invocations
                         .iter()

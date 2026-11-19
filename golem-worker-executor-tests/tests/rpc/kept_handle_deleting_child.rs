@@ -7,6 +7,7 @@
 // not found, without a panic.
 
 use super::*;
+use crate::panic_watch::{panics_naming, watch_panics_naming};
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -56,53 +57,6 @@ impl WorkerDeletionHook for GateBeforeStage {
         }
         Ok(())
     }
-}
-
-// The executor is built with `panic = "abort"` (`[profile.release]` and `[profile.dev]` in the
-// root `Cargo.toml`), so a panic that the unwinding test harness contains in a spawned task
-// aborts a production executor. Panics that name one of the watched agents, and every state
-// actor panic, are recorded.
-static WATCHED_PANICS: std::sync::OnceLock<Mutex<(Vec<String>, Vec<String>)>> =
-    std::sync::OnceLock::new();
-
-// Matched as well as the agent name, so a change in how the agent is named in the panic message
-// cannot make the check pass without looking.
-const STATE_ACTOR_PANIC: &str = "Worker state actor";
-
-fn watch_panics_naming(name: &str) {
-    static INSTALL: std::sync::Once = std::sync::Once::new();
-    let watched = WATCHED_PANICS.get_or_init(|| Mutex::new((Vec::new(), Vec::new())));
-    watched.lock().unwrap().0.push(name.to_string());
-    INSTALL.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let message = info.to_string();
-            if let Some(watched) = WATCHED_PANICS.get()
-                && let Ok(mut watched) = watched.lock()
-                && (message.contains(STATE_ACTOR_PANIC)
-                    || watched.0.iter().any(|name| message.contains(name.as_str())))
-            {
-                watched.1.push(message);
-            }
-            previous(info);
-        }));
-    });
-}
-
-fn panics_naming(name: &str) -> Vec<String> {
-    WATCHED_PANICS
-        .get()
-        .map(|watched| {
-            watched
-                .lock()
-                .unwrap()
-                .1
-                .iter()
-                .filter(|message| message.contains(name) || message.contains(STATE_ACTOR_PANIC))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 struct RaceGate {

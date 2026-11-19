@@ -149,6 +149,7 @@ pub(super) fn command_node(name: &str) -> golem_common::schema::tool::CommandNod
         name: name.to_string(),
         aliases: vec![],
         doc: doc(name),
+        http: None,
         globals: Globals::default(),
         subcommands: vec![],
         body: None,
@@ -274,6 +275,7 @@ pub(super) fn grep_tool() -> Tool {
     Tool {
         version: "1".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root, replace],
         },
