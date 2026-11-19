@@ -52,11 +52,16 @@ The buckets add up to the uploaded file:
 - Go and MoonBit: twiggy over the `name` section of a debug build, scaled to the release file and
   marked approximate.
 
-Go and MoonBit symbols belong to their package path; Go standard-library, vendored and
-linker-generated packages are the runtime. Imports, data segments and section headers are
-`other`. A scaled breakdown leaves the named build's `name` sections out before scaling, so they
-do not inflate the attributed buckets. A main core module without function names in its `name`
-section fails instead of attributing nothing.
+Go symbols belong to their package path. The standard library of the pinned Go toolchain, its
+vendored packages and linker-generated `type:` and `go:` symbols are the runtime; any other
+package, including a local module with a dotless path, is a dependency. MoonBit symbols are
+mangled by `moonc` (`_M0FP28username5hello12use__generic`); the collector decodes their package
+(`username/hello`), and `moonbitlang/core` with the compiler's `moonbit.*` and `tlsf/*` helpers
+is the runtime. Imports, data segments, section headers and code the compiler generates are
+`other`. A scaled breakdown leaves out the custom sections that only the named build carries
+(its `name` section and DWARF `.debug_*` sections), so they do not shrink the attributed buckets.
+A main core module without function names in its `name` section fails instead of attributing
+nothing.
 
 ## Reflection retention contracts
 

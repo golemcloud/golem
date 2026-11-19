@@ -76,19 +76,30 @@ fn code_bytes_and_names(core: &[u8]) -> anyhow::Result<(usize, bool)> {
     Ok((code, named))
 }
 
-/// The bytes of the `name` sections of every core module of `file`, with their framing.
-pub fn name_section_bytes(file: &[u8]) -> anyhow::Result<u64> {
-    let mut bytes = 0;
+/// The bytes of the custom sections of every core module of `file`, with their framing, by
+/// section name.
+pub fn core_custom_section_bytes(file: &[u8]) -> anyhow::Result<BTreeMap<String, u64>> {
+    let mut bytes = BTreeMap::new();
     for core in core_modules(file)? {
         for section in raw_sections(&core)? {
-            if section.id == CUSTOM_SECTION
-                && custom_section_name(&core[section.payload.clone()])? == "name"
-            {
-                bytes += section.whole.len() as u64;
+            if section.id == CUSTOM_SECTION {
+                let name = custom_section_name(&core[section.payload.clone()])?;
+                *bytes.entry(name.to_string()).or_default() += section.whole.len() as u64;
             }
         }
     }
     Ok(bytes)
+}
+
+/// The custom-section bytes of the cores of `named` that `uploaded` does not carry: for each
+/// section name, how much more `named` has. These are the `name` section and the DWARF
+/// `.debug_*` sections of a debug build.
+pub fn extra_custom_section_bytes(named: &[u8], uploaded: &[u8]) -> anyhow::Result<u64> {
+    let uploaded = core_custom_section_bytes(uploaded)?;
+    Ok(core_custom_section_bytes(named)?
+        .into_iter()
+        .map(|(name, bytes)| bytes.saturating_sub(uploaded.get(&name).copied().unwrap_or(0)))
+        .sum())
 }
 
 /// A core module and its twiggy items (`None` without code).
@@ -130,8 +141,8 @@ pub fn component_symbols(file: &[u8]) -> anyhow::Result<Vec<CoreSymbols>> {
 pub fn group_by_owner(symbols: &[Symbol], naming: SymbolNaming) -> BTreeMap<String, u64> {
     let mut groups = BTreeMap::new();
     for symbol in symbols {
-        let owner = owner(naming, &symbol.name).unwrap_or(UNATTRIBUTED);
-        *groups.entry(owner.to_string()).or_default() += symbol.bytes;
+        let owner = owner(naming, &symbol.name).unwrap_or(UNATTRIBUTED.into());
+        *groups.entry(owner.into_owned()).or_default() += symbol.bytes;
     }
     groups
 }

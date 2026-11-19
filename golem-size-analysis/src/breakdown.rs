@@ -2,7 +2,9 @@ use anyhow::{Context, bail, ensure};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use crate::attribution::{Symbol, component_symbols, name_section_bytes, scale_to};
+#[cfg(test)]
+use crate::attribution::core_custom_section_bytes;
+use crate::attribution::{Symbol, component_symbols, extra_custom_section_bytes, scale_to};
 use crate::sections::section_table;
 
 /// A published bucket of the Rule 2 breakdown.
@@ -284,6 +286,7 @@ impl SymbolClassifier {
         let Some(owner) = owner(self.naming, name) else {
             return Bucket::Other;
         };
+        let owner = owner.as_ref();
         let matches = |owners: &[String]| {
             owners.iter().any(|o| {
                 if o.ends_with('/') {
@@ -310,10 +313,11 @@ impl SymbolClassifier {
 /// The owner of a twiggy item: the crate of a Rust symbol, or the package path of a Go or
 /// MoonBit symbol. `None` for imports, data segments, section headers and other items no crate
 /// or package owns.
-pub fn owner(naming: SymbolNaming, name: &str) -> Option<&str> {
+pub fn owner(naming: SymbolNaming, name: &str) -> Option<std::borrow::Cow<'_, str>> {
     match naming {
-        SymbolNaming::Rust => rust_crate(name),
-        SymbolNaming::Go | SymbolNaming::Moonbit => package_path(name),
+        SymbolNaming::Rust => rust_crate(name).map(Into::into),
+        SymbolNaming::Go => package_path(name).map(Into::into),
+        SymbolNaming::Moonbit => moonbit_package(name),
     }
 }
 
@@ -407,13 +411,130 @@ fn package_path(name: &str) -> Option<&str> {
     (!package.is_empty()).then_some(package)
 }
 
-/// Go packages compiled from the toolchain: the standard library (no domain in its first path
-/// element), its vendored packages, and linker-generated `type:` and `go:` symbols.
+/// The package of a mangled MoonBit symbol. `moonc` writes `_M0` followed by a kind letter (`F`
+/// function, `M` method, `I` impl, `T` type and others) and the package: `PB` for
+/// `moonbitlang/core/builtin`, `PC<count><segments>` for another `moonbitlang/core` package,
+/// `P0` for code the compiler generates, and `P<count><segments>` for any other package. Each
+/// segment is its length and its text, with `_` doubled. The count and the first length are
+/// adjacent digits, so the count is the split for which every segment fits in the name.
+/// Runtime helpers that the MoonBit compiler links in (`moonbit.*`, `tlsf/*`) belong to
+/// `moonbitlang/core`.
+fn moonbit_package(name: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if name.starts_with("moonbit.") || name.starts_with("tlsf/") {
+        return Some("moonbitlang/core".into());
+    }
+    let rest = name.strip_prefix("_M0")?;
+    let rest = rest.get(1..)?.strip_prefix('P')?;
+    if rest.starts_with('B') {
+        return Some("moonbitlang/core/builtin".into());
+    }
+    if rest.starts_with('0') {
+        return None;
+    }
+    let (prefix, rest) = match rest.strip_prefix('C') {
+        Some(core) => ("moonbitlang/core/", core),
+        None => ("", rest),
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    (1..=digits.min(3)).find_map(|split| {
+        let count: usize = rest[..split].parse().ok()?;
+        let segments = moonbit_segments(&rest[split..], count)?;
+        Some(format!("{prefix}{}", segments.join("/")).into())
+    })
+}
+
+/// Reads `count` length-prefixed segments, undoubling `_`; `None` when they do not fit.
+fn moonbit_segments(mut rest: &str, count: usize) -> Option<Vec<String>> {
+    let mut segments = Vec::with_capacity(count);
+    for _ in 0..count {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 || rest.starts_with('0') {
+            return None;
+        }
+        let length: usize = rest[..digits].parse().ok()?;
+        let segment = rest.get(digits..digits + length)?;
+        if segment.is_empty()
+            || !segment
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return None;
+        }
+        segments.push(segment.replace("__", "_"));
+        rest = &rest[digits + length..];
+    }
+    // The next item (a name, a type or a trait) starts with a length or a package marker.
+    rest.starts_with(|c: char| c.is_ascii_digit() || c == 'P')
+        .then_some(segments)
+}
+
+/// The top-level directories of `src/` in the Go toolchain the CLI pins (`go1.27.1-golem.5`, the
+/// same set as upstream `go1.27.1`). Every standard-library package path starts with one of them.
+/// A local module with a dotless path, such as `module shared`, is not in this list.
+const GO_STANDARD_LIBRARY: &[&str] = &[
+    "archive",
+    "arena",
+    "bufio",
+    "builtin",
+    "bytes",
+    "cmd",
+    "cmp",
+    "compress",
+    "container",
+    "context",
+    "crypto",
+    "database",
+    "debug",
+    "embed",
+    "encoding",
+    "errors",
+    "expvar",
+    "flag",
+    "fmt",
+    "go",
+    "hash",
+    "html",
+    "image",
+    "index",
+    "internal",
+    "io",
+    "iter",
+    "log",
+    "maps",
+    "math",
+    "mime",
+    "net",
+    "os",
+    "path",
+    "plugin",
+    "reflect",
+    "regexp",
+    "runtime",
+    "simd",
+    "slices",
+    "sort",
+    "strconv",
+    "strings",
+    "structs",
+    "sync",
+    "syscall",
+    "testing",
+    "text",
+    "time",
+    "unicode",
+    "unique",
+    "unsafe",
+    "uuid",
+    "weak",
+];
+
+/// Go packages compiled from the toolchain: the standard library, its vendored packages, and
+/// linker-generated `type:` and `go:` symbols.
 fn is_go_runtime(package: &str) -> bool {
     package.starts_with("vendor/")
         || package.starts_with("type:")
         || package.starts_with("go:")
-        || !package.split('/').next().unwrap_or(package).contains('.')
+        || GO_STANDARD_LIBRARY.contains(&package.split('/').next().unwrap_or(package))
 }
 
 /// Buckets of the named symbols of every core module of `file`. Bytes outside the core
@@ -453,9 +574,10 @@ pub fn rust_breakdown(
 }
 
 /// Attributes a named build and scales its buckets to the uploaded file: Go and MoonBit release
-/// builds, and a Rust build whose uploaded file is stripped. The named build's `name` sections
-/// have no counterpart in the uploaded file, so they are left out before scaling instead of
-/// inflating every bucket. The result is approximate.
+/// builds, and a Rust build whose uploaded file is stripped. The custom sections that only the
+/// named build carries (its `name` section and DWARF `.debug_*` sections) have no counterpart in
+/// the uploaded file, so they are left out before scaling instead of inflating `other` and
+/// shrinking every attributed bucket. The result is approximate.
 pub fn scaled_breakdown(
     named: &[u8],
     uploaded: &[u8],
@@ -464,8 +586,10 @@ pub fn scaled_breakdown(
     let (mut buckets, symbols) = symbol_buckets(named, classifier)?;
     let other = buckets.entry(Bucket::Other).or_default();
     *other = other
-        .checked_sub(name_section_bytes(named)?)
-        .context("the name sections are larger than the unattributed bytes")?;
+        .checked_sub(extra_custom_section_bytes(named, uploaded)?)
+        .context(
+            "the named build's extra custom sections are larger than its unattributed bytes",
+        )?;
     let buckets = scale_to(&buckets, uploaded.len() as u64);
     Ok((
         Breakdown::new(uploaded.len() as u64, true, buckets)?,
@@ -729,6 +853,10 @@ mod tests {
             ),
             ("type:.eq.[2]interface {}", Bucket::Runtime),
             ("go:itab.*os.File,io.Writer", Bucket::Runtime),
+            ("mime/multipart.NewReader", Bucket::Runtime),
+            // A second local module with a dotless path is a dependency, not the runtime.
+            ("shared/store.Get", Bucket::Dependencies),
+            ("component-name/helpers.Format", Bucket::Dependencies),
             (
                 "import wasi:io/streams@0.2.0::[method]output-stream.write",
                 Bucket::Other,
@@ -738,7 +866,7 @@ mod tests {
         }
         // The Go standard-library rule does not apply to other SDKs.
         assert_eq!(
-            SymbolClassifier::moonbit("me/app").classify("$unique/pkg.f"),
+            SymbolClassifier::moonbit("me/app").classify("_M0FP26unique3pkg1f"),
             Bucket::Dependencies
         );
         assert_eq!(
@@ -758,7 +886,17 @@ mod tests {
                 (func $github.com/google/uuid.New (result i32) i32.const 2))"#,
         )
         .unwrap()]);
-        let release = vec![0u8; 777];
+        // A stripped release build: no `name` section, padded to 777 bytes with a custom
+        // section, so nothing the debug build has beyond it is shared.
+        let stripped =
+            wat::parse_str("(module (memory 1) (func (result i32) i32.const 1))").unwrap();
+        let padding = 777 - stripped.len() - 1 - 2 - 1 - "padding".len();
+        let release = [
+            stripped,
+            crate::sections::tests::custom("padding", &vec![0u8; padding]),
+        ]
+        .concat();
+        assert_eq!(release.len(), 777);
         let classifier = SymbolClassifier::go("example.com/app");
         let (unscaled, _) = symbol_buckets(&debug, &classifier).unwrap();
         assert!(unscaled[&Bucket::Sdk] > 0 && unscaled[&Bucket::Runtime] > 0);
@@ -772,7 +910,7 @@ mod tests {
 
         // The debug build's `name` section is left out before scaling: each attributed bucket
         // keeps its share of the debug build without that section.
-        let names = name_section_bytes(&debug).unwrap();
+        let names = extra_custom_section_bytes(&debug, &release).unwrap();
         assert!(names > 0);
         let attributable = debug.len() as u64 - names;
         let expected_sdk = unscaled[&Bucket::Sdk] * 777 / attributable;
@@ -780,20 +918,104 @@ mod tests {
             (expected_sdk..=expected_sdk + 1).contains(&breakdown.bucket(Bucket::Sdk)),
             "{breakdown:?}, expected about {expected_sdk}"
         );
+    }
 
-        let moonbit = SymbolClassifier::moonbit("me/app");
-        assert_eq!(moonbit.classify("$me/app.main"), Bucket::UserCode);
+    #[test]
+    fn dwarf_and_shared_custom_sections_are_handled_before_scaling() {
+        use crate::sections::tests::custom;
+        let core = |extra: &[Vec<u8>]| {
+            let mut core = wat::parse_str(
+                r#"(module (memory 1)
+                    (func $github.com/golemcloud/golem/sdks/go/golem.Invoke (result i32)
+                        i32.const 1 i32.const 2 i32.add i32.const 3 i32.add)
+                    (func $runtime.mallocgc (result i32) i32.const 1 i32.const 2 i32.add)
+                    (func $example.com/app.Counter.Inc (result i32) i32.const 1))"#,
+            )
+            .unwrap();
+            core.extend(extra.concat());
+            core
+        };
+        let producers = custom("producers", &[7u8; 50]);
+        let release = wrap(&[core(std::slice::from_ref(&producers))]);
+        let classifier = SymbolClassifier::go("example.com/app");
+        let scaled = |extra: &[Vec<u8>]| {
+            let named = wrap(&[core(extra)]);
+            scaled_breakdown(&named, &release, &classifier).unwrap().0
+        };
+        let plain = scaled(std::slice::from_ref(&producers));
+        let with_dwarf = scaled(&[
+            producers.clone(),
+            custom(".debug_info", &[0u8; 4000]),
+            custom(".debug_line", &[0u8; 1500]),
+        ]);
+        assert_eq!(with_dwarf, plain);
+        assert!(plain.bucket(Bucket::Sdk) > 0 && plain.bucket(Bucket::UserCode) > 0);
+        // Only what the named build has beyond the uploaded file is left out: here its `name`
+        // section, because the uploaded file is stripped, and not the shared `producers`.
+        let named = wrap(&[core(std::slice::from_ref(&producers))]);
+        let release_stripped = wrap(&[[
+            wat::parse_str("(module (memory 1) (func (result i32) i32.const 1))").unwrap(),
+            producers,
+        ]
+        .concat()]);
+        let named_sections = core_custom_section_bytes(&named).unwrap();
         assert_eq!(
-            moonbit.classify("$moonbitlang/core/builtin.Array::push"),
-            Bucket::Runtime
+            extra_custom_section_bytes(&named, &release_stripped).unwrap(),
+            named_sections["name"]
         );
+    }
+
+    #[test]
+    fn moonbit_mangled_names_are_bucketed_by_package() {
+        // Names from `moon build --target wasm --debug` (moonc v0.10.18) of a module
+        // `username/hello` that uses the Golem SDK and an external package.
+        let moonbit = SymbolClassifier::moonbit("username/hello");
+        for (name, bucket) in [
+            ("_M0FP28username5hello12use__generic", Bucket::UserCode),
+            (
+                "_M0FP48username5hello4deep5inner8deep__fn",
+                Bucket::UserCode,
+            ),
+            (
+                "_M0FP138username5hello1a1b1c1d1e1f1g1h1i1j1k3kfn",
+                Bucket::UserCode,
+            ),
+            (
+                "_M0FP38username5hello52long__package__name__that__is__quite__long__abcdefgh3lfn",
+                Bucket::UserCode,
+            ),
+            ("_M0MPB3Map3setGsRP28username5hello4ItemE", Bucket::Runtime),
+            (
+                "_M0MPC15array5Array4pushGRP28username5hello4ItemE",
+                Bucket::Runtime,
+            ),
+            ("_M0IPC16string6StringPB4Hash4hash", Bucket::Runtime),
+            ("_M0FPB20int__to__string__dec", Bucket::Runtime),
+            ("moonbit.utf8.encode_from_utf16", Bucket::Runtime),
+            ("tlsf/insertBlock", Bucket::Runtime),
+            (
+                "_M0FP310golemcloud10golem__sdk6agents14register__agent",
+                Bucket::Sdk,
+            ),
+            ("_M0FP26mizchi5bench9ackermann", Bucket::Dependencies),
+            // Code the compiler generates, and structural items, have no package.
+            ("_M0FP017____moonbit__main", Bucket::Other),
+            (
+                "_M0IP016_24default__implPB6Logger5writeGRPB13StringBuilderE",
+                Bucket::Other,
+            ),
+            ("import wasi_snapshot_preview1::fd_write", Bucket::Other),
+            ("\"function names\" subsection", Bucket::Other),
+        ] {
+            assert_eq!(moonbit.classify(name), bucket, "{name}");
+        }
         assert_eq!(
-            moonbit.classify("@golemcloud/golem_sdk/agents.register"),
-            Bucket::Sdk
-        );
-        assert_eq!(
-            moonbit.classify("$me/app/counter.Counter::inc"),
-            Bucket::UserCode
+            owner(
+                SymbolNaming::Moonbit,
+                "_M0FP138username5hello1a1b1c1d1e1f1g1h1i1j1k3kfn"
+            )
+            .as_deref(),
+            Some("username/hello/a/b/c/d/e/f/g/h/i/j/k")
         );
     }
 
