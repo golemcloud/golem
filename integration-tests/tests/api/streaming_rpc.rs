@@ -159,10 +159,12 @@ fn public_start(
         selector: Box::new(InvocationSelector {
             agent_type: "StreamingRpcTarget".to_string(),
             application: application_name.to_string(),
-            constructor_parameters: native_record([serde_json::json!({
-                "kind": "string",
-                "value": agent_name
-            })]),
+            target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                constructor_parameters: native_record([serde_json::json!({
+                    "kind": "string",
+                    "value": agent_name
+                })]),
+            },
             environment: environment_name.to_string(),
             method: method_name.to_string(),
         }),
@@ -2564,6 +2566,62 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             ..
         }
     ));
+
+    let PublicServerMessage::InvocationAccepted { agent_id, .. } = scalar[0] else {
+        unreachable!()
+    };
+    let mut by_id = public_start(
+        application_name,
+        environment_name,
+        &agent_name,
+        "ping",
+        native_record([]),
+    );
+    if let PublicClientMessage::InvocationStart { selector, .. } = &mut by_id {
+        selector.target = golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+            agent_id,
+            expected_fingerprint: None,
+        };
+    }
+    let existing = run_public_session(deps, environment.id, &user.token, by_id.clone()).await?;
+    assert!(matches!(
+        existing[1],
+        PublicServerMessage::InvocationResult { .. }
+    ));
+    let missing_key = agent_key!("StreamingRpcTarget", format!("{agent_name}-missing"));
+    let missing_key =
+        golem_common::model::agent::AgentKey::new(missing_key.agent_type, missing_key.parameters)?;
+    let missing = AgentId::keyed(environment.id, agent_id.type_id().unwrap(), &missing_key);
+    if let PublicClientMessage::InvocationStart { selector, .. } = &mut by_id {
+        selector.target = golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+            agent_id: missing,
+            expected_fingerprint: None,
+        };
+    }
+    let rejected = run_public_session(deps, environment.id, &user.token, by_id).await?;
+    assert!(matches!(
+        &rejected[..],
+        [PublicServerMessage::InvocationRejected {
+            code: PublicErrorCode::NotFound,
+            ..
+        }]
+    ));
+    let worker_service = deps.worker_service();
+    let metadata = reqwest::Client::new()
+        .get(format!(
+            "http://{}:{}/v1/runtime/envs/{}/agents/{missing}",
+            worker_service.http_host(),
+            worker_service.http_port(),
+            environment.id,
+        ))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(
+        metadata.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "an ID session must not create an agent"
+    );
 
     let produced = run_public_session(
         deps,
