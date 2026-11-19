@@ -186,6 +186,7 @@ harness = false
 anyhow = { workspace = true }
 assert2 = { workspace = true }
 criterion = { workspace = true }
+figment = { workspace = true, features = ["test"] }
 futures = { workspace = true }
 golem-schema = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }

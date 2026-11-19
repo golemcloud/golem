@@ -35,14 +35,14 @@ cat >> golem.env <<'EOF'
 AWS_ACCESS_KEY_ID=<access key>
 AWS_SECRET_ACCESS_KEY=<secret key>
 PORT=10000
-GOLEM__ROUTER__PORT=10000
-GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+GOLEM_ADVANCED__SERVER__ROUTER__PORT=10000
+GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST=golem.example.com
 GOLEM_LITESTREAM=true
 GOLEM_LITESTREAM_REPLICA_URL=s3://my-bucket/litestream?endpoint=https://<account id>.r2.cloudflarestorage.com&region=auto
 EOF
 ```
 
-Set both variables: `GOLEM__ROUTER__PORT` sets Golem's listener, and `PORT` tells Render which port to use. The server listens on `::`, which accepts IPv4 connections too. `golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
+Set both variables: `GOLEM_ADVANCED__SERVER__ROUTER__PORT` sets Golem's listener, and `PORT` tells Render which port to use. The server listens on `::`, which accepts IPv4 connections too. `golem.env` contains the admin token, `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the service runs.
 
 ### Create the web service
 
@@ -58,7 +58,7 @@ Create a web service from the existing image `golemservices/golem:<version>` wit
 
 Add the management host (`golem.example.com`) and each domain of an HTTP API or MCP deployment as custom domains of the service. Render shows the DNS records to create and gets the certificates.
 
-To use the management API before configuring custom domains, use the service's generated `onrender.com` domain as `GOLEM__ROUTER__MANAGEMENT_HOST`. Use only the host name, without `https://`. HTTP API and MCP deployments each need a different domain; the management domain cannot serve them.
+To use the management API before configuring custom domains, use the service's generated `onrender.com` domain as `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`. Use only the host name, without `https://`. HTTP API and MCP deployments each need a different domain; the management domain cannot serve them.
 
 Set `scheme: https` in the HTTP API deployment so its OpenAPI document advertises HTTPS; this does not require trusting forwarded headers.
 
@@ -88,8 +88,8 @@ cat >> golem.env <<'EOF'
 AWS_ACCESS_KEY_ID=<access key>
 AWS_SECRET_ACCESS_KEY=<secret key>
 PORT=10000
-GOLEM__ROUTER__PORT=10000
-GOLEM__ROUTER__MANAGEMENT_HOST=golem.example.com
+GOLEM_ADVANCED__SERVER__ROUTER__PORT=10000
+GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST=golem.example.com
 EOF
 ```
 

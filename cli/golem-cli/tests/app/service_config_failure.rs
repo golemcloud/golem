@@ -35,7 +35,7 @@ async fn run(binary: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(path);
     command.args(args).current_dir(cwd.path());
     for (name, _) in std::env::vars_os().filter_map(|(k, v)| k.into_string().ok().map(|k| (k, v))) {
-        if name.starts_with("GOLEM__") {
+        if name.starts_with("GOLEM__") || name.starts_with("GOLEM_ADVANCED__") {
             command.env_remove(name);
         }
     }
@@ -126,31 +126,78 @@ async fn assert_config_exit_codes(binary: &str, setting: &str) {
 #[test]
 #[timeout("6m")]
 async fn worker_executor_config_exit_codes() {
-    assert_config_exit_codes("worker-executor", "GOLEM__GRPC__PORT").await;
+    assert_config_exit_codes(
+        "worker-executor",
+        "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT",
+    )
+    .await;
 }
 
 #[test]
 #[timeout("6m")]
 async fn worker_service_config_exit_codes() {
-    assert_config_exit_codes("golem-worker-service", "GOLEM__PORT").await;
+    assert_config_exit_codes(
+        "golem-worker-service",
+        "GOLEM_ADVANCED__WORKER_SERVICE__PORT",
+    )
+    .await;
 }
 
 #[test]
 #[timeout("6m")]
 async fn registry_service_config_exit_codes() {
-    assert_config_exit_codes("golem-registry-service", "GOLEM__GRPC__PORT").await;
+    assert_config_exit_codes(
+        "golem-registry-service",
+        "GOLEM_ADVANCED__REGISTRY_SERVICE__GRPC__PORT",
+    )
+    .await;
 }
 
 #[test]
 #[timeout("6m")]
 async fn shard_manager_config_exit_codes() {
-    assert_config_exit_codes("golem-shard-manager", "GOLEM__GRPC__PORT").await;
+    assert_config_exit_codes(
+        "golem-shard-manager",
+        "GOLEM_ADVANCED__SHARD_MANAGER__GRPC__PORT",
+    )
+    .await;
 }
 
 #[test]
 #[timeout("6m")]
 async fn component_compilation_service_config_exit_codes() {
-    assert_config_exit_codes("golem-component-compilation-service", "GOLEM__GRPC__PORT").await;
+    assert_config_exit_codes(
+        "golem-component-compilation-service",
+        "GOLEM_ADVANCED__COMPONENT_COMPILATION_SERVICE__GRPC__PORT",
+    )
+    .await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn unreachable_s3_fails_startup_without_local_blob_storage() {
+    let data = TempDir::new().unwrap();
+    let output = run(
+        "golem-component-compilation-service",
+        &[],
+        &[
+            ("GOLEM__DATA_DIR", data.path().to_str().unwrap()),
+            ("GOLEM__BLOB_STORE", "s3"),
+            ("GOLEM__OBJECT_STORAGE__ENDPOINT_URL", "http://127.0.0.1:1"),
+            ("GOLEM__OBJECT_STORAGE__PATH_STYLE", "true"),
+            ("AWS_ACCESS_KEY_ID", "test-access-key"),
+            ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
+            ("AWS_EC2_METADATA_DISABLED", "true"),
+        ],
+    )
+    .await;
+    assert_eq!(output.status.code(), Some(1), "{}", describe("S3", &output));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("S3 startup check"),
+        "{}",
+        describe("S3", &output)
+    );
+    assert_eq!(std::fs::read_dir(data.path()).unwrap().count(), 0);
 }
 
 #[test]

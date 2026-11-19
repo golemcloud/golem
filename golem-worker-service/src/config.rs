@@ -38,6 +38,8 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceConfig {
+    #[serde(default)]
+    pub installation: golem_common::config::self_host::InstallationConfig,
     pub environment: String,
     /// The installation's Golem issuer: the issuer of the identities of its agents, tools and
     /// accounts. An https URL on its own host, or a `urn:golem:issuer:<uuid>` value that Golem
@@ -280,6 +282,7 @@ impl Default for WorkerServiceConfig {
             golem_issuer: None,
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             blob_storage: BlobStorageConfig::default(),
+            installation: Default::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 9005,
@@ -1134,7 +1137,7 @@ pub struct InvocationSessionTokenKeyConfig {
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";
 
 pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> {
-    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME))
+    ConfigLoader::new_with_examples(&PathBuf::from(CONFIG_FILE_NAME)).for_service("worker_service")
 }
 
 #[cfg(test)]
@@ -1485,7 +1488,7 @@ mod tests {
         Jail::expect_with(|jail| {
             with_worker_service_config_file(jail)?;
             jail.set_env(
-                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                "GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
                 r#"["172.18.128.0/19","172.18.160.0/19","172.18.192.0/19"]"#,
             );
 
@@ -1509,7 +1512,7 @@ mod tests {
         Jail::expect_with(|jail| {
             with_worker_service_config_file(jail)?;
             jail.set_env(
-                "GOLEM__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
+                "GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES",
                 r#"["10.0.0.1"]"#,
             );
 
@@ -1538,7 +1541,10 @@ mod tests {
                 make_worker_service_config_loader().figment().extract()?;
             assert_eq!(config.golem_issuer, None);
 
-            jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
+            jail.set_env(
+                "GOLEM_ADVANCED__WORKER_SERVICE__GOLEM_ISSUER",
+                "https://id.acme.example",
+            );
             let config: WorkerServiceConfig =
                 make_worker_service_config_loader().figment().extract()?;
             assert_eq!(
@@ -1546,7 +1552,10 @@ mod tests {
                 Some("https://id.acme.example".parse().unwrap())
             );
 
-            jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
+            jail.set_env(
+                "GOLEM_ADVANCED__WORKER_SERVICE__GOLEM_ISSUER",
+                "http://id.acme.example",
+            );
             let error = make_worker_service_config_loader()
                 .figment()
                 .extract::<WorkerServiceConfig>()
@@ -1617,7 +1626,7 @@ mod tests {
         for value in ["", "   "] {
             Jail::expect_with(|jail| {
                 with_worker_service_config_file(jail)?;
-                jail.set_env("GOLEM__GOLEM_ISSUER", value);
+                jail.set_env("GOLEM_ADVANCED__WORKER_SERVICE__GOLEM_ISSUER", value);
                 let config: WorkerServiceConfig =
                     make_worker_service_config_loader().figment().extract()?;
                 assert_eq!(config.golem_issuer, None, "env value {value:?}");

@@ -50,19 +50,19 @@ xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents
 Set the mount point as the storage root:
 
 ```toml
-[filesystem_storage.mode]
+[advanced.worker_executor.filesystem_storage.mode]
 type = "ReflinkXfs"
 
-[filesystem_storage.mode.config]
+[advanced.worker_executor.filesystem_storage.mode.config]
 root = "/var/lib/golem/agents"
 ```
 
-The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+The environment variables are `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs` and `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
 
 `ReflinkXfs` refuses mounts with project quota accounting, including `prjquota` or `pqnoenforce`. It has these limits:
 
 - **No per-agent disk limit.** The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup. One agent can fill the volume. The pressure targets still apply to the whole volume. When a write finds the volume full, the executor unloads idle agents and retries. If that frees too little space, the write fails with an out-of-space error, never a quota error. Capture admission skips snapshots while the volume is below its targets.
-- **No filesystem metering.** Set `[resource_usage_metering] filesystem = false`. With `true`, startup fails with `filesystem metering requires XFS storage with project quotas`.
+- **No filesystem metering.** Set `[advanced.worker_executor.resource_usage_metering] filesystem = false`. With `true`, startup fails with `filesystem metering requires XFS storage with project quotas`.
 
 See [configuration](/next/operate/filesystem_snapshots/configuration) for pressure settings.
 
@@ -102,14 +102,14 @@ xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents
 Set the storage mode:
 
 ```toml
-[filesystem_storage.mode]
+[advanced.worker_executor.filesystem_storage.mode]
 type = "ManagedXfs"
 
-[filesystem_storage.mode.config]
+[advanced.worker_executor.filesystem_storage.mode.config]
 root = "/var/lib/golem/agents"
 ```
 
-The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`. Also configure the socket as described in [Run xfs-quotad](/next/operate/filesystem_snapshots/xfs#run-xfs-quotad).
+The environment variables are `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`. Also configure the socket as described in [Run xfs-quotad](/next/operate/filesystem_snapshots/xfs#run-xfs-quotad).
 
 The executor sets directory projects. Linux permits this only in the initial user namespace. Containers must use the host user namespace, even if they have `CAP_SYS_ADMIN`.
 
@@ -120,8 +120,8 @@ The image runs as `golem`, uid and gid 65534. Drop all capabilities and set `no_
 ```shell
 docker run --cap-drop ALL --security-opt no-new-privileges \
   --mount type=bind,source=/var/lib/golem/agents,target=/var/lib/golem/agents \
-  -e GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs \
-  -e GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents \
+  -e GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs \
+  -e GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents \
   golemservices/golem-worker-executor:<version>
 ```
 
@@ -165,15 +165,15 @@ The image runs as uid and gid 65534. Its binary has the file capability `cap_sys
 Configure the executor's socket:
 
 ```toml
-[filesystem_storage.mode]
+[advanced.worker_executor.filesystem_storage.mode]
 type = "ManagedXfs"
 
-[filesystem_storage.mode.config]
+[advanced.worker_executor.filesystem_storage.mode.config]
 root = "/var/lib/golem/agents"
 xfs_quotad_socket = "/run/golem-quota/xfs-quotad.sock"
 ```
 
-The socket environment variable is `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`.
+The socket environment variable is `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET`.
 
 The executor checks the protocol version and filesystem identity on connect. Each call, including connection establishment, has a five-second deadline. If the connection breaks, the executor reconnects and sends the call once more. The daemon changes limits only on the newest connection, so a late call from an old connection cannot undo a later change.
 
@@ -215,11 +215,11 @@ containers:
   - name: worker-executor
     image: golemservices/golem-worker-executor:<version>
     env:
-      - name: GOLEM__FILESYSTEM_STORAGE__MODE__TYPE
+      - name: GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE
         value: ManagedXfs
-      - name: GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT
+      - name: GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT
         value: /var/lib/golem/agents
-      - name: GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET
+      - name: GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET
         value: /run/golem-quota/xfs-quotad.sock
     securityContext:
       runAsNonRoot: true
@@ -261,9 +261,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges]
     environment:
-      GOLEM__FILESYSTEM_STORAGE__MODE__TYPE: ManagedXfs
-      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT: /var/lib/golem/agents
-      GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET: /run/golem-quota/xfs-quotad.sock
+      GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE: ManagedXfs
+      GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT: /var/lib/golem/agents
+      GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__XFS_QUOTAD_SOCKET: /run/golem-quota/xfs-quotad.sock
     volumes:
       - /var/lib/golem/agents:/var/lib/golem/agents
       - quota-socket:/run/golem-quota

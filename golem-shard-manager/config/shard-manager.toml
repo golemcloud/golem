@@ -1,4 +1,11 @@
 ## Generated from default config
+blob_store = "data_disk"
+data_dir = "/var/lib/golem"
+outbound_sockets = false
+retained_update_snapshots = 2
+state_store = "sqlite"
+
+[advanced.shard_manager]
 bind_address = "0.0.0.0"
 http_port = 8081
 initial_health_check_timeout = "3s"
@@ -9,37 +16,24 @@ shard_lease_duration = "1m"
 state_read_timeout = "30s"
 state_write_timeout = "4s"
 
-[grpc]
+[advanced.shard_manager.grpc]
 port = 9092
 
-[grpc.tls]
-type = "Disabled"
-
-[grpc.tls.config]
-
-[health_check]
+[advanced.shard_manager.health_check]
 delay = "10s"
 silent = false
 
-[health_check.mode]
+[advanced.shard_manager.health_check.mode]
 type = "Grpc"
 
-[health_check.mode.config]
+[advanced.shard_manager.health_check.mode.config]
 
-[persistence]
-type = "Sqlite"
-
-[persistence.config]
-database = "../data/golem_shard_manager.db"
-foreign_keys = false
-max_connections = 10
-
-[quota]
+[advanced.shard_manager.quota]
 definition_staleness_ttl = "5m"
 lease_duration = "1m"
 min_executors = 2
 
-[registry_service]
+[advanced.shard_manager.registry_service]
 connect_timeout = "10s"
 connection_pool_size = 4
 host = "localhost"
@@ -50,34 +44,63 @@ max_connection_age = "1m"
 max_message_size = 52428800
 port = 8080
 
-[registry_service.invalidation_event_subscriber]
+[advanced.shard_manager.registry_service.invalidation_event_subscriber]
 initial_backoff = "100ms"
 max_backoff = "30s"
 
-[registry_service.retries_on_unavailable]
+[advanced.shard_manager.registry_service.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[registry_service.tls]
-type = "Disabled"
-
-[registry_service.tls.config]
-
-[resource_definition_fetcher]
+[advanced.shard_manager.resource_definition_fetcher]
 cache_eviction_period = "1m"
 cache_max_capacity = 1024
 cache_ttl = "5m"
 
-[tracing]
+[advanced.shard_manager.worker_executors]
+assign_shards_timeout = "5s"
+connect_timeout = "10s"
+connection_pool_size = 4
+health_check_timeout = "2s"
+http2_keep_alive_interval = "10s"
+http2_keep_alive_timeout = "10s"
+http2_keep_alive_while_idle = true
+max_connection_age = "1m"
+max_message_size = 33554432
+revoke_shards_timeout = "5s"
+
+[advanced.shard_manager.worker_executors.retries]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[advanced.shard_manager.worker_executors.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[cache]
+type = "Disabled"
+
+[cache.config]
+
+[internal_grpc_tls]
+enabled = false
+
+[logging]
 console = false
 dtor_friendly = false
 file_name = "shard-manager.log"
 file_truncate = true
 
-[tracing.file]
+[logging.file]
 ansi = false
 compact = false
 enabled = false
@@ -90,13 +113,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.otlp]
-enabled = false
-host = "localhost"
-port = 4318
-service_name = "golem"
-
-[tracing.stderr]
+[logging.stderr]
 ansi = false
 compact = false
 enabled = false
@@ -109,7 +126,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.stdout]
+[logging.stdout]
 ansi = true
 compact = false
 enabled = true
@@ -122,38 +139,29 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[worker_executors]
-assign_shards_timeout = "5s"
-connect_timeout = "10s"
-connection_pool_size = 4
-health_check_timeout = "2s"
-http2_keep_alive_interval = "10s"
-http2_keep_alive_timeout = "10s"
-http2_keep_alive_while_idle = true
-max_connection_age = "1m"
-max_message_size = 33554432
-revoke_shards_timeout = "5s"
+[object_storage]
+artifacts_bucket = "golem-artifacts"
+components_bucket = "golem-components"
+data_bucket = "golem-data"
+object_prefix = ""
+region = "us-east-1"
 
-[worker_executors.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
+[otlp]
+enabled = false
+host = "localhost"
+port = 4318
+service_name = "golem"
 
-[worker_executors.retries_on_unavailable]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
-[worker_executors.tls]
-type = "Disabled"
-
-[worker_executors.tls.config]
+[postgres]
+database = "golem"
+host = "localhost"
+max_connections = 10
+password = ""
+port = 5432
+username = "golem"
 
 ## Generated from example config: with k8s healthcheck
+# [advanced.shard_manager]
 # bind_address = "0.0.0.0"
 # http_port = 8081
 # initial_health_check_timeout = "3s"
@@ -164,38 +172,40 @@ type = "Disabled"
 # state_read_timeout = "30s"
 # state_write_timeout = "4s"
 #
-# [grpc]
+# [advanced.shard_manager.grpc]
 # port = 9092
 #
-# [grpc.tls]
+# [advanced.shard_manager.grpc.tls]
 # type = "Disabled"
 #
-# [grpc.tls.config]
+# [advanced.shard_manager.grpc.tls.config]
 #
-# [health_check]
+# [advanced.shard_manager.health_check]
 # delay = "1s"
 # silent = false
 #
-# [health_check.mode]
+# [advanced.shard_manager.health_check.mode]
 # type = "K8s"
 #
-# [health_check.mode.config]
+# [advanced.shard_manager.health_check.mode.config]
 # namespace = "namespace"
 #
-# [persistence]
+# [advanced.shard_manager.installation]
+#
+# [advanced.shard_manager.persistence]
 # type = "Sqlite"
 #
-# [persistence.config]
+# [advanced.shard_manager.persistence.config]
 # database = "../data/golem_shard_manager.db"
 # foreign_keys = false
 # max_connections = 10
 #
-# [quota]
+# [advanced.shard_manager.quota]
 # definition_staleness_ttl = "5m"
 # lease_duration = "1m"
 # min_executors = 2
 #
-# [registry_service]
+# [advanced.shard_manager.registry_service]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -206,34 +216,34 @@ type = "Disabled"
 # max_message_size = 52428800
 # port = 8080
 #
-# [registry_service.invalidation_event_subscriber]
+# [advanced.shard_manager.registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
 #
-# [registry_service.retries_on_unavailable]
+# [advanced.shard_manager.registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [registry_service.tls]
+# [advanced.shard_manager.registry_service.tls]
 # type = "Disabled"
 #
-# [registry_service.tls.config]
+# [advanced.shard_manager.registry_service.tls.config]
 #
-# [resource_definition_fetcher]
+# [advanced.shard_manager.resource_definition_fetcher]
 # cache_eviction_period = "1m"
 # cache_max_capacity = 1024
 # cache_ttl = "5m"
 #
-# [tracing]
+# [advanced.shard_manager.tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "shard-manager.log"
 # file_truncate = true
 #
-# [tracing.file]
+# [advanced.shard_manager.tracing.file]
 # ansi = false
 # compact = false
 # enabled = false
@@ -246,13 +256,13 @@ type = "Disabled"
 # span_events_full = false
 # without_time = false
 #
-# [tracing.otlp]
+# [advanced.shard_manager.tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
 #
-# [tracing.stderr]
+# [advanced.shard_manager.tracing.stderr]
 # ansi = false
 # compact = false
 # enabled = false
@@ -265,7 +275,7 @@ type = "Disabled"
 # span_events_full = false
 # without_time = false
 #
-# [tracing.stdout]
+# [advanced.shard_manager.tracing.stdout]
 # ansi = true
 # compact = false
 # enabled = true
@@ -278,7 +288,7 @@ type = "Disabled"
 # span_events_full = false
 # without_time = false
 #
-# [worker_executors]
+# [advanced.shard_manager.worker_executors]
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
 # connection_pool_size = 4
@@ -290,26 +300,27 @@ type = "Disabled"
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 #
-# [worker_executors.retries]
+# [advanced.shard_manager.worker_executors.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [worker_executors.retries_on_unavailable]
+# [advanced.shard_manager.worker_executors.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [worker_executors.tls]
+# [advanced.shard_manager.worker_executors.tls]
 # type = "Disabled"
 #
-# [worker_executors.tls.config]
+# [advanced.shard_manager.worker_executors.tls.config]
 
 ## Generated from example config: with etcd persistence (distributed mode)
+# [advanced.shard_manager]
 # bind_address = "0.0.0.0"
 # http_port = 8081
 # initial_health_check_timeout = "3s"
@@ -320,27 +331,29 @@ type = "Disabled"
 # state_read_timeout = "30s"
 # state_write_timeout = "4s"
 #
-# [grpc]
+# [advanced.shard_manager.grpc]
 # port = 9092
 #
-# [grpc.tls]
+# [advanced.shard_manager.grpc.tls]
 # type = "Disabled"
 #
-# [grpc.tls.config]
+# [advanced.shard_manager.grpc.tls.config]
 #
-# [health_check]
+# [advanced.shard_manager.health_check]
 # delay = "10s"
 # silent = false
 #
-# [health_check.mode]
+# [advanced.shard_manager.health_check.mode]
 # type = "Grpc"
 #
-# [health_check.mode.config]
+# [advanced.shard_manager.health_check.mode.config]
 #
-# [persistence]
+# [advanced.shard_manager.installation]
+#
+# [advanced.shard_manager.persistence]
 # type = "Etcd"
 #
-# [persistence.config]
+# [advanced.shard_manager.persistence.config]
 # compaction_retention_revisions = 1000
 # connect_timeout = "10s"
 # endpoints = ["http://localhost:2379"]
@@ -350,12 +363,12 @@ type = "Disabled"
 # retry_max_delay = "5s"
 # retry_min_delay = "100ms"
 #
-# [quota]
+# [advanced.shard_manager.quota]
 # definition_staleness_ttl = "5m"
 # lease_duration = "1m"
 # min_executors = 2
 #
-# [registry_service]
+# [advanced.shard_manager.registry_service]
 # connect_timeout = "10s"
 # connection_pool_size = 4
 # host = "localhost"
@@ -366,34 +379,34 @@ type = "Disabled"
 # max_message_size = 52428800
 # port = 8080
 #
-# [registry_service.invalidation_event_subscriber]
+# [advanced.shard_manager.registry_service.invalidation_event_subscriber]
 # initial_backoff = "100ms"
 # max_backoff = "30s"
 #
-# [registry_service.retries_on_unavailable]
+# [advanced.shard_manager.registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [registry_service.tls]
+# [advanced.shard_manager.registry_service.tls]
 # type = "Disabled"
 #
-# [registry_service.tls.config]
+# [advanced.shard_manager.registry_service.tls.config]
 #
-# [resource_definition_fetcher]
+# [advanced.shard_manager.resource_definition_fetcher]
 # cache_eviction_period = "1m"
 # cache_max_capacity = 1024
 # cache_ttl = "5m"
 #
-# [tracing]
+# [advanced.shard_manager.tracing]
 # console = false
 # dtor_friendly = false
 # file_name = "shard-manager.log"
 # file_truncate = true
 #
-# [tracing.file]
+# [advanced.shard_manager.tracing.file]
 # ansi = false
 # compact = false
 # enabled = false
@@ -406,13 +419,13 @@ type = "Disabled"
 # span_events_full = false
 # without_time = false
 #
-# [tracing.otlp]
+# [advanced.shard_manager.tracing.otlp]
 # enabled = false
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
 #
-# [tracing.stderr]
+# [advanced.shard_manager.tracing.stderr]
 # ansi = false
 # compact = false
 # enabled = false
@@ -425,7 +438,7 @@ type = "Disabled"
 # span_events_full = false
 # without_time = false
 #
-# [tracing.stdout]
+# [advanced.shard_manager.tracing.stdout]
 # ansi = true
 # compact = false
 # enabled = true
@@ -438,7 +451,7 @@ type = "Disabled"
 # span_events_full = false
 # without_time = false
 #
-# [worker_executors]
+# [advanced.shard_manager.worker_executors]
 # assign_shards_timeout = "5s"
 # connect_timeout = "10s"
 # connection_pool_size = 4
@@ -450,21 +463,21 @@ type = "Disabled"
 # max_message_size = 33554432
 # revoke_shards_timeout = "5s"
 #
-# [worker_executors.retries]
+# [advanced.shard_manager.worker_executors.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [worker_executors.retries_on_unavailable]
+# [advanced.shard_manager.worker_executors.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 #
-# [worker_executors.tls]
+# [advanced.shard_manager.worker_executors.tls]
 # type = "Disabled"
 #
-# [worker_executors.tls.config]
+# [advanced.shard_manager.worker_executors.tls.config]

@@ -147,6 +147,7 @@ pub struct S3BlobStorageConfig {
     #[serde(default)]
     pub namespace_prefixes: bool,
     pub aws_endpoint_url: Option<String>,
+    pub public_endpoint_url: Option<Box<str>>,
     pub aws_credentials: Option<S3BlobStorageCredentialsConfig>,
     pub aws_path_style: Option<bool>,
     pub compilation_cache_bucket: String,
@@ -155,6 +156,8 @@ pub struct S3BlobStorageConfig {
     pub compressed_oplog_buckets: Vec<String>,
     pub initial_agent_files_bucket: String,
     pub components_bucket: String,
+    #[serde(default = "default_artifacts_bucket")]
+    pub artifacts_bucket: Box<str>,
     pub filesystem_snapshots_bucket: String,
 }
 
@@ -227,6 +230,9 @@ impl SafeDisplay for S3BlobStorageConfig {
         if let Some(endpoint_url) = &self.aws_endpoint_url {
             let _ = writeln!(&mut result, "aws_endpoint_url: {endpoint_url}");
         }
+        if let Some(endpoint_url) = &self.public_endpoint_url {
+            let _ = writeln!(&mut result, "public_endpoint_url: {endpoint_url}");
+        }
         if let Some(aws_credentials) = &self.aws_credentials {
             let _ = writeln!(&mut result, "aws_credentials:");
             let _ = writeln!(&mut result, "{}", aws_credentials.to_safe_string_indented());
@@ -260,6 +266,7 @@ impl SafeDisplay for S3BlobStorageConfig {
             self.initial_agent_files_bucket
         );
         let _ = writeln!(&mut result, "components bucket: {}", self.components_bucket);
+        let _ = writeln!(&mut result, "artifacts bucket: {}", self.artifacts_bucket);
         let _ = writeln!(
             &mut result,
             "filesystem snapshots bucket: {}",
@@ -281,11 +288,13 @@ impl Default for S3BlobStorageConfig {
             object_prefix: "".to_string(),
             namespace_prefixes: false,
             aws_endpoint_url: None,
+            public_endpoint_url: None,
             aws_credentials: None,
             aws_path_style: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             initial_agent_files_bucket: "golem-initial-agent-files".to_string(),
             components_bucket: "component-store".to_string(),
+            artifacts_bucket: default_artifacts_bucket(),
             filesystem_snapshots_bucket: "filesystem-snapshots".to_string(),
         }
     }
@@ -296,6 +305,10 @@ pub struct LocalFileSystemBlobStorageConfig {
     /// bytes in a file of a directory below the root first, and then renames that file into place,
     /// and a rename works only within one volume.
     pub root: PathBuf,
+}
+
+fn default_artifacts_bucket() -> Box<str> {
+    "golem-artifacts".into()
 }
 
 impl Default for LocalFileSystemBlobStorageConfig {
@@ -363,55 +376,63 @@ mod tests {
 
     #[test]
     fn blob_storage_config_files_and_examples_are_valid() {
-        for (name, source, has_s3_example) in [
+        [
             (
-                "worker-executor",
+                "worker_executor",
                 include_str!("../../golem-worker-executor/config/worker-executor.toml"),
                 true,
             ),
             (
-                "registry-service",
+                "registry_service",
                 include_str!("../../golem-registry-service/config/registry-service.toml"),
                 false,
             ),
             (
-                "component-compilation-service",
+                "component_compilation_service",
                 include_str!(
                     "../../golem-component-compilation-service/config/component-compilation-service.toml"
                 ),
                 true,
             ),
-        ] {
-            let config: BlobStorageConfig = Figment::new()
-                .merge(Toml::string(source))
-                .extract_inner("blob_storage")
-                .unwrap();
+        ]
+        .into_iter()
+        .for_each(|(name, source, has_s3_example)| {
+            let config: BlobStorageConfig = golem_common::config::self_host::project(
+                name,
+                &Figment::from(Toml::string(source)),
+            )
+            .extract_inner("blob_storage")
+            .unwrap();
             config.validate().unwrap();
 
-            let mut found_s3_example = false;
-            for example in source.split("# [blob_storage]").skip(1) {
+            let prefix = format!("advanced.{name}.blob_storage");
+            let header = format!("# [{prefix}]");
+            let nested = format!("# [{prefix}.");
+            let found_s3_example = source.split(&header).skip(1).fold(false, |found, example| {
                 let section = example
                     .lines()
                     .take_while(|line| {
-                        !line.starts_with("# [") || line.starts_with("# [blob_storage.")
+                        !line.starts_with("# [") || line.starts_with(&nested)
                     })
                     .filter_map(|line| line.strip_prefix("# "))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let config: BlobStorageConfig = Figment::new()
-                    .merge(Toml::string(&format!("[blob_storage]\n{section}")))
-                    .extract_inner("blob_storage")
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let config: BlobStorageConfig = golem_common::config::self_host::project(
+                    name,
+                    &Figment::from(Toml::string(&format!("[{prefix}]\n{section}"))),
+                )
+                .extract_inner("blob_storage")
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
                 config
                     .validate()
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
-                found_s3_example |= matches!(config, BlobStorageConfig::S3(_));
-            }
+                found || matches!(config, BlobStorageConfig::S3(_))
+            });
             assert_eq!(
                 found_s3_example, has_s3_example,
                 "{name}: S3 example coverage"
             );
-        }
+        });
     }
 
     #[test]

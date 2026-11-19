@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod byte_size;
+pub mod self_host;
 
 use crate::SafeDisplay;
 use crate::model::RetryConfig;
@@ -64,6 +65,7 @@ pub trait HasConfigExamples<T> {
 pub struct ConfigLoader<T: ConfigLoaderConfig> {
     pub config_file_name: PathBuf,
     pub make_examples: Option<fn() -> Vec<ConfigExample<T>>>,
+    service: Option<&'static str>,
     config_type: std::marker::PhantomData<T>,
 }
 
@@ -75,6 +77,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         Self {
             config_file_name,
             make_examples: None,
+            service: None,
             config_type: std::marker::PhantomData,
         }
     }
@@ -89,27 +92,52 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         Self {
             config_file_name,
             make_examples: Some(T::examples),
+            service: None,
             config_type: std::marker::PhantomData,
         }
     }
 
+    pub fn for_service(mut self, service: &'static str) -> Self {
+        self.service = Some(service);
+        self
+    }
+
     pub fn default_figment(&self) -> Figment {
-        Figment::new().merge(Serialized::defaults(T::default()))
+        Figment::from(Serialized::defaults(T::default()))
+    }
+
+    fn settings_defaults(&self) -> Figment {
+        let defaults = self.default_figment();
+        match self.service {
+            Some(service) => self_host::reference(service, &defaults),
+            None => defaults,
+        }
     }
 
     pub fn example_figments(&self) -> Vec<(&'static str, Figment)> {
         self.make_examples
             .map_or(Vec::new(), |make| make())
             .into_iter()
-            .map(|(name, example)| (name, Figment::new().merge(Serialized::defaults(example))))
+            .map(|(name, example)| {
+                let value = match self.service {
+                    Some(service) => Serialized::default(&format!("advanced.{service}"), example),
+                    None => Serialized::defaults(example),
+                };
+                (name, Figment::from(value))
+            })
             .collect()
     }
 
     pub fn figment(&self) -> Figment {
-        Figment::new()
-            .merge(Serialized::defaults(T::default()))
+        let input = self
+            .settings_defaults()
             .merge(Toml::file_exact(self.config_file_name.clone()))
-            .merge(env_config_provider())
+            .merge(env_config_provider());
+        let settings = match self.service {
+            Some(service) => self_host::project(service, &input),
+            None => input,
+        };
+        Figment::from(Serialized::defaults(T::default())).merge(settings)
     }
 
     pub fn load(&self) -> figment::Result<T> {
@@ -127,7 +155,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     }
 
     fn load_or_dump_config_for_flag(&self, flag: &str) -> Result<LoadOrDump<T>, ConfigError> {
-        if dump_config(flag, &self.default_figment(), &self.example_figments())? {
+        if dump_config(flag, &self.settings_defaults(), &self.example_figments())? {
             Ok(LoadOrDump::Dumped)
         } else {
             self.load()
@@ -290,13 +318,16 @@ pub(crate) mod dump {
                 print!("#");
             }
 
-            print!("{ENV_VAR_PREFIX}");
-
-            if !path.is_empty() {
-                for elem in path {
-                    print!("{}{}", elem.to_uppercase(), ENV_VAR_NESTED_SEPARATOR);
-                }
-            }
+            let path = if path.first() == Some(&"advanced") {
+                print!("GOLEM_ADVANCED__");
+                &path[1..]
+            } else {
+                print!("{ENV_VAR_PREFIX}");
+                path
+            };
+            path.iter().for_each(|elem| {
+                print!("{}{}", elem.to_uppercase(), ENV_VAR_NESTED_SEPARATOR);
+            });
             if !name.is_empty() {
                 print!("{}", name.to_uppercase());
             }
@@ -445,8 +476,12 @@ impl RetryConfig {
     }
 }
 
-pub fn env_config_provider() -> Env {
-    Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR)
+pub fn env_config_provider() -> Figment {
+    Figment::from(Env::prefixed(ENV_VAR_PREFIX).split(ENV_VAR_NESTED_SEPARATOR)).merge(
+        Env::prefixed("GOLEM_ADVANCED__")
+            .split(ENV_VAR_NESTED_SEPARATOR)
+            .map(|key| format!("advanced.{key}").into()),
+    )
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -625,6 +660,50 @@ mod tests {
                 other => panic!("flag {flag:?}: expected Loaded, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn self_host_invalid_store_is_a_load_error() {
+        [
+            "state_store = 123",
+            "blob_store = false",
+            "state_store = 'redis'",
+            "blob_store = 'memory'",
+        ]
+        .into_iter()
+        .for_each(|contents| {
+            let (_dir, loader) = loader_with_file(contents);
+            let result = loader.for_service("worker_executor").load();
+            assert!(result.is_err(), "{contents} loaded defaults");
+        });
+    }
+
+    #[test]
+    fn self_host_advanced_environment_is_scoped_and_keeps_its_path() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "settings.toml",
+                "[advanced.worker_executor]\nloader_test_port = 1234",
+            )?;
+            jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__LOADER_TEST_PORT", "4567");
+            let loader =
+                || ConfigLoader::<LoaderTestConfig>::new(std::path::Path::new("settings.toml"));
+            assert_eq!(
+                loader()
+                    .for_service("worker_executor")
+                    .load()?
+                    .loader_test_port,
+                4567
+            );
+            assert_eq!(
+                loader()
+                    .for_service("worker_service")
+                    .load()?
+                    .loader_test_port,
+                0
+            );
+            Ok(())
+        });
     }
 
     #[test]

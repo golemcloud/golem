@@ -58,7 +58,9 @@ pub async fn run(
 ) -> anyhow::Result<RunDetails> {
     config.blob_storage.validate()?;
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
-        BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+        BlobStorageConfig::S3(config) => {
+            Arc::new(S3BlobStorage::new(config.clone(), &config.compilation_cache_bucket).await?)
+        }
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
             golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                 .await

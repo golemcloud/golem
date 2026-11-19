@@ -411,7 +411,9 @@ fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRan
 }
 
 impl S3BlobStorage {
-    pub async fn new(config: S3BlobStorageConfig) -> Self {
+    /// Connects to S3 and checks access to the bucket needed at startup.
+    pub async fn new(config: S3BlobStorageConfig, startup_bucket: &str) -> Result<Self, Error> {
+        config.validate()?;
         let region = config.region.clone();
 
         let mut config_builder =
@@ -446,7 +448,15 @@ impl S3BlobStorage {
             s3_config_builder = s3_config_builder.force_path_style(*path_style);
         }
 
-        Self::with_sdk_config(config, s3_config_builder.build())
+        let storage = Self::with_sdk_config(config, s3_config_builder.build());
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            storage.client.head_bucket().bucket(startup_bucket).send(),
+        )
+        .await
+        .map_err(|err| anyhow!("S3 startup check timed out: {err}"))?
+        .map_err(|err| anyhow!("S3 startup check failed: {err}"))?;
+        Ok(storage)
     }
 
     /// Makes a blob storage that sends its requests through a client with the given S3 settings.

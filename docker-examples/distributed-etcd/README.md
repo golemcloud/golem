@@ -39,7 +39,7 @@ The misconfigurations described below stop a replica at startup:
 
 - `https://` endpoint without TLS settings → exits 1 with `Error: Invalid configuration: etcd endpoint
   https://... uses https://, which needs persistence.config.tls (at least ca_cert_file or ca_cert)`
-- no `GOLEM__GRPC__ADVERTISED_HOST` → exits 1 with `grpc.advertised_host must be set in
+- no `GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST` → exits 1 with `grpc.advertised_host must be set in
   distributed mode`
 - unbracketed endpoint list → exits 1 with `Error: Failed to load config: invalid type: found string
   "...", expected a sequence for key "PERSISTENCE"`
@@ -56,9 +56,9 @@ Read the reason with `docker compose logs <service>`.
 
 | | `published-postgres` | here |
 |---|---|---|
-| `GOLEM__PERSISTENCE__TYPE` | `Postgres` | `Etcd` |
+| `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE` | `Postgres` | `Etcd` |
 | Shard manager replicas | exactly one | any number (three here); one is elected and serves, the rest stand by |
-| `GOLEM__GRPC__ADVERTISED_HOST` | not used | each replica's own service name |
+| `GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST` | not used | each replica's own service name |
 | Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
@@ -77,7 +77,7 @@ It needs these files beside the compose files:
 
 - `etcd-tls/ca.pem`: the CA that signed the two certificates below.
 - `etcd-tls/server.pem` and `etcd-tls/server-key.pem`: etcd's certificate and key. The certificate
-  must name `etcd`, the endpoint host, or set `GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a
+  must name `etcd`, the endpoint host, or set `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__TLS__SERVER_NAME` to a
   name it holds.
 - `etcd-tls/client.pem` and `etcd-tls/client-key.pem`: the shard manager's client certificate and
   its unencrypted key, which all three replicas use.
@@ -122,15 +122,15 @@ the shard manager's durable state, so a real deployment runs a cluster.
 **Every replica serves its gRPC port.** The executors and the worker service reach any replica
 through the network alias `golem-shard-manager`. A standby does not run a call: it answers with the
 leader's address, and the client connects to the leader at that address and keeps using it. Each
-replica therefore sets `GOLEM__GRPC__ADVERTISED_HOST` to the host that the other containers reach it
+replica therefore sets `GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST` to the host that the other containers reach it
 at, here its own service name. On Kubernetes that is the pod IP; see the deployment guide for a full
 example.
 
-Use two probes on the HTTP port (`GOLEM__HTTP_PORT`). Readiness is `/readyz`: it answers 200 while the replica
-serves, or, for a standby or a just-elected leader still starting, while etcd has answered it within one lease TTL. A replica is also not ready until it has reached its own advertised address, so a wrong `GOLEM__GRPC__ADVERTISED_HOST` keeps it unready, with a warning that names the address; such a replica does not join the election either, so it neither queues nor leads. Liveness is `/healthcheck`.
+Use two probes on the HTTP port (`GOLEM_ADVANCED__SHARD_MANAGER__HTTP_PORT`). Readiness is `/readyz`: it answers 200 while the replica
+serves, or, for a standby or a just-elected leader still starting, while etcd has answered it within one lease TTL. A replica is also not ready until it has reached its own advertised address, so a wrong `GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST` keeps it unready, with a warning that names the address; such a replica does not join the election either, so it neither queues nor leads. Liveness is `/healthcheck`.
 The shard manager image has neither `curl` nor `wget`, so this example defines no container healthcheck.
 
-Each replica's `GOLEM__GRPC__ADVERTISED_HOST` is its own service name. It must stay unique: a replica that
+Each replica's `GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST` is its own service name. It must stay unique: a replica that
 finds another live replica advertising its address refuses to start.
 
 During a failover no replica serves. A graceful handover takes milliseconds for the election. After a kill or

@@ -34,10 +34,10 @@ This starts:
 Set these environment variables before the cargo make task:
 
 ```shell
-GOLEM__TRACING__OTLP__ENABLED=true \
-GOLEM__TRACING__OTLP__HOST=localhost \
-GOLEM__TRACING__OTLP__PORT=4318 \
-GOLEM__TRACING__OTLP__SERVICE_NAME=worker-executor-tests \
+GOLEM__OTLP__ENABLED=true \
+GOLEM__OTLP__HOST=localhost \
+GOLEM__OTLP__PORT=4318 \
+GOLEM__OTLP__SERVICE_NAME=worker-executor-tests \
 GOLEM_OTLP_FILTER=info \
 RUST_LOG=info,h2=warn,hyper=warn \
 cargo make worker-executor-tests-group1
@@ -46,10 +46,10 @@ cargo make worker-executor-tests-group1
 To run a single test instead of a full group:
 
 ```shell
-GOLEM__TRACING__OTLP__ENABLED=true \
-GOLEM__TRACING__OTLP__HOST=localhost \
-GOLEM__TRACING__OTLP__PORT=4318 \
-GOLEM__TRACING__OTLP__SERVICE_NAME=worker-executor-tests \
+GOLEM__OTLP__ENABLED=true \
+GOLEM__OTLP__HOST=localhost \
+GOLEM__OTLP__PORT=4318 \
+GOLEM__OTLP__SERVICE_NAME=worker-executor-tests \
 GOLEM_OTLP_FILTER=info \
 RUST_LOG=info,h2=warn,hyper=warn \
 cargo test -p golem-worker-executor-tests --test integration -- <test_name> --report-time --nocapture
@@ -67,7 +67,7 @@ The `.with_env_overrides()` call uses Figment to merge `GOLEM__*` env vars into 
 ### Choosing what to export
 
 `GOLEM_OTLP_FILTER` is `RUST_LOG` syntax over the trace pipeline, and it is required:
-unset means `off`, so the four `GOLEM__TRACING__OTLP__*` variables on their own export
+unset means `off`, so the four `GOLEM__OTLP__*` variables on their own export
 nothing. It is separate from `RUST_LOG` because console verbosity and what is worth
 sending to a trace store are different questions.
 
@@ -247,8 +247,8 @@ print(f'Total: {len(data[\"data\"])}, After filtering noise: {len(clean)}')
 ## Known Caveats
 
 - **An invocation spans two traces, joined by a link**: the request side ends at `wait_for_invocation_result`, and the execution is the root of its own trace linked back to `enqueue_invocation`. That is deliberate — the worker runs the invocation independently and outlives the caller, so nesting would report a child outliving its parent. To follow one to the other, search on the `idempotency_key` both sides carry. gRPC client and server spans within a single service's request path do still connect normally via `traceparent`.
-- **Nothing exported at all**: check `GOLEM_OTLP_FILTER` first — unset means `off`, so the `GOLEM__TRACING__OTLP__*` variables on their own produce nothing. The effective filter is logged at startup as `otlp_filter`. If that looks right, then verify the `GOLEM__TRACING__OTLP__*` variables, without which the `tracing_opentelemetry` layer is never added to the subscriber.
-- **Span queue size (`OTEL_BSP_MAX_QUEUE_SIZE`)**: The `BatchSpanProcessor` has a default queue size of 2048 spans. Under high-throughput tests this queue can overflow, causing spans to be silently dropped. Set `OTEL_BSP_MAX_QUEUE_SIZE=262144` alongside the other env vars to match spawned benchmark services. Example: `OTEL_BSP_MAX_QUEUE_SIZE=262144 GOLEM__TRACING__OTLP__ENABLED=true ... cargo test ...`.
+- **Nothing exported at all**: check `GOLEM_OTLP_FILTER` first — unset means `off`, so the `GOLEM__OTLP__*` variables on their own produce nothing. The effective filter is logged at startup as `otlp_filter`. If that looks right, then verify the `GOLEM__OTLP__*` variables, without which the `tracing_opentelemetry` layer is never added to the subscriber.
+- **Span queue size (`OTEL_BSP_MAX_QUEUE_SIZE`)**: The `BatchSpanProcessor` has a default queue size of 2048 spans. Under high-throughput tests this queue can overflow, causing spans to be silently dropped. Set `OTEL_BSP_MAX_QUEUE_SIZE=262144` alongside the other env vars to match spawned benchmark services. Example: `OTEL_BSP_MAX_QUEUE_SIZE=262144 GOLEM__OTLP__ENABLED=true ... cargo test ...`.
 - **Background loop noise**: Background spans close after each tick or operation; they are not test-long spans. Their volume can still obscure focused traces.
 - **Fresh Jaeger**: Always restart Jaeger with `docker compose down && docker compose up -d` before a new investigation to avoid mixing traces from different runs.
 

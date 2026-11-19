@@ -114,61 +114,61 @@ async fn env_vars(
     let mcp_port = custom_request_port + 2;
 
     let builder = EnvVarBuilder::golem_service(verbosity)
-        .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+        .with_str("GOLEM__BLOB_STORE", "data_disk")
         .with(
-            "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+            "GOLEM__DATA_DISK__BLOB_ROOT",
             std::env::temp_dir()
                 .join("ittest-local-object-store/golem")
                 .to_string_lossy()
                 .to_string(),
         )
         .with(
-            "GOLEM__REGISTRY_SERVICE__HOST",
+            "GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__HOST",
             registry_service.grpc_host(),
         )
         .with(
-            "GOLEM__REGISTRY_SERVICE__PORT",
+            "GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__PORT",
             registry_service.grpc_port().to_string(),
         )
-        .with_str("GOLEM__ENVIRONMENT", "local");
+        .with_str("GOLEM_ADVANCED__WORKER_SERVICE__ENVIRONMENT", "local");
     let builder = match std::env::var("GOLEM_TEST_GATEWAY_SESSION_STORAGE")
         .as_deref()
         .unwrap_or("redis")
     {
         "redis" => builder
-            .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Redis")
+            .with_str("GOLEM__CACHE__TYPE", "Redis")
             .with(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST",
+                "GOLEM__CACHE__CONFIG__HOST",
                 redis.private_host(),
             )
             .with(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT",
+                "GOLEM__CACHE__CONFIG__PORT",
                 redis.private_port().to_string(),
             )
             .with(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__KEY_PREFIX",
+                "GOLEM__CACHE__CONFIG__KEY_PREFIX",
                 redis.prefix().to_string(),
             ),
         "sqlite" => builder
-            .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Sqlite")
+            .with_str("GOLEM_ADVANCED__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__TYPE", "Sqlite")
             .with_str(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PENDING_LOGIN_EXPIRATION",
+                "GOLEM_ADVANCED__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__PENDING_LOGIN_EXPIRATION",
                 "1h",
             )
             .with_str(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__CLEANUP_INTERVAL",
+                "GOLEM_ADVANCED__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__CLEANUP_INTERVAL",
                 "1m",
             )
             .with(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__DATABASE",
+                "GOLEM_ADVANCED__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__DATABASE",
                 format!("/tmp/golem-gateway-session-{custom_request_port}.db"),
             )
             .with_str(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__MAX_CONNECTIONS",
+                "GOLEM_ADVANCED__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__MAX_CONNECTIONS",
                 "10",
             )
             .with_str(
-                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__FOREIGN_KEYS",
+                "GOLEM_ADVANCED__WORKER_SERVICE__GATEWAY_SESSION_STORAGE__CONFIG__FOREIGN_KEYS",
                 "false",
             ),
         value => panic!(
@@ -177,20 +177,32 @@ async fn env_vars(
     };
 
     builder
-        .with("GOLEM__SHARD_MANAGER__HOST", shard_manager.grpc_host())
         .with(
-            "GOLEM__SHARD_MANAGER__PORT",
+            "GOLEM_ADVANCED__WORKER_SERVICE__SHARD_MANAGER__HOST",
+            shard_manager.grpc_host(),
+        )
+        .with(
+            "GOLEM_ADVANCED__WORKER_SERVICE__SHARD_MANAGER__PORT",
             shard_manager.grpc_port().to_string(),
         )
         .with(
-            "GOLEM__CUSTOM_REQUEST_PORT",
+            "GOLEM_ADVANCED__WORKER_SERVICE__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
         )
-        .with("GOLEM__MCP_PORT", mcp_port.to_string())
-        .with("GOLEM__GRPC__PORT", grpc_port.to_string())
-        .with("GOLEM__PORT", http_port.to_string())
         .with(
-            "GOLEM__ENGINE__ENABLE_FS_CACHE",
+            "GOLEM_ADVANCED__WORKER_SERVICE__MCP_PORT",
+            mcp_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__WORKER_SERVICE__GRPC__PORT",
+            grpc_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__WORKER_SERVICE__PORT",
+            http_port.to_string(),
+        )
+        .with(
+            "GOLEM_ADVANCED__WORKER_SERVICE__ENGINE__ENABLE_FS_CACHE",
             enable_fs_cache.to_string(),
         )
         .with_all(rdb.info().env("golem_worker", rdb_private_connection))

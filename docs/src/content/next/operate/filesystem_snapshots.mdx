@@ -8,7 +8,7 @@ The local macOS server enables filesystem snapshots by default. Standalone execu
 
 ## Choose a storage backend
 
-Set the backend with `[filesystem_storage.mode]`:
+Set the backend with `[advanced.worker_executor.filesystem_storage.mode]`:
 
 | Backend | Use | Filesystem snapshots | Per-agent disk limits and metering |
 | --- | --- | --- | --- |
@@ -24,7 +24,7 @@ Production requires Linux 5.8 or later and a dedicated XFS filesystem for each e
 
 1. [Prepare XFS storage](/next/operate/filesystem_snapshots/xfs) on each production executor. For local development, follow the [macOS guide](/next/operate/filesystem_snapshots/macos).
 2. [Configure snapshots](/next/operate/filesystem_snapshots/configuration): retain an encryption key, configure blob storage, and enable the feature on every executor that can run the same agents.
-3. Enable a [snapshotting policy](/next/develop/snapshotting#configuring-snapshot-based-recovery) on the agent. Enabling filesystem snapshots on an executor does not enable application snapshots. A policy of `enabled` uses `[oplog.default_snapshotting]`, which defaults to `Disabled`.
+3. Enable a [snapshotting policy](/next/develop/snapshotting#configuring-snapshot-based-recovery) on the agent. Enabling filesystem snapshots on an executor does not enable application snapshots. A policy of `enabled` uses `[advanced.worker_executor.oplog.default_snapshotting]`, which defaults to `Disabled`.
 4. [Verify a snapshot](#verify-a-snapshot), then use the [monitoring guide](/next/operate/filesystem_snapshots/monitoring) to watch uploads, restores, and storage growth.
 
 <Callout type="warning">

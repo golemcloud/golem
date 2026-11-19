@@ -57,13 +57,13 @@ database. A local database where the app connects as its owner works without any
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `GOLEM__DB__CONFIG__HOST` | | PostgreSQL host. Same variable as the registry service. |
-| `GOLEM__DB__CONFIG__PORT` | `5432` | PostgreSQL port. |
-| `GOLEM__DB__CONFIG__DATABASE` | | Database name. |
-| `GOLEM__DB__CONFIG__USERNAME` | | Database user. In the hosted deployment, the role of the app (see [Database](#database)). |
-| `GOLEM__DB__CONFIG__PASSWORD` | | Database password. |
-| `GOLEM__DB__CONFIG__MAX_CONNECTIONS` | `10` | Size of the connection pool. |
-| `GOLEM__DB__TYPE` | `Postgres` | Must be `Postgres` when set. |
+| `GOLEM__POSTGRES__HOST` | | PostgreSQL host. Same variable as the registry service. |
+| `GOLEM__POSTGRES__PORT` | `5432` | PostgreSQL port. |
+| `GOLEM__POSTGRES__DATABASE` | | Database name. |
+| `GOLEM__POSTGRES__USERNAME` | | Database user. In the hosted deployment, the role of the app (see [Database](#database)). |
+| `GOLEM__POSTGRES__PASSWORD` | | Database password. |
+| `GOLEM__POSTGRES__MAX_CONNECTIONS` | `10` | Size of the connection pool. |
+| `GOLEM__STATE_STORE` | `postgres` | Must be `postgres` when set. |
 | `GOLEM_CLOUD_BILLING_DB_SCHEMA` | `billing` | Schema of the app's tables. |
 | `GOLEM_CLOUD_BILLING_DB_TLS` | `verify-full` | `disable`, `require` (TLS without certificate verification) or `verify-full`. `verify-full` also trusts the certificates in `NODE_EXTRA_CA_CERTS`, for example the Amazon RDS CA bundle. |
 | `GOLEM_CLOUD_BILLING_HTTP_PORT` | `8080` | HTTP port. |

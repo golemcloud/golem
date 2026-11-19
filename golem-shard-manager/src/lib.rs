@@ -1235,7 +1235,7 @@ fn validate_advertised_host(config: &ShardManagerConfig) -> anyhow::Result<Optio
     }
     let host = advertised_host(config).context(
         "grpc.advertised_host must be set in distributed mode: it is the address clients connect \
-         to when this replica leads. On Kubernetes, set GOLEM__GRPC__ADVERTISED_HOST from the pod \
+         to when this replica leads. On Kubernetes, set GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST from the pod \
          IP (fieldRef status.podIP).",
     )?;
     let ip = host.parse::<std::net::IpAddr>().ok();

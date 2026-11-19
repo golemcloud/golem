@@ -886,37 +886,37 @@ fn resolve_golem_issuer_keeps_a_configured_value_without_a_warning() {
 #[test]
 fn the_golem_issuer_is_read_through_the_loader_from_toml_and_the_environment() {
     use figment::Jail;
-    use figment::providers::{Format, Toml};
-    use golem_common::config::env_config_provider;
 
     Jail::expect_with(|jail| {
         jail.clear_env();
-        let from_toml = super::make_config_loader()
-            .default_figment()
-            .merge(Toml::string(
-                r#"golem_issuer = "https://id.acme.example/golem""#,
-            ))
-            .extract::<GolemConfig>()?;
+        jail.create_dir("config")?;
+        jail.create_file(
+            "config/worker-executor.toml",
+            r#"[advanced.worker_executor]
+golem_issuer = "https://id.acme.example/golem""#,
+        )?;
+        let from_toml = super::make_config_loader().load()?;
         assert_eq!(
             from_toml.golem_issuer,
             Some("https://id.acme.example/golem".parse().unwrap())
         );
 
-        jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
-        let from_env = super::make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()?;
+        jail.set_env(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__GOLEM_ISSUER",
+            "https://id.acme.example",
+        );
+        let from_env = super::make_config_loader().load()?;
         assert_eq!(
             from_env.golem_issuer,
             Some("https://id.acme.example".parse().unwrap())
         );
 
-        jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
+        jail.set_env(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__GOLEM_ISSUER",
+            "http://id.acme.example",
+        );
         let error = super::make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()
+            .load()
             .expect_err("a plain http issuer must not load")
             .to_string();
         assert!(error.to_lowercase().contains("golem_issuer"), "{error}");
@@ -928,16 +928,12 @@ fn the_golem_issuer_is_read_through_the_loader_from_toml_and_the_environment() {
 fn an_empty_or_blank_golem_issuer_counts_as_not_set() {
     use figment::Jail;
     use figment::providers::{Format, Toml};
-    use golem_common::config::env_config_provider;
 
     for value in ["", "   "] {
         Jail::expect_with(|jail| {
             jail.clear_env();
-            jail.set_env("GOLEM__GOLEM_ISSUER", value);
-            let config = super::make_config_loader()
-                .default_figment()
-                .merge(env_config_provider())
-                .extract::<GolemConfig>()?;
+            jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__GOLEM_ISSUER", value);
+            let config = super::make_config_loader().load()?;
             assert_eq!(config.golem_issuer, None, "env value {value:?}");
             Ok(())
         });

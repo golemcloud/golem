@@ -89,7 +89,7 @@ async fn insert_usage_for_period(
                 .max_connections(1)
                 .connect_with(
                     SqliteConnectOptions::new()
-                        .filename(root.join("golem_registry.db"))
+                        .filename(root.join("registry.db"))
                         .journal_mode(SqliteJournalMode::Wal)
                         .foreign_keys(true),
                 )
@@ -129,7 +129,7 @@ async fn insert_usage_for_period(
                 .await?;
             for (usage_type, value) in VALUES {
                 sqlx::query(
-                    "INSERT INTO golem_registry.account_usage_stats \
+                    "INSERT INTO golem_registry_service.account_usage_stats \
                      (account_id, usage_type, usage_key, value, updated_at) \
                      VALUES ($1, $2, $3, $4, $5)",
                 )
@@ -143,7 +143,7 @@ async fn insert_usage_for_period(
                 .with_context(|| format!("failed to seed PostgreSQL usage type {usage_type}"))?;
             }
             sqlx::query(
-                "INSERT INTO golem_registry.account_usage_metering_state \
+                "INSERT INTO golem_registry_service.account_usage_metering_state \
                  (account_id, usage_key, compute_enabled, memory_enabled, \
                   filesystem_enabled, updated_at) \
                  VALUES ($1, $2, TRUE, TRUE, TRUE, $3)",
