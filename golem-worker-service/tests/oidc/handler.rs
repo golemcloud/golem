@@ -853,7 +853,10 @@ async fn pkce_token_exchange_and_bearer_authenticate_without_cookie_fallback(
         .handle_pkce_token(&mut request, &route, &scheme)
         .await?;
     assert_eq!(result.status, http::StatusCode::OK);
-    assert_eq!(result.headers[http::header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        result.headers[http::header::CACHE_CONTROL],
+        "private, no-store"
+    );
     assert_eq!(result.headers[http::header::PRAGMA], "no-cache");
     let response = token_response(result).await;
     assert_eq!(response.token_type, "Bearer");

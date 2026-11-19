@@ -18,6 +18,7 @@ harness = false
 default = ["full"]
 
 client = ["golem-schema/native-stream"]
+javascript = ["dep:camino", "dep:wasm-rquickjs"]
 # Exposes `schema::proptest_strategies` (proptest generators for SchemaType /
 # SchemaValue / SchemaGraph) to downstream crates' test code.
 proptest = ["dep:proptest", "golem-schema/proptest"]
@@ -90,6 +91,7 @@ bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+camino = { workspace = true, optional = true }
 chrono = { workspace = true }
 combine = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
@@ -144,6 +146,7 @@ typed-path = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true }
+wasm-rquickjs = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wasmtime-wasi-http = { workspace = true, optional = true }

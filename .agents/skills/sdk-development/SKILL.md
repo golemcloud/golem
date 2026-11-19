@@ -74,7 +74,7 @@ cargo clippy -p <affected-sdk-crate> --all-targets -- -Dwarnings
 - `wasm32-wasip2`: `rustup target add wasm32-wasip2` (the Preview 3 wrapper still builds through
   this Rust target)
 - `wasm-rquickjs-cli`: `cargo install --locked wasm-rquickjs-cli@<VERSION>` (check
-  `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`)
+  `wasm-rquickjs-version` in `.github/actions/setup-main-validation/action.yml`)
 
 ### Packages
 
