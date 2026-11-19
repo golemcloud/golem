@@ -73,14 +73,13 @@ def compress(path):
         temporary.unlink(missing_ok=True)
 
 
-def wait_for(process, process_group=False, tick=None):
+def wait_for(process, process_group=False, tick=None, timeout_seconds=None, on_timeout=None):
     received = None
     deadline = None
+    expires = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+    timed_out = False
 
-    def stop(signum, _frame):
-        nonlocal received, deadline
-        received = signum
-        deadline = time.monotonic() + 15
+    def send(signum):
         try:
             if process_group:
                 os.killpg(process.pid, signum)
@@ -89,44 +88,78 @@ def wait_for(process, process_group=False, tick=None):
         except ProcessLookupError:
             pass
 
+    def stop(signum, _frame):
+        nonlocal received, deadline
+        received = signum
+        deadline = time.monotonic() + 15
+        send(signum)
+
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         while process.poll() is None:
+            if expires is not None and time.monotonic() >= expires and deadline is None:
+                timed_out = True
+                deadline = time.monotonic() + 15
+                if on_timeout:
+                    on_timeout()
+                send(signal.SIGTERM)
             if deadline is not None and time.monotonic() >= deadline:
-                try:
-                    if process_group:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
-                except ProcessLookupError:
-                    pass
+                send(signal.SIGKILL)
             if tick:
                 tick()
             time.sleep(.2)
         code = process.wait()
-        return (128 + received if received else 128 - code if code < 0 else code), received
+        return (128 + received if received else 124 if timed_out else 128 - code if code < 0 else code), received
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
 
-def run_task(directory, lane, name, command):
+def run_task(directory, lane, name, command, timeout_seconds=None):
     task = task_record(lane, name)
+    # Test budgets include dependency construction and teardown. Builds retain
+    # the workflow deadline because cold compilation can take several hours.
+    if timeout_seconds is None and lane in ("worker", "service", "cli"):
+        timeout_seconds = 60 * 60
     state_path = directory / "progress" / f'{task["id"]}.json'
     log = directory / task["log"]
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("wb") as output:
         task.update(status="running", started_at=now())
+        gate_read, gate_write = os.pipe()
         try:
-            process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT)
+            # Publish the new process group before it can start the workload.
+            # If this wrapper dies during publication, EOF releases the launcher
+            # without executing anything the observer cannot yet find.
+            process = subprocess.Popen(
+                [sys.executable, __file__, "exec", str(gate_read), "--", *command],
+                stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                pass_fds=(gate_read,))
+            task["pid"] = process.pid
+            save(state_path, task)
+            os.write(gate_write, b"1")
         except OSError as error:
             output.write(f"Could not start command: {error}\n".encode())
             task.update(status="failed", completed_at=now(), exit_code=127)
             save(state_path, task)
             return 127
-        task["pid"] = process.pid
-        save(state_path, task)
-        code, interrupted = wait_for(process)
+        finally:
+            os.close(gate_read)
+            os.close(gate_write)
+
+        def timed_out():
+            output.write(f"\n[validation] Task exceeded {timeout_seconds:g}s; terminating its process group\n".encode())
+            output.flush()
+
+        code, interrupted = wait_for(process, process_group=True,
+                                     timeout_seconds=timeout_seconds, on_timeout=timed_out)
+        if code == 124 or interrupted:
+            # A parent can exit on SIGTERM while a descendant ignores it.
+            # Do not leave that descendant holding ports for the next group.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         task.update(status="interrupted" if interrupted else "passed" if code == 0 else "failed",
                     completed_at=now(), exit_code=code)
     try:
@@ -207,10 +240,15 @@ def resource_sample():
         path = Path("/proc/pressure") / name
         if path.exists():
             pressure[name] = path.read_text().strip()
+    # Keep cumulative device counters so elapsed I/O time and queueing can be
+    # compared with task intervals, even on runners without pressure metrics.
+    diskstats = Path("/proc/diskstats")
+    diskstats = diskstats.read_text() if diskstats.exists() else None
     return {"timestamp": now(), "monotonic_seconds": time.monotonic(), "scope": "runner-host",
             "available_cpus": len(os.sched_getaffinity(0)), "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
             "cpu_ticks": dict(zip(("user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"), cpu)),
-            "memory_bytes": memory, "load_average": os.getloadavg(), "disks": disks, "pressure": pressure}
+            "memory_bytes": memory, "load_average": os.getloadavg(), "disks": disks,
+            "pressure": pressure, "diskstats": diskstats}
 
 
 def observe(directory, command):
@@ -275,8 +313,22 @@ def observe(directory, command):
         process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
                                    env=environment, start_new_session=True)
         code, interrupted = wait_for(process, process_group=True, tick=report)
+    if interrupted:
+        # The controller may exit before a wrapper that ignores SIGTERM.
+        # Stop those wrappers before inspecting their last published task PIDs.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     for task in records(directory):
         if task["status"] in ("pending", "running"):
+            if task["status"] == "running" and task["pid"] is not None:
+                # Controller escalation can kill a task wrapper before it cleans
+                # up its separate process group. The observer owns that cleanup.
+                try:
+                    os.killpg(task["pid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             task["status"] = "blocked" if task["status"] == "pending" else "interrupted"
             task["completed_at"] = now()
             save(progress_dir / f'{task["id"]}.json', task)
@@ -300,10 +352,23 @@ def observe(directory, command):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("observe", "run"))
+    parser.add_argument("operation", choices=("observe", "run", "exec"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     arguments = args.arguments
+    if args.operation == "exec" and len(arguments) > 2 and arguments[1] == "--":
+        gate = int(arguments[0])
+        try:
+            released = os.read(gate, 1) == b"1"
+        finally:
+            os.close(gate)
+        if not released:
+            return 143
+        try:
+            os.execvp(arguments[2], arguments[2:])
+        except OSError as error:
+            print(f"Could not start command: {error}", file=sys.stderr)
+            return 127
     directory = Path(os.environ["MAIN_VALIDATION_REPORT_DIR"]).resolve()
     if args.operation == "observe" and arguments:
         return observe(directory, arguments)
