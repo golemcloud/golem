@@ -282,6 +282,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "component.manifest-trace",
         arb_component_manifest_trace_result
     ),
+    registry_entry!("PackageDigest", "package.digest", arb_package_digest),
     registry_entry!(
         "DeploymentNewView",
         "deploy.deployment",
@@ -5682,6 +5683,15 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
             },
         ),
     )
+}
+
+fn arb_package_digest() -> OutputDocumentStrategy {
+    serialized_output(any::<[u8; 32]>().prop_map(|bytes| {
+        use sha2::{Digest, Sha256};
+        crate::package::PackageDigest {
+            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+        }
+    }))
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {

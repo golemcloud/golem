@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
+use crate::app::context::{ApplicationContext, BuildContext};
 use crate::command_handler::component::ifs::{
     ComponentFilesArchive, IfsFileManager, expand_component_files,
     resolve_archive_paths_for_sources,
@@ -19,7 +21,8 @@ use crate::command_handler::component::ifs::{
 use crate::context::Context;
 use crate::log::LogColorize;
 use crate::model::app::{
-    CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
+    Agents, BuildConfig, CanonicalFilePathWithPermissions, InitialComponentFile,
+    InitialComponentFileSource,
 };
 use crate::model::app_raw;
 use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
@@ -50,6 +53,39 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::sync::OnceCell;
+
+mod package;
+
+pub(super) async fn extract_local_component(
+    app: &ApplicationContext,
+    name: &ComponentName,
+    package_bytes: Option<&[u8]>,
+) -> anyhow::Result<(
+    golem_common::model::agent::extraction::ExtractedComponentMetadata,
+    Agents,
+)> {
+    let metadata = match package_bytes {
+        Some(bytes) => {
+            let metadata =
+                crate::model::agent::extraction::extract_component_metadata_from_bytes(bytes)
+                    .await?;
+            app.component_metadata()
+                .add_cached_component_metadata(name, metadata)
+                .await?
+        }
+        None => {
+            extract_and_store_component_metadata(&BuildContext::new(app, &BuildConfig::new()), name)
+                .await?
+        }
+    };
+    let agent_components = metadata
+        .agent_types
+        .iter()
+        .map(|agent| (agent.type_name.clone(), name.clone()))
+        .collect();
+    let agents = app.application().resolve_agents(&agent_components)?;
+    Ok((metadata, agents))
+}
 
 fn resolve_ifs_entry(
     file: &app_raw::InitialComponentFile,
@@ -278,18 +314,16 @@ impl<'a> ComponentStager<'a> {
     }
 
     pub async fn open_wasm(&self) -> anyhow::Result<File> {
-        File::open(&self.component_deploy_properties.wasm_path)
-            .await
-            .with_context(|| {
-                anyhow!(
-                    "Failed to open component output WASM at {}",
-                    self.component_deploy_properties
-                        .wasm_path
-                        .display()
-                        .to_string()
-                        .log_color_error_highlight()
-                )
-            })
+        Self::open_local_wasm(&self.component_deploy_properties.wasm_path).await
+    }
+
+    async fn open_local_wasm(wasm_path: &std::path::Path) -> anyhow::Result<File> {
+        File::open(wasm_path).await.with_context(|| {
+            anyhow!(
+                "Failed to open component output WASM at {}",
+                wasm_path.display().to_string().log_color_error_highlight()
+            )
+        })
     }
 
     pub async fn open_wasm_if_changed(&self) -> anyhow::Result<Option<File>> {
