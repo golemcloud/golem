@@ -1272,6 +1272,7 @@ impl WorkerService {
         &self,
         environment_id: EnvironmentId,
         agent_type_name: &AgentTypeName,
+        component_name: Option<&str>,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -1282,7 +1283,8 @@ impl WorkerService {
             .deployed_agent_type(environment_id, agent_type_name, &auth_ctx)
             .await?;
 
-        self.worker_client
+        let (cursor, agents) = self
+            .worker_client
             .find_metadata(
                 registered.type_id,
                 filter,
@@ -1290,9 +1292,28 @@ impl WorkerService {
                 count,
                 precise,
                 environment_id,
-                auth_ctx,
+                auth_ctx.clone(),
             )
-            .await
+            .await?;
+        let mut metadata = Vec::with_capacity(agents.len());
+        for agent in agents {
+            let component = self
+                .component_service
+                .get_revision(agent.component_id, agent.metadata.component_revision)
+                .await?;
+            if component_name.is_some_and(|name| name != component.component_name.0) {
+                continue;
+            }
+            authorize_agent_type(
+                &auth_ctx,
+                &component,
+                agent_type_name,
+                AgentVerb::View,
+                AgentResourcePattern::Empty,
+            )?;
+            metadata.push(agent.metadata);
+        }
+        Ok((cursor, metadata))
     }
 
     pub async fn resume(
@@ -4768,6 +4789,7 @@ mod tests {
         effects: Mutex<Vec<&'static str>>,
         invocation_output: Mutex<AgentInvocationOutput>,
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
+        listed_agents: Mutex<(Option<ScanCursor>, Vec<ExistingAgent>)>,
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
@@ -4799,6 +4821,7 @@ mod tests {
                 effects: Mutex::new(Vec::new()),
                 invocation_output: Mutex::new(invocation_output),
                 metadata_component_revision: Mutex::new(None),
+                listed_agents: Mutex::new((None, Vec::new())),
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
@@ -5044,8 +5067,8 @@ mod tests {
             _: bool,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-            unimplemented!()
+        ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
+            Ok(self.listed_agents.lock().unwrap().clone())
         }
 
         async fn resume(
@@ -5946,6 +5969,71 @@ mod tests {
             verb: Some(verb),
             resource: FilesystemResourcePattern::Path(FilesystemPathPattern::parse(path).unwrap()),
         })
+    }
+
+    #[test]
+    async fn component_selection_uses_each_agents_recorded_owner_and_preserves_the_cursor() {
+        let mut harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let current_id = AgentId::from_parts(harness.type_id.get(), 1);
+        let current = harness
+            .worker_client
+            .get_metadata(&current_id, harness.environment_id, AuthCtx::system())
+            .await
+            .unwrap();
+        let current_component = harness
+            .worker_service
+            .component_service
+            .get_revision(harness.component_id, harness.component_revision)
+            .await
+            .unwrap();
+        let mut previous_component = current_component.clone();
+        previous_component.id = ComponentId::new();
+        previous_component.component_name = ComponentName("previous-component".into());
+        let mut previous = current.clone();
+        previous.component_id = previous_component.id;
+        previous.metadata.agent_id = AgentId::from_parts(harness.type_id.get(), 2);
+        let previous_id = previous.metadata.agent_id;
+        harness.worker_service.component_service = Arc::new(StaticComponentService {
+            components: vec![current_component, previous_component],
+            tool_state: None,
+            tool_queries: Mutex::new(vec![]),
+        });
+        let cursor = Some(ScanCursor::new("next-page".into()));
+        *harness.worker_client.listed_agents.lock().unwrap() =
+            (cursor.clone(), vec![previous, current]);
+
+        for (filter, expected) in [
+            (None, vec![previous_id, current_id]),
+            (Some("weather-component"), vec![current_id]),
+            (Some("previous-component"), vec![previous_id]),
+            (Some("another-component"), vec![]),
+        ] {
+            let (next, agents) = harness
+                .worker_service
+                .find_metadata(
+                    harness.environment_id,
+                    &harness.agent_type_name,
+                    filter,
+                    None,
+                    ScanCursor::default(),
+                    10,
+                    false,
+                    AuthCtx::system(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(next, cursor);
+            assert_eq!(
+                agents
+                    .into_iter()
+                    .map(|agent| agent.agent_id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
     }
 
     #[test]

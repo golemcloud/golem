@@ -1442,6 +1442,7 @@ impl AgentCommandHandler {
                         )
                         .await?,
                     agent_types: vec![agent_type.agent_type.type_name],
+                    component_name_filter: component_name,
                 }])
             }
             None => {
@@ -1472,6 +1473,9 @@ impl AgentCommandHandler {
                                     Some(component) => {
                                         targets.push(AgentListTarget {
                                             agent_types: component_agent_types(&component),
+                                            component_name_filter: Some(
+                                                component.component_name.clone(),
+                                            ),
                                             component,
                                         });
                                     }
@@ -1538,6 +1542,10 @@ impl AgentCommandHandler {
                 .list_component_agents(
                     &target.component,
                     &target.agent_types,
+                    target
+                        .component_name_filter
+                        .as_ref()
+                        .map(|name| name.0.as_str()),
                     Some(filters),
                     mode_overlay,
                     scan_cursor,
@@ -1654,7 +1662,7 @@ impl AgentCommandHandler {
                 target
                     .agent_types
                     .iter()
-                    .map(|agent_type| (&target.component, agent_type))
+                    .map(move |agent_type| (target, agent_type))
             })
             .collect::<Vec<_>>();
         let names = types
@@ -1666,7 +1674,8 @@ impl AgentCommandHandler {
             cursor,
             count,
             async |position, scan_cursor, limit| {
-                let (component, agent_type) = types[position];
+                let (target, agent_type) = types[position];
+                let component = &target.component;
                 let mut start = AgentListCursor::default();
                 start.insert(
                     agent_type,
@@ -1676,6 +1685,10 @@ impl AgentCommandHandler {
                     .list_component_agents(
                         component,
                         std::slice::from_ref(agent_type),
+                        target
+                            .component_name_filter
+                            .as_ref()
+                            .map(|name| name.0.as_str()),
                         Some(filters),
                         mode_overlay,
                         Some(&start),
@@ -2362,6 +2375,7 @@ impl AgentCommandHandler {
             .list_component_agents(
                 component,
                 &component_agent_types(component),
+                Some(component.component_name.0.as_str()),
                 Some(&agent_filters),
                 None,
                 None,
@@ -2637,6 +2651,7 @@ impl AgentCommandHandler {
             .list_component_agents(
                 component,
                 &component_agent_types(component),
+                Some(component.component_name.0.as_str()),
                 None,
                 None,
                 None,
@@ -2715,6 +2730,7 @@ impl AgentCommandHandler {
             .list_component_agents(
                 component,
                 &component_agent_types(component),
+                Some(component.component_name.0.as_str()),
                 None,
                 None,
                 None,
@@ -2933,6 +2949,7 @@ impl AgentCommandHandler {
         &self,
         component: &ComponentDto,
         agent_types: &[AgentTypeName],
+        component_name_filter: Option<&str>,
         filters: Option<&[String]>,
         mode_overlay: Option<&AgentFilter>,
         start_cursor: Option<&AgentListCursor>,
@@ -2976,6 +2993,7 @@ impl AgentCommandHandler {
                     .find_agents_metadata(
                         &component.environment_id.0,
                         &agent_type.0,
+                        component_name_filter,
                         &WorkersMetadataRequest {
                             filter: filter.clone(),
                             cursor: current_scan_cursor.clone(),
@@ -3049,6 +3067,7 @@ impl AgentCommandHandler {
 struct AgentListTarget {
     component: ComponentDto,
     agent_types: Vec<AgentTypeName>,
+    component_name_filter: Option<ComponentName>,
 }
 
 /// The agent types that `component` implements.

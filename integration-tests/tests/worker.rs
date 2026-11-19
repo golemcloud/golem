@@ -932,6 +932,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
             .get_agents_metadata(
                 &component.environment_id.0,
                 agent_type,
+                None,
                 Some(&get_filter),
                 Some("not-a-valid-cursor"),
                 Some(1),
@@ -945,6 +946,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
             .find_agents_metadata(
                 &component.environment_id.0,
                 agent_type,
+                None,
                 &WorkersMetadataRequest {
                     filter: Some(running_filter.clone()),
                     cursor: Some(ScanCursor::new("not-a-valid-cursor".to_string())),
@@ -962,6 +964,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
                 .get_agents_metadata(
                     &component.environment_id.0,
                     agent_type,
+                    None,
                     Some(&get_filter),
                     None,
                     Some(count),
@@ -975,6 +978,7 @@ async fn invalid_worker_enumeration_requests_return_http_400(
                 .find_agents_metadata(
                     &component.environment_id.0,
                     agent_type,
+                    None,
                     &WorkersMetadataRequest {
                         filter: Some(running_filter.clone()),
                         cursor: None,

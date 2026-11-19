@@ -712,40 +712,56 @@ async fn per_type_list_and_find_return_only_the_agents_of_the_type(
     }
 
     for (agent_type, ids) in &expected {
-        let listed = client
-            .get_agents_metadata(&environment, agent_type, None, None, Some(100), None)
-            .await?;
-        let found = client
-            .find_agents_metadata(
-                &environment,
-                agent_type,
-                &WorkersMetadataRequest {
-                    filter: None,
-                    cursor: None,
-                    count: Some(100),
-                    precise: None,
-                },
-            )
-            .await?;
-        for response in [listed, found] {
-            assert!(response.cursor.is_none());
-            assert!(
-                response
-                    .workers
-                    .iter()
-                    .all(|worker| worker.agent_type_name
+        for component_name in [
+            None,
+            Some(component.component_name.0.as_str()),
+            Some("another-component"),
+        ] {
+            let listed = client
+                .get_agents_metadata(
+                    &environment,
+                    agent_type,
+                    component_name,
+                    None,
+                    None,
+                    Some(100),
+                    None,
+                )
+                .await?;
+            let found = client
+                .find_agents_metadata(
+                    &environment,
+                    agent_type,
+                    component_name,
+                    &WorkersMetadataRequest {
+                        filter: None,
+                        cursor: None,
+                        count: Some(100),
+                        precise: None,
+                    },
+                )
+                .await?;
+            for response in [listed, found] {
+                assert!(response.cursor.is_none());
+                assert!(
+                    response.workers.iter().all(|worker| worker.agent_type_name
                         == Some(AgentTypeName(agent_type.to_string()))),
-                "{agent_type}: {:?}",
-                response.workers
-            );
-            assert_eq!(
-                &response
-                    .workers
-                    .iter()
-                    .map(|worker| worker.agent_id.0)
-                    .collect::<HashSet<_>>(),
-                ids
-            );
+                    "{agent_type}: {:?}",
+                    response.workers
+                );
+                assert_eq!(
+                    &response
+                        .workers
+                        .iter()
+                        .map(|worker| worker.agent_id.0)
+                        .collect::<HashSet<_>>(),
+                    &if component_name == Some("another-component") {
+                        HashSet::new()
+                    } else {
+                        ids.clone()
+                    }
+                );
+            }
         }
     }
     Ok(())

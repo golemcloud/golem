@@ -468,6 +468,23 @@ pub struct ExistingAgent {
     pub component_id: ComponentId,
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAgent {
+    type Error = String;
+
+    fn try_from(
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+    ) -> Result<Self, Self::Error> {
+        let component_id = metadata
+            .component_id
+            .ok_or("Missing component_id in agent metadata")?
+            .try_into()?;
+        Ok(Self {
+            metadata: metadata.try_into()?,
+            component_id,
+        })
+    }
+}
+
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
     async fn prepare(
@@ -548,7 +565,7 @@ pub trait WorkerClient: Send + Sync {
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)>;
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)>;
 
     async fn resume(
         &self,
@@ -867,7 +884,7 @@ impl WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         filter: Option<AgentFilter>,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<Vec<AgentMetadataDto>> {
+    ) -> WorkerResult<Vec<ExistingAgent>> {
         let result = self.call_worker_executor(
             AllExecutors,
             "get_running_workers_metadata",
@@ -892,7 +909,7 @@ impl WorkerExecutorWorkerClient {
                                                                                                                 workers
                                                                                                             })),
                         } => {
-                            let workers: Vec<AgentMetadataDto> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
+                            let workers: Vec<ExistingAgent> = workers.into_iter().map(|w| w.try_into()).collect::<Result<Vec<_>, _>>().map_err(|_| WorkerExecutorError::unknown("Convert response error"))?;
                             Ok(workers)
                         }
                         workerexecutor::v1::GetRunningWorkersMetadataResponse {
@@ -920,7 +937,7 @@ impl WorkerExecutorWorkerClient {
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
         let result = self
             .call_worker_executor(
                 RandomExecutor,
@@ -1341,15 +1358,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         result:
                         Some(workerexecutor::v1::get_agent_metadata_response::Result::Success(metadata)),
                     } => {
-                        let component_id = metadata
-                            .component_id
-                            .ok_or("Missing component_id in agent metadata")?
+                        metadata
                             .try_into()
-                            .map_err(|err: String| ResponseMapResult::Other(WorkerServiceError::Internal(err)))?;
-                        let metadata = metadata
-                            .try_into()
-                            .map_err(|err: String| ResponseMapResult::Other(WorkerServiceError::Internal(err)))?;
-                        Ok(ExistingAgent { metadata, component_id })
+                            .map_err(|err: String| ResponseMapResult::Other(WorkerServiceError::Internal(err)))
                     }
                     workerexecutor::v1::GetAgentMetadataResponse {
                         result:
@@ -1377,7 +1388,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         precise: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
         validate_agent_enumeration_count(count)?;
 
         if let Some(running_filter) = running_metadata_fast_path_filter(&filter, &cursor) {

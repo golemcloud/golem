@@ -1874,6 +1874,14 @@ paths:
         explode: true
         style: simple
       - in: query
+        name: component_name
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
         name: filter
         description: Filter in the form `property op value`. When it is given more than once, every filter must match.
         deprecated: false
@@ -2311,6 +2319,14 @@ paths:
           type: string
         explode: true
         style: simple
+      - in: query
+        name: component_name
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
       requestBody:
         content:
           application/json; charset=utf-8:

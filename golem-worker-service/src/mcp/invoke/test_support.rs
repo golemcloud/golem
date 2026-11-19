@@ -550,7 +550,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: bool,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
+    ) -> WorkerResult<(Option<ScanCursor>, Vec<ExistingAgent>)> {
         unimplemented!()
     }
 

@@ -1970,6 +1970,14 @@ paths:
         required: true
         deprecated: false
         explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: query
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        required: false
+        deprecated: false
+        explode: true
       - name: filter
         schema:
           type: array
@@ -2294,6 +2302,14 @@ paths:
           type: string
         in: path
         required: true
+        deprecated: false
+        explode: true
+      - name: component_name
+        schema:
+          type: string
+        in: query
+        description: Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        required: false
         deprecated: false
         explode: true
       requestBody:

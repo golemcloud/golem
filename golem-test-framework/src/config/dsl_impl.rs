@@ -959,6 +959,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .find_agents_metadata(
                 &environment_id.0,
                 &agent_type.0,
+                None,
                 &WorkersMetadataRequest {
                     filter,
                     cursor: Some(cursor),

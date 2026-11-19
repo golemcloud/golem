@@ -240,6 +240,8 @@ impl AgentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         agent_type_name: Path<AgentTypeName>,
+        /// Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        component_name: Query<Option<String>>,
         /// Filter in the form `property op value`. When it is given more than once, every filter must match.
         filter: Query<Option<Vec<String>>>,
         /// Position where to start listing. To get the next page, pass the cursor of the previous response.
@@ -272,6 +274,7 @@ impl AgentsApi {
             self.find_agents(
                 environment_id.0,
                 &agent_type_name.0,
+                component_name.0.as_deref(),
                 filter,
                 cursor.0.map(ScanCursor::from),
                 count.0,
@@ -313,6 +316,8 @@ impl AgentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         agent_type_name: Path<AgentTypeName>,
+        /// Restrict results to agents whose recorded component has this name, not the type's current implementer.
+        component_name: Query<Option<String>>,
         params: Json<WorkersMetadataRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkersMetadataResponse>> {
@@ -339,6 +344,7 @@ impl AgentsApi {
             self.find_agents(
                 environment_id.0,
                 &agent_type_name.0,
+                component_name.0.as_deref(),
                 filter,
                 params.cursor,
                 params.count,
@@ -510,6 +516,7 @@ impl AgentsApi {
         &self,
         environment_id: EnvironmentId,
         agent_type_name: &AgentTypeName,
+        component_name: Option<&str>,
         filter: Option<AgentFilter>,
         cursor: Option<ScanCursor>,
         count: Option<u64>,
@@ -521,6 +528,7 @@ impl AgentsApi {
             .find_metadata(
                 environment_id,
                 agent_type_name,
+                component_name,
                 filter,
                 cursor.unwrap_or_default(),
                 count.unwrap_or(50),
