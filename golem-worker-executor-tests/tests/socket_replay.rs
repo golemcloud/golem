@@ -1067,6 +1067,59 @@ async fn p2_tcp_sent_bytes_reach_the_peer_once_across_a_restart(
     session.finish().await
 }
 
+/// A P2 `blocking-splice` into a TCP output sends its bytes before it returns, as Wasmtime's
+/// does. The agent splices a file of 1 MiB into a connection with a small send buffer and drops
+/// the socket right after the last splice. The peer has a receive buffer of 4 KiB and reads 4 KiB
+/// every 10 ms, so the last write is still in progress at the drop unless the splice waited for it.
+/// The peer gets every byte.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_blocking_splice_sends_all_bytes_before_it_returns(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    const LEN: usize = 1024 * 1024;
+    let context = TestContext::new(last_unique_id);
+    let listener = tokio::net::TcpSocket::new_v4()?;
+    listener.set_recv_buffer_size(4096)?;
+    listener.bind("127.0.0.1:0".parse()?)?;
+    let listener = listener.listen(1)?;
+    let port = listener.local_addr()?.port();
+    let peer = AbortOnDropHandle::new(tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut received = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            match stream.read(&mut buffer).await? {
+                0 => break,
+                n => received.extend_from_slice(&buffer[..n]),
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        anyhow::Ok(received)
+    }));
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-tcp-splice-flush",
+    )
+    .await?;
+
+    let spliced: Result<u64, String> = session
+        .call("p2_tcp_blocking_splice_file", data_value!(port, LEN as u32))
+        .await?;
+    assert_eq!(spliced, Ok(LEN as u64));
+    let received = tokio::time::timeout(WAIT, peer).await???;
+    let expected: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
+    assert_eq!(received.len(), LEN, "the peer got every spliced byte");
+    assert!(received == expected, "the peer got the bytes in order");
+    session.finish().await
+}
+
 /// A completed P2 read replays from the oplog with the peer gone: the agent gets back the bytes
 /// it read, and replay starts no read and no connection.
 #[test]

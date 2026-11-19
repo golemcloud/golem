@@ -977,13 +977,18 @@ durable call with no request payload:
 | `write`, `write-zeroes`, `blocking-write-and-flush`, `blocking-write-zeroes-and-flush` | `sockets::tcp::output_stream::*` | `WriteRemote` | the count, never the bytes |
 | `flush`, `blocking-flush` | `sockets::tcp::output_stream::{flush, blocking_flush}` | `WriteRemote` | the result |
 
-An error is recorded as `SerializableTcpStreamError` with its errno (or the socket error code of an
-I/O error without one), so the guest gets the same error, with the same message and
-`network-error-code`, live and on replay; live calls also return the recorded form. A trap is not
+An error is recorded as `SerializableTcpStreamError`. For an `std::io::Error` it keeps the errno
+(or the socket error code of an I/O error without one), and always the message, so the guest gets
+the same error, with the same message and `network-error-code`, live and on replay; live calls also
+return the recorded form. The native P2 TCP streams of the Wasmtime fork wrap a socket `ErrorCode`,
+not an `std::io::Error`, so a real reset records only its message and `network-error-code` is
+`None`, as on main; only the lost-connection stand-in gives `connection-reset`. A trap is not
 recorded. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
 the destination (`check_write`, or `write_ready` for `blocking-splice`), the read of at most that
-many bytes, and the write of what was read. A non-TCP side goes through the durable host as a direct
-call on that stream would, so a TCP-to-file splice replays its file write from the recorded bytes.
+many bytes, and the write of what was read. `blocking-splice` writes with `blocking_write_and_flush`
+like Wasmtime, so its bytes are sent when it returns; `splice` writes with `write`. A non-TCP side
+goes through the durable host as a direct call on that stream would, so a TCP-to-file splice replays
+its file write from the recorded bytes.
 `blocking-write-and-flush` waits for write permits (the native stream's own implementation) and
 traps above 4096 bytes before its `Start`, like Wasmtime.
 

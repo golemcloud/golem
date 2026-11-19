@@ -311,6 +311,16 @@ pub(super) async fn blocking_write_and_flush<Ctx: WorkerCtx>(
             "Buffer too large for blocking-write-and-flush (expected at most 4096)",
         ));
     }
+    write_and_flush(ctx, rep, contents).await
+}
+
+/// Writes all of `contents` within the write permits of the stream, flushes it and waits until
+/// the flush is done, as one `blocking_write_and_flush` call of any size.
+async fn write_and_flush<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    rep: u32,
+    contents: Vec<u8>,
+) -> Result<(), StreamError> {
     let len = contents.len() as u64;
     durable::<SocketsTcpOutputStreamBlockingWriteAndFlush, _>(
         ctx,
@@ -409,8 +419,9 @@ pub(super) async fn blocking_flush<Ctx: WorkerCtx>(
 
 /// A splice with a TCP stream on at least one side, made of the calls of its parts: the write
 /// permit of the destination, the read of at most that many bytes from the source, and the write
-/// of the bytes read. The TCP parts are durable calls; the other side runs through the durable
-/// host as a direct call on that stream would.
+/// of the bytes read. A blocking splice writes with `blocking-write-and-flush`, as Wasmtime's
+/// does, so the bytes are sent when it returns. The TCP parts are durable calls; the other side
+/// runs through the durable host as a direct call on that stream would.
 pub(super) async fn splice<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     dest: u32,
@@ -451,10 +462,13 @@ pub(super) async fn splice<Ctx: WorkerCtx>(
         return Ok(0);
     }
     let written = contents.len() as u64;
-    if tcp_dest {
-        write(ctx, dest, contents).await?;
-    } else {
-        HostOutputStream::write(ctx, output(dest), contents).await?;
+    match (tcp_dest, blocking) {
+        (true, true) => write_and_flush(ctx, dest, contents).await?,
+        (true, false) => write(ctx, dest, contents).await?,
+        (false, true) => {
+            HostOutputStream::blocking_write_and_flush(ctx, output(dest), contents).await?
+        }
+        (false, false) => HostOutputStream::write(ctx, output(dest), contents).await?,
     }
     Ok(written)
 }
