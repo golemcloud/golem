@@ -3765,3 +3765,176 @@ async fn pending_update_public_form_shows_the_requester() {
         assert_eq!(seen, vec!["pending update", "queued manual update"]);
     }
 }
+
+/// The byte strings in the JSON form of a public entry: lists of `u8` values and binary payloads.
+fn byte_strings(value: &serde_json::Value, out: &mut Vec<Vec<u8>>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            let as_u8 = |item: &serde_json::Value| {
+                let number = match item {
+                    serde_json::Value::Object(map) if map.get("kind") == Some(&"u8".into()) => {
+                        map.get("value")
+                    }
+                    other => Some(other),
+                };
+                number
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| u8::try_from(n).ok())
+            };
+            match items.iter().map(as_u8).collect::<Option<Vec<u8>>>() {
+                Some(bytes) if !bytes.is_empty() => out.push(bytes),
+                _ => items.iter().for_each(|item| byte_strings(item, out)),
+            }
+        }
+        serde_json::Value::Object(map) => map.values().for_each(|item| byte_strings(item, out)),
+        _ => {}
+    }
+}
+
+/// An oplog processor passes the raw entries of its batch to `enrich-oplog-entries`, and the
+/// executor records that request in the processor's own oplog. The raw entries hold the claims of
+/// the users who called the processed agent, so the public form of the `Start` entry, in REST and
+/// in the WIT `get-oplog`, keeps only their indexes.
+#[test]
+async fn the_public_enrich_request_holds_no_raw_entries() {
+    const MARKER: &str = "claimsmarker5e2b";
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("processor-agent").await;
+
+    // The raw `agent-invocation-started` of the processed agent, as the processor's batch holds it.
+    let bob = golem_common::model::caller::Caller::entry(
+        golem_common::model::caller::Principal::User(golem_common::model::caller::UserPrincipal {
+            pair: golem_common::model::caller::Pair::new("http://test-idp.com", "bob"),
+            claims: golem_common::model::caller::Claims::from_json(format!(
+                r#"{{"sub":"bob","email":"{MARKER}@mail.example"}}"#
+            ))
+            .unwrap(),
+            authenticated_at: Timestamp::from(1_000),
+        }),
+    );
+    let raw_started = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::from(1_000),
+        invocation_id: Uuid::from_u128(0x100).into(),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            method_name: "run".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() },
+            caller: bob,
+            scope_card: None,
+        })),
+        trace_id: golem_common::model::invocation_context::TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+            wallet_token: golem_common::model::card::WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    // The batch entry the guest gets, and the entry the host decodes from the guest's call, as
+    // `prepare_oplog_enrichment_entries` does.
+    let wit_entry =
+        crate::preview2::golem_api_1_x::oplog::OplogEntry::try_from(raw_started).unwrap();
+    let enrichment = golem_common::model::oplog::OplogEnrichmentEntry::try_from(wit_entry).unwrap();
+    let request_entry = golem_common::serialization::serialize(&enrichment).unwrap();
+
+    // The recorded request of the processor's `enrich-oplog-entries` call.
+    let request: golem_common::model::oplog::HostRequest =
+        golem_common::model::oplog::HostRequestGolemApiOplogEnrich {
+            environment_id: owned_agent_id.environment_id(),
+            agent_id: owned_agent_id.agent_id.clone(),
+            entries: vec![(5, request_entry)],
+            component_revision: 0,
+        }
+        .into();
+    let request_payload = oplog_service
+        .upload_payload(&owned_agent_id, AgentMode::Durable, &request)
+        .await
+        .unwrap();
+    let start_index = oplog
+        .add(OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::GolemApiEnrichOplogEntries,
+            invocation_id: None,
+            observational_owner: None,
+            request: Some(request_payload),
+            durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
+            denial: None,
+        })
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let raw = oplog_service
+        .read_exact(
+            &owned_agent_id,
+            AgentMode::Durable,
+            start_index,
+            Into::<u64>::into(start_index),
+        )
+        .await
+        .unwrap();
+    let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
+    for (index, raw_entry) in raw {
+        // The public form that a REST reader without `include=claims` gets.
+        let mut public_entry = PublicOplogEntry::from_oplog_entry(
+            index,
+            raw_entry,
+            oplog_service.clone(),
+            components.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::OplogProcessor,
+            None,
+            ComponentRevision::INITIAL,
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+
+        // The guest form that `get-oplog` gives to a guest that reads the processor's oplog.
+        let wit_entry =
+            crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::try_from(public_entry.clone())
+                .unwrap();
+        let crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::Start(wit_start) = wit_entry
+        else {
+            panic!("expected a Start entry");
+        };
+        let wit_request =
+            golem_schema::schema::wit::decode_typed(wit_start.request.as_ref().unwrap()).unwrap();
+        let mut wit_bytes = Vec::new();
+        byte_strings(
+            &serde_json::to_value(wit_request.value()).unwrap(),
+            &mut wit_bytes,
+        );
+        let wit_leaked = wit_bytes
+            .iter()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .filter(|text| text.contains(MARKER))
+            .count();
+
+        public_entry.redact_host_managed_values_for_external();
+        let json = serde_json::to_value(&public_entry).unwrap();
+        let mut bytes = Vec::new();
+        byte_strings(&json, &mut bytes);
+        let leaked = bytes
+            .iter()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .filter(|text| text.contains(MARKER))
+            .collect::<Vec<_>>();
+        assert!(
+            leaked.is_empty(),
+            "the REST form of entry {index} holds the claims"
+        );
+        assert_eq!(
+            wit_leaked, 0,
+            "the WIT form of entry {index} holds the claims"
+        );
+        let request = &json["request"].to_string();
+        assert!(request.contains('5'), "the entry index is kept: {request}");
+    }
+}

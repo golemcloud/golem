@@ -45,7 +45,7 @@ use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -107,7 +107,7 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         page_entries: Vec<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
-        include_claims: bool,
+        claims: ClaimVisibility,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let mut result = Vec::with_capacity(page_entries.len());
         for page_entry in page_entries {
@@ -121,7 +121,7 @@ impl TestWorkerExecutor {
                         environment_id,
                         omitted.oplog_index,
                         Some(omitted.component_revision),
-                        include_claims,
+                        claims,
                     )
                     .await?,
                 ),
@@ -143,7 +143,7 @@ impl TestWorkerExecutor {
             environment_id,
             oplog_index,
             component_revision,
-            false,
+            ClaimVisibility::Hidden,
         )
         .await
     }
@@ -154,7 +154,7 @@ impl TestWorkerExecutor {
         environment_id: EnvironmentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
-        include_claims: bool,
+        claims: ClaimVisibility,
     ) -> anyhow::Result<PublicOplogEntryWithIndex> {
         let mut stream = self
             .client
@@ -165,7 +165,7 @@ impl TestWorkerExecutor {
                 auth_ctx: Some(self.auth_ctx().into()),
                 oplog_index: oplog_index.into(),
                 component_revision: component_revision.map(Into::into),
-                include_claims,
+                claims: claims.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -799,7 +799,8 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &AgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        self.read_full_oplog(agent_id, from, false).await
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Hidden)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -808,7 +809,8 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &AgentId,
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-        self.read_full_oplog(agent_id, from, true).await
+        self.read_full_oplog(agent_id, from, ClaimVisibility::Shown)
+            .await
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
@@ -827,7 +829,7 @@ impl TestDsl for TestWorkerExecutor {
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
-                include_claims: false,
+                claims: ClaimVisibility::Hidden.to_protobuf(),
             })
             .await?
             .into_inner();
@@ -864,7 +866,7 @@ impl TestDsl for TestWorkerExecutor {
                     count: 100,
                     query: query.to_string(),
                     auth_ctx: Some(self.auth_ctx().into()),
-                    include_claims: false,
+                    claims: ClaimVisibility::Hidden.to_protobuf(),
                 })
                 .await?
                 .into_inner();
@@ -877,7 +879,7 @@ impl TestDsl for TestWorkerExecutor {
                                 agent_id,
                                 latest_version.environment_id,
                                 chunk.entries,
-                                false,
+                                ClaimVisibility::Hidden,
                             )
                             .await?,
                         );
@@ -1517,7 +1519,7 @@ impl TestWorkerExecutor {
         &self,
         agent_id: &AgentId,
         from: OplogIndex,
-        include_claims: bool,
+        claims: ClaimVisibility,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
@@ -1537,7 +1539,7 @@ impl TestWorkerExecutor {
                     cursor,
                     count: 100,
                     auth_ctx: Some(self.auth_ctx().into()),
-                    include_claims,
+                    claims: claims.to_protobuf(),
                 })
                 .await?
                 .into_inner();
@@ -1550,7 +1552,7 @@ impl TestWorkerExecutor {
                                 agent_id,
                                 latest_version.environment_id,
                                 chunk.entries,
-                                include_claims,
+                                claims,
                             )
                             .await?,
                         );

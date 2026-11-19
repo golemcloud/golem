@@ -22,6 +22,7 @@
 use super::{AccountAuthentication, Caller, Kind, Pair, Principal, TokenProvenance};
 use crate::base_model::account::AccountId;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::oplog::OplogInclude;
 use crate::base_model::{AgentId, Timestamp};
 use golem_schema::Empty;
 use serde::{Deserialize, Serialize};
@@ -40,11 +41,10 @@ pub enum ClaimVisibility {
 
 impl ClaimVisibility {
     /// `Shown` exactly when the reader asked for the claims.
-    pub fn from_include_claims(include_claims: bool) -> Self {
-        if include_claims {
-            Self::Shown
-        } else {
-            Self::Hidden
+    pub fn from_include(include: Option<OplogInclude>) -> Self {
+        match include {
+            Some(OplogInclude::Claims) => Self::Shown,
+            None => Self::Hidden,
         }
     }
 
@@ -54,7 +54,8 @@ impl ClaimVisibility {
 }
 
 /// The public form of a caller. Both roles are always present, also when they are the same
-/// principal. It holds no credential, and claims only with [`ClaimVisibility::Shown`].
+/// principal. It holds no credential, and it holds claims only when the reader asks for them
+/// (`include=claims`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
@@ -183,7 +184,8 @@ fn public_claims(json: &str) -> serde_json::Value {
 pub struct PublicUserPrincipal {
     pub pair: Pair,
     pub authenticated_at: Timestamp,
-    /// The verified claims, only with [`ClaimVisibility::Shown`]. The key is absent otherwise.
+    /// The verified claims, only when the reader asks for them (`include=claims`). The key is
+    /// absent otherwise.
     #[cfg_attr(feature = "full", oai(skip_serializing_if_is_none))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claims: Option<serde_json::Value>,

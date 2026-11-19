@@ -6156,7 +6156,7 @@ components:
         normalizes a trailing slash or Unicode text: OpenID Connect compares both as exact strings,
         so a normalization would merge two users or split one.
 
-        The text form, from [`Display`] and [`FromStr`], is `("<issuer>","<subject>")` with no spaces.
+        The text form is `("<issuer>","<subject>")` with no spaces.
         Each string is escaped as RFC 8785 serializes JSON strings, and the parser refuses every other
         spelling, so two texts are equal exactly when their pairs are equal.
       required:
@@ -6705,7 +6705,8 @@ components:
       title: PublicCaller
       description: |-
         The public form of a caller. Both roles are always present, also when they are the same
-        principal. It holds no credential, and claims only with [`ClaimVisibility::Shown`].
+        principal. It holds no credential, and it holds claims only when the reader asks for them
+        (`include=claims`).
       required:
       - original
       - immediate
@@ -8546,7 +8547,9 @@ components:
           type: string
           format: date-time
         claims:
-          description: The verified claims, only with [`ClaimVisibility::Shown`]. The key is absent otherwise.
+          description: |-
+            The verified claims, only when the reader asks for them (`include=claims`). The key is
+            absent otherwise.
     Quantifier:
       type: string
       enum:

@@ -92,7 +92,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             start_component_revision,
             start,
             limits,
-            ClaimVisibility::from_include_claims(request.include_claims),
+            ClaimVisibility::from_protobuf(request.claims)
+                .map_err(WorkerExecutorError::invalid_request)?,
         )
         .await
         .map_err(WorkerExecutorError::unknown)?;
@@ -162,7 +163,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_type_name.as_ref(),
             OplogIndex::from_u64(request.oplog_index),
             component_revision,
-            ClaimVisibility::from_include_claims(request.include_claims),
+            ClaimVisibility::from_protobuf(request.claims)
+                .map_err(WorkerExecutorError::invalid_request)?,
         )
         .await?;
         let entry: golem::worker::OplogEntryWithIndex =
@@ -216,7 +218,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             limits,
             &request.query,
             self.services.config().limits.scan_budget,
-            ClaimVisibility::from_include_claims(request.include_claims),
+            ClaimVisibility::from_protobuf(request.claims)
+                .map_err(WorkerExecutorError::invalid_request)?,
         )
         .await
         .map_err(WorkerExecutorError::unknown)?;
