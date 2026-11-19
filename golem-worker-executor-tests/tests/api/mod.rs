@@ -9375,16 +9375,18 @@ async fn owner_load_restores_lost_invocation_wake(
             id: &ScheduleId,
             owner: uuid::Uuid,
             until: chrono::DateTime<Utc>,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
-            self.inner.extend_lease(id, owner, until).await
+            self.inner.extend_lease(id, owner, until, now).await
         }
 
         async fn ack(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
-            self.inner.ack(id, owner).await
+            self.inner.ack(id, owner, now).await
         }
     }
 
@@ -12427,19 +12429,21 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             id: &ScheduleId,
             owner: uuid::Uuid,
             until: chrono::DateTime<Utc>,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
-            self.inner.extend_lease(id, owner, until).await
+            self.inner.extend_lease(id, owner, until, now).await
         }
 
         async fn ack(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
+            now: chrono::DateTime<Utc>,
         ) -> Result<bool, SchedulerStorageError> {
             if self.wakes.lock().unwrap().contains(id) {
                 self.wake_acked.store(true, Ordering::Release);
             }
-            self.inner.ack(id, owner).await
+            self.inner.ack(id, owner, now).await
         }
     }
 

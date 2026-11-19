@@ -279,7 +279,12 @@ impl SchedulerServiceDefault {
                 for _ in 0..self.max_batches_per_tick {
                     let claimed = self
                         .scheduler_storage
-                        .claim_due(now, &assignment, self.claim_batch_size, self.lease_ttl)
+                        .claim_due(
+                            Utc::now(),
+                            &assignment,
+                            self.claim_batch_size,
+                            self.lease_ttl,
+                        )
                         .instrument(debug_span!("scheduler_storage_claim_due"))
                         .await?;
 
@@ -385,7 +390,7 @@ impl SchedulerServiceDefault {
 
         let acked = self
             .scheduler_storage
-            .ack(&schedule_id, lease_owner)
+            .ack(&schedule_id, lease_owner, Utc::now())
             .await
             .map_err(|error| {
                 warn!(
@@ -424,12 +429,14 @@ impl SchedulerServiceDefault {
                     return Ok(result);
                 }
                 _ = tokio::time::sleep(renewal_interval) => {
-                    let lease_until = Utc::now().add(self.lease_ttl);
+                    let now = Utc::now();
+                    let lease_until = now.add(self.lease_ttl);
                     let renewed = self.scheduler_storage
                         .extend_lease(
                             &schedule_id,
                             lease_owner,
                             lease_until,
+                            now,
                         )
                         .await?;
 

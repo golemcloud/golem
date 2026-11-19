@@ -122,6 +122,8 @@ the member, and the next scan requests the delete again. A delete request that a
 queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
 scan asks again.
 
+Scheduler storage (memory, SQLite and Postgres) acknowledges or renews a lease only when its owner token matches and its deadline is later than the caller-supplied `now`, compared at millisecond precision. Equality is expired. SQL mutations and the memory mutex enforce the owner and expiry checks atomically. A valid renewal cannot shorten the lease or revive an expired one. These are trusted as-of timestamps, not database execution-time checks: a pool wait or process pause after sampling time does not advance the check. The scheduler samples fresh time for each batch, acknowledgement and renewal; batch eligibility advances, but archive follow-ups retain the original tick time. Expiry refusal leaves the action for redelivery and does not undo effects already performed, so scheduling remains at-least-once. Only archival work currently runs under continuous lease renewal.
+
 Scheduled `WakeInvocation`, `Resume` and `CompletePromise` actions carry the target's fingerprint and
 use `WorkerActivator::enqueue_exact_existing`. It checks identity before cold hydration and
 again on the returned worker, covering cached and shared acquisition. Missing or mismatched

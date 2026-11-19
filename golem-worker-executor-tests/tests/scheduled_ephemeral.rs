@@ -141,12 +141,18 @@ impl SchedulerStorage for DuplicateWakes {
         id: &ScheduleId,
         owner: uuid::Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        let acknowledged = self.inner.ack(id, owner).await?;
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        let acknowledged = self.inner.ack(id, owner, now).await?;
         if acknowledged && self.duplicates.lock().unwrap().contains(id) {
             self.acknowledged.lock().unwrap().push(*id);
         }
@@ -210,12 +216,18 @@ impl SchedulerStorage for PausedScheduler {
         id: &ScheduleId,
         owner: uuid::Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        let acknowledged = self.inner.ack(id, owner).await?;
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        let acknowledged = self.inner.ack(id, owner, now).await?;
         if acknowledged && self.invocation_wake.lock().unwrap().as_ref() == Some(id) {
             self.acknowledged.notify_one();
         }
