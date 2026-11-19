@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::request_write::HttpRequestWriteInterceptor;
 use super::response_body::{HttpFutureDelivery, HttpFutureDeliveryGuard};
 use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
@@ -54,7 +55,7 @@ use std::task::{Context, Poll, Waker};
 use tokio::sync::oneshot;
 use wasmtime::component::{
     Access, Accessor, FutureAny, FutureConsumer, FutureProducer, FutureReader, Resource, Source,
-    StreamReader,
+    StreamAny, StreamReader,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::WasiHttp;
@@ -1219,7 +1220,29 @@ pub(crate) struct PendingHttpRequestBodyTransmission {
     resolution_tx: oneshot::Sender<HttpTransmissionResolution>,
     demand_rx: oneshot::Receiver<()>,
     delivery: Arc<HttpFutureDelivery>,
+    contents_write: Option<(StreamAny, HttpRequestWriteInterceptor<u8>)>,
+    trailers_write: Option<(
+        FutureAny,
+        HttpRequestWriteInterceptor<Result<Option<Resource<Trailers>>, ErrorCode>>,
+    )>,
     pub(super) recovery: RequestBodyRecovery,
+}
+
+impl PendingHttpRequestBodyTransmission {
+    pub(super) fn install_write_interceptors<U: 'static>(
+        &mut self,
+        mut store: impl AsContextMut<Data = U>,
+    ) -> wasmtime::Result<()> {
+        if let Some((reader, interceptor)) = self.contents_write.take() {
+            StreamReader::try_from_stream_any(reader)?
+                .intercept_guest_writes(store.as_context_mut(), interceptor)?;
+        }
+        if let Some((reader, interceptor)) = self.trailers_write.take() {
+            FutureReader::try_from_future_any(reader)?
+                .intercept_guest_writes(store.as_context_mut(), interceptor)?;
+        }
+        Ok(())
+    }
 }
 
 /// Resident wiring and weak identity witnesses for transmission futures returned to the guest.
@@ -1279,6 +1302,8 @@ pub(super) fn interpose_transmission<Ctx: WorkerCtx, U: Send + 'static>(
             resolution_tx,
             demand_rx,
             delivery,
+            contents_write: None,
+            trailers_write: None,
             recovery: RequestBodyRecovery::default(),
         },
     ))
@@ -1790,7 +1815,9 @@ pub(super) fn finish_transmission<Ctx: WorkerCtx, U: Send + 'static>(
     pending: Option<PendingHttpRequestBodyTransmission>,
     host_input: bool,
 ) -> wasmtime::Result<()> {
-    if let Some(pending) = pending {
+    if let Some(mut pending) = pending {
+        drop(pending.contents_write.take());
+        drop(pending.trailers_write.take());
         let activity = {
             let mut store_ctx = store.as_context_mut();
             durable_worker_ctx::<Ctx, U>(store_ctx.data_mut())
@@ -1837,8 +1864,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
     fn new(
         mut store: Access<U, Self>,
         headers: Resource<Headers>,
-        contents: Option<StreamReader<u8>>,
-        trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
+        mut contents: Option<StreamReader<u8>>,
+        mut trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
         options: Option<Resource<RequestOptions>>,
     ) -> wasmtime::Result<(Resource<Request>, FutureReader<Result<(), ErrorCode>>)> {
         observe_function_call_store::<Ctx, U>(
@@ -1846,6 +1873,60 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
             "http::types::request",
             "new",
         );
+        let task_context = store
+            .as_context_mut()
+            .guest_task_context::<GuestTaskContext>()?;
+        let invocation_id = {
+            let mut access = store.as_context_mut();
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            let owner = resolve_current_observational_owner(ctx, task_context.as_deref())?;
+            if owner.is_none() && ctx.runtime == crate::durable_host::OwnerRuntime::Agent {
+                Some(import_invocation_id(ctx, owner)?)
+            } else {
+                None
+            }
+        };
+        // Recovering a host-produced HTTP body can also close its trailers reader.
+        // Only guest-produced bodies keep both aliases alive until send.
+        let guest_body = match &contents {
+            Some(contents) => contents.is_guest_produced(store.as_context_mut())?,
+            None => true,
+        };
+        let contents_write = if let Some(invocation_id) = invocation_id
+            && guest_body
+            && contents.is_some()
+        {
+            let interceptor = super::request_write::write_interceptor::<
+                Ctx,
+                U,
+                golem_common::model::oplog::host_functions::P3HttpRequestContentsWrite,
+                u8,
+            >(&mut store, invocation_id)?;
+            let reader = contents
+                .take()
+                .unwrap()
+                .try_into_stream_any(store.as_context_mut())?;
+            contents = Some(StreamReader::try_from_stream_any(reader.clone())?);
+            Some((reader, interceptor))
+        } else {
+            None
+        };
+        let trailers_write = if let Some(invocation_id) = invocation_id
+            && guest_body
+            && trailers.is_guest_produced(store.as_context_mut())?
+        {
+            let interceptor = super::request_write::write_interceptor::<
+                Ctx,
+                U,
+                golem_common::model::oplog::host_functions::P3HttpRequestTrailersWrite,
+                _,
+            >(&mut store, invocation_id)?;
+            let reader = trailers.try_into_future_any(store.as_context_mut())?;
+            trailers = FutureReader::try_from_future_any(reader.clone())?;
+            Some((reader, interceptor))
+        } else {
+            None
+        };
         let (req, inner_transmission) = {
             let http_store =
                 Access::<U, WasiHttp>::new(store.as_context_mut(), wasi_http_view::<Ctx, U>);
@@ -1860,8 +1941,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostRequestWithStore<U> for Durab
         // future resolves: `client::send` records/replays the (otherwise
         // non-deterministic) result durably, as does consuming a host-created
         // input. Guest-written consume input and drop use deterministic passthrough.
-        let (transmission, pending) =
+        let (transmission, mut pending) =
             interpose_transmission::<Ctx, U>(&mut store, inner_transmission)?;
+        pending.contents_write = contents_write;
+        pending.trailers_write = trailers_write;
 
         // Register the wiring only after every fallible construction succeeded
         // (a failure above traps and tears the store down, so no partial state

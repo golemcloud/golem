@@ -114,6 +114,193 @@ async fn http_client(
 }
 
 #[test]
+#[test_r::timeout("2m")]
+async fn outgoing_http_unsent_body_returns_to_the_guest_without_write_records(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("HttpClient4");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    for (write_first, cancel) in [(false, false), (true, false), (true, true)] {
+        let result = timeout(
+            Duration::from_secs(20),
+            executor.invoke_and_await_agent(
+                &component,
+                &agent,
+                "consume_unsent_request_body",
+                data_value!(write_first, cancel),
+            ),
+        )
+        .await??
+        .into_typed::<String>()?;
+        assert_eq!(result, "unsent");
+    }
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::Start(start)
+            if matches!(start.function_name.as_str(),
+                "http::types::request::contents-write" | "http::types::request::trailers-write"))));
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let result = timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent(&component, &agent, "stored_send_error", data_value!()),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "none");
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("2m")]
+async fn outgoing_http_retained_request_write_settles_and_replays_across_invocations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::HostRequestP3HttpRequestBodyWrite;
+    use golem_common::model::oplog::payload::types::SerializableP3HttpWriteOutcome;
+    use golem_common::schema::FromSchema;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let uploads = Arc::new(Mutex::new(Vec::new()));
+    let captured = uploads.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = spawn(async move {
+        let router = Router::new().route(
+            "/deferred",
+            post(move |body: Bytes| {
+                captured.lock().unwrap().push(body.to_vec());
+                async { "accepted" }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("HttpClient4");
+    let worker = executor
+        .start_agent_with(
+            &component.id,
+            agent.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let result = timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent(&component, &agent, "retain_unsent_request", data_value!()),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "unsent");
+    let idle = executor
+        .invoke_and_await_agent(&component, &agent, "stored_send_error", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(idle, "none");
+    let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let settled_before_acceptance = before
+        .iter()
+        .filter_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                .then_some(entry.oplog_index)
+        })
+        .max()
+        .expect("the invocations must settle while the native consumer is absent");
+    assert!(!before.iter().any(|entry| matches!(&entry.entry,
+        PublicOplogEntry::Start(start)
+            if start.function_name == "http::types::request::contents-write")));
+    assert!(uploads.lock().unwrap().is_empty());
+    let status = executor
+        .invoke_and_await_agent(&component, &agent, "send_retained_request", data_value!())
+        .await?
+        .into_typed::<u16>()?;
+    assert_eq!(status, 200);
+    let after = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let writes: Vec<_> = after
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry,
+            PublicOplogEntry::Start(start)
+                if start.function_name == "http::types::request::contents-write")
+        })
+        .collect();
+    assert!(!writes.is_empty());
+    let PublicOplogEntry::Start(first_write) = &writes[0].entry else {
+        unreachable!()
+    };
+    let cancelled = HostRequestP3HttpRequestBodyWrite::from_value(
+        first_write.request.as_ref().unwrap().value(),
+    )?;
+    assert_eq!(cancelled.sequence, 0);
+    assert_eq!(cancelled.offered, 8);
+    assert!(matches!(
+        cancelled.outcome,
+        SerializableP3HttpWriteOutcome::Cancelled(0) | SerializableP3HttpWriteOutcome::Completed(8)
+    ));
+    assert!(
+        writes
+            .iter()
+            .all(|entry| entry.oplog_index > settled_before_acceptance)
+    );
+    let write_ends: Vec<_> = after
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end)
+                if writes.iter().any(|start| start.oplog_index == end.start_index))
+        })
+        .collect();
+    assert_eq!(write_ends.len(), writes.len());
+    assert_eq!(*uploads.lock().unwrap(), vec![b"deferred".to_vec()]);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let result = timeout(
+        Duration::from_secs(20),
+        executor.invoke_and_await_agent(&component, &agent, "stored_send_error", data_value!()),
+    )
+    .await
+    .expect("replay must finish the retained writer before starting a fresh invocation")?
+    .into_typed::<String>()?;
+    assert_eq!(result, "none");
+    let replayed = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let replayed_writes: Vec<_> = replayed
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "http::types::request::contents-write")
+        })
+        .collect();
+    assert_eq!(replayed_writes, writes);
+    let replayed_write_ends: Vec<_> = replayed
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end)
+                if writes.iter().any(|start| start.oplog_index == end.start_index))
+        })
+        .collect();
+    assert_eq!(replayed_write_ends, write_ends);
+    assert_eq!(*uploads.lock().unwrap(), vec![b"deferred".to_vec()]);
+    server.abort();
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn http_client_using_reqwest(
     last_unique_id: &LastUniqueId,

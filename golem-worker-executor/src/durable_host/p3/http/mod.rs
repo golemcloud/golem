@@ -16,6 +16,7 @@ mod host_types;
 mod rebuild;
 mod replay;
 mod request_body;
+mod request_write;
 mod response_body;
 mod send;
 mod serialization;

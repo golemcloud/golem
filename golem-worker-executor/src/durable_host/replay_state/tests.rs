@@ -6949,6 +6949,99 @@ fn unpinned_invocation_started() -> OplogEntry {
 
 #[test]
 #[test_r::timeout("30s")]
+async fn deferred_observation_missing_contents_does_not_claim_shared_id_trailers() {
+    let id = test_invocation_id(7);
+    let mut start = start_named(HostFunctionName::P3HttpRequestTrailersWrite);
+    let OplogEntry::Start { invocation_id, .. } = &mut start else {
+        unreachable!()
+    };
+    *invocation_id = Some(id);
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start,
+        end_for(2, 23),
+    ])
+    .await;
+    let mut contents = Box::pin(
+        rs.claim_start_for_store_with_observation(
+            StartClaim::unowned(
+                &HostFunctionName::P3HttpRequestContentsWrite,
+                &DurableFunctionType::ReadLocal,
+            )
+            .with_invocation_id(Some(id)),
+            false,
+            |_, _| {},
+            None,
+            true,
+        ),
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), contents.as_mut())
+            .await
+            .is_err()
+    );
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(
+            StartClaim::unowned(
+                &HostFunctionName::P3HttpRequestTrailersWrite,
+                &DurableFunctionType::ReadLocal,
+            )
+            .with_invocation_id(Some(id)),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the missing contents observation must leave the trailers Start unclaimed");
+    };
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
+    rs.await_resolution(handle).await.unwrap();
+    assert!(matches!(
+        contents.await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+
+    let mut start = start_named(HostFunctionName::P3HttpRequestContentsWrite);
+    let OplogEntry::Start {
+        invocation_id,
+        parent_start_index,
+        ..
+    } = &mut start
+    else {
+        unreachable!()
+    };
+    *invocation_id = Some(id);
+    *parent_start_index = Some(OplogIndex::from_u64(99));
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start,
+        end_for(2, 23),
+    ])
+    .await;
+    let result = rs
+        .claim_start_for_store_with_observation(
+            StartClaim::unowned(
+                &HostFunctionName::P3HttpRequestContentsWrite,
+                &DurableFunctionType::ReadLocal,
+            )
+            .with_invocation_id(Some(id)),
+            false,
+            |_, _| {},
+            None,
+            true,
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "the same function with a different parent is divergence"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_invocation() {
     use crate::durable_host::tail_work::TailWorkTracker;
 

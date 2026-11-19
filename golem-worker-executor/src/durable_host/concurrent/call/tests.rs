@@ -834,10 +834,17 @@ async fn a_required_claim_of_a_locally_live_store_names_the_surviving_history() 
     };
 
     // An ordinary claim of a Store that continued live is a new live call of that Store.
-    let ordinary =
-        claims::claim_for_store(replay_state.clone(), claim(), true, false, |_, _| {}, None)
-            .await
-            .unwrap();
+    let ordinary = claims::claim_for_store(
+        replay_state.clone(),
+        claim(),
+        true,
+        false,
+        false,
+        |_, _| {},
+        None,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         ordinary,
         ReplayStartClaimOutcome::StoreAlreadyLive
@@ -845,7 +852,16 @@ async fn a_required_claim_of_a_locally_live_store_names_the_surviving_history() 
 
     // A required claim runs with historical admission and names the entry the cursor holds.
     let divergence = required_divergence(
-        claims::claim_for_store(replay_state.clone(), claim(), true, true, |_, _| {}, None).await,
+        claims::claim_for_store(
+            replay_state.clone(),
+            claim(),
+            true,
+            true,
+            false,
+            |_, _| {},
+            None,
+        )
+        .await,
     );
     assert_eq!(
         divergence.oplog_index,
@@ -887,6 +903,7 @@ async fn a_required_claim_at_the_end_of_the_history_has_end_of_history_as_expect
                 ),
                 store_continued_live,
                 true,
+                false,
                 |_, _| {},
                 None,
             )
@@ -937,6 +954,7 @@ async fn a_required_claim_of_a_deleted_start_keeps_its_index() {
                 ),
                 store_continued_live,
                 true,
+                false,
                 |_, _| {},
                 None,
             )

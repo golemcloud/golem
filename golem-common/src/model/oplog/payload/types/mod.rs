@@ -661,6 +661,22 @@ pub enum SerializableP3HttpBodyChunk {
     Cancelled,
 }
 
+/// The result of one canonical write to an HTTP request body or trailers future.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3HttpWriteOutcome {
+    Completed(u64),
+    Dropped(u64),
+    Cancelled(u64),
+}
+
 /// One persisted unit of a P3 HTTP *outgoing request* body stream.
 ///
 /// The request body produced by the guest is recorded frame-by-frame as

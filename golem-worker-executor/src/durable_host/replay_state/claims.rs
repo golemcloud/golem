@@ -320,7 +320,7 @@ impl StartClaim {
 /// The identity of a recorded `Start` entry: the fields a [`StartClaim`] matches.
 #[derive(Debug, Clone)]
 pub(super) struct RecordedStart {
-    function_name: HostFunctionName,
+    pub(super) function_name: HostFunctionName,
     function_type: DurableFunctionType,
     parent_start_index: Option<OplogIndex>,
     observational_owner: Option<OplogIndex>,
@@ -535,6 +535,20 @@ impl ReplayState {
         on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
         admission: Option<AdmissionRefusal>,
     ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+        self.claim_start_for_store_with_observation(claim, store_live, on_claim, admission, false)
+            .await
+    }
+
+    /// An observation records nothing until its input is ready, so its Start may follow
+    /// other guest calls or remain absent at the replay tail.
+    pub(crate) async fn claim_start_for_store_with_observation(
+        &self,
+        claim: StartClaim,
+        store_live: bool,
+        on_claim: impl Fn(OplogIndex, &OplogEntry) + Clone + Send + Sync + 'static,
+        admission: Option<AdmissionRefusal>,
+        deferred_observation: bool,
+    ) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
         enum Missing {
             ReplayEnded,
             DeletedRegion(OplogIndex),
@@ -561,8 +575,11 @@ impl ReplayState {
                                 // Draining the cursor can retain calls the guest has not
                                 // reproduced. Exhaustion does not permit changing their identity.
                                 if let Some(invocation_id) = owned_claim.expected_invocation_id()
-                                    && let Some((index, recorded)) =
-                                        tx.unclaimed_start_with_invocation_id(invocation_id)
+                                    && let Some((index, recorded)) = tx
+                                        .unclaimed_start_with_invocation_id(
+                                            invocation_id,
+                                            deferred_observation.then_some(&owned_claim),
+                                        )
                                 {
                                     return Err(WorkerExecutorError::replay_divergence(
                                         owned_claim.divergence_from_start(index, &recorded),
@@ -573,6 +590,9 @@ impl ReplayState {
                                 }
                                 if store_live {
                                     return Ok((None, None, Some(Missing::StoreAlreadyLive)));
+                                }
+                                if deferred_observation {
+                                    return Ok((None, Some(BlockedOn::CursorProgress), None));
                                 }
                                 if let Some(bodies) = tx.active_body_owning_head(
                                     tx.buffered_head_owner(),
