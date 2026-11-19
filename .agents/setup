@@ -190,6 +190,14 @@ if [[ "$(sbt --script-version 2>/dev/null || true)" != "$sbt_version" ]]; then
     rm -f "$sbt_archive"
 fi
 
+mill_version="$(sed -n 's#^//| mill-version: ##p' sdks/scala/mill/build.mill)"
+if ! grep -qsF "DEFAULT_MILL_VERSION=\"$mill_version\"" /usr/local/bin/mill; then
+    sudo curl -fsSL \
+        "https://repo1.maven.org/maven2/com/lihaoyi/mill-dist/$mill_version/mill-dist-$mill_version-mill.sh" \
+        -o /usr/local/bin/mill
+    sudo chmod +x /usr/local/bin/mill
+fi
+
 export PATH="$HOME/.moon/bin:$PATH"
 moonbit_version="$(awk -F"'" '/uses: hustcer\/setup-moonbit@/ { moonbit = 1; next } moonbit && /^[[:space:]]*version: / { print $2; exit }' .github/actions/setup-main-validation/action.yml)"
 if [[ -z "$moonbit_version" ]]; then

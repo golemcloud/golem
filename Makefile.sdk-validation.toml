@@ -15,6 +15,7 @@ cd ${root}
 cm_run_task check-sdk-scala-capability-fixtures
 cd ${root}/sdks/scala
 exec --fail-on-error sbt "++2.12.21!; sbtPlugin/compile"
+exec --fail-on-error ./scripts/test-build-plugins.sh
 exec --fail-on-error sbt -batch "set ThisBuild / packageDoc / publishArtifact := false" golemPublishLocal
 '''
 

@@ -291,6 +291,8 @@ trait MyAgent {
 
 The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the default base guest runtime to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
 
+Both plugins ship the `fullLinkJS` output, so the same sources give the same bundle with sbt and with Mill. A component holds one JavaScript module: when the linker emits more than one module (for example because the code uses `js.dynamicImport`), `golemBuildComponent` fails and names the modules.
+
 ```bash
 cd <your-app-dir>
 golem-cli build --yes
