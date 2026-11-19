@@ -525,6 +525,67 @@ fn event_bytes(event: HttpSessionEvent) -> Option<Vec<u8>> {
 
 #[test]
 #[test_timeout("10s")]
+async fn closed_request_channel_preserves_pending_response_completion() {
+    let mut h = harness(1);
+    let mut session = h.start_session();
+    let Call::Start(_, tail) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Accepted(_)
+    ));
+    drop(tail);
+    session
+        .input
+        .send_chunk(b"late input".to_vec())
+        .await
+        .unwrap();
+    // The executor can stop consuming input before its response is delivered.
+    assert!(
+        timeout(Duration::from_millis(30), h.calls.recv())
+            .await
+            .is_err()
+    );
+    send(
+        &h.response_txs[0],
+        response(invocation_response::Response::StreamEnd(StreamEnd {
+            transport_stream_id: INPUT_STREAM_ID,
+            producer_sequence: 0,
+            direction: StreamDirection::Input as i32,
+            authored_by: StreamTerminalAuthor::Guest as i32,
+            outcome: Some(
+                StreamTerminal::ConsumerCancelled { details: None }
+                    .try_into()
+                    .unwrap(),
+            ),
+            durable_stream_id: Some(uuid(101)),
+            durable_offset: offset(0),
+            epoch: 1,
+        })),
+    )
+    .await;
+    send(&h.response_txs[0], scalar_result()).await;
+    send(&h.response_txs[0], finished()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::StreamEnd(_)
+    ));
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Result(_)
+    ));
+    let completion = event(&mut session).await;
+    assert!(
+        matches!(completion, HttpSessionEvent::Finished(_)),
+        "{completion:?}"
+    );
+    assert!(h.calls.try_recv().is_err());
+}
+
+#[test]
+#[test_timeout("10s")]
 async fn input_is_held_until_acceptance_and_empty_chunk_is_not_eof() {
     let mut h = harness(1);
     let prepared = start();

@@ -340,12 +340,15 @@ pub(super) async fn run_session(
                 return;
             }
             if request_tx.send(request).await.is_err() {
-                continue 'attempts;
+                break;
             }
         }
         // Output disposal is durable only once its terminal response is observed. Reissue any
         // still-pending controls after every accepted attachment.
         for stream_id in output.pending_disposals.iter().copied().collect::<Vec<_>>() {
+            if request_tx.is_closed() {
+                break;
+            }
             let Some(&durable_id) = output.controls.get(&stream_id) else {
                 continue;
             };
@@ -358,12 +361,18 @@ pub(super) async fn run_session(
                 return;
             }
             if request_tx.send(request).await.is_err() {
-                continue 'attempts;
+                break;
             }
         }
 
         loop {
-            if input.disposal_pending && !input.terminal && input.retained.is_empty() {
+            // The executor may close its request side before delivering its final responses.
+            // Keep draining them; only response loss requires another attachment.
+            if !request_tx.is_closed()
+                && input.disposal_pending
+                && !input.terminal
+                && input.retained.is_empty()
+            {
                 let request = cancel_request(
                     INPUT_STREAM_ID,
                     input.next_sequence,
@@ -383,9 +392,8 @@ pub(super) async fn run_session(
                 if request_tx.send(request).await.is_err() {
                     debug!(
                         reason = "input_disposal_send_closed",
-                        "HTTP session requires reattachment"
+                        "HTTP session drains remaining responses"
                     );
-                    continue 'attempts;
                 }
             }
             let can_read_input = input.can_read(&limits);
@@ -526,7 +534,7 @@ pub(super) async fn run_session(
                         },
                         else => std::future::pending().await,
                     }
-                } => {
+                }, if !request_tx.is_closed() => {
                     let Some(command) = command else {
                         continue;
                     };
@@ -548,8 +556,7 @@ pub(super) async fn run_session(
                         return;
                     }
                     if request_tx.send(request).await.is_err() {
-                        debug!(reason = "command_send_closed", "HTTP session requires reattachment");
-                        continue 'attempts;
+                        debug!(reason = "command_send_closed", "HTTP session drains remaining responses");
                     }
                 }
             }
