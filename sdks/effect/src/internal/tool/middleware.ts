@@ -10,6 +10,7 @@ import {
   InvocationContextLive,
 } from "../../host/InvocationContextClient.js"
 import { withCustomScopes } from "../customScope.js"
+import { returnsStream } from "../invocationContext.js"
 import { schemaShapesMatch } from "../schema-model/model.js"
 import { schemaGraphFromWit } from "../schema-model/wit.js"
 import { type CompiledWitCodec, compile } from "../../WitCodec.js"
@@ -854,9 +855,11 @@ export const toolMiddlewareGuest = {
       )
     const closeLayer = () => runInScopes(Scope.close(invocationScope, Exit.void))
     let cleanupPromise: Promise<void> | undefined
-    const cleanup = (primary?: unknown): Promise<void> =>
+    // A result that holds a stream keeps the caller for its producer, which runs after the call
+    // returns. Cleanup runs before the return, while this call still holds the host's caller.
+    const cleanup = (primary?: unknown, returnedStream = false): Promise<void> =>
       (cleanupPromise ??= (async () => {
-        invocationContext.end()
+        invocationContext.end(returnedStream)
         await Promise.allSettled(admitted)
         const ownershipResult = await Promise.allSettled([ownership.dispose()])
         for (const observer of observers) releaseObserver(observer)
@@ -912,7 +915,7 @@ export const toolMiddlewareGuest = {
       )
       if (pumpFailure) throw pumpFailure.reason
       await Promise.allSettled(admitted)
-      await cleanup()
+      await cleanup(undefined, returnsStream(result))
       return { result: result.result }
     } catch (cause) {
       active = false
