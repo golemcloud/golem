@@ -26,10 +26,12 @@ use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationStart};
 use golem_api_grpc::proto::golem::workerexecutor::v1 as executor;
 use golem_common::SafeDisplay;
-use golem_common::model::agent::{OwnerKind, ParsedAgentKey, Principal};
+use golem_common::model::agent::{OwnerKind, ParsedAgentKey};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentInvocationIdPattern, AgentResourcePattern, AgentVerb};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey, OwnedInvocationId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use tracing::warn;
@@ -263,22 +265,22 @@ impl WorkerService {
         let start = InvocationStart {
             agent_id: Some(agent_id.clone().into()),
             idempotency_key: Some(IdempotencyKey::new(invocation_id.uuid().to_string()).into()),
-            principal: Some(Principal::anonymous().into()),
+            caller: Some(Caller::anonymous().into()),
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             ..Default::default()
         };
         let output = match self.lookup_agent_invocation(start, auth_ctx).await {
             Ok(output) => output,
-            Err(error) if summary.state == InvocationState::Failed => {
-                return Ok(Some(InvocationOutcome::Failure(InvocationFailure {
-                    error: error.to_safe_string(),
-                })));
-            }
             Err(error) => {
+                if summary.state == InvocationState::Failed
+                    && let Some(failure) = recorded_failure(&error)
+                {
+                    return Ok(Some(InvocationOutcome::Failure(failure)));
+                }
                 warn!(
                     invocation_id = %invocation_id,
                     error = error.to_safe_string(),
-                    "Failed to read the result of a completed invocation"
+                    "Failed to read the result of a terminal invocation"
                 );
                 return Ok(None);
             }
@@ -322,6 +324,22 @@ impl WorkerService {
             );
             None
         }))
+    }
+}
+
+/// The recorded failure of an invocation, as the result lookup gives it. Any other error is a
+/// failure to read the result, such as an unavailable executor, and is not the outcome.
+fn recorded_failure(error: &WorkerServiceError) -> Option<InvocationFailure> {
+    match error {
+        WorkerServiceError::GolemError(
+            WorkerExecutorError::InvocationFailed { .. }
+            | WorkerExecutorError::PreviousInvocationFailed { .. }
+            | WorkerExecutorError::PermissionDenied { .. }
+            | WorkerExecutorError::InvalidRequest { .. },
+        ) => Some(InvocationFailure {
+            error: error.to_safe_string(),
+        }),
+        _ => None,
     }
 }
 
@@ -403,5 +421,37 @@ fn kind_to_proto(kind: InvocationKind) -> executor::InvocationKind {
         InvocationKind::Method => executor::InvocationKind::Method,
         InvocationKind::Constructor => executor::InvocationKind::Constructor,
         InvocationKind::Tool => executor::InvocationKind::Tool,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerServiceError, recorded_failure};
+    use golem_common::model::oplog::AgentError;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use test_r::test;
+
+    #[test]
+    fn only_a_recorded_failure_is_the_outcome_of_a_failed_invocation() {
+        let failed = WorkerServiceError::GolemError(WorkerExecutorError::InvocationFailed {
+            error: AgentError::DeterministicTrap("boom".to_string()),
+            stderr: String::new(),
+        });
+        assert!(recorded_failure(&failed).is_some_and(|failure| failure.error.contains("boom")));
+        assert!(
+            recorded_failure(&WorkerServiceError::GolemError(
+                WorkerExecutorError::permission_denied("denied")
+            ))
+            .is_some()
+        );
+        assert!(
+            recorded_failure(&WorkerServiceError::GolemError(
+                WorkerExecutorError::ShardingNotReady
+            ))
+            .is_none()
+        );
+        assert!(
+            recorded_failure(&WorkerServiceError::Internal("unreachable".to_string())).is_none()
+        );
     }
 }
