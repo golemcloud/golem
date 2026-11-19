@@ -2429,8 +2429,10 @@ enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an in
 (initialization, snapshot save and load) `invocation-id()` is none. Work that Golem starts itself
 gets its caller from `golem_started::GolemStartedWork`: snapshot save and load run with the agent
 in both roles, and an oplog processor batch runs with the installing account as original and the
-source agent as immediate. A unit test (`only_entry_points_build_an_anonymous_caller`) refuses an
-anonymous caller anywhere else in the executor. The export functions take no
+source agent as immediate. A unit test (`only_entry_points_build_an_anonymous_caller`) allows
+`Caller::anonymous()` once in `grpc/invocation.rs` and once in `services/worker_proxy.rs`, and
+nowhere else in the executor. The first is a known gap: a card transfer request carries no caller,
+so a recipient that the transfer creates runs its constructor as anonymous. The export functions take no
 `caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 

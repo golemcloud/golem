@@ -6598,7 +6598,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             ),
                             metadata_version: "0.1.0".to_string(),
                             metadata_digest: current_file_hash,
-                            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            provision: (&golem_common::model::tool::ToolProvisionConfig::default()).into(),
                             component_bindings: BTreeMap::from([(
                                 "component".to_string(),
                                 golem_common::model::diff::EffectiveToolBinding {
@@ -6634,7 +6634,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             ),
                             metadata_version: "0.1.0".to_string(),
                             metadata_digest: new_file_hash,
-                            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            provision: (&golem_common::model::tool::ToolProvisionConfig::default()).into(),
                             component_bindings: BTreeMap::from([(
                                 "component".to_string(),
                                 golem_common::model::diff::EffectiveToolBinding {

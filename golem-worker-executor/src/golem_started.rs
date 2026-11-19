@@ -90,13 +90,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use test_r::test;
 
-    /// Production code that may build an anonymous caller, and why. Everything else gets its
-    /// caller from the request, from the invocation that makes a call, or from
+    /// Production code that may build an anonymous caller, once per file, and why. Everything
+    /// else gets its caller from the request, from the invocation that makes a call, or from
     /// [`super::GolemStartedWork`].
     const ANONYMOUS_CALLERS: &[(&str, &str)] = &[
         (
             "grpc/invocation.rs",
-            "a card transfer request comes from the sending agent's executor with no caller",
+            "a card transfer request carries no caller, so a recipient that the transfer creates \
+             runs its constructor as anonymous instead of as the sending agent",
         ),
         (
             "services/worker_proxy.rs",
@@ -118,16 +119,21 @@ mod tests {
                 continue;
             }
             let source = std::fs::read_to_string(&file).unwrap();
-            if production_code(&source).iter().any(|line| {
-                line.contains("Caller::anonymous()") || line.contains("Principal::Anonymous")
-            }) {
-                found.push(relative);
+            let count: usize = production_code(&source)
+                .iter()
+                .map(|line| {
+                    line.matches("Caller::anonymous()").count()
+                        + line.matches("Principal::Anonymous").count()
+                })
+                .sum();
+            if count > 0 {
+                found.push((relative, count));
             }
         }
         found.sort();
-        let mut allowed: Vec<String> = ANONYMOUS_CALLERS
+        let mut allowed: Vec<(String, usize)> = ANONYMOUS_CALLERS
             .iter()
-            .map(|(file, _)| file.to_string())
+            .map(|(file, _)| (file.to_string(), 1))
             .collect();
         allowed.sort();
         assert_eq!(
@@ -159,8 +165,8 @@ mod tests {
             || name.ends_with("_testing.rs")
     }
 
-    /// The lines of a source file outside the items marked `#[cfg(test)]` or
-    /// `#[cfg(any(test, ...))]`.
+    /// The lines of a source file outside the items, fields and match arms marked
+    /// `#[cfg(test)]` or `#[cfg(any(test, ...))]`.
     fn production_code(source: &str) -> Vec<&str> {
         let mut lines = source.lines();
         let mut result = Vec::new();
@@ -172,15 +178,21 @@ mod tests {
             }
             let mut depth = 0i64;
             let mut opened = false;
+            let mut first = true;
             for item_line in lines.by_ref() {
                 if !opened && item_line.trim_start().starts_with("#[") {
                     continue;
                 }
                 depth += braces(item_line);
                 opened |= item_line.contains('{');
-                if (opened && depth <= 0) || (!opened && item_line.trim_end().ends_with(';')) {
+                let end = item_line.trim_end();
+                // A field or a match arm ends at the comma of its first line.
+                if (opened && depth <= 0)
+                    || (!opened && (end.ends_with(';') || (first && end.ends_with(','))))
+                {
                     break;
                 }
+                first = false;
             }
         }
         result

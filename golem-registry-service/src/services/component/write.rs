@@ -387,7 +387,7 @@ impl ComponentWriteService {
                 .component_provision_config
                 .plugin_installations,
             &resolved_grants,
-            auth.actor_account_id(),
+            auth.access_account_id(),
         )?;
         let (component_initial_permissions, component_card_record) = self
             .prepare_component_initial_permission_card_record(
@@ -420,7 +420,7 @@ impl ComponentWriteService {
             let plugins = resolve_plugins_for_creation(
                 &creation.plugin_installations,
                 &resolved_grants,
-                auth.actor_account_id(),
+                auth.access_account_id(),
             )?;
             let config =
                 validate_and_transform_config_entries(agent_type, creation.config.clone())?;
@@ -450,7 +450,7 @@ impl ComponentWriteService {
             component_creation.tool_deployment_configs,
             &uploaded_files,
             &resolved_grants,
-            auth.actor_account_id(),
+            auth.access_account_id(),
         )?;
         let tool_middleware_deployment_metadata =
             resolve_tool_middleware_deployment_metadata_for_creation(
@@ -458,7 +458,7 @@ impl ComponentWriteService {
                 component_creation.tool_middleware_provision_configs,
                 &uploaded_files,
                 &resolved_grants,
-                auth.actor_account_id(),
+                auth.access_account_id(),
             )?;
 
         let component_metadata = analyze_and_validate_component_wasm(
@@ -664,7 +664,7 @@ impl ComponentWriteService {
                 plugins: resolve_plugins_for_creation(
                     &config.plugin_installations,
                     &grants,
-                    auth.actor_account_id(),
+                    auth.access_account_id(),
                 )?,
                 files: resolve_component_files_for_creation(&config.files, &uploaded_files)?,
             };
@@ -1110,6 +1110,9 @@ impl ComponentWriteService {
                     if let Some(new_parameters) = inner.new_parameters {
                         plugin.parameters = new_parameters;
                     };
+
+                    // The account that changes an installation is its installer from now on.
+                    plugin.installed_by = auth.access_account_id();
                 }
                 PluginInstallationAction::Install(inner) => {
                     // ensure the plugin priority and environment_plugin_grant_id is not already used
@@ -1155,7 +1158,7 @@ impl ComponentWriteService {
                             .oplog_processor_component_revision(),
                         plugin_name: environment_plugin_grant.plugin.name,
                         plugin_version: environment_plugin_grant.plugin.version,
-                        installed_by: auth.actor_account_id(),
+                        installed_by: auth.access_account_id(),
                     });
                 }
             }

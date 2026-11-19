@@ -1706,7 +1706,7 @@ impl ComponentCommandHandler {
                         owner_account_email: grant.release_owner.email.clone(),
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
-                        provision,
+                        provision: (&provision).into(),
                         component_bindings: manifest_config
                             .component_bindings
                             .iter()

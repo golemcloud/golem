@@ -384,7 +384,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                 }
             }
-            request.caller()?;
             let worker = Worker::get_exact_existing_suspended(self, &owned_agent_id).await?;
             if !reserved {
                 Self::not_found_if_deleting(&worker, worker.ensure_inspection_may_start().await)
@@ -426,7 +425,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return Ok(None);
             }
-            request.caller()?;
             return Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owner,
@@ -442,7 +440,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         if expected_fingerprint.is_some() {
-            request.caller()?;
             return Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
@@ -523,7 +520,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if let Some(expected) = expected_fingerprint {
             // The incarnation is pinned before its status is read, so the failure of a re-created
             // agent never answers a caller that named the deleted incarnation.
-            request.caller()?;
             let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
