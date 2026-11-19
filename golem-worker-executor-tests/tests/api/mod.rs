@@ -8759,6 +8759,7 @@ async fn cancelling_pending_invocations(
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         };
         let executor = executor.clone();
