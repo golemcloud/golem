@@ -21,9 +21,6 @@ use self::cache_headers::{
     supports_http_revalidation,
 };
 pub(super) use self::parameter_parsing::validate_query_parameters;
-use self::parameter_parsing::{
-    parse_path_segment_value, parse_query_or_header_value, parse_query_parameter,
-};
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
 use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
@@ -43,6 +40,10 @@ use golem_common::schema::unstructured::wrap_unstructured_inline_for_schema;
 use golem_common::schema::validation::validate_value;
 use golem_common::schema::{
     BinaryValuePayload, FieldSource, SchemaType, SchemaValue, TextValuePayload, TypedSchemaValue,
+};
+use golem_service_base::custom_api::parameter_parsing::{
+    HttpParameterError, parse_path_segment_value, parse_query_or_header_value,
+    parse_query_parameter,
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, MethodParameter, PhantomSelection, RequestBodySchema,
@@ -384,11 +385,10 @@ impl CallAgentHandler {
                     "Method input field has multiple bindings",
                 ));
             }
-            let invalid =
-                |error: RequestHandlerError| RequestHandlerError::ParameterParsingFailed {
-                    name: field.name.clone(),
-                    error: Box::new(error),
-                };
+            let invalid = |error: HttpParameterError| RequestHandlerError::ParameterParsingFailed {
+                name: field.name.clone(),
+                error: Box::new(error.into()),
+            };
             let value = match param {
                 MethodParameter::Path {
                     path_segment_index,
