@@ -679,12 +679,9 @@ export type ValidateEndpointsTuple<Eps extends ReadonlyArray<HttpEndpointSpec<st
   readonly [K in keyof Eps]: Eps[K] extends HttpEndpointSpec<infer V, infer Kind, infer B, infer HN>
     ? [InvalidQueryBindings<B, Params>] extends [never]
       ? Kind extends 'bodyless'
-        ? [
-            Exclude<
-              UnsupportedImplicitQueryKeys<Params>,
-              V | StreamResourceKeys<Params>
-            >,
-          ] extends [never]
+        ? [Exclude<UnsupportedImplicitQueryKeys<Params>, V | StreamResourceKeys<Params>>] extends [
+            never,
+          ]
           ? ValidateEndpointStructure<Eps[K], B, HN>
           : Invalid<`GET/HEAD/DELETE endpoint cannot bind implicit query input '${Exclude<
               UnsupportedImplicitQueryKeys<Params>,
