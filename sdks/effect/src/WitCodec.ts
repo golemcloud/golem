@@ -681,50 +681,9 @@ const isPrincipalRefAST = (a: SchemaAST.AST): boolean =>
 
 // ---------- PrincipalRef (the named record `principal-ref { issuer, subject }`) ----------
 //
-// A `Principal` carried as ordinary structured data (a method param / return),
-// as opposed to the `Principal` capability service. The graph mirrors the host
-// `Principal` shape exactly (case order oidc/agent/golem-user/anonymous), and
-// the value pair round-trips a host `Principal` <-> `SchemaValue`.
-
-type HostUuid = CoreTypes.Uuid
-
-// --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType => t.uuid()
-const agentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
-const accountIdType = (): SchemaType => t.record([field("uuid", uuidType())])
-const oidcType = (): SchemaType =>
-  t.record([
-    field("sub", t.string()),
-    field("issuer", t.string()),
-    field("email", t.option(t.string())),
-    field("name", t.option(t.string())),
-    field("emailVerified", t.option(t.bool())),
-    field("givenName", t.option(t.string())),
-    field("familyName", t.option(t.string())),
-    field("picture", t.option(t.string())),
-    field("preferredUsername", t.option(t.string())),
-    field("claims", t.string()),
-  ])
-const agentPrincipalType = (): SchemaType => t.record([field("agentId", agentIdType())])
-const golemUserType = (): SchemaType => t.record([field("accountId", accountIdType())])
-
-// --- SchemaValue field accessors (positional record reads) ---
-const recFields = (sv: SchemaValue): ReadonlyArray<SchemaValue> =>
-  (sv as { tag: "record"; fields: ReadonlyArray<SchemaValue> }).fields
-const strOf = (f: SchemaValue): string => (f as { tag: "string"; value: string }).value
-const boolOf = (f: SchemaValue): boolean => (f as { tag: "bool"; value: boolean }).value
-const optOf = (f: SchemaValue): SchemaValue | undefined =>
-  (f as { tag: "option"; value?: SchemaValue }).value
-
-// --- codec helpers (round-trip via the host shape) ---
-const uuidToValue = (u: HostUuid): SchemaValue => v.uuid(u)
-const uuidFromValue = (sv: SchemaValue): HostUuid =>
-  (sv as Extract<SchemaValue, { tag: "uuid" }>).value
-
-const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue => v.record([uuidToValue(a.uuid)])
-const agentIdFromValue = (sv: SchemaValue): AgentCommon.AgentId => ({
-  uuid: uuidFromValue(recFields(sv)[0]!),
-})
+// A `PrincipalRef` is the identity of a principal as plain data. Every SDK emits the same named
+// record, so a cross-SDK call with a `PrincipalRef` argument decodes the same everywhere. A
+// `Principal` or a `Caller` is a live value and has no schema.
 
 const PRINCIPAL_REF_TYPE_ID = "principal-ref"
 

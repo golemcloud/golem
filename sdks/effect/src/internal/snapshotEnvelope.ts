@@ -145,26 +145,11 @@ const decodeUtf8 = (bytes: Uint8Array, ctx: string): string => {
 const checkLegacyPrincipal = (principal: typeof LegacySerializedPrincipal.Type): void => {
   switch (principal.tag) {
     case "anonymous":
-      return { tag: "anonymous" }
-    case "agent":
-      return {
-        tag: "agent",
-        val: { agentId: CoreTypes.uuidToString(p.val.agentId.uuid) },
-      }
-    case "golem-user":
-      return {
-        tag: "golem-user",
-        val: { accountId: CoreTypes.uuidToString(p.val.accountId.uuid) },
-      }
     case "oidc":
       return
     case "agent":
-      return {
-        tag: "agent",
-        val: {
-          agentId: { uuid: CoreTypes.parseUuid(p.val.agentId) },
-        },
-      }
+      CoreTypes.parseUuid(principal.val.agentId)
+      return
     case "golem-user":
       CoreTypes.parseUuid(principal.val.accountId)
       return

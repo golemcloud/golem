@@ -424,7 +424,7 @@ describe("snapshotting", () => {
   ])("auto: rejects malformed snapshot state tag %j", async (...tag) => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "DirectSnapshotAgent"]])
     await expect(
-      dispatchLoadSnapshot(encodeJsonEnvelope(anonymous, { $golemSnapshot: tag }), wire()),
+      dispatchLoadSnapshot(encodeJsonEnvelope({ $golemSnapshot: tag }), wire()),
     ).rejects.toThrow(SnapshotEnvelopeError)
   })
 
@@ -496,7 +496,7 @@ describe("snapshotting", () => {
 
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-    const wrong = encodeBinaryEnvelope(anonymous, new Uint8Array([1, 2, 3]))
+    const wrong = encodeBinaryEnvelope(new Uint8Array([1, 2, 3]))
     await expect(dispatchLoadSnapshot(wrong, wire(aliceWv))).rejects.toThrow(SnapshotEnvelopeError)
   })
 
@@ -649,7 +649,7 @@ describe("snapshotting", () => {
 
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CustomSnapshotAgent"]])
 
-    const wrong = encodeJsonEnvelope(anonymous, { count: 0, owner: "carol" })
+    const wrong = encodeJsonEnvelope({ count: 0, owner: "carol" })
     await expect(dispatchLoadSnapshot(wrong, wire(carolWv))).rejects.toThrow(SnapshotEnvelopeError)
   })
 
@@ -676,13 +676,13 @@ describe("snapshotting", () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
     await withCaller(oidcBob, () => guest.initialize("AutoSnapshotCounter", wire(aliceWv)))
-    const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "alice" })
+    const fake = encodeJsonEnvelope({ count: 0, owner: "alice" })
     await expect(dispatchLoadSnapshot(fake, wire(aliceWv))).rejects.toThrow(/already initialized/)
   })
 
   it("load fails with the missing card grant when GOLEM_AGENT_TYPE is not readable", async () => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "00000001-0000-8000-8000-000000000001"]])
-    const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "x" })
+    const fake = encodeJsonEnvelope({ count: 0, owner: "x" })
     await expect(dispatchLoadSnapshot(fake, wire())).rejects.toThrow(
       new Error(
         "load-snapshot: GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE",
@@ -732,7 +732,7 @@ describe("snapshotting", () => {
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "CleanupOnRestoreFailure"]])
 
     await expect(
-      dispatchLoadSnapshot(encodeBinaryEnvelope(anonymous, new Uint8Array([1])), wire()),
+      dispatchLoadSnapshot(encodeBinaryEnvelope(new Uint8Array([1])), wire()),
     ).rejects.toBeTruthy()
     expect(cleaned).toBe(true)
   })

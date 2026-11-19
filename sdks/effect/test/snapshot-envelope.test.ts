@@ -36,15 +36,15 @@ describe("snapshot-envelope JSON format", () => {
       state: { count: 42 },
     })
     const decoded = decodeEnvelope(env)
-    expect(decoded).toEqual({ kind: "json", principal: anonymous, state: { count: 42 } })
+    expect(decoded).toEqual({ kind: "json", state: { count: 42 } })
   })
 
-  it("preserves the embedded principal on decode", () => {
-    const env = encodeJsonEnvelope(oidcAlice, "x")
-    const decoded = decodeEnvelope(env)
-    expect(decoded.kind).toBe("json")
-    if (decoded.kind !== "json") throw new Error()
-    expect(decoded.principal).toEqual(oidcAlice)
+  it("reads a 1.6 JSON envelope and drops its principal", () => {
+    const decoded = decodeEnvelope({
+      payload: text({ version: 1, principal: oidcAlice, state: "x" }),
+      mimeType: "application/json",
+    })
+    expect(decoded).toEqual({ kind: "json", state: "x" })
   })
 
   it("rejects malformed JSON payloads", () => {
@@ -77,7 +77,7 @@ describe("snapshot-envelope binary format", () => {
   it("writes the version byte 3 and the user payload", () => {
     const env = encodeBinaryEnvelope(new Uint8Array([1, 2, 3, 4, 5]))
     expect(env.mimeType).toBe("application/octet-stream")
-    expect(env.payload[0]).toBe(2) // version byte
+    expect(env.payload[0]).toBe(3) // version byte
     const decoded = decodeEnvelope(env)
     expect(decoded.kind).toBe("binary")
     if (decoded.kind !== "binary") throw new Error()

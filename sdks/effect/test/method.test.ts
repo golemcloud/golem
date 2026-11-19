@@ -50,29 +50,17 @@ describe("Method", () => {
           const wire = schemaValueToWit(v.record(mixed ? [v.string("Ada")] : []))
           const decoded = yield* compiled.inputCodec.decode(wire)
           expect(decoded).toEqual(mixed ? { user: "Ada" } : {})
-          expect(decoded.caller).toBeUndefined()
-          const principals: PrincipalValue[] = [
-            { tag: "anonymous" },
-            {
-              tag: "agent",
-              val: {
-                agentId: { uuid: { highBits: 1n, lowBits: 2n } },
-              },
-            },
-          ]
-          for (const principal of principals) {
-            const output = yield* invokeMethod(
-              compiled,
-              (input) => {
-                expect(input).toEqual(
-                  mixed ? { user: "Ada", caller: principal } : { caller: principal },
-                )
-                return Effect.succeed(input.caller.tag)
-              },
-              wire,
-            ).pipe(Effect.provideService(Principal, principal))
-            expect(schemaValueFromWit(output!)).toEqual(v.string(principal.tag))
-          }
+          const context = { caller: Caller.anonymous() }
+          const output = yield* invokeMethod(
+            compiled,
+            () =>
+              Effect.map(InvocationContext, (current) => {
+                expect(current).toBe(context)
+                return current.caller.immediate.kind
+              }),
+            wire,
+          ).pipe(Effect.provideService(InvocationContext, context))
+          expect(schemaValueFromWit(output!)).toEqual(v.string("anonymous"))
         }),
     )
   }

@@ -262,7 +262,7 @@ describe("explicit multipart snapshots", () => {
     setLoad("MultipartSqlite")
     const parts = new Map([["index", { bytes, contentType: "application/octet-stream" }]])
     await expect(
-      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(principal, null, [], parts), wire),
+      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [], parts), wire),
     ).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
     expect(dbRestoreCalls).toBe(0)
     __setRestoreDatabaseSync((_db, image) => {
@@ -270,7 +270,7 @@ describe("explicit multipart snapshots", () => {
       dbHydrated = true
     })
     await dispatchLoadSnapshot(
-      encodeMultipartJsonEnvelope(principal, null, [{ name: "main", bytes }], parts),
+      encodeMultipartJsonEnvelope(null, [{ name: "main", bytes }], parts),
       wire,
     )
     expect(dbRestoreCalls).toBe(1)
@@ -289,10 +289,7 @@ describe("explicit multipart snapshots", () => {
       ),
     ).rejects.toBeDefined()
     await expect(
-      dispatchLoadSnapshot(
-        encodeMultipartJsonEnvelope(principal, null, [{ name: "other", bytes }]),
-        wire,
-      ),
+      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [{ name: "other", bytes }]), wire),
     ).rejects.toThrow(/SnapshotDatabaseUnknownPartError/)
   })
 

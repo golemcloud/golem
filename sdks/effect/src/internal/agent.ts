@@ -1078,7 +1078,6 @@ const initAgentInstance = async (
           ? Effect.succeed(restoration.saved)
           : compiled.impl.snapshot.restore(restoration.saved as never, {
               id: constructorInput,
-              principal,
               agentId: await runUserPromise(SelfAgentId),
               config: configShape as never,
             })
@@ -1503,7 +1502,6 @@ export const dispatchLoadSnapshot = async (
 
   // 2. Decode the envelope.
   const decoded = decodeEnvelope(snapshot)
-  const principal = decoded.principal
 
   let saved: unknown
   if (compiled.compiledSnapshot.kind !== "custom") {
@@ -1626,7 +1624,7 @@ export const dispatchLoadSnapshot = async (
     handlers,
     snapshot: bound,
     state,
-  } = await initAgentInstance(agentTypeName, compiled, constructorInput, principal, {
+  } = await initAgentInstance(agentTypeName, compiled, constructorInput, {
     saved,
     restoreDatabases,
   })

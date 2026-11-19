@@ -11,7 +11,7 @@ import { defineConfig } from "../src/Config.js"
 import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 import { compileMethodSpec, invokeMethod, method } from "../src/Method.js"
-import { PrincipalSchema } from "../src/Principal.js"
+import { PrincipalRef, PrincipalRefSchema } from "../src/InvocationContext.js"
 import {
   Option as UnstructuredOption,
   UnstructuredBinary,
@@ -952,9 +952,9 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const owner = new PrincipalRef("https://example.test", "alice")
       const runtime = makeRuntime({ response: yield* encode(Schema.String, "ok") })
       yield* Effect.gen(function* () {
-        const full = yield* Client.bind(agentIdFor("principal"), PrincipalTarget)
-        expect(yield* full.value({})).toBe("ok")
-        const input = { before: "first", after: 7 }
+        const full = yield* Client.bind(agentIdFor("principal"), OwnerTarget)
+        expect(yield* full.value({ owner })).toBe("ok")
+        const input = { before: "first", owner, after: 7 }
         expect(yield* full.mixed(input)).toBe("ok")
         yield* full.mixed.trigger(input)
         yield* full.mixed.schedule({ seconds: 1n, nanoseconds: 0 }, input)
@@ -969,13 +969,13 @@ describe("Client 1.6 config and ephemeral receipts", () => {
           expect(decoded.owner.equals(owner)).toBe(true)
           expect(decoded.before).toBe("first")
         }
-        const factory = yield* PrincipalTarget.client.upsert({ name: "main" })
-        expect(yield* factory.value({})).toBe("ok")
+        const factory = yield* OwnerTarget.client.upsert({ name: "main", owner })
+        expect(yield* factory.value({ owner })).toBe("ok")
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.lifecycle.connectionOpen).toBe(2)
       const upserted = constructorOf(runtime.opens[1]?.target)!
-      expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(1)
-      expect(upserted.valueNodes).toHaveLength(2)
+      expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(2)
+      expect(upserted.valueNodes).toHaveLength(5)
     }),
   )
 

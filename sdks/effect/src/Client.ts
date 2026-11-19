@@ -28,6 +28,7 @@ import {
   compileMethodSpec,
   type CompiledInputCodec,
   type MethodCodec,
+  type MethodInput,
   type MethodParams,
   type MethodSpec,
   type MethodSuccess,
@@ -206,7 +207,7 @@ export interface DurableClient<
    * initialized agent is reused without rerunning its constructor.
    */
   readonly upsert: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     options?: ScopeCardOptions,
   ) => Effect.Effect<
     RemoteAgent<M>,
@@ -215,7 +216,7 @@ export interface DurableClient<
   >
   /** Create an agent and connect to it after its successful initialization. */
   readonly create: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     options?: CreateOptions<F>,
   ) => Effect.Effect<
     RemoteAgent<M>,
@@ -238,7 +239,7 @@ export interface DurableClient<
 export interface EphemeralClient<C extends MethodParams, M extends Record<string, AnyMethodSpec>> {
   /** Connect to the agent type; each invocation runs on a new one-shot instance. */
   readonly upsert: (
-    input: CallerInput<C>,
+    input: MethodInput<C>,
     options?: ScopeCardOptions,
   ) => Effect.Effect<
     EphemeralRemoteAgent<M>,
@@ -655,10 +656,7 @@ export const clientFor = <
     cached
       ? Effect.succeed(cached)
       : Effect.gen(function* () {
-          const constructorCodec = yield* compileCallerParamBindings(
-            `${def.name} constructor`,
-            def.id,
-          )
+          const constructorCodec = yield* compileParamBindings(`${def.name} constructor`, def.id)
           const methods = yield* compileMethods(def.methods)
           return (cached = { constructorCodec, methods })
         }),
@@ -684,7 +682,7 @@ export const clientFor = <
         ),
       )
     })
-  const encodeConstructor = (codecs: CompiledClient<C>, input: CallerInput<C>) =>
+  const encodeConstructor = (codecs: CompiledClient<C>, input: MethodInput<C>) =>
     Effect.mapError(codecs.constructorCodec.encodeAsync(input), (e) =>
       responseError(`failed to encode constructor input: ${String(e)}`),
     )
@@ -698,7 +696,7 @@ export const clientFor = <
       Effect.acquireRelease(acquire, (connection) => Effect.sync(() => connection.drop())),
       (rpc) => buildRemote(rpc, codecs, ephemeral, scopeCard),
     )
-  const upsert = (input: CallerInput<C>, options?: ScopeCardOptions) =>
+  const upsert = (input: MethodInput<C>, options?: ScopeCardOptions) =>
     Effect.gen(function* () {
       const codecs = yield* compile
       const constructorTree = yield* encodeConstructor(codecs, input)
@@ -710,7 +708,7 @@ export const clientFor = <
         options?.scopeCard,
       )
     })
-  const create = (input: CallerInput<C>, options?: CreateOptions<F>) =>
+  const create = (input: MethodInput<C>, options?: CreateOptions<F>) =>
     Effect.gen(function* () {
       const codecs = yield* compile
       const agentConfig = yield* config(options)

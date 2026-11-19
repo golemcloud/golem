@@ -203,7 +203,7 @@ describe("snapshot + sqlite databases", () => {
     __setIsAutocommitDatabaseSyncForTest(() => true)
     __setRestoreDatabaseSyncForTest(() => {})
     const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
-    const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [])
+    const tampered = encodeMultipartJsonEnvelope({ note: "zoe" }, [])
     __setEnvironment([["GOLEM_AGENT_TYPE", "SqliteCounterTest"]])
     await expect(dispatchLoadSnapshot(tampered, wire(xWv))).rejects.toThrow(
       /SnapshotDatabaseMissingPartError/,
@@ -345,7 +345,7 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         serialized.length = 0
         agent.select()
         await dispatchLoadSnapshot(snapshot, wire())
-        expect(agent.restored).toHaveBeenCalledWith(oidcZoe)
+        expect(agent.restored).toHaveBeenCalledWith()
         expect(hydrated).toEqual(handles.filter((db) => db.location() === null))
         expect(warmed).toEqual(handles)
         // This read is discarded cache warming, not a saved file image.
