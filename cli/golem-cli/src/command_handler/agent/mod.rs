@@ -90,8 +90,8 @@ use golem_common::model::agent::{
     AgentConfigSource, AgentMode, AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey,
 };
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::ComponentName;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
@@ -1659,19 +1659,23 @@ impl AgentCommandHandler {
         if let Some(scan_cursor) = scan_cursor {
             let listed = targets
                 .iter()
-                .flat_map(|target| target.agent_types.iter())
-                .map(|agent_type| agent_type.0.as_str())
+                .flat_map(|target| {
+                    target
+                        .agent_types
+                        .iter()
+                        .map(move |agent_type| (target.component.id, agent_type.0.as_str()))
+                })
                 .collect::<BTreeSet<_>>();
             let unlisted = scan_cursor
-                .agent_types()
-                .filter(|agent_type| !listed.contains(agent_type))
+                .scans()
+                .filter(|scan| !listed.contains(scan))
                 .collect::<Vec<_>>();
             if !unlisted.is_empty() {
                 log_error(format!(
                     "The cursor continues agent types that are not listed: {}",
                     unlisted
                         .iter()
-                        .map(|agent_type| agent_type.log_color_highlight())
+                        .map(|(component, agent_type)| format!("{component}/{agent_type}"))
                         .join(", ")
                 ));
                 logln("");
@@ -1715,7 +1719,7 @@ impl AgentCommandHandler {
                 .await?,
             );
             for (agent_type, type_scan_cursor) in type_scan_cursors {
-                next_cursor.insert(&agent_type, type_scan_cursor);
+                next_cursor.insert(target.component.id, &agent_type, type_scan_cursor);
             }
         }
         view.cursor = (!next_cursor.is_empty()).then(|| next_cursor.encode());
@@ -1825,7 +1829,7 @@ impl AgentCommandHandler {
             .collect::<Vec<_>>();
         let names = types
             .iter()
-            .map(|(_, agent_type)| agent_type.0.as_str())
+            .map(|(target, agent_type)| (target.component.id, agent_type.0.as_str()))
             .collect::<Vec<_>>();
         let (agents, cursor) = read_page(
             &names,
@@ -1836,6 +1840,7 @@ impl AgentCommandHandler {
                 let component = &target.component;
                 let mut start = AgentListCursor::default();
                 start.insert(
+                    component.id,
                     agent_type,
                     scan_cursor.unwrap_or_else(|| ScanCursor::new(String::new())),
                 );
@@ -3164,7 +3169,7 @@ impl AgentCommandHandler {
         for agent_type in agent_types {
             let mut current_scan_cursor = match start_cursor {
                 None => None,
-                Some(start_cursor) => match start_cursor.resume_at(agent_type) {
+                Some(start_cursor) => match start_cursor.resume_at(component.id, agent_type) {
                     Some(resume_at) => Some(resume_at),
                     None => continue,
                 },
@@ -3864,7 +3869,7 @@ pub(super) fn parse_method_argument_schema_value(
 /// The page ends at the first scan that gives a scan cursor, or when `count` items are listed.
 /// The next cursor includes the unfinished type and every type not yet scanned.
 async fn read_page<T>(
-    component_names: &[&str],
+    scans: &[(ComponentId, &str)],
     cursor: Option<&AgentListCursor>,
     count: u64,
     mut scan: impl AsyncFnMut(
@@ -3877,9 +3882,11 @@ async fn read_page<T>(
         bail!("A page needs a --max-count of at least 1");
     }
     if let Some(cursor) = cursor {
-        for agent_type in cursor.agent_types() {
-            if !component_names.contains(&agent_type) {
-                bail!("The page cursor is for agent type {agent_type}, which is not selected");
+        for (component, agent_type) in cursor.scans() {
+            if !scans.contains(&(component, agent_type)) {
+                bail!(
+                    "The page cursor is for component {component} and agent type {agent_type}, which is not selected"
+                );
             }
         }
     }
@@ -3887,17 +3894,18 @@ async fn read_page<T>(
     let mut remaining = count;
     let mut next = AgentListCursor::default();
     let mut stopped = false;
-    for (position, name) in component_names.iter().enumerate() {
+    for (position, (component, name)) in scans.iter().enumerate() {
         let agent_type = AgentTypeName((*name).to_string());
         let scan_cursor = match cursor {
             None => None,
-            Some(cursor) => match cursor.resume_at(&agent_type) {
+            Some(cursor) => match cursor.resume_at(*component, &agent_type) {
                 Some(cursor) => cursor.into_option(),
                 None => continue,
             },
         };
         if stopped || remaining == 0 {
             next.insert(
+                *component,
                 &agent_type,
                 scan_cursor.unwrap_or_else(|| ScanCursor::new(String::new())),
             );
@@ -3907,7 +3915,7 @@ async fn read_page<T>(
         remaining = remaining.saturating_sub(listed.len() as u64);
         items.extend(listed);
         if let Some(next_scan_cursor) = next_scan_cursor {
-            next.insert(&agent_type, next_scan_cursor);
+            next.insert(*component, &agent_type, next_scan_cursor);
             stopped = true;
         }
     }
@@ -4157,7 +4165,10 @@ mod tests {
         Vec<(Vec<String>, Option<String>)>,
         Vec<(usize, Option<String>)>,
     ) {
-        let names = components.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        let names = components
+            .iter()
+            .map(|(name, _)| (ComponentId::new(), *name))
+            .collect::<Vec<_>>();
         let mut pages = Vec::new();
         let mut scans = Vec::new();
         let mut cursor = None::<AgentListCursor>;
@@ -4191,17 +4202,14 @@ mod tests {
     async fn a_page_that_ends_a_component_at_its_limit_names_the_next_component() {
         let (pages, scans) = read_all_pages(&[("a:x", 2), ("b:y", 3)], 2).await;
         assert_eq!(
-            pages,
+            pages
+                .iter()
+                .map(|(items, cursor)| (items.clone(), cursor.is_some()))
+                .collect::<Vec<_>>(),
             vec![
-                (
-                    vec!["a:x#0".to_string(), "a:x#1".to_string()],
-                    Some("eyJiOnkiOiIifQ".to_string())
-                ),
-                (
-                    vec!["b:y#0".to_string(), "b:y#1".to_string()],
-                    Some("eyJiOnkiOiIyIn0".to_string())
-                ),
-                (vec!["b:y#2".to_string()], None),
+                (vec!["a:x#0".to_string(), "a:x#1".to_string()], true),
+                (vec!["b:y#0".to_string(), "b:y#1".to_string()], true),
+                (vec!["b:y#2".to_string()], false),
             ]
         );
         // The cursor for an unscanned type starts it at its beginning; no scan asks for 0 items.
@@ -4216,6 +4224,16 @@ mod tests {
             pages,
             vec![(vec!["a:x#0".to_string(), "b:y#0".to_string()], None)]
         );
+    }
+
+    #[test]
+    async fn page_reaches_the_second_component_of_a_moved_type() {
+        let names = [(ComponentId::new(), "T"), (ComponentId::new(), "T")];
+        let scan = async |position, _: Option<ScanCursor>, _| Ok((vec![position], None));
+        let (first, token) = read_page(&names, None, 1, scan).await.unwrap();
+        let cursor = AgentListCursor::decode(token.as_deref().unwrap()).unwrap();
+        let (second, end) = read_page(&names, Some(&cursor), 1, scan).await.unwrap();
+        assert_eq!((first, second, end), (vec![0], vec![1], None));
     }
 
     #[test]
