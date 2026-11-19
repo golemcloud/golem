@@ -3689,26 +3689,34 @@ async fn outgoing_http_contains_idempotency_key(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server_requests = requests.clone();
 
     let http_server = spawn(
         async move {
             let route = Router::new().route(
                 "/post-example",
-                post(move |headers: HeaderMap| async move {
-                    let idempotency_key = headers
-                        .get("idempotency-key")
-                        .map(|h| h.to_str().unwrap().to_string());
-                    let idempotency_key_str = idempotency_key.map(|i| i.to_string());
-                    json!({
-                        "percentage": 0.0,
-                        "message": idempotency_key_str
-                    })
-                    .to_string()
+                post(move |headers: HeaderMap| {
+                    let requests = server_requests.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        let idempotency_key = headers
+                            .get("idempotency-key")
+                            .map(|h| h.to_str().unwrap().to_string());
+                        let idempotency_key_str = idempotency_key.map(|i| i.to_string());
+                        json!({
+                            "percentage": 0.0,
+                            "message": idempotency_key_str
+                        })
+                        .to_string()
+                    }
                 }),
             );
 
@@ -3757,6 +3765,7 @@ async fn outgoing_http_contains_idempotency_key(
         expected_key.value
     );
     assert_eq!(result.into_typed::<String>()?, expected_response);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     // Restart the executor to force a full oplog replay and repeat the invocation with the same
     // idempotency key: the replayed invocation must observe the same injected key (recorded in
@@ -3768,6 +3777,7 @@ async fn outgoing_http_contains_idempotency_key(
         .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
         .await?;
     assert_eq!(replayed_result.into_typed::<String>()?, expected_response);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     // A fresh invocation after the restart replays the first invocation (including the durable
     // send) and then performs a new live request, which derives a different key from its own
@@ -3781,6 +3791,7 @@ async fn outgoing_http_contains_idempotency_key(
         "unexpected response for the post-restart invocation: {fresh_result}"
     );
     assert_ne!(fresh_result, expected_response);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
