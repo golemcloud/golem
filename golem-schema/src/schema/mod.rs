@@ -17,6 +17,7 @@
 pub mod canonical;
 pub mod conversion;
 pub mod derive;
+mod file;
 pub mod fingerprint;
 pub mod graph;
 pub mod host_managed;
@@ -45,6 +46,7 @@ pub use conversion::{
     Quantity, QuantityUnit, SchemaBuilder, merge_agent_graphs, try_into_schema_graph,
     try_into_typed_schema_value,
 };
+pub use file::File;
 pub use fingerprint::{
     SchemaFingerprintError, SchemaFingerprintV1, resolve_stream_element_schema_v1,
     schema_fingerprint_v1,
