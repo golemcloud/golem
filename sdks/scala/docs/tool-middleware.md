@@ -12,7 +12,7 @@ For each `@toolDefinition` trait, the sbt and Mill plugins generate these middle
 - `<Tool>Middleware`: the transparent middleware surface;
 - `<Tool>Middleware.Adapter[U]`: the same presented surface with a different expected underlying type `U`.
 
-Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `Principal` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout and stderr are carried independently by the successful result as `ToolMiddlewareOutputHandle`s and must be drained concurrently.
+Every generated middleware method takes its underlying as the first parameter and returns `Future[Either[ToolInvokeError[E], A]]`. Global arguments, command arguments, and `InvocationContext` follow the generated projection for that command. Declared stdin becomes a `ToolMiddlewareInputHandle`; declared stdout and stderr are carried independently by the successful result as `ToolMiddlewareOutputHandle`s and must be drained concurrently.
 
 Installation parameters are statically typed. Extend `<Tool>Middleware.WithParameters[P]` (or `UniversalToolMiddleware.WithParameters[P]`) and use `UniversalToolMiddlewareInvocation[P]`; monomorphic generated handlers receive `parameters: P` immediately after the underlying. `P` must have a `zio.blocks.schema.Schema`. The no-configuration universal form uses `UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters]`. See the compile fixture linked above for both forms.
 
@@ -21,7 +21,7 @@ Installation parameters are statically typed. Extend `<Tool>Middleware.WithParam
 A transparent middleware presents and expects the same tool. Extend the generated `<Tool>Middleware` trait:
 
 ```scala
-import golem.Principal
+import golem.InvocationContext
 import golem.runtime.annotations.toolMiddleware
 import golem.tool.ToolInvokeError
 
@@ -33,7 +33,7 @@ final class MiddlewareFixtureTransparent extends MiddlewareFixtureToolMiddleware
     underlying: MiddlewareFixtureToolUnderlying,
     config: String,
     value: String,
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying.call(config, value).toMiddlewareResult
 }
@@ -53,7 +53,7 @@ final class MiddlewareFixtureAdapter
     underlying: MiddlewareFixtureBackendUnderlying,
     config: String,
     value: String,
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[MiddlewareFixtureError], String]] =
     underlying
       .execute(value)
@@ -98,7 +98,7 @@ final class MiddlewareFixtureUniversal extends UniversalToolMiddleware {
 }
 ```
 
-`UniversalToolMiddlewareInvocation` contains the tool name, full tool metadata, command path, typed schema input, optional stdin, and principal. Universal custom errors remain raw `TypedSchemaValue` payloads.
+`UniversalToolMiddlewareInvocation` contains the tool name, full tool metadata, command path, typed schema input, optional stdin, and the invocation context (`context.caller`). Universal custom errors remain raw `TypedSchemaValue` payloads.
 
 ## Exact invocation errors
 

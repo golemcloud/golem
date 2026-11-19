@@ -166,7 +166,7 @@ pub async fn ArtifactRender::artifact_render(
   stdin : @asyncCore.Stream[Byte]?,
   stdout : @tool.ProviderOutput,
   stderr : @tool.ProviderOutput?,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> Result[ArtifactReport, ArtifactError] {
   ignore(profile)
   ignore(request)
@@ -180,7 +180,7 @@ pub async fn ArtifactRender::artifact_render(
   ignore(stdin)
   ignore(stdout)
   ignore(stderr)
-  ignore(principal)
+  ignore(context)
   ...
 }
 

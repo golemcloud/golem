@@ -18,12 +18,11 @@ use super::{
     HasPromiseService, LookupResult, OplogIndex, OwnedAgentId, ResolveRevertLastInvocationsRequest,
     ResolvedRevert, RevertWorkerRequest, UpdateMode, UpdateWorkerRequest, UsesAllDeps, Worker,
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, WorkerUpdateMode, common_model,
-    extract_owned_agent_id, extract_principal, from_proto_invocation_context, golem,
+    extract_caller, extract_owned_agent_id, from_proto_invocation_context, golem,
 };
 use crate::worker::CreateIntent;
-use golem_common::model::agent::{
-    AgentTarget, InvocationFreshnessDisposition, Principal, ScheduleId,
-};
+use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, ScheduleId};
+use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 
@@ -69,7 +68,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let env: Vec<(String, String)> = request
             .env
@@ -100,7 +99,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             None,
             &invocation_context,
-            principal,
+            caller,
             freshness_disposition,
             CreateIntent::Create {
                 exclusive: !request.ignore_already_existing,
@@ -161,9 +160,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
-        Worker::<Ctx>::delete(self, &owned_agent_id, principal).await
+        Worker::<Ctx>::delete(self, &owned_agent_id, caller).await
     }
 
     pub(super) async fn fork_worker_internal(
@@ -224,7 +223,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 CreateRequest::new(
                     CreateRequestKind::Fork,
                     None,
-                    extract_principal(&request.principal),
+                    extract_caller(&request.caller)?,
                     &InvocationContextStack::fresh(),
                 ),
             )
@@ -249,7 +248,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let resolved_revert = request.resolved_revert.map(|resolved| ResolvedRevert {
             last_oplog_index: OplogIndex::from_u64(resolved.last_oplog_index),
@@ -264,7 +263,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        Worker::<Ctx>::revert(self, &owned_agent_id, target, resolved_revert, principal).await
+        Worker::<Ctx>::revert(self, &owned_agent_id, target, resolved_revert, caller).await
     }
 
     pub(super) async fn resolve_revert_last_invocations_internal(
@@ -295,7 +294,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let idempotency_key: golem_common::model::InvocationId = request
             .idempotency_key
@@ -339,7 +338,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker = match Worker::get_exact_existing_suspended(
                 self,
                 &owned_agent_id,
-                Principal::anonymous(),
+                Caller::anonymous(),
             )
             .await
             {
@@ -366,7 +365,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
         {
             let worker = self
-                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .get_existing_for_management(&owned_agent_id, caller, "cancel")
                 .await?;
             Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
                 .await?;
@@ -380,7 +379,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Err(WorkerExecutorError::invalid_request("Invocation not found"))
         } else {
             let worker = self
-                .get_existing_for_management(&owned_agent_id, principal, "cancel")
+                .get_existing_for_management(&owned_agent_id, caller, "cancel")
                 .await?;
             // A deletion, even one that failed later and left the generation cached, can have
             // stopped its state actor. The lookup then fails, and the deletion answers instead.
@@ -436,15 +435,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
-        Worker::<Ctx>::interrupt(
-            self,
-            &owned_agent_id,
-            request.recover_immediately,
-            principal,
-        )
-        .await
+        Worker::<Ctx>::interrupt(self, &owned_agent_id, request.recover_immediately, caller).await
     }
 
     pub(super) async fn resume_worker_internal(
@@ -457,11 +450,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let force_resume = request.force.unwrap_or(false);
 
-        Worker::<Ctx>::resume(self, &owned_agent_id, force_resume, principal).await
+        Worker::<Ctx>::resume(self, &owned_agent_id, force_resume, caller).await
     }
 
     pub(super) async fn update_worker_internal(
@@ -471,7 +464,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let target_revision = request.target_revision.try_into().map_err(|e| {
             WorkerExecutorError::invalid_request(format!(
@@ -493,7 +486,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             mode,
             target_revision,
             request.disable_wakeup,
-            principal,
+            caller,
         )
         .await
     }

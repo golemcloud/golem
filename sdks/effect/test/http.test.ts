@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Option, Schema, Stream } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
-import { PrincipalSchema } from "../src/Principal.js"
+import { InvocationContext } from "../src/InvocationContext.js"
 import { AgentStream } from "../src/WitTypes.js"
 import * as Wit from "../src/WitTypes.js"
 import { guest } from "../src/internal/guest.js"
@@ -1249,7 +1249,7 @@ describe("Http pipeable combinators — endpoints", () => {
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
   })
 
-  it.effect("registers authenticated GET and HEAD with injected principal inputs", () =>
+  it.effect("registers authenticated GET and HEAD that read the invocation context", () =>
     Effect.gen(function* () {
       const AdminData = Schema.Struct({ secret: Schema.String })
       defineAgent({
@@ -1258,13 +1258,12 @@ describe("Http pipeable combinators — endpoints", () => {
         http: mount("/api"),
         methods: {
           admin: method({
-            input: { principal: PrincipalSchema },
+            input: {},
             success: AdminData,
             http: [get("/admin", { auth: true }), head("/admin", { auth: true })],
           }),
           mixed: method({
             input: {
-              principal: PrincipalSchema,
               id: Schema.String,
               q: Schema.String,
               token: Schema.String,
@@ -1279,9 +1278,14 @@ describe("Http pipeable combinators — endpoints", () => {
       }).implement({
         init: () => Effect.void,
         methods: () => ({
-          admin: ({ principal }) => Effect.succeed({ secret: principal.tag }),
-          mixed: ({ principal, id, q, token }) =>
-            Effect.succeed({ secret: `${principal.tag}:${id}:${q}:${token}` }),
+          admin: () =>
+            Effect.map(InvocationContext, (context) => ({
+              secret: context.caller.immediate.kind,
+            })),
+          mixed: ({ id, q, token }) =>
+            Effect.map(InvocationContext, (context) => ({
+              secret: `${context.caller.immediate.kind}:${id}:${q}:${token}`,
+            })),
         }),
       })
       const types = yield* Effect.sync(() => guest.discoverAgentTypes())
@@ -1292,9 +1296,8 @@ describe("Http pipeable combinators — endpoints", () => {
         if (method.inputSchema.tag !== "parameters") throw new Error("expected parameters")
         expect(method.inputSchema.val.map((field) => [field.name, field.source.tag])).toEqual(
           method.name === "admin"
-            ? [["principal", "auto-injected"]]
+            ? []
             : [
-                ["principal", "auto-injected"],
                 ["id", "user-supplied"],
                 ["q", "user-supplied"],
                 ["token", "user-supplied"],

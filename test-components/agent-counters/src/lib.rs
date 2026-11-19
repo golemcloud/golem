@@ -608,9 +608,10 @@ impl FailingCounter for FailingCounterImpl {
 mod constructor_probe {
     use golem_rust::agentic::{
         AgentInitiator, AgentInvocationResult, AgentParameterProbe, AgentParameterSchema,
-        BaseAgent, DirectAgentInput, Principal, ResolvedAgent, SnapshotData,
+        BaseAgent, DirectAgentInput, ResolvedAgent, SnapshotData,
         SnapshotRestoreContext, custom_error, invalid_input_error, invalid_method_error,
     };
+    use golem_rust::caller::InvocationContext;
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConstructor, AgentError, AgentMethod, AgentMode, AgentType, AgentTypeKind,
         InputSchema, OutputSchema, Snapshotting,
@@ -636,7 +637,10 @@ mod constructor_probe {
             (&AgentParameterProbe::<String>(PhantomData)).parameter_schema("name", &mut schema),
             (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("fail", &mut schema),
             (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("block", &mut schema),
-        ];
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let output = <u32 as direct::WireSchema>::append_schema(&mut schema);
         let root = schema.push(wire::SchemaTypeBody::RecordType(vec![]));
         AgentType {
@@ -677,7 +681,7 @@ mod constructor_probe {
         async fn initiate(
             &self,
             params: wire::SchemaValueTree,
-            _principal: Principal,
+            _context: InvocationContext,
         ) -> Result<ResolvedAgent, AgentError> {
             let (name, fail, block) = (|| {
                 let mut input = DirectAgentInput::new(params)?;
@@ -724,7 +728,7 @@ mod constructor_probe {
             &mut self,
             method_name: String,
             input: wire::SchemaValueTree,
-            _principal: Principal,
+            _context: InvocationContext,
         ) -> Result<AgentInvocationResult, AgentError> {
             if method_name != "increment" {
                 return Err(invalid_method_error(method_name));

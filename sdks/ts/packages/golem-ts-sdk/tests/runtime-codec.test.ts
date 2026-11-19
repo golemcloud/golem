@@ -10,15 +10,16 @@ import { method } from '../src/method';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from '../src/host/hostapi';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
+import { anonymousContext } from './callerTestSupport';
 
 describe('prepared runtime codecs', () => {
-  it('keeps field order and principal injection separate from wire field count', () => {
+  it('keeps the field order of the wire record', () => {
     const agent = registerAgentType(
       'prepared-input',
       {},
       {
         read: {
-          input: { before: z.string(), principal: s.principal(), after: s.u8() },
+          input: { before: z.string(), after: s.u8() },
           returns: z.void(),
         },
       },
@@ -26,15 +27,14 @@ describe('prepared runtime codecs', () => {
     const runtime = agent.runtimeMethods.get('read')!;
     for (const n of [7, 31]) {
       const wire = schemaValueToWit(v.record([v.string('first'), v.u8(n)]));
-      expect(runtime.read(wire, { tag: 'anonymous' })).toMatchObject({
+      expect(runtime.read(wire)).toMatchObject({
         before: 'first',
-        principal: { tag: 'anonymous' },
         after: n,
       });
     }
-    expect(() =>
-      runtime.read(schemaValueToWit(v.record([v.string('first')])), { tag: 'anonymous' }),
-    ).toThrow(/2 user-supplied fields/);
+    expect(() => runtime.read(schemaValueToWit(v.record([v.string('first')])))).toThrow(
+      /2 user-supplied fields/,
+    );
   });
 
   it('retains generic output semantics rather than revalidating or reapplying source transforms', async () => {
@@ -127,10 +127,10 @@ describe('prepared runtime codecs', () => {
         },
       });
       const initiator = AgentInitiatorRegistry.lookup('FreshIdentity')!;
-      const initialized = await initiator.initiate(input, { tag: 'anonymous' });
+      const initialized = await initiator.initiate(input, anonymousContext);
       if (initialized.tag !== 'ok') throw new Error('initialization failed');
       const agent = initialized.val as ResolvedAgent;
-      const result = await agent.invoke('read', input, { tag: 'anonymous' });
+      const result = await agent.invoke('read', input, anonymousContext);
       if (result.tag !== 'ok' || !result.val) throw new Error('invocation failed');
       const decoded = schemaValueFromWit(result.val);
       if (decoded.tag !== 'string') throw new Error('expected string');
@@ -145,7 +145,7 @@ describe('prepared runtime codecs', () => {
       expect(JSON.parse(new TextDecoder().decode(snapshot.data))).toEqual({ saved: parent });
       const restored = await initiator.loadSnapshot(
         input,
-        { tag: 'anonymous' },
+        anonymousContext,
         snapshot.data,
         'application/json',
         { inMemory: [], fileDatabases: {} },

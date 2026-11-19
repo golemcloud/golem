@@ -1,5 +1,5 @@
 use golem_rust::tool::{
-    InputStream, OutputStream, Principal, Tool, ToolInvokeError, ToolMiddleware,
+    InputStream, InvocationContext, OutputStream, Tool, ToolInvokeError, ToolMiddleware,
     ToolMiddlewareInvokeFuture, ToolMiddlewareScope, UnderlyingTool,
 };
 use golem_rust::{
@@ -101,7 +101,7 @@ fn invoke_universal(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture {
     Box::pin(async move {

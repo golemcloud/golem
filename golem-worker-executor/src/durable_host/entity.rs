@@ -34,7 +34,7 @@ use crate::worker::entity_invocation::{
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
-use golem_common::model::agent::{AgentPrincipal, Principal};
+use golem_common::model::caller::Caller;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
@@ -122,7 +122,7 @@ enum EntityReconstructionOutcome<R, H> {
 pub struct EntityInvocationDurability {
     handle: DurableCallSession<GolemEntityInvoke, LeaveIncompleteOnDrop>,
     scope: EntityInvocationScope,
-    principal: Principal,
+    caller: Caller,
     parent: OwnerInvocationId,
     call_mode: EntityCallMode,
     operation: EntityInvocationDescriptor,
@@ -309,7 +309,7 @@ impl EntityInvocationDurability {
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
         entity: AgentEntity,
-        principal: Principal,
+        caller: Caller,
         call_mode: EntityCallMode,
         operation: EntityInvocationDescriptor,
         plan: EntityInvocationPlanReference,
@@ -332,7 +332,7 @@ impl EntityInvocationDurability {
             entity: entity.clone(),
             call_mode,
             operation,
-            principal,
+            caller,
             plan,
             authority_wallet: store
                 .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
@@ -541,7 +541,7 @@ impl EntityInvocationDurability {
         Ctx: WorkerCtx,
     {
         let parent_start_index = parent.start_index();
-        let (owner, invocation_scope_card, enclosing_invocation_id, interest) =
+        let (owner, invocation_scope_card, enclosing_invocation_id, interest, calling_principal) =
             store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
@@ -549,6 +549,7 @@ impl EntityInvocationDurability {
                     ctx.current_invocation_scope_card(),
                     ctx.current_invocation_id(),
                     ctx.state.owner_wallet.interest.clone(),
+                    ctx.self_principal(),
                 )
             });
         let invocation_id = EntityInvocationId::new(
@@ -566,9 +567,6 @@ impl EntityInvocationDurability {
                 .map(|scope| scope.root_card_ids.as_slice())
                 .unwrap_or_default(),
         );
-        let calling_principal = Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        });
         let idempotency_key = uuid::Uuid::new_v5(
             &key_context.caller_key.0,
             format!(
@@ -596,7 +594,7 @@ impl EntityInvocationDurability {
                     .expect("replayed entity invocation must own a reconstruction claim"),
             )
         };
-        let principal = metadata.principal;
+        let caller = metadata.caller;
         let activation = Arc::new(resolved_position.layer().activation().clone());
         let execution_mode = if handle.is_live() {
             InvocationExecutionMode::Live
@@ -637,7 +635,7 @@ impl EntityInvocationDurability {
         Ok(Self {
             handle,
             scope,
-            principal,
+            caller,
             parent,
             call_mode: metadata.call_mode,
             operation,
@@ -662,8 +660,8 @@ impl EntityInvocationDurability {
         self.scope_interest.clone()
     }
 
-    pub fn principal(&self) -> &Principal {
-        &self.principal
+    pub fn caller(&self) -> &Caller {
+        &self.caller
     }
 
     pub fn operation(&self) -> &EntityInvocationDescriptor {
@@ -704,7 +702,7 @@ impl EntityInvocationDurability {
         let Self {
             handle,
             scope,
-            principal,
+            caller,
             parent,
             call_mode,
             operation,
@@ -760,7 +758,7 @@ impl EntityInvocationDurability {
         let durability = Self {
             handle,
             scope,
-            principal,
+            caller,
             parent,
             call_mode,
             operation,
@@ -1702,7 +1700,8 @@ pub(crate) mod tests {
     use super::*;
     use golem_common::model::AgentId;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::{AgentPrincipal, AgentTypeName};
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::caller::{AgentPrincipal, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::{
@@ -1927,9 +1926,13 @@ pub(crate) mod tests {
                     errors: Vec::new(),
                 },
             }),
-            principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
+            caller: Caller::entry(Principal::Agent(AgentPrincipal::of_agent(
+                "https://golem.test".to_string(),
+                owner.agent_id,
+                golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
+                AgentTypeName("Test".to_string()),
+                owner.environment_id,
+            ))),
             plan,
             authority_wallet: Vec::new(),
         })

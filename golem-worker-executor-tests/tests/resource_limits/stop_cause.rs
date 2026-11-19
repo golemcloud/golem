@@ -1,8 +1,8 @@
 use super::*;
-use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_worker_executor::services::UsesAllDeps;
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 #[test]
@@ -43,7 +43,7 @@ async fn deletion_cancels_initial_wait_without_acquiring_a_permit(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     Worker::start_if_needed(worker.clone()).await?;

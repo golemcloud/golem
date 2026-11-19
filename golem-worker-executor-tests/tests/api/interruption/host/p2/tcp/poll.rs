@@ -6,6 +6,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -158,7 +159,7 @@ async fn pending_block(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();

@@ -40,7 +40,7 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::model::RetryContext;
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::agent::{AgentPrincipal, Principal};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::AgentResourcePattern;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
@@ -633,9 +633,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         &source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        Principal::Agent(AgentPrincipal {
-                            agent_id: self.agent_id().clone(),
-                        }),
+                        Caller::entry(self.self_principal()),
                         handle.agent_auth_ctx(),
                     )
                     .await;
@@ -1039,9 +1037,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let fork_request = CreateRequest::new(
                 CreateRequestKind::Fork,
                 None,
-                Principal::Agent(AgentPrincipal {
-                    agent_id: self.agent_id().clone(),
-                }),
+                Caller::entry(self.self_principal()),
                 &self.clone_as_inherited_stack(&self.state.invocation_state().current_span_id),
             );
             let fork_result = loop {

@@ -14,7 +14,8 @@
 
 import { ResolvedAgent } from './resolvedAgent';
 import { Result } from 'golem:agent/host@2.0.0';
-import { AgentError, Principal } from 'golem:agent/common@2.0.0';
+import { AgentError } from 'golem:agent/common@2.0.0';
+import type { InvocationContext } from '../caller';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type { SnapshotPart } from '../snapshot';
 import type { SnapshotDatabases } from './databaseSnapshot';
@@ -39,13 +40,13 @@ export type AgentInitiator = {
    */
   initiate(
     constructorParams: SchemaValueTree,
-    principal: Principal,
+    ctx: InvocationContext,
   ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 
   /** Constructs a complete agent directly from snapshot data, without calling the initializer. */
   loadSnapshot(
     constructorParams: SchemaValueTree,
-    principal: Principal,
+    ctx: InvocationContext,
     bytes: Uint8Array,
     mimeType: string | undefined,
     databases: SnapshotDatabases | undefined,

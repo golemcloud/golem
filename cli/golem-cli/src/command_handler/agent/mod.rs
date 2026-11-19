@@ -97,7 +97,7 @@ use golem_common::model::{
     AgentFilter, FilterComparator, IdempotencyKey, IdempotencyScope, InvocationRequestKey,
     OplogIndex, StringFilterComparator,
 };
-use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 
 use crate::command_handler::interactive::Ask;
@@ -3415,12 +3415,7 @@ fn parse_method_parameters_with_error_table(
         .ok_or_else(|| anyhow!("Method '{}' not found in agent type", method_name))?;
 
     let InputSchema::Parameters(fields) = &method.input_schema;
-    // Auto-injected fields (the principal) are filled by the host and carry no
-    // value, so the caller supplies only the rest.
-    let element_schemas = fields
-        .iter()
-        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-        .collect::<Vec<_>>();
+    let element_schemas = fields.iter().collect::<Vec<_>>();
 
     if element_schemas.len() != arguments.len() {
         logln("");
@@ -3867,8 +3862,8 @@ mod tests {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::{IdempotencyKey, OplogIndex};
     use golem_common::schema::agent::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
-        NamedField, OutputSchema,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
+        OutputSchema,
     };
     use golem_common::schema::graph::TypedSchemaValue;
     use golem_common::schema::schema_type::{NamedFieldType, VariantCaseType};
@@ -4149,16 +4144,10 @@ mod tests {
     }
 
     #[test]
-    fn method_arguments_omit_host_injected_fields() {
+    fn method_arguments_are_every_declared_field() {
         let mut agent_type = test_agent_type_schema(AgentMode::Durable);
-        let principal = NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        );
         agent_type.methods[0].input_schema = InputSchema::Parameters(vec![
             NamedField::user_supplied("name", SchemaType::string()),
-            principal.clone(),
             NamedField::user_supplied("count", SchemaType::u32()),
         ]);
         for language in [
@@ -4180,7 +4169,17 @@ mod tests {
                 },
             );
         }
-        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![principal]);
+        // A declared field is never left out: too few arguments are refused.
+        assert!(
+            parse_method_parameters_with_error_table(
+                &agent_type,
+                "run",
+                vec!["\"alice\"".to_string()],
+                &SourceLanguage::TypeScript,
+            )
+            .is_err()
+        );
+        agent_type.methods[0].input_schema = InputSchema::Parameters(vec![]);
         assert_eq!(
             parse_method_parameters_with_error_table(
                 &agent_type,

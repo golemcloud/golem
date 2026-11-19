@@ -811,9 +811,7 @@ fn colliding_branch_tags_disambiguate_by_parent_field() {
 
 mod agent_entry_points {
     use super::*;
-    use crate::schema::agent::{
-        AutoInjectedKind, FieldSource, InputSchema, NamedField, OutputSchema,
-    };
+    use crate::schema::agent::{FieldSource, InputSchema, NamedField, OutputSchema};
     use crate::schema::metadata::Role;
     use crate::schema::render::json_schema::{
         input_schema_to_json_schema, output_schema_to_json_schema,
@@ -840,15 +838,10 @@ mod agent_entry_points {
     }
 
     #[test]
-    fn input_schema_omits_auto_injected_and_marks_options_optional() {
+    fn input_schema_marks_options_optional() {
         let input = InputSchema::Parameters(vec![
             NamedField::user_supplied("city", SchemaType::string()),
             NamedField::user_supplied("hint", SchemaType::option(SchemaType::string())),
-            NamedField::auto_injected(
-                "principal",
-                AutoInjectedKind::Principal,
-                SchemaType::string(),
-            ),
         ]);
         let graph = SchemaGraph::empty();
         let doc =
@@ -858,19 +851,11 @@ mod agent_entry_points {
         let props = doc["properties"].as_object().expect("properties object");
         assert!(props.contains_key("city"));
         assert!(props.contains_key("hint"));
-        assert!(
-            !props.contains_key("principal"),
-            "auto-injected fields must not be surfaced: {doc}"
-        );
         let required = doc["required"].as_array().expect("required array");
         assert!(required.contains(&Value::String("city".to_string())));
         assert!(
             !required.contains(&Value::String("hint".to_string())),
             "option fields must not be required: {doc}"
-        );
-        assert!(
-            !required.contains(&Value::String("principal".to_string())),
-            "auto-injected fields must not be required: {doc}"
         );
         assert!(doc.get("$schema").is_none());
     }

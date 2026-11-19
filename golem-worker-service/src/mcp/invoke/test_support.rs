@@ -29,8 +29,9 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
+use golem_common::model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, PluginPriority,
@@ -342,7 +343,7 @@ pub(crate) struct FileReadMock {
 
 pub(crate) struct RecordedInvocationContext {
     pub auth: AuthCtx,
-    pub principal: golem_api_grpc::proto::golem::component::Principal,
+    pub caller: golem_api_grpc::proto::golem::component::Caller,
     pub context: Option<InvocationContext>,
     pub idempotency_key: IdempotencyKey,
     pub request_key: golem_common::model::InvocationRequestKey,
@@ -407,7 +408,7 @@ impl WorkerClient for RecordingWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         _idempotency_key: Option<IdempotencyKey>,
         _freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
@@ -420,7 +421,7 @@ impl WorkerClient for RecordingWorkerClient {
             environment_id,
             auth_ctx,
             invocation_context,
-            principal,
+            caller,
         );
         self.prepared_agent_ids
             .lock()
@@ -439,7 +440,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AuthCtx,
         _: Option<InvocationContext>,
-        _: Option<golem_api_grpc::proto::golem::component::Principal>,
+        _: golem_api_grpc::proto::golem::component::Caller,
         _: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         unimplemented!()
@@ -637,7 +638,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AccountId,
         _: AccountEmail,
-        _: Principal,
+        _: Caller,
         _: AuthCtx,
     ) -> WorkerResult<()> {
         unimplemented!()
@@ -689,7 +690,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: EnvironmentId,
         _: AccountId,
         auth: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         _: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -701,7 +702,7 @@ impl WorkerClient for RecordingWorkerClient {
             .unwrap()
             .push(RecordedInvocationContext {
                 auth,
-                principal,
+                caller,
                 context,
                 idempotency_key: request_key.owner_key(method_name.as_deref().unwrap_or_default()),
                 request_key,
@@ -993,6 +994,7 @@ impl InvocationHarness {
                     Duration::from_secs(60),
                     Duration::from_secs(60),
                 )),
+                "https://golem.test".parse().unwrap(),
             )),
             component_id,
             environment_id,

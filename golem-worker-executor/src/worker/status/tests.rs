@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
@@ -36,7 +37,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::InvocationResultPosition;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
@@ -1338,7 +1339,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "a".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
-                    principal: Principal::anonymous(),
+                    caller: Caller::anonymous(),
                     scope_card: None,
                 })),
                 trace_id: TraceId::generate(),
@@ -1848,7 +1849,7 @@ fn recovery_errors_are_not_invocation_results() {
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "agent:method".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
-                    principal: Principal::anonymous(),
+                    caller: Caller::anonymous(),
                     scope_card: None,
                 })),
                 trace_id: TraceId::generate(),
@@ -1893,7 +1894,7 @@ fn started_invocation(key: &InvocationId) -> OplogEntry {
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -1950,7 +1951,7 @@ fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
         OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         TraceId::generate(),
@@ -3260,7 +3261,7 @@ async fn multiple_reverts() {
                 fields: vec![SchemaValue::Bool(true)],
             },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .agent_invocation_finished(
@@ -3305,7 +3306,7 @@ async fn cancel_pending_invocation() {
                 fields: vec![SchemaValue::Bool(true)],
             },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .pending_invocation(AgentInvocation::AgentMethod {
@@ -3313,7 +3314,7 @@ async fn cancel_pending_invocation() {
             method_name: "b".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .cancel_pending_invocation(k1)
@@ -3331,7 +3332,7 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
             method_name: "denied".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .permission_denied_pending_invocation(idempotency_key)
@@ -4865,7 +4866,7 @@ impl TestCaseBuilder {
                         create_request: golem_common::model::oplog::CreateRequest::new(
                             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                             None,
-                            golem_common::model::agent::Principal::anonymous(),
+                            golem_common::model::caller::Caller::anonymous(),
                             &golem_common::model::invocation_context::InvocationContextStack::fresh(
                             ),
                         ),
@@ -4912,7 +4913,7 @@ impl TestCaseBuilder {
         let payload = AgentInvocationPayload::AgentMethod {
             method_name: function_name.to_string(),
             input: SchemaValue::Record { fields: request },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         };
         self.add(
@@ -8994,7 +8995,7 @@ mod invocation_payload_decodes {
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("input".to_string())],
                 },
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             })),
             trace_id: TraceId::generate(),

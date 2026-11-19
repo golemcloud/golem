@@ -159,7 +159,11 @@ function instantiate(code, overrides = {}, format = 'cjs') {
   const host = {
     DatabaseSync: class {},
     getEnvironment: () => [['GOLEM_AGENT_ID', 'Counter()']],
-    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } }),
+    caller: () => ({
+      original: { tag: 'anonymous' },
+      immediate: { tag: 'anonymous' },
+      tokens: [],
+    }),
     parseAgentId: () => [
       'Counter',
       { graph: { typeNodes: [], defs: [], root: 0 }, value: unit },
@@ -801,10 +805,8 @@ describe('component exports', () => {
     let configReads = 0;
     let secretDrops = 0;
     let title;
-    let principal = { tag: 'anonymous' };
     const runtime = await instantiate(output.code, {
       makeAgentId: () => 'Counter()',
-      caller: () => ({ original: principal, immediate: principal }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
         if (path.join('.') === 'group.title')
@@ -859,19 +861,20 @@ describe('component exports', () => {
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);
     await runtime.guest.initialize('Counter', structuredClone(unit));
-    principal = {
-      tag: 'golem-user',
-      val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
-    };
-    const principalResult = await runtime.guest.invoke('principal', structuredClone(unit));
-    principal = { tag: 'anonymous' };
-    expect(principalResult).toEqual({
+    const principalRefResult = await runtime.guest.invoke('principalRef', {
       root: 3,
       valueNodes: [
-        { tag: 'uuid-value', val: { highBits: 17n, lowBits: 31n } },
-        { tag: 'record-value', val: [0] },
-        { tag: 'record-value', val: [1] },
-        { tag: 'variant-value', val: { case_: 2, payload: 2 } },
+        { tag: 'string-value', val: 'https://login.example' },
+        { tag: 'string-value', val: 'u-1' },
+        { tag: 'record-value', val: [0, 1] },
+        { tag: 'record-value', val: [2] },
+      ],
+    });
+    expect(schemaValueFromWit(principalRefResult)).toEqual({
+      tag: 'record',
+      fields: [
+        { tag: 'string', value: 'https://login.example' },
+        { tag: 'string', value: 'u-1' },
       ],
     });
     expect(configReads).toBe(0);
@@ -1179,7 +1182,7 @@ describe('component exports', () => {
           expect(retained).not.toContain(module);
       if (name === 'agent-reflection') expect(retained).toContain('schema-model/wit.mjs');
       if (!capabilities.agents) {
-        expect(output.unminified).not.toContain('serializePrincipal');
+        expect(output.unminified).not.toContain('validateLegacySnapshotPrincipal');
         expect(output.unminified).not.toContain('initializedAgent');
       }
       const exports = await instantiate(output.code);
@@ -1216,8 +1219,7 @@ describe('component exports', () => {
         expect(compileSchema(z.number()).fromValue(schemaValueFromWit(result))).toBe(18);
         const snapshot = await exports.saveSnapshot.save();
         expect(JSON.parse(new TextDecoder().decode(snapshot.payload))).toEqual({
-          version: 1,
-          principal: { tag: 'anonymous' },
+          version: 2,
           state: { count: 18 },
           fileDatabases: {},
         });

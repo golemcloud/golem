@@ -13,6 +13,7 @@ use golem_worker_executor::services::rdbms::{
     RdbmsTransactionStatus,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use test_r::test;
 use tokio::sync::Notify;
@@ -558,7 +559,7 @@ async fn completion_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let input = if operation == Operation::Keyvalue {

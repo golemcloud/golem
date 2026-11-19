@@ -24,6 +24,7 @@ use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -293,7 +294,7 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
             ),
             environment_id: Some(context.default_environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             resolved_revert: Some(resolved),
         })
         .await?

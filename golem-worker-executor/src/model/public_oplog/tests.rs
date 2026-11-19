@@ -17,7 +17,8 @@ use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::agent::AgentTypeName;
+
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
@@ -562,7 +563,7 @@ fn make_agent_metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -1153,9 +1154,7 @@ fn test_entity_request(
                 },
             })
         }),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
+        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
         plan: EntityInvocationPlanReference::Root { plan },
         authority_wallet: Vec::new(),
     };

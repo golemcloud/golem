@@ -171,9 +171,13 @@ func init() {
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
-		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
+		caller, end := currentCaller()
+		defer end(false)
+		result := defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
 			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stderr(stderr))},
-			principalFromWit(link.ImmediateCaller()))
+			caller)
+		end(returnsStream(result))
+		return result
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -211,7 +215,9 @@ func init() {
 		// The input's cards are this component's: the ones no decode took or
 		// call sent go back to the host however the invocation ends.
 		defer engine.ReleaseCardsIn(input.Value.ValueNodes, link.ReleaseCard)
-		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
+		caller, end := currentCaller()
+		defer end(false)
+		result := defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,
 			parameters:  typedValue(parameters),
@@ -220,18 +226,43 @@ func init() {
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolOutput("stdout", hostOutput(toolExports.Stdout(stdout))),
 			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stderr(stderr))),
-			principal:   principalFromWit(link.ImmediateCaller()),
+			caller:      caller,
 			under:       newUnderlyingLayer(wrapped),
 		})
+		end(returnsStream(result))
+		return result
 	}
 }
 
+// returnsStream reports whether a tool result returns a stream: a value that
+// holds one, or a standard output stream. Its producer runs after the call.
+func returnsStream(result witTypes.Result[toolCommon.InvocationResult, types.ToolError]) bool {
+	if !result.IsOk() {
+		return false
+	}
+	ok := result.Ok()
+	if ok.Stdout.IsSome() || ok.Stderr.IsSome() {
+		return true
+	}
+	return ok.Result.IsSome() && engine.HoldsStream(ok.Result.Some().Value.ValueNodes)
+}
+
 // Context is the per-invocation context handed to a command handler. The
-// arguments, standard input and principal arrive in the argument struct; the
-// context says which command is running.
+// arguments and standard input arrive in the argument struct; the context says
+// which command is running and who called it.
 type Context struct {
-	tool string
-	path []string
+	tool   string
+	path   []string
+	caller func() golem.Caller
+}
+
+// Caller says who caused the running invocation. The host is asked on the first
+// call, and the answer is kept for the rest of the invocation.
+func (c *Context) Caller() golem.Caller {
+	if c.caller == nil {
+		return golem.AnonymousCaller()
+	}
+	return c.caller()
 }
 
 // Tool returns the name of the tool being invoked.

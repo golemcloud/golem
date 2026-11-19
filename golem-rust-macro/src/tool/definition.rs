@@ -450,7 +450,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
             mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
             mut __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
-            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+            __context: golem_rust::agentic::InvocationContext,
         ) -> golem_rust::agentic::ToolInvokeFuture
         where
             Self: Sized + 'static,
@@ -473,7 +473,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         __stdin,
                         __stdout,
                         __stderr,
-                        __principal,
+                        __context,
                     )
                     .await
             })
@@ -489,7 +489,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
             __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
             __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
-            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+            __context: golem_rust::agentic::InvocationContext,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
             Self: Sized + 'a,
@@ -501,7 +501,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     __stdin,
                     __stdout,
                     __stderr,
-                    __principal,
+                    __context,
                 )
                 .await
             })
@@ -517,7 +517,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
             mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
             mut __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
-            __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
+            __context: golem_rust::agentic::InvocationContext,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
             Self: Sized + 'a,
@@ -587,7 +587,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                             __stdin,
                             __stdout,
                             __stderr,
-                            __principal,
+                            __context,
                         ).await;
                     }
                 }
@@ -692,9 +692,9 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                 let ty = &param.ty;
                 let value_name = canonical_param_name(ir, cmd, param, &tool_name);
                 let value_aliases = param_aliases(cmd, param);
-                if is_auto_injected_principal_type(ty) {
+                if is_injected_context_type(ty) {
                     quote! {
-                        let #ident = __principal.clone();
+                        let #ident = __context.clone();
                     }
                 } else if let Some((kind, required)) = stream_type(ty) {
                     match (kind, required) {
@@ -870,7 +870,7 @@ fn encode_invocation_result(
     }
 }
 
-fn is_auto_injected_principal_type(ty: &Type) -> bool {
+fn is_injected_context_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };
@@ -883,16 +883,8 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic" | "tool", "Principal"]
-            | ["golem_native_tool" | "crate", "Principal"]
-            | [
-                "golem_rust",
-                "golem_agentic",
-                "golem",
-                "agent",
-                "common",
-                "Principal"
-            ]
+        ["golem_rust", "agentic" | "tool", "InvocationContext"]
+            | ["golem_native_tool" | "crate", "Caller"]
     )
 }
 
@@ -1381,13 +1373,13 @@ mod tests {
     }
 
     #[test]
-    fn sdk_path_normalization_keeps_canonical_principal_auto_injected() {
+    fn sdk_path_normalization_keeps_canonical_context_auto_injected() {
         let resolved = proc_macro2::Ident::new("golem_rust", Span::call_site());
         let canonical = proc_macro2::Ident::new("golem_rust", Span::call_site());
         let preserved = proc_macro2::Ident::new("__preserved_golem_rust", Span::call_site());
         let mut item: ItemTrait = syn::parse_quote! {
             trait Example {
-                fn run(&self, principal: golem_rust::tool::Principal, value: String);
+                fn run(&self, context: golem_rust::tool::InvocationContext, value: String);
             }
         };
 
@@ -1395,8 +1387,8 @@ mod tests {
         let definition = build_tool_definition_ir(&item, None).unwrap();
 
         assert!(
-            crate::tool::client::is_principal_type(&definition.commands[0].params[0].ty),
-            "the SDK Principal parameter must remain classified as auto-injected after path normalization"
+            crate::tool::client::is_injected_context_type(&definition.commands[0].params[0].ty),
+            "the SDK InvocationContext parameter must remain classified as auto-injected after path normalization"
         );
     }
 

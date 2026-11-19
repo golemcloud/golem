@@ -107,9 +107,7 @@ fn context_for(
         parent: parent(),
         call_mode,
         activation: activation(filesystem),
-        principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
+        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
         descriptor: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: Vec::new(),
@@ -3523,7 +3521,7 @@ fn probed_entity_invocation(
         EntityInvocationId::new(entity_id, OplogIndex::from_u64(2)).unwrap(),
         OplogIndex::from_u64(1),
         context.activation,
-        context.principal,
+        context.caller.immediate.clone(),
         InvocationExecutionMode::Live,
         uuid::Uuid::new_v4().into(),
         false,
@@ -3612,7 +3610,7 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
         EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
         OplogIndex::from_u64(1),
         operation.activation,
-        operation.principal,
+        operation.caller.immediate.clone(),
         InvocationExecutionMode::Live,
         uuid::Uuid::new_v4().into(),
         false,

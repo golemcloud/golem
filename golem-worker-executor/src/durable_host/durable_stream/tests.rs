@@ -4276,7 +4276,9 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
         .add(OplogEntry::pending_agent_invocation(
             None,
             uuid::Uuid::from_u128(107).into(),
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -6312,7 +6314,9 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
     let pending = OplogEntry::pending_agent_invocation(
         None,
         uuid::Uuid::from_u128(108).into(),
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        })),
         TraceId::generate(),
         Vec::new(),
         Vec::new(),
@@ -6511,7 +6515,9 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     let pending = OplogEntry::pending_agent_invocation(
         None,
         identity.invocation.idempotency_key,
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        })),
         TraceId::generate(),
         vec!["winner-trace".into()],
         Vec::new(),

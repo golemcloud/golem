@@ -7,7 +7,6 @@
 //     http://license.golem.cloud/LICENSE
 
 use anyhow::{Context, Result, bail};
-use golem_common::model::agent::Principal;
 use golem_common::schema::agent::wit::wire as agent_wire;
 use golem_common::schema::tool::Tool;
 use golem_common::schema::tool::wit::wire as tool_wire;
@@ -16,6 +15,7 @@ use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
 use golem_schema::schema::SchemaValueStreamHandleRep;
 use golem_schema::schema::wit::{PermissionCardHandleRep, QuotaTokenHandleRep, SecretHandleRep};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{PrecompiledComponent, WorkerExecutorTestDependencies};
 use std::collections::HashMap;
 use std::path::Path;
@@ -262,10 +262,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
                 linker_interface.func_wrap(
                     name,
                     |_store: wasmtime::StoreContextMut<'_, Host>, (): ()| {
-                        Ok((agent_wire::Caller {
-                            original: Principal::anonymous().into(),
-                            immediate: Principal::anonymous().into(),
-                        },))
+                        Ok((agent_wire::Caller::from(callers::anonymous()),))
                     },
                 )?;
                 continue;

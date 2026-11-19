@@ -72,9 +72,13 @@ impl HttpRouter for StaticHttpRouterImpl {
     }
 
     async fn openapi(&self) -> String {
-        use golem_rust::agentic::{get_agent_id, get_principal};
+        use golem_rust::agentic::get_agent_id;
         use golem_rust::golem_agentic::golem::agent::common::Principal;
-        assert!(matches!(get_principal(), Some(Principal::Anonymous)));
+        use golem_rust::golem_agentic::golem::agent::invocation_context;
+        assert!(matches!(
+            invocation_context::caller().immediate,
+            Principal::Anonymous
+        ));
         if std::env::var("TEST_OPENAPI_INVALID").as_deref() == Ok("true") {
             return "invalid-provider-document".to_string();
         }

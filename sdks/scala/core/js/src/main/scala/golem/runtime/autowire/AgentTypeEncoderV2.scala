@@ -47,8 +47,7 @@ object AgentTypeEncoderV2 {
 
   sealed trait FieldSource
   object FieldSource {
-    case object UserSupplied          extends FieldSource
-    case object AutoInjectedPrincipal extends FieldSource
+    case object UserSupplied extends FieldSource
   }
 
   /** A single named parameter with its own self-contained schema graph. */
@@ -177,7 +176,6 @@ object AgentTypeEncoderV2 {
 
   private def encodeSource(source: FieldSource): JsFieldSource =
     source match {
-      case FieldSource.UserSupplied          => JsFieldSource.userSupplied
-      case FieldSource.AutoInjectedPrincipal => JsFieldSource.autoInjectedPrincipal
+      case FieldSource.UserSupplied => JsFieldSource.userSupplied
     }
 }

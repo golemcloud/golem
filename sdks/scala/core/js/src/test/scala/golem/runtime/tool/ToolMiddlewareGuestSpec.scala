@@ -25,7 +25,7 @@ import golem.schema.{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
 import golem.tool.wire.{WitCustomToolError, WitToolError}
-import golem.{FutureInterop, Principal}
+import golem.FutureInterop
 import zio.test._
 import zio.ZIO
 import zio.blocks.schema.Schema
@@ -242,7 +242,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
       UniversalCaptured.toolName = invocation.toolName
       UniversalCaptured.toolMetadata = Some(invocation.toolMetadata)
-      UniversalCaptured.principal = invocation.principal
+      UniversalCaptured.caller = invocation.context.caller.immediate.toString
       underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin)
     }
   }
@@ -250,7 +250,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
   private object UniversalCaptured {
     var toolName: String                              = ""
     var toolMetadata: Option[golem.tool.wire.WitTool] = None
-    var principal: Principal                          = Principal.Anonymous
+    var caller: String                                = ""
   }
 
   private object TypedUniversalCaptured {
@@ -268,7 +268,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
   }
 
   private object MonomorphicCaptured {
-    var principal: Principal  = Principal.Anonymous
+    var caller: String        = ""
     var stdinPresent: Boolean = false
   }
 
@@ -335,7 +335,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
       Nil,
       expectsStdin = true,
       (_, underlying, context) => {
-        MonomorphicCaptured.principal = context.principal
+        MonomorphicCaptured.caller = context.caller.immediate.toString
         MonomorphicCaptured.stdinPresent = context.stdin.nonEmpty
         underlying.invoke(
           List("backend"),
@@ -460,40 +460,22 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           wrappedStdin,
           forwardedStdinValue.asInstanceOf[js.Object] eq stdin,
           MonomorphicCaptured.stdinPresent,
-          MonomorphicCaptured.principal == Principal.Anonymous
+          MonomorphicCaptured.caller == "anonymous"
         )
       },
-      test("universal dispatch roundtrips metadata, input, result, and principal") {
+      test("universal dispatch roundtrips metadata, input, result, and caller") {
         registered
-        val oidcPrincipal = js.Dynamic.literal(
-          "tag" -> "oidc",
+        val userPrincipal = js.Dynamic.literal(
+          "tag" -> "user",
           "val" -> js.Dynamic.literal(
-            "sub"               -> "subject-37",
-            "issuer"            -> "https://issuer.example",
-            "claims"            -> "{\"role\":\"admin\"}",
-            "email"             -> "scala@example.com",
-            "name"              -> "Scala Middleware",
-            "emailVerified"     -> true,
-            "givenName"         -> "Scala",
-            "familyName"        -> "Middleware",
-            "picture"           -> "https://example.com/picture.png",
-            "preferredUsername" -> "scala-middleware"
+            "pair"            -> js.Dynamic.literal("issuer" -> "https://issuer.example", "subject" -> "subject-37"),
+            "claims"          -> "{\"role\":\"admin\"}",
+            "authenticatedAt" -> js.Dynamic.literal("seconds" -> js.BigInt("1700000000"), "nanoseconds" -> 0)
           )
         )
-        val expectedPrincipal = Principal.Oidc(
-          sub = "subject-37",
-          issuer = "https://issuer.example",
-          claims = "{\"role\":\"admin\"}",
-          email = Some("scala@example.com"),
-          name = Some("Scala Middleware"),
-          emailVerified = Some(true),
-          givenName = Some("Scala"),
-          familyName = Some("Middleware"),
-          picture = Some("https://example.com/picture.png"),
-          preferredUsername = Some("scala-middleware")
-        )
-        val metadata   = toolToJs(universalTool)
-        val underlying = wrapped { (_, value, _) =>
+        val expectedCaller = "user (\"https://issuer.example\",\"subject-37\")"
+        val metadata       = toolToJs(universalTool)
+        val underlying     = wrapped { (_, value, _) =>
           resolved(
             js.Dynamic.literal("result" -> value).asInstanceOf[JsInvocationResult]
           )
@@ -508,14 +490,14 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
                         input("payload"),
                         noStdin,
                         underlying,
-                        oidcPrincipal
+                        userPrincipal
                       )
                     )
         } yield assertTrue(
           resultOf(result).map(SchemaWireInterop.typedFromJs).contains(typed("payload")),
           UniversalCaptured.toolName == universalTool.toolName,
           UniversalCaptured.toolMetadata.contains(universalTool.tryToTool.toOption.get),
-          UniversalCaptured.principal == expectedPrincipal
+          UniversalCaptured.caller == expectedCaller
         )
       },
       test("declared nested parameters are decoded distinctly for successive invocations") {

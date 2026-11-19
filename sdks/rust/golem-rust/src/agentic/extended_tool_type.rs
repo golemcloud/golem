@@ -8,10 +8,10 @@ use std::collections::{HashMap, HashSet};
 
 pub type Tool = wire::Tool;
 
-pub fn tool_value_schema<T: Schema>(position: &str) -> Result<SchemaGraph, ToolBuildError> {
-    T::get_type()
+pub fn tool_value_schema<T: Schema>(_position: &str) -> Result<SchemaGraph, ToolBuildError> {
+    Ok(T::get_type()
         .get_schema_graph()
-        .ok_or_else(|| ToolBuildError::AutoInjectedToolParameter(position.to_string()))
+        .expect("a tool value type always has a schema graph"))
 }
 
 pub fn encode_schema_value_default(

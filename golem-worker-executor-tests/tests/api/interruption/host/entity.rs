@@ -7,7 +7,6 @@ use super::*;
 use anyhow::Context as _;
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::AgentPrincipal;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
@@ -32,6 +31,7 @@ use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor::workerctx::{
     EntityInvocationManagement, InvocationManagement, WorkerCtx,
 };
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{TestCardService, start_with_resource_limits_and_overrides};
 use pretty_assertions::assert_eq;
 use test_r::test;
@@ -175,9 +175,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     assert!(Arc::ptr_eq(&host.owner_resources(), &resources));
     let before_entity = worker.oplog().current_oplog_index().await;
     let scope_index = before_entity.next();
-    let principal = Principal::Agent(AgentPrincipal {
-        agent_id: id.clone(),
-    });
+    let caller = callers::agent(id.clone());
     // Like the instance-layer tests, install an in-memory scope without a tool dispatcher.
     // The index identifies the scope only; this test does not create a durable entity root.
     let scope = EntityInvocationScope::new(
@@ -191,7 +189,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         .unwrap(),
         before_entity,
         activation,
-        principal.clone(),
+        caller.immediate.clone(),
         InvocationExecutionMode::Live,
         golem_common::model::InvocationId(uuid::Uuid::new_v4()),
         false,
@@ -224,7 +222,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 idempotency_key: init_key,
                 input: parsed.parameters.value().clone(),
                 invocation_context: InvocationContextStack::fresh(),
-                principal: principal.clone(),
+                caller: caller.clone(),
             };
             // Entity execution bypasses primary pending admission. The entity scope remains Live.
             let result = invoke_observed_and_traced(
@@ -251,7 +249,7 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 method_name: "tcp_collect_p3".to_string(),
                 input: data_value!(entity_port).value().clone(),
                 invocation_context: InvocationContextStack::fresh(),
-                principal,
+                caller,
                 scope_card: None,
             };
             invoke_observed_and_traced(

@@ -45,6 +45,7 @@ use golem_common::model::agent::{
     AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
 use golem_common::model::agent::{AgentFileContentHash, AgentMode, AgentTypeName};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
@@ -587,7 +588,7 @@ impl TestDsl for TestWorkerExecutor {
                 config: config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 invocation_context: None,
                 idempotency_key: None,
                 freshness_disposition: 0,
@@ -636,7 +637,7 @@ impl TestDsl for TestWorkerExecutor {
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(self.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(Caller::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -660,7 +661,7 @@ impl TestDsl for TestWorkerExecutor {
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         _deployment_revision: Option<DeploymentRevision>,
-        principal: Option<golem_common::model::agent::Principal>,
+        caller: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
@@ -685,7 +686,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 context: None,
-                principal: principal.map(Into::into),
+                caller: Some(caller.unwrap_or_else(Caller::anonymous).into()),
                 freshness_disposition:
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
@@ -756,7 +757,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 target: Some(target.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 resolved_revert,
             })
             .await?
@@ -929,7 +930,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 recover_immediately,
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -957,7 +958,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 force: Some(force),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1015,7 +1016,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1044,7 +1045,7 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1079,7 +1080,7 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Automatic.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1114,7 +1115,7 @@ impl TestDsl for TestWorkerExecutor {
                 mode: UpdateMode::Manual.into(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 disable_wakeup,
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1141,7 +1142,7 @@ impl TestDsl for TestWorkerExecutor {
                 agent_id: Some(agent_id.clone().into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1257,7 +1258,7 @@ impl TestDsl for TestWorkerExecutor {
                 idempotency_key: Some((*idempotency_key).into()),
                 environment_id: Some(latest_version.environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 scheduled: None,
             })
             .await?
@@ -1291,7 +1292,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();
@@ -1344,7 +1345,7 @@ impl TestDsl for TestWorkerExecutor {
                 environment_id: Some(latest_version.environment_id.into()),
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
                 selection: Some(FileByteSelection::Full.into()),
             })
             .await?
@@ -1431,7 +1432,7 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 component_owner_account_email: "test@golem".to_string(),
                 auth_ctx: Some(self.auth_ctx().into()),
-                principal: None,
+                caller: Some(Caller::anonymous().into()),
             })
             .await?
             .into_inner();

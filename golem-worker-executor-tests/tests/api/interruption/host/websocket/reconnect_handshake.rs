@@ -1,5 +1,6 @@
 use super::reconnect_pool::{self, Path};
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! handshake_case {
@@ -172,7 +173,7 @@ pub(super) async fn pending_reconnect_handshake(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let pool = worker.websocket_connection_pool();

@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the License.
 package golem.runtime.autowire
 
-import golem.{FutureInterop, Principal, UShort}
+import golem.{FutureInterop, InvocationContext, UShort}
 import golem.runtime.*
 import golem.runtime.http.*
 import golem.schema.*
@@ -96,7 +96,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
           }
           ZIO.fromFuture { _ =>
             SchemaPayload.encodeAsync(request(verb))(input).flatMap { wire =>
-              val invocation = FutureInterop.fromPromise(binding.invoke((), wire, Principal.Anonymous))
+              val invocation = FutureInterop.fromPromise(binding.invoke((), wire, InvocationContext.anonymous))
               for {
                 _       <- started.future
                 pending  = !invocation.isCompleted
@@ -134,7 +134,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
           ZIO.fromFuture { _ =>
             for {
               wire    <- SchemaPayload.encodeAsync(request(verb))(input)
-              result  <- FutureInterop.fromPromise(binding.invoke((), wire, Principal.Anonymous))
+              result  <- FutureInterop.fromPromise(binding.invoke((), wire, InvocationContext.anonymous))
               response = SchemaPayload.decode[HttpResponse](result.get).toOption.get
               item    <- response.body.pull()
               _       <- response.body.close()
@@ -177,7 +177,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
         )
         for {
           wire    <- SchemaPayload.encodeAsync(request("HEAD").copy(body = body))(input)
-          result  <- FutureInterop.fromPromise(binding.invoke((), wire, Principal.Anonymous))
+          result  <- FutureInterop.fromPromise(binding.invoke((), wire, InvocationContext.anonymous))
           response = SchemaPayload.decode[HttpResponse](result.get).toOption.get
           end     <- response.body.pull()
         } yield assertTrue(decoded == 1, finalized == 1, end.isEmpty)
@@ -199,7 +199,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
         def invoke(
           instance: Unit,
           input: golem.schema.wire.WitSchemaValueTree,
-          principal: Principal
+          context: InvocationContext
         ): Future[Option[golem.schema.wire.WitSchemaValueTree]] =
           Future.successful(Some(SchemaWire.schemaValueToWit(HttpResponse.intoSchema.toValue(response))))
       }
@@ -217,7 +217,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
       ZIO.fromFuture { _ =>
         for {
           wire    <- SchemaPayload.encodeAsync(request("HEAD"))(input)
-          result  <- FutureInterop.fromPromise(binding.invoke((), wire, Principal.Anonymous))
+          result  <- FutureInterop.fromPromise(binding.invoke((), wire, InvocationContext.anonymous))
           response = SchemaPayload.decode[HttpResponse](result.get).toOption.get
           end     <- response.body.pull()
         } yield assertTrue(pulls == 0, finalized == 1, end.isEmpty)
@@ -237,7 +237,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
       ZIO.fromFuture { _ =>
         for {
           wire  <- SchemaPayload.encodeAsync(request("GET"))(input)
-          error <- FutureInterop.fromPromise(binding.invoke((), wire, Principal.Anonymous)).failed
+          error <- FutureInterop.fromPromise(binding.invoke((), wire, InvocationContext.anonymous)).failed
         } yield assertTrue(error eq failure, finalized == 1)
       }
     }
