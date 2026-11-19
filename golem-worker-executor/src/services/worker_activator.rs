@@ -17,8 +17,9 @@ use crate::services::oplog::ArchiveWait;
 use crate::worker::{CreateIntent, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::base_model::agent::{AgentMode, Principal};
+use golem_common::base_model::agent::AgentMode;
 use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -87,7 +88,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 
@@ -100,7 +101,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>;
 
     async fn enqueue_exact_existing(
@@ -253,7 +254,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self
@@ -272,7 +273,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         component_revision,
                         parent,
                         invocation_context,
-                        principal,
+                        caller,
                         create_intent,
                     )
                     .await
@@ -291,7 +292,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let maybe_worker_activator = self
             .worker_activator
@@ -309,7 +310,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
                         component_revision,
                         parent,
                         invocation_context,
-                        principal,
+                        caller,
                     )
                     .await
             }
@@ -388,7 +389,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Principal::anonymous())
+            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
             .await
         {
             Ok(worker) => worker.archive_oplog(last_oplog_index, wait).await,
@@ -408,7 +409,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Principal::anonymous())
+            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
             .await
         {
             Ok(worker) => worker,
@@ -431,7 +432,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                 match self
                     .all
                     .active_agents()
-                    .get_existing(&self.all, owned_agent_id, Principal::anonymous())
+                    .get_existing(&self.all, owned_agent_id, Caller::anonymous())
                     .await
                 {
                     Ok(worker) => worker,
@@ -523,7 +524,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_suspended_with_freshness(
@@ -534,7 +535,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             component_revision,
             parent,
             invocation_context,
-            principal,
+            caller,
             InvocationFreshnessDisposition::MayExist,
             create_intent,
         )
@@ -549,7 +550,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         Worker::get_or_create_running(
             &self.all,
@@ -559,7 +560,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             component_revision,
             parent,
             invocation_context,
-            principal,
+            caller,
         )
         .await
     }
@@ -576,7 +577,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             .get_existing_with_fingerprint(
                 &self.all,
                 owned_agent_id,
-                Principal::anonymous(),
+                Caller::anonymous(),
                 Some(expected_fingerprint),
             )
             .await

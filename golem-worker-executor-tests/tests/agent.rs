@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_worker_executor_test_utils::callers;
 
 use golem_api_grpc::proto::golem::worker::InvocationStart;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -333,6 +334,7 @@ async fn stream_method_failure_settles_active_http_tail_before_publication_and_r
         attempt_id: Some(uuid::Uuid::new_v4().into()),
         expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
         request_key: Some(request_key.into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut failure = Box::pin(executor.invoke_agent_session(invocation));
@@ -771,7 +773,6 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
     _tracing: &Tracing,
     #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::agent::Principal;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::{AgentInvocation, AgentStatus};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -823,7 +824,7 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
             worker = golem_worker_executor::worker::Worker::get_exact_existing_suspended(
                 healthy_worker.all(),
                 &owned,
-                Principal::anonymous(),
+                callers::anonymous(),
             )
             .await?;
         }
@@ -834,7 +835,7 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
                 method_name: "value".to_string(),
                 input: data_value!().into_parts().1,
                 invocation_context: InvocationContextStack::fresh(),
-                principal: Principal::anonymous(),
+                caller: callers::anonymous(),
                 scope_card: None,
             };
             let error = if scheduled {
@@ -1088,6 +1089,7 @@ async fn method_failure_replay_rejects_success_or_trap_in_place_of_a_local_termi
                 freshness_disposition:
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             })
             .await
@@ -1245,7 +1247,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 environment_id: Some(component.environment_id.into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 context: None,
-                principal: None,
+                caller: Some(callers::anonymous().into()),
                 freshness_disposition:
                     golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                         as i32,
@@ -1328,7 +1330,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             environment_id: Some(streaming_component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -1827,7 +1829,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -1883,7 +1885,7 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -1951,7 +1953,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             context: None,
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
@@ -3087,7 +3089,7 @@ fn counter_invocation(
         environment_id: Some(component.environment_id.into()),
         auth_ctx: Some(executor.auth_ctx().into()),
         context: None,
-        principal: None,
+        caller: Some(callers::anonymous().into()),
         freshness_disposition:
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
         config: Vec::new(),

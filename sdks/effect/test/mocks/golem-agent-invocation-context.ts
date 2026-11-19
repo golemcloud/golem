@@ -5,21 +5,34 @@
  * agent, tool, or middleware invocation. The default caller is anonymous.
  */
 const anonymous = { tag: "anonymous" }
-let current: { original: unknown; immediate: unknown } = {
+let current: { original: unknown; immediate: unknown; tokens: Array<unknown> } = {
   original: anonymous,
   immediate: anonymous,
+  tokens: [],
 }
 
-export const caller = () => current
+let reads = 0
+
+export const caller = () => {
+  reads += 1
+  return current
+}
+
+/** How many times the guest asked the host for the caller. */
+export const callerReads = (): number => reads
 
 export const invocationId = () => undefined
 
-export const __setCaller = (immediate: unknown, original: unknown = immediate): void => {
-  current = { original, immediate }
+export const __setCaller = (
+  immediate: unknown,
+  original: unknown = immediate,
+  tokens: Array<unknown> = [],
+): void => {
+  current = { original, immediate, tokens }
 }
 
 export const __resetCaller = (): void => {
-  current = { original: anonymous, immediate: anonymous }
+  current = { original: anonymous, immediate: anonymous, tokens: [] }
 }
 
 /** Report `immediate` as the caller, then start `run`. */

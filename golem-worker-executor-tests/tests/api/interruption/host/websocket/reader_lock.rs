@@ -3,6 +3,7 @@ use anyhow::{Context as _, ensure};
 use golem_common::model::oplog::HostResponseGolemApiPromiseId;
 use golem_common::model::oplog::host_functions::host_response_from_typed_schema_value;
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 const TIMED_RECEIVE: &str = "golem:websocket/client::receive-with-timeout";
@@ -118,7 +119,7 @@ async fn durable_websocket_two_receive_interruption(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -401,7 +402,7 @@ async fn pending_reader_lock(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -797,7 +798,7 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let mut peer = Peer::start().await?;

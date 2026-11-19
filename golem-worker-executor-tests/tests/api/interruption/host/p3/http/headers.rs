@@ -1,4 +1,5 @@
 use crate::api::interruption::host::http_peer as peer;
+use golem_worker_executor_test_utils::callers;
 
 use super::*;
 use anyhow::{Context as _, ensure};
@@ -233,7 +234,7 @@ async fn pending_headers(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let stored_key = executor

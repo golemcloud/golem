@@ -352,7 +352,6 @@ export interface SnapshotRestorationContext<
   Config = unknown,
 > {
   readonly id: Id
-  readonly principal: AgentCommon.Principal
   readonly phantomId: CoreTypes.Uuid | undefined
   readonly agentId: CoreTypes.AgentId
   /** Complete host-parsed agent id string, including any phantom identity. */

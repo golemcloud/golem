@@ -975,6 +975,21 @@ fn decode_union(
     path: &mut PathStack,
     policy: JsonDecodePolicy,
 ) -> Result<SchemaValue, RenderError> {
+    let branch = select_union_branch(spec, json)?;
+    path.push(PathSegment::Union(branch.tag.clone()));
+    let body = from_json_inner(graph, &branch.body, json, path, &mut HashSet::new(), policy)?;
+    path.pop();
+    Ok(SchemaValue::Union(UnionValuePayload {
+        tag: branch.tag.clone(),
+        body: Box::new(body),
+    }))
+}
+
+/// Select the union branch that matches a raw JSON value, without decoding its body.
+pub fn select_union_branch<'a>(
+    spec: &'a UnionSpec,
+    json: &Value,
+) -> Result<&'a UnionBranch, RenderError> {
     // First: find every branch whose discriminator rule matches the
     // incoming JSON value. Validation rules out multi-match at construction
     // time; a runtime safety net catches the case where the value is bad.
@@ -986,17 +1001,7 @@ fn decode_union(
     }
     match matched.as_slice() {
         [] => Err(RenderError::UnionNoMatch),
-        [branch] => {
-            // Then: decode the body against the matched branch.
-            path.push(PathSegment::Union(branch.tag.clone()));
-            let body =
-                from_json_inner(graph, &branch.body, json, path, &mut HashSet::new(), policy)?;
-            path.pop();
-            Ok(SchemaValue::Union(UnionValuePayload {
-                tag: branch.tag.clone(),
-                body: Box::new(body),
-            }))
-        }
+        [branch] => Ok(branch),
         multiple => Err(RenderError::UnionAmbiguous {
             matched: multiple.iter().map(|b| b.tag.clone()).collect(),
         }),

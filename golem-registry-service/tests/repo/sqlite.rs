@@ -26,6 +26,7 @@ use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
 use golem_registry_service::repo::environment_tool_middleware_grant::DbEnvironmentToolMiddlewareGrantRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
+use golem_registry_service::repo::installation::DbInstallationRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
@@ -112,6 +113,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
+        installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(db.pool.clone())),
         blob_storage: std::sync::Arc::new(
@@ -150,6 +152,11 @@ async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &D
 #[test]
 async fn test_runtime_card_creation_rejects_system_cards(deps: &Deps) {
     crate::repo::common::test_runtime_card_creation_rejects_system_cards(deps).await;
+}
+
+#[test]
+async fn test_installation_golem_issuer_is_stored_once(deps: &Deps) {
+    crate::repo::common::test_installation_golem_issuer_is_stored_once(deps).await;
 }
 
 #[test]

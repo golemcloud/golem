@@ -17455,10 +17455,25 @@ components:
           $ref: '#/components/schemas/AgentUpdateMode'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
+        failureClass:
+          description: Why the update failed.
+          allOf:
+          - $ref: '#/components/schemas/UpdateFailureClass'
+          - description: Why the update failed.
+        divergence:
+          description: |-
+            The first divergence from the recorded history, when the replay of the target
+            diverged at a recorded entry.
+          allOf:
+          - $ref: '#/components/schemas/ReplayDivergence'
+          - description: |-
+              The first divergence from the recorded history, when the replay of the target
+              diverged at a recorded entry.
       required:
       - timestamp
       - targetRevision
       - mode
+      - failureClass
     FallibleResultParameters:
       title: FallibleResultParameters
       type: object
@@ -20697,6 +20712,143 @@ components:
         required:
         - kind
         - value
+    ReplayDivergence:
+      title: ReplayDivergence
+      description: |-
+        Where a replay left the recorded history: the first entry at which the replay did not
+        reproduce the recorded execution, what the oplog holds there and what the replay did instead.
+      type: object
+      properties:
+        oplogIndex:
+          description: The oplog index of the first divergence.
+          type: integer
+          format: uint64
+        expected:
+          description: What the oplog holds at the index.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStep'
+          - description: What the oplog holds at the index.
+        actual:
+          description: What the replay did at the index.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStep'
+          - description: What the replay did at the index.
+        mismatched:
+          description: |-
+            The identity fields on which `expected` and `actual` differ; empty when the steps differ
+            in kind.
+          type: array
+          items:
+            $ref: '#/components/schemas/StartIdentityField'
+      required:
+      - oplogIndex
+      - expected
+      - actual
+      - mismatched
+    ReplayHostCall:
+      title: ReplayHostCall
+      description: |-
+        A host call of a replay: the identity of a recorded `Start`, or of the call that the replay
+        made in its place.
+      type: object
+      properties:
+        functionName:
+          type: string
+        durableFunctionType:
+          $ref: '#/components/schemas/PublicDurableFunctionType'
+        parentStartIndex:
+          type: integer
+          format: uint64
+        invocationId:
+          $ref: '#/components/schemas/DurableInvocationId'
+        observationalOwner:
+          type: integer
+          format: uint64
+        carriesRequest:
+          description: |-
+            Whether the call carries a request: `true` for a durable call, `false` for a durable
+            scope.
+          type: boolean
+        request:
+          description: The request of the call, when it is known.
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - description: The request of the call, when it is known.
+      required:
+      - functionName
+      - durableFunctionType
+      - carriesRequest
+    ReplayStep:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      discriminator:
+        propertyName: type
+        mapping:
+          HostCall: '#/components/schemas/ReplayStep_ReplayHostCall'
+          InvocationEnd: '#/components/schemas/ReplayStep_Empty'
+          EndOfHistory: '#/components/schemas/ReplayStep_Empty'
+          Other: '#/components/schemas/ReplayStep_ReplayStepDescription'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStep_ReplayHostCall'
+      - $ref: '#/components/schemas/ReplayStep_Empty'
+      - $ref: '#/components/schemas/ReplayStep_Empty'
+      - $ref: '#/components/schemas/ReplayStep_ReplayStepDescription'
+    ReplayStepDescription:
+      title: ReplayStepDescription
+      description: A step of a replay that a text describes.
+      type: object
+      properties:
+        description:
+          type: string
+      required:
+      - description
+    ReplayStep_Empty:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: EndOfHistory
+            type: string
+            enum:
+            - EndOfHistory
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    ReplayStep_ReplayHostCall:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: HostCall
+            type: string
+            enum:
+            - HostCall
+        required:
+        - type
+      - $ref: '#/components/schemas/ReplayHostCall'
+    ReplayStep_ReplayStepDescription:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Other
+            type: string
+            enum:
+            - Other
+        required:
+        - type
+      - $ref: '#/components/schemas/ReplayStepDescription'
     ResultSpec:
       type: object
       properties:
@@ -22277,6 +22429,16 @@ components:
       required:
       - payload
       - mimeType
+    StartIdentityField:
+      description: An identity field of a recorded `Start`, which a replayed host call must match.
+      type: string
+      enum:
+      - function-name
+      - function-type
+      - invocation-id
+      - observational-owner
+      - request-presence
+      - parent
     StoredCard:
       discriminator:
         propertyName: type
@@ -22578,6 +22740,17 @@ components:
       required:
       - tag
       - body
+    UpdateFailureClass:
+      description: Why an update failed.
+      type: string
+      enum:
+      - divergence
+      - target-trap
+      - not-replayable
+      - target-rejected
+      - interrupted
+      - operational
+      - other
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -23335,9 +23508,14 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        failureClass:
+          $ref: '#/components/schemas/UpdateFailureClass'
+        divergence:
+          $ref: '#/components/schemas/ReplayDivergence'
       required:
       - timestamp
       - targetRevision
+      - failureClass
     r#GrowMemoryParams:
       title: r#GrowMemoryParams
       type: object
@@ -24696,10 +24874,6 @@ components:
       required:
       - redirectUris
       - origins
-    AutoInjectedKind:
-      type: string
-      enum:
-      - principal
     CachePolicy:
       discriminator:
         propertyName: type
@@ -26364,17 +26538,6 @@ components:
             - user-supplied
         required:
         - tag
-      - type: object
-        properties:
-          tag:
-            type: string
-            enum:
-            - auto-injected
-          value:
-            $ref: '#/components/schemas/AutoInjectedKind'
-        required:
-        - tag
-        - value
     FileMapping:
       discriminator:
         propertyName: type
@@ -28296,11 +28459,8 @@ components:
       properties:
         cachePolicy:
           $ref: '#/components/schemas/CachePolicy'
-        usesPrincipal:
-          type: boolean
       required:
       - cachePolicy
-      - usesPrincipal
     RegisteredAgentTypeImplementer:
       title: RegisteredAgentTypeImplementer
       type: object

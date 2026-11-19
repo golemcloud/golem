@@ -573,7 +573,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
         deployment_revision: Option<DeploymentRevision>,
-        principal: Option<golem_common::model::agent::Principal>,
+        principal: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {

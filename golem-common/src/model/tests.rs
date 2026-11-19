@@ -1526,7 +1526,7 @@ fn worker_filter_matches() {
         create_request: crate::model::oplog::CreateRequest::new(
             crate::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            crate::model::agent::Principal::anonymous(),
+            crate::base_model::caller::Caller::anonymous(),
             &crate::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     };
@@ -1907,9 +1907,10 @@ fn agent_invocation_result_redacted_debug_hides_capability_material() {
 
 #[test]
 fn agent_invocation_payload_round_trip_preserves_scope_card() {
+    use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
     use crate::model::card::{CardId, ScopeCard};
     use crate::model::invocation_context::InvocationContextStack;
-    use crate::model::{AgentInvocation, AgentInvocationPayload, Principal};
+    use crate::model::{AgentInvocation, AgentInvocationPayload};
     use crate::schema::SchemaValue;
     use crate::serialization::{deserialize, serialize};
 
@@ -1929,20 +1930,28 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
             elements: Vec::new(),
         },
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
+        caller: sample_caller(),
         scope_card: Some(scope_card.clone()),
     };
     let (_, payload, _) = invocation.into_parts();
     let encoded = serialize(&payload).unwrap();
     let decoded: AgentInvocationPayload = deserialize(&encoded).unwrap();
 
-    assert!(matches!(
-        decoded,
-        AgentInvocationPayload::AgentMethod {
-            scope_card: Some(decoded_scope_card),
-            ..
-        } if decoded_scope_card == scope_card
-    ));
+    assert_eq!(decoded, payload);
+    let AgentInvocationPayload::AgentMethod {
+        caller,
+        scope_card: Some(decoded_scope_card),
+        ..
+    } = decoded
+    else {
+        panic!("expected a method payload with a scope card");
+    };
+    assert_eq!(decoded_scope_card, scope_card);
+    assert_eq!(caller, sample_caller());
+    assert_eq!(
+        original_claims_json(&caller),
+        original_claims_json(&sample_caller())
+    );
 }
 
 #[test]

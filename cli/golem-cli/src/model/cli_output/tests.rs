@@ -282,6 +282,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "component.manifest-trace",
         arb_component_manifest_trace_result
     ),
+    registry_entry!("PackageDigest", "package.digest", arb_package_digest),
     registry_entry!(
         "DeploymentNewView",
         "deploy.deployment",
@@ -905,6 +906,81 @@ fn agent_get_structured_output_masks_secret_config_paths() {
     assert_no_plaintext(&value, &["runtime-secret", "default-secret"]);
 }
 
+/// `agent get` shows the class and the divergence of a failed update in its update history,
+/// and its JSON keeps both fields.
+#[test]
+fn agent_get_renders_the_failure_class_and_divergence_of_a_failed_update() {
+    use crate::model::text_format::MessageWithFields;
+    use golem_common::model::OplogIndex;
+    use golem_common::model::oplog::{
+        PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStep,
+        StartIdentityField, UpdateFailureClass,
+    };
+
+    colored::control::set_override(false);
+    let mut metadata = sample_agent_metadata_view();
+    metadata.updates = vec![golem_common::model::agent::UpdateRecord::FailedUpdate(
+        golem_common::model::agent::FailedUpdate {
+            timestamp: "2024-01-01T00:00:00Z".parse().unwrap(),
+            target_revision: golem_common::model::component::ComponentRevision::new(2).unwrap(),
+            details: Some("UPDATE_REPLAY_FAILED: diverged".to_string()),
+            pending_update_index: Some(OplogIndex::from_u64(9)),
+            mode: golem_common::model::agent::AgentUpdateMode::Automatic,
+            snapshot_assisted_details: None,
+            failure_class: UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(ReplayHostCall {
+                    function_name: "random::get_random_bytes".to_string(),
+                    durable_function_type: PublicDurableFunctionType::ReadLocal(
+                        golem_schema::Empty {},
+                    ),
+                    parent_start_index: None,
+                    invocation_id: None,
+                    observational_owner: None,
+                    carries_request: true,
+                    request: None,
+                }),
+                actual: ReplayStep::end_of_history(),
+                mismatched: vec![StartIdentityField::FunctionName],
+            })),
+        },
+    )];
+    let view = crate::model::agent::AgentGetView {
+        metadata,
+        precise: true,
+    };
+
+    let history = view
+        .fields()
+        .into_iter()
+        .find_map(|(name, value)| (name == "Update history").then_some(value))
+        .expect("the update history is shown");
+    assert!(
+        history.contains("Failed update to 2 (divergence)"),
+        "{history}"
+    );
+    assert!(
+        history.contains(
+            "Unexpected oplog entry at 7: expected Start { random::get_random_bytes, ReadLocal"
+        ),
+        "{history}"
+    );
+    assert!(
+        history.contains("got the end of the recorded history (mismatched: function-name)"),
+        "{history}"
+    );
+
+    let value = hidden_structured_output(view);
+    let failed = &value["metadata"]["updates"][0];
+    assert_eq!(failed["failureClass"], json!("divergence"));
+    assert_eq!(failed["divergence"]["oplogIndex"], json!(7));
+    assert_eq!(
+        failed["divergence"]["actual"]["type"],
+        json!("EndOfHistory")
+    );
+}
+
 #[test]
 fn component_get_and_list_structured_outputs_mask_secret_payloads() {
     let component = sample_component_view();
@@ -1344,9 +1420,8 @@ fn sample_agent_type_schema(
             description: String::new(),
             prompt_hint: None,
             input_schema: golem_common::schema::agent::InputSchema::parameters([
-                golem_common::schema::agent::NamedField::auto_injected(
-                    "principal",
-                    golem_common::schema::agent::AutoInjectedKind::Principal,
+                golem_common::schema::agent::NamedField::user_supplied(
+                    "name",
                     golem_common::schema::SchemaType::string(),
                 ),
             ]),
@@ -2792,6 +2867,8 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             details: None,
             update_attempt_index: Some(OplogIndex::from_u64(20)),
             snapshot_assisted_details: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::TargetRejected,
+            divergence: None,
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
@@ -2806,6 +2883,62 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                     snapshot_index: OplogIndex::from_u64(19),
                 },
             ),
+            failure_class: golem_common::model::oplog::UpdateFailureClass::Divergence,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(22),
+                expected: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::api::generate_idempotency_key".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        carries_request: false,
+                        request: None,
+                    },
+                ),
+                actual: golem_common::model::oplog::ReplayStep::HostCall(
+                    golem_common::model::oplog::ReplayHostCall {
+                        function_name: "golem::api::get_oplog_index".to_string(),
+                        durable_function_type:
+                            golem_common::model::oplog::PublicDurableFunctionType::ReadLocal(
+                                golem_schema::Empty {},
+                            ),
+                        parent_start_index: Some(OplogIndex::from_u64(20)),
+                        invocation_id: Some(golem_common::model::oplog::DurableInvocationId {
+                            anchor: OplogIndex::from_u64(20),
+                            ordinal: 1,
+                        }),
+                        observational_owner: Some(OplogIndex::from_u64(20)),
+                        carries_request: true,
+                        request: None,
+                    },
+                ),
+                mismatched: vec![
+                    golem_common::model::oplog::StartIdentityField::FunctionName,
+                    golem_common::model::oplog::StartIdentityField::InvocationId,
+                    golem_common::model::oplog::StartIdentityField::ObservationalOwner,
+                    golem_common::model::oplog::StartIdentityField::RequestPresence,
+                    golem_common::model::oplog::StartIdentityField::Parent,
+                ],
+            })),
+        }),
+        PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(4).unwrap(),
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: golem_common::model::oplog::UpdateFailureClass::TargetTrap,
+            divergence: Some(Box::new(golem_common::model::oplog::ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(23),
+                expected: golem_common::model::oplog::ReplayStep::invocation_end(),
+                actual: golem_common::model::oplog::ReplayStep::described("a pending invocation"),
+                mismatched: vec![],
+            })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -3280,13 +3413,7 @@ fn arb_metadata_envelope() -> BoxedStrategy<golem_common::schema::MetadataEnvelo
 }
 
 fn arb_field_source() -> BoxedStrategy<golem_common::schema::FieldSource> {
-    prop_oneof![
-        Just(golem_common::schema::FieldSource::UserSupplied),
-        Just(golem_common::schema::FieldSource::AutoInjected(
-            golem_common::schema::AutoInjectedKind::Principal,
-        )),
-    ]
-    .boxed()
+    Just(golem_common::schema::FieldSource::UserSupplied).boxed()
 }
 
 fn arb_named_field() -> BoxedStrategy<golem_common::schema::NamedField> {
@@ -3324,13 +3451,8 @@ fn arb_output_schema() -> BoxedStrategy<golem_common::schema::agent::OutputSchem
 }
 
 fn arb_read_only_config() -> BoxedStrategy<golem_common::model::agent::ReadOnlyConfig> {
-    (arb_cache_policy(), any::<bool>())
-        .prop_map(
-            |(cache_policy, uses_principal)| golem_common::model::agent::ReadOnlyConfig {
-                cache_policy,
-                uses_principal,
-            },
-        )
+    arb_cache_policy()
+        .prop_map(|cache_policy| golem_common::model::agent::ReadOnlyConfig { cache_policy })
         .boxed()
 }
 
@@ -4567,6 +4689,8 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::agent::UpdateRecord
                         pending_update_index: None,
                         mode: golem_common::model::agent::AgentUpdateMode::Automatic,
                         snapshot_assisted_details: None,
+                        failure_class: golem_common::model::oplog::UpdateFailureClass::Operational,
+                        divergence: None,
                     },
                 )
             }),
@@ -5608,6 +5732,15 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
             },
         ),
     )
+}
+
+fn arb_package_digest() -> OutputDocumentStrategy {
+    serialized_output(any::<[u8; 32]>().prop_map(|bytes| {
+        use sha2::{Digest, Sha256};
+        crate::package::PackageDigest {
+            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+        }
+    }))
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {

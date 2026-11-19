@@ -6,7 +6,7 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use super::call_agent::principal_from_request;
+use super::call_agent::caller_from_request;
 use super::error::RequestHandlerError;
 use super::http_completion::{BodyGate, GateOutput, GateTerminal};
 use super::http_envelope::{
@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result, stream_terminal,
 };
 use golem_common::model::AgentId;
-use golem_common::model::agent::{ParsedAgentKey, Principal};
+use golem_common::model::agent::ParsedAgentKey;
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaValue, TypedSchemaValue, try_into_schema_graph,
@@ -173,7 +173,7 @@ impl RawHandler {
             component_id: target.agent.component_id,
             agent_id: final_id.to_string(),
         };
-        let principal: Principal = principal_from_request(request)?;
+        let caller = caller_from_request(request)?;
         let context = InvocationContext {
             parent: None,
             env: Default::default(),
@@ -188,7 +188,7 @@ impl RawHandler {
                 request_key: Some(request_key.into()),
                 context: Some(context),
                 auth_ctx: Some(AuthCtx::System.into()),
-                principal: Some(principal.into()),
+                caller: Some(caller.into()),
                 environment_id: Some(selected.route.environment_id.into()),
                 config: vec![],
                 component_owner_account_id: Some(selected.route.account_id.into()),

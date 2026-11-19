@@ -270,8 +270,8 @@ mod tests {
         golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
     }
 
-    fn anonymous_principal() -> golem_rust::agentic::Principal {
-        golem_rust::agentic::Principal::Anonymous
+    fn anonymous_context() -> golem_rust::agentic::InvocationContext {
+        golem_rust::agentic::InvocationContext::anonymous()
     }
 
     #[test]
@@ -1272,7 +1272,7 @@ mod tests {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .unwrap()
@@ -1320,7 +1320,7 @@ mod tests {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .unwrap()
@@ -1382,7 +1382,7 @@ mod tests {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("optional streams may both be absent");
@@ -1444,7 +1444,7 @@ mod tests {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("optional outputs may both be absent");
@@ -1456,8 +1456,8 @@ mod tests {
     }
 
     #[tool_definition]
-    trait PrincipalAutoInjectedRoundTrip {
-        fn whoami(&self, principal: golem_rust::tool::Principal, name: String) -> String;
+    trait ContextRoundTrip {
+        fn whoami(&self, ctx: golem_rust::tool::InvocationContext, name: String) -> String;
     }
 
     #[tool_definition]
@@ -1493,11 +1493,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_descriptor_accepts_auto_injected_principal_parameters() {
-        let tool = __golem_tool_descriptor_for_PrincipalAutoInjectedRoundTrip(
-            &mut ToolBuildCtx::new(),
-        )
-        .expect("Principal is supplied by the guest invocation principal, not by the input record");
+    fn tool_descriptor_omits_invocation_context_parameters() {
+        let tool = __golem_tool_descriptor_for_ContextRoundTrip(&mut ToolBuildCtx::new())
+            .expect("InvocationContext is supplied by the host, not by the input record");
         let command_index = tool
             .command_index_by_path(&["whoami".to_string()])
             .expect("whoami command exists");
@@ -1509,7 +1507,7 @@ mod tests {
                 .map(|field| field.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["name"],
-            "auto-injected Principal parameters must not appear in the tool input schema",
+            "InvocationContext parameters must not appear in the tool input schema",
         );
     }
 
@@ -1616,13 +1614,13 @@ mod tests {
         fn __golem_tool_middleware_annotation() {}
     }
 
-    struct PrincipalMiddlewareShape;
+    struct ContextMiddlewareShape;
 
-    impl PrincipalAutoInjectedRoundTripMiddleware for PrincipalMiddlewareShape {
+    impl ContextRoundTripMiddleware for ContextMiddlewareShape {
         async fn whoami(
             &self,
-            underlying: &PrincipalAutoInjectedRoundTripUnderlying,
-            _principal: golem_rust::tool::Principal,
+            underlying: &ContextRoundTripUnderlying,
+            _ctx: golem_rust::tool::InvocationContext,
             name: String,
         ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
             underlying.whoami(name).await
@@ -2348,7 +2346,7 @@ impl EchoMiddleware for Policy {
             r#"
 use golem_rust::{universal_tool_middleware, TypedSchemaValue};
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, RawCustomToolError, Tool,
     ToolInvokeError, UnderlyingTool,
 };
 
@@ -2361,7 +2359,7 @@ async fn audit(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying
@@ -2375,6 +2373,124 @@ async fn audit(
             output.status.success(),
             "a valid universal middleware must compile:\n{}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    const LIVE_VALUE_REFUSAL: &str =
+        "Principal and Caller cannot appear in a method, constructor or tool signature";
+
+    fn assert_build_refuses_live_value(name: &str, source: &str) {
+        let output = cargo_build_tool_crate(name, source);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "a live value in a tool signature must not build:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(LIVE_VALUE_REFUSAL),
+            "the build must fail with the shared message:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_principal_parameter_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-parameter",
+            r#"
+use golem_rust::agentic::Principal;
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, who: Principal) -> String;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _who: Principal) -> String {
+        String::new()
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_caller_result_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-result",
+            r#"
+use golem_rust::agentic::Caller;
+use golem_rust::{tool_definition, tool_implementation};
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, name: String) -> Caller;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _name: String) -> Caller {
+        Caller::anonymous()
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_principal_nested_in_a_map_parameter_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-map",
+            r#"
+use golem_rust::agentic::Principal;
+use golem_rust::{tool_definition, tool_implementation};
+use std::collections::HashMap;
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, who: HashMap<String, Principal>) -> String;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _who: HashMap<String, Principal>) -> String {
+        String::new()
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn build_refuses_a_shared_caller_result_of_a_tool() {
+        assert_build_refuses_live_value(
+            "live-value-tool-arc",
+            r#"
+use golem_rust::agentic::Caller;
+use golem_rust::{tool_definition, tool_implementation};
+use std::sync::Arc;
+
+#[tool_definition]
+trait BadTool {
+    fn run(&self, name: String) -> Arc<Caller>;
+}
+
+struct BadToolImpl;
+
+#[tool_implementation]
+impl BadTool for BadToolImpl {
+    fn run(&self, _name: String) -> Arc<Caller> {
+        Arc::new(Caller::anonymous())
+    }
+}
+"#,
         );
     }
 
@@ -2592,7 +2708,7 @@ async fn audit(
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation succeeds");
@@ -2622,7 +2738,7 @@ async fn audit(
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect_err("tool error is surfaced as guest ToolError");
@@ -2676,7 +2792,7 @@ async fn audit(
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect_err("tool error is surfaced as guest ToolError");
@@ -2732,7 +2848,7 @@ async fn audit(
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect_err("tool error is surfaced as guest ToolError");
@@ -2787,7 +2903,7 @@ async fn audit(
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect_err("tool error is surfaced as guest ToolError");
@@ -2841,7 +2957,7 @@ async fn audit(
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation succeeds for a custom IntoSchema return type");
@@ -2885,7 +3001,7 @@ async fn audit(
             vec![golem_rust::SchemaValue::String("alice".to_string())],
         );
 
-        let result = invoker(vec![], input, None, None, None, anonymous_principal())
+        let result = invoker(vec![], input, None, None, None, anonymous_context())
             .await
             .expect("guest invocation dispatches the trait default method body");
         let result = result.result.expect("plain return is encoded as a result");
@@ -2924,7 +3040,7 @@ async fn audit(
         };
 
         let result = instance
-            .__tool_invoke_on(vec![], input, None, None, None, anonymous_principal())
+            .__tool_invoke_on(vec![], input, None, None, None, anonymous_context())
             .await
             .expect("instance invocation succeeds");
         let result = result.result.expect("plain return is encoded as a result");
@@ -4178,7 +4294,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("grafted subtree invocation succeeds");
@@ -4208,7 +4324,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("grafted subtree invocation succeeds through command aliases");
@@ -4270,7 +4386,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect(
@@ -4323,7 +4439,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("an alias owned by a different command path must not shadow sibling fields");
@@ -4386,7 +4502,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation uses alias mapping instead of same-typed absolute position");
@@ -4454,7 +4570,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation maps a child alias back to the inherited parent global");
@@ -4499,7 +4615,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation succeeds when impl parameter names differ from the trait");
@@ -4560,7 +4676,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation maps an inherited global alias back to the method parameter");
@@ -4620,7 +4736,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("guest invocation maps a child alias back to the same-trait inherited global");
@@ -4677,7 +4793,7 @@ fn check_sparse_nested_capture_set() {
             None,
             None,
             None,
-            anonymous_principal(),
+            anonymous_context(),
         )
         .await
         .expect("root body aliases are not inherited by sibling commands");
@@ -8030,23 +8146,23 @@ impl BadTool for BadToolImpl {
     }
 
     #[test]
-    fn bug_finder_auto_injected_principal_rejects_arg_attributes_that_would_be_ignored() {
+    fn bug_finder_invocation_context_rejects_arg_attributes_that_would_be_ignored() {
         let output = cargo_check_tool_crate(
-            "principal-arg-attr",
+            "context-arg-attr",
             r#"
 use golem_rust::{tool_definition, tool_implementation};
 
 #[tool_definition]
 trait BadTool {
-    #[arg(principal = "option")]
-    fn run(&self, principal: golem_rust::agentic::Principal, name: String) -> String;
+    #[arg(ctx = "option")]
+    fn run(&self, ctx: golem_rust::agentic::InvocationContext, name: String) -> String;
 }
 
 struct BadToolImpl;
 
 #[tool_implementation]
 impl BadTool for BadToolImpl {
-    fn run(&self, _principal: golem_rust::agentic::Principal, name: String) -> String {
+    fn run(&self, _ctx: golem_rust::agentic::InvocationContext, name: String) -> String {
         name
     }
 }
@@ -8055,7 +8171,7 @@ impl BadTool for BadToolImpl {
 
         assert!(
             !output.status.success(),
-            "an auto-injected Principal is projected only from its exact SDK/WIT type and any `#[arg]` field would be silently dropped, so it must be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
+            "an InvocationContext is projected only from its exact SDK type and any `#[arg]` field would be silently dropped, so it must be rejected, but cargo check succeeded\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
@@ -8971,6 +9087,10 @@ impl BadTool for BadToolImpl {
 
     fn cargo_check_tool_crate(name: &str, source: &str) -> std::process::Output {
         cargo_tool_crate(name, source, "check")
+    }
+
+    fn cargo_build_tool_crate(name: &str, source: &str) -> std::process::Output {
+        cargo_tool_crate(name, source, "build")
     }
 
     fn cargo_test_tool_crate(name: &str, source: &str) -> std::process::Output {

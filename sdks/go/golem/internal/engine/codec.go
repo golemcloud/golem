@@ -114,8 +114,8 @@ func (d *Engine) TypeID(t reflect.Type) string {
 }
 
 func (d *Engine) buildCodec(c *Codec) {
-	if c.Typ == d.PrincipalType {
-		MarkInvalid(c, "%s", MisplacedPrincipal)
+	if d.IsLive != nil && d.IsLive(c.Typ) {
+		MarkInvalid(c, "%s", d.LiveMessage)
 		return
 	}
 	// User-declared variants and enums are looked up before the kind switch:
@@ -277,9 +277,6 @@ func (d *Engine) buildCodec(c *Codec) {
 		MarkInvalid(c, "unsupported type %s (kind %s)", c.Typ, c.Typ.Kind())
 	}
 }
-
-// MisplacedPrincipal explains a Principal anywhere but where the host fills it.
-const MisplacedPrincipal = "golem.Principal is filled by the host, so it is only valid as a direct field of a method's input struct or of an agent's Id struct"
 
 // MarkInvalid flags a type the SDK cannot represent and fills the codec with a
 // safe no-op body, so schema derivation itself does not panic. It records

@@ -3,7 +3,7 @@ import { SnapshotError } from '../snapshot';
 const marker = '$golemSnapshot';
 const decimal = /^(?:0|-?[1-9][0-9]*)$/;
 
-/** Encode state only; principal metadata and binary parts retain their own formats. */
+/** Encode state only; the version envelope and binary parts retain their own formats. */
 export function encodeSnapshotState(
   value: unknown,
   path = 'state',

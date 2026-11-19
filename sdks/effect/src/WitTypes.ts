@@ -313,19 +313,18 @@ export type WitTypedArrayKind =
 export const witQuotaTokenAnnotationKey = WIT_QUOTA_TOKEN_ANNOTATION_KEY
 
 /**
- * Annotation key marking a schema as a `principal` value carried as ordinary
- * structured data (the WIT `golem:agent/common` `principal` variant —
- * `oidc` / `agent` / `golem-user` / `anonymous`). Schemas carrying this
- * annotation are compiled by the codec to that variant type and their values
- * round-trip a host `Principal` to/from the corresponding `SchemaValue`.
+ * Annotation key marking a schema as a `PrincipalRef` carried as ordinary structured data (the
+ * named record `principal-ref { issuer, subject }`). Schemas carrying this annotation are compiled
+ * by the codec to that record and their values round-trip a `PrincipalRef` to/from the
+ * corresponding `SchemaValue`.
  *
- * Unlike the numeric / typed-array hints there is no payload — the presence of
- * the key alone selects the principal shape. See {@link Principal.PrincipalSchema}.
+ * Unlike the numeric / typed-array hints there is no payload: the presence of the key alone
+ * selects the shape. See {@link InvocationContext.PrincipalRefSchema}.
  *
- * @since 1.6.0
+ * @since 2.0.0
  * @category utils
  */
-export const witPrincipalAnnotationKey = "effect-golem/witPrincipal"
+export const witPrincipalRefAnnotationKey = "effect-golem/witPrincipalRef"
 
 /** Annotation key used by Golem-native rich and capability schemas. @since 1.6.0 @category annotations */
 export const witSchemaNodeAnnotationKey = "effect-golem/schemaNode"

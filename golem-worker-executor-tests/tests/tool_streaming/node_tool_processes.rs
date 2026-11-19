@@ -691,12 +691,9 @@ async fn builtin_npm_lifecycle_crash_during_pending_tool_output(
 /// Crash the owner while built-in `node` also holds a second bound-tool call with an open
 /// stdin.
 ///
-/// Four of nine isolated runs hung after the crash: replay reached the checkpoint again
-/// without repeating the effect and the held call completed after release, but the script's
-/// final stdin write and end never reached the provider. Each hung run logged `terminal guard
-/// abandoned during runtime teardown; leaving the end markerless` for the pending
-/// `tool-stdin-closed::wait` Start at the crash, and its `End` was the first entry recorded
-/// after recovery. No passing run logged it.
+/// The crash fences the owner while a `tool-stdin-closed::wait` is pending. That wait's `Start`
+/// must stay incomplete rather than record the fence's `Cancelled` as a closed stdin, so after
+/// recovery the script's final stdin write and end still reach the provider.
 #[test]
 #[timeout("5m")]
 async fn builtin_node_crash_during_open_tool_stdin(
@@ -722,10 +719,6 @@ async fn builtin_node_crash_during_open_tool_stdin(
 }
 
 /// Run the open-stdin crash cut in an npm lifecycle script's local Node child.
-///
-/// Without the crash this passes. With it, four of five isolated runs hung in the same way and
-/// with the same log. A local Node child started by built-in `node` with `execFile` instead of
-/// npm also hung, so the hang is not specific to npm.
 #[test]
 #[timeout("5m")]
 async fn builtin_npm_lifecycle_crash_during_open_tool_stdin(

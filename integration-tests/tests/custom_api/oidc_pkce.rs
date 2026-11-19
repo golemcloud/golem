@@ -238,10 +238,11 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         "private, no-cache"
     );
     let principal: Value = authenticated.json().await?;
-    assert_eq!(principal["value"]["oidc"]["sub"], "fixture-user");
-    assert_eq!(
-        principal["value"]["oidc"]["email"],
-        "fixture-user@example.com"
+    assert_eq!(principal["value"]["kind"], "user");
+    assert_eq!(principal["value"]["ref"]["subject"], "fixture-user");
+    assert!(
+        !principal.to_string().contains("fixture-user@example.com"),
+        "the email must not be part of the caller's reference: {principal}"
     );
 
     let readonly_url = context
@@ -371,7 +372,7 @@ async fn cookie_callback_credentials_are_private_and_not_stored(
         "private, no-cache"
     );
     assert_eq!(
-        authenticated.json::<Value>().await?["value"]["oidc"]["sub"],
+        authenticated.json::<Value>().await?["value"]["ref"]["subject"],
         "fixture-user"
     );
     Ok(())
@@ -445,8 +446,8 @@ async fn readonly_cache_varies_when_valid_bearer_principal_changes(
         let bearer = token["access_token"].as_str().unwrap();
 
         if let Some(first_etag) = &first_etag {
-            // Before Bob invokes the method, Alice's validator still matches.
-            // Credential Vary prevents a cache from selecting Alice's body here.
+            // Alice's validator names Alice as the caller, so it never revalidates
+            // Bob's request: Bob gets his own body under his own validator.
             let cross_principal = context
                 .gateway
                 .client
@@ -455,13 +456,16 @@ async fn readonly_cache_varies_when_valid_bearer_principal_changes(
                 .header(reqwest::header::IF_NONE_MATCH, first_etag)
                 .send()
                 .await?;
-            assert_eq!(cross_principal.status(), reqwest::StatusCode::NOT_MODIFIED);
-            assert_eq!(
+            assert_eq!(cross_principal.status(), reqwest::StatusCode::OK);
+            assert_ne!(
                 cross_principal.headers()[reqwest::header::ETAG],
                 *first_etag
             );
             assert_credential_vary(cross_principal.headers());
-            assert!(cross_principal.bytes().await?.is_empty());
+            assert_eq!(
+                cross_principal.json::<Value>().await?["value"]["ref"]["subject"],
+                subject
+            );
         }
 
         // A cache must select a different variant for the new Authorization value,
@@ -481,7 +485,7 @@ async fn readonly_cache_varies_when_valid_bearer_principal_changes(
         let etag = response.headers()[reqwest::header::ETAG].clone();
         let headers = response.headers().clone();
         assert_eq!(
-            response.json::<Value>().await?["value"]["oidc"]["sub"],
+            response.json::<Value>().await?["value"]["ref"]["subject"],
             subject
         );
         let cached = context

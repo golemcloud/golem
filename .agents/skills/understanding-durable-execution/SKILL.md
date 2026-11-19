@@ -32,7 +32,11 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    to other owners; see "Entry ownership". Operator-reverted entries are excluded). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
-   not tolerated.
+   not tolerated. The error is `UnexpectedOplogEntry` with a `ReplayDivergence`: the oplog index
+   of the first divergence, the expected and the actual step, and the identity fields of a host
+   call that differ. Every producer names the entry it compared. `FailedUpdate` keeps the
+   divergence and a required `failure_class`, which `start_outcome` sets from the problem and the
+   `FailureProvenance` of the failure (see `worker/start_outcome/mod.rs::failure_class`).
 
 2. **The resident runtime is disposable.** The Wasmtime `Store`, the worker task, the executor
    process, sockets, channels and subscriptions can vanish while work is pending. Suspension,
@@ -1066,8 +1070,58 @@ A receive Start does not prove that a socket was created, bound or polled Pendin
 Port reuse requires an independently known endpoint; UDP has no EOF. Completion-first
 controls verify End and delivery, then preserve the selected invocation result through
 commit and notification. These tests do not establish exactly-once datagram consumption
-across the receive-before-End crash window. Connected UDP reconstruction and incomplete
-batched sends remain separate, unresolved contracts.
+across the receive-before-End crash window.
+
+P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records the selected local
+address (`P3SocketsBind`, also for port 0) and keeps the bind request in the entry; connect, send
+and receive record every local-address change, such as an implicit bind or a wildcard bind that
+connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
+response. On Linux a connect that fails with `EINVAL` dissolves the old association before it tries
+again, so the connect response also records when a failed connect left the socket disconnected, and
+the entry then loses its remote address. Replay updates the entry and touches no native socket; the
+address getters are not recorded and use only the entry. `disconnect` (`WriteLocal`,
+`P3SocketsUdpDisconnect`) resets the local address to the bind request, or to the unspecified
+address with port 0 after an implicit bind, because the native socket releases an implicitly bound
+port, and records the native local address when it differs: the endpoint rebuild binds a fixed port
+that Linux then keeps on the disconnect. Recording it at the disconnect, not at the call that
+rebuilt the endpoint, keeps it when the guest dropped that call. At the first live operation,
+`ensure_native_endpoint` binds the native socket on the address that
+`SocketEntry::udp_rebuild_bind_address` selects and connects it again when the entry is connected,
+without sending a packet. A local address that names an interface, such as the one a connect
+selected, is bound as it is; an unspecified one is bound on the bind request's address with the
+recorded port. A local address with port 0, which only a disconnect leaves, is restored by
+`UdpSocket::restore_released_bind`: it binds the new native socket on that address and dissolves
+the association at once, so the socket keeps the IP address without a port, as the disconnect left
+the old one. A connect then keeps the same source address, receive waits and the next send selects
+a port. The socket address policy
+allows a fixed port only on a loopback address, so an unconnected wildcard or implicit endpoint
+with a fixed port cannot be rebuilt and is lost. When the rebuild fails, the entry becomes `Lost`
+and every later operation returns `connection-broken`; the rebuild is not checked against grants
+again, each datagram still is. Send records only the target and the result, never the datagram. An
+incomplete send completes with `connection-broken` and is not sent again; an incomplete receive
+re-executes after the rebuild.
+
+P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
+`start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
+result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
+permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
+the bind request, `stream(none)` on a connected socket resets the local address to it as P3
+`disconnect` does, and `stream`, `send`, `receive` and `check-send` record every other change of
+the native local address (`udp_local_address_change`), such as the port that a rebuild on port 0
+selects. Its disconnect is a live `stream(none)` that records the native local address it leaves, as
+P3 `disconnect` does, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
+it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
+again); the entry then loses its remote address, live and on replay.
+The guest's datagram streams are `DurableIncomingDatagramStream` and
+`DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
+native order, so later resource reps do not change. At the first live operation the host binds the
+native socket on the bind request's address with the recorded port (`udp_rebuild_bind_address`,
+as P3) and calls native `stream` again with the recorded remote
+address when the guest holds streams. A loss is recorded as `lost: true` and reported as
+`connection-reset`, the code P2 TCP also uses for a lost connection (P2 has no
+`connection-broken`). An incomplete send completes with `connection-reset` and is never sent
+again.
 
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
@@ -1358,7 +1412,7 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
-Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, the full caller record, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
 
 After admission, executor create and REST create await `Worker::await_initialization`, not
 `WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
@@ -1380,7 +1434,7 @@ holds that write until Create returns.
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
-principal and its invocation context. Callers pass a `CreateIntent`. An explicit create
+caller and its invocation context. Callers pass a `CreateIntent`. An explicit create
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
@@ -1388,14 +1442,14 @@ no key. An invocation session passes the owner key of its `request_key`, from wh
 an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
-target records `Fork`, no key and the forker's principal. A self fork also records the forking
+target records `Fork`, no key and the forking agent as its caller. A self fork also records the forking
 agent's current invocation context; a fork through the worker service records a fresh context.
 When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
-recorded principal and context, not with the loading request's. The resident `unpublished_create`
+recorded caller and context, not with the loading request's. The resident `unpublished_create`
 flag only records that an attempt committed `Create` and the worker is not published yet; it
-carries no principal or context. Tests:
+carries no caller or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
-`grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
+`grpc_create_records_its_kind_key_and_caller` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
 
@@ -2377,7 +2431,7 @@ Guests read their identity and caller through `golem:agent/invocation-context`
 invocation start recorded, so they are not durable calls. An entity Store answers for its
 enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
 (initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
-`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+`caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
 ## Invocation attribution and per-invocation state
@@ -2416,7 +2470,7 @@ did not start a task group" (an armed key not consumed while the call runs). An 
 ends in its first poll, such as one Wasmtime refused to enter, ran no guest code and logs `debug!`.
 
 Per-invocation state lives in `InvocationExecutionState` entries of `Invocations`
-(`durable_host/execution_state.rs`): start index, invocation ID, principal, invocation context and
+(`durable_host/execution_state.rs`): start index, invocation ID, caller, invocation context and
 current span, read-only strictness, retry point, per-invocation call counters, a tail-work count,
 the guest-trap retry scopes, and the invocation's `InvocationAuthority`. The `AgentLevel` entry
 always exists. The loop runs one invocation at a time. `set_current_idempotency_key` calls
@@ -3662,7 +3716,7 @@ mappings. The target's `Create` entry records the fork request, not the source's
 request. Entity-invocation requests do not record the internal calling principal: live execution
 and replay derive it from the current owner, including every middleware and leaf invocation.
 Request matching still checks entity, operation, call mode, input and descendant plan position.
-The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
+The separate execution `caller`, authority snapshot, guest inputs, recorded environment and
 external effects remain unchanged. Inline request bytes are preserved; external payloads are copied
 from authoritative contents under the target without decoding or re-encoding them. Cached external
 values are not a substitute for copying durable bytes. Repeated forks derive the new owner without

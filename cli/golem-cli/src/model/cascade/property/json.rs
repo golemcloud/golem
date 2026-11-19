@@ -18,6 +18,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use serde_derive::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -60,6 +62,74 @@ pub enum JsonPropertyTraceElem<L: Layer> {
 pub struct JsonProperty<L: Layer> {
     value: Option<Value>,
     trace: Vec<JsonPropertyTraceElem<L>>,
+    #[serde(skip)]
+    sources: BTreeMap<Vec<String>, PathBuf>,
+}
+
+impl<L: Layer> JsonProperty<L> {
+    pub fn source_at(&self, path: &[String]) -> Option<&Path> {
+        (0..=path.len())
+            .rev()
+            .find_map(|len| self.sources.get(&path[..len]).map(PathBuf::as_path))
+    }
+
+    pub fn apply_sourced(
+        &mut self,
+        id: &L::Id,
+        selection: Option<&L::AppliedSelection>,
+        value: Option<Value>,
+        source: &Path,
+    ) {
+        if let Some(value) = &value {
+            self.overlay_sources(value, &[], source);
+        }
+        self.apply_layer(id, selection, value);
+    }
+
+    pub fn apply_inherited<M: Layer>(
+        &mut self,
+        id: &L::Id,
+        selection: Option<&L::AppliedSelection>,
+        parent: &JsonProperty<M>,
+    ) {
+        if let Some(value) = &parent.value {
+            // A non-object value replaces its entire subtree; an object merges its keys.
+            fn overlay(
+                sources: &mut BTreeMap<Vec<String>, PathBuf>,
+                path: &mut Vec<String>,
+                value: &Value,
+            ) {
+                if let Value::Object(fields) = value {
+                    sources.remove(path.as_slice());
+                    for (key, child) in fields {
+                        path.push(key.clone());
+                        overlay(sources, path, child);
+                        path.pop();
+                    }
+                } else {
+                    sources.retain(|key, _| !key.starts_with(path));
+                }
+            }
+            overlay(&mut self.sources, &mut Vec::new(), value);
+            self.sources.extend(parent.sources.clone());
+        }
+        self.apply_layer(id, selection, parent.value.clone());
+    }
+
+    fn overlay_sources(&mut self, value: &Value, path: &[String], source: &Path) {
+        if let Value::Object(fields) = value {
+            self.sources.remove(path);
+            let mut path = path.to_vec();
+            for (key, child) in fields {
+                path.push(key.clone());
+                self.overlay_sources(child, &path, source);
+                path.pop();
+            }
+        } else {
+            self.sources.retain(|key, _| !key.starts_with(path));
+            self.sources.insert(path.to_vec(), source.to_path_buf());
+        }
+    }
 }
 
 impl<L: Layer> Default for JsonProperty<L> {
@@ -67,6 +137,7 @@ impl<L: Layer> Default for JsonProperty<L> {
         Self {
             value: None,
             trace: vec![],
+            sources: BTreeMap::new(),
         }
     }
 }
@@ -76,6 +147,7 @@ impl<L: Layer> From<Option<Value>> for JsonProperty<L> {
         Self {
             value,
             trace: vec![],
+            sources: BTreeMap::new(),
         }
     }
 }

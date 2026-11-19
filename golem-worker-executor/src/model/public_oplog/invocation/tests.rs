@@ -13,33 +13,25 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::schema::agent::{AutoInjectedKind, NamedField};
+use golem_common::schema::agent::NamedField;
 use golem_common::schema::{SchemaTypeDef, TypeId};
 use test_r::test;
 
-/// An agent method (or constructor) input schema that mixes user-supplied
-/// fields with an auto-injected `principal` field. The value recorded in
-/// the oplog is caller-only (the principal travels out of band), so the
-/// typed value paired for the public oplog must describe exactly the
-/// user-supplied fields — its root record arity must match the value's.
+/// The typed value paired for the public oplog describes exactly the declared fields: its root
+/// record arity matches the value's.
 #[test]
-fn input_value_to_typed_schema_value_excludes_auto_injected_fields() {
+fn input_value_to_typed_schema_value_has_every_declared_field() {
     let input_schema = InputSchema::parameters([
         NamedField::user_supplied("count", SchemaType::u32()),
         NamedField::user_supplied("label", SchemaType::string()),
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
     ]);
-    // Caller-only record as stored in the oplog (two user-supplied values).
+    // The record as stored in the oplog.
     let value = SchemaValue::Record {
         fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
     };
 
     let typed = input_value_to_typed_schema_value(&SchemaGraph::empty(), &input_schema, value)
-        .expect("pairing caller-only value with method schema must succeed");
+        .expect("pairing the value with the method schema must succeed");
 
     let SchemaType::Record { fields, .. } = typed.root_type() else {
         panic!("expected record root, got {:?}", typed.root_type());
@@ -50,7 +42,7 @@ fn input_value_to_typed_schema_value_excludes_auto_injected_fields() {
     assert_eq!(
         fields.len(),
         values.len(),
-        "root record schema arity must match the caller-only value arity"
+        "root record schema arity must match the value arity"
     );
     let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["count", "label"]);

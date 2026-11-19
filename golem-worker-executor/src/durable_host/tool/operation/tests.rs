@@ -107,9 +107,7 @@ fn context_for(
         parent: parent(),
         call_mode,
         activation: activation(filesystem),
-        principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
+        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
         descriptor: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: Vec::new(),
@@ -572,6 +570,7 @@ async fn historical_admission_refusal_does_not_block_child_validation() {
             let selected = tokio::time::timeout(
                 std::time::Duration::from_secs(1),
                 child.select_infrastructure(WorkerExecutorError::unexpected_oplog_entry(
+                    OplogIndex::from_u64(3),
                     "recorded child result",
                     "different child result",
                 )),
@@ -2670,11 +2669,12 @@ async fn owner_failure_supersedes_its_own_uncommitted_cancellation() {
                 retry_policy_state: golem_common::model::RetryPolicyState::Counter(3),
             },
         ),
+        provenance: crate::model::FailureProvenance::Host,
     };
     assert!(operation.select_trap(trap).await);
     assert!(
         matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Trap(
-        TrapType::Error { error: golem_common::model::oplog::AgentError::OutOfMemory, retry_from, semantic_trap_retry_override: Some(semantic) }
+        TrapType::Error { error: golem_common::model::oplog::AgentError::OutOfMemory, retry_from, semantic_trap_retry_override: Some(semantic), .. }
     )) if retry_from == OplogIndex::from_u64(19)
         && semantic.retry_from == OplogIndex::from_u64(17)
         && semantic.policy_name == "selected-host-policy"
@@ -3523,7 +3523,7 @@ fn probed_entity_invocation(
         EntityInvocationId::new(entity_id, OplogIndex::from_u64(2)).unwrap(),
         OplogIndex::from_u64(1),
         context.activation,
-        context.principal,
+        context.caller.immediate.clone(),
         InvocationExecutionMode::Live,
         uuid::Uuid::new_v4().into(),
         false,
@@ -3612,7 +3612,7 @@ async fn retained_registration_keeps_fenced_slot_alive_until_last_lease_is_relea
         EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
         OplogIndex::from_u64(1),
         operation.activation,
-        operation.principal,
+        operation.caller.immediate.clone(),
         InvocationExecutionMode::Live,
         uuid::Uuid::new_v4().into(),
         false,

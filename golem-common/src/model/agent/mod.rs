@@ -386,12 +386,6 @@ pub fn constructor_parameter_record(agent_type: &AgentTypeSchema) -> SchemaType 
             .input_schema
             .fields()
             .iter()
-            .filter(|field| {
-                matches!(
-                    field.source,
-                    crate::schema::agent::FieldSource::UserSupplied
-                )
-            })
             .map(|field| NamedFieldType {
                 name: field.name.clone(),
                 body: field.schema.clone(),

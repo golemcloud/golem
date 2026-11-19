@@ -774,6 +774,25 @@ pub struct SerializableP3UdpDatagram {
     pub remote_address: SerializableP3IpSocketAddress,
 }
 
+/// How a P3 UDP call changed the local endpoint of its socket.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableP3UdpEndpoint {
+    /// The local address of the socket changed to this address: an implicit bind, or the
+    /// interface address that a connect selected for a wildcard bind.
+    Bound(SerializableP3IpSocketAddress),
+    /// The socket could not get its recorded local address back after recovery.
+    Lost,
+}
+
 #[derive(
     Debug,
     Clone,

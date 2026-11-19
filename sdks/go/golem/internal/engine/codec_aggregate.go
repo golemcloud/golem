@@ -32,10 +32,6 @@ import (
 func (d *Engine) compileRecord(c *Codec) {
 	c.record = true
 	fields := d.StructFields(c.Typ)
-	if slices.ContainsFunc(fields, func(f Field) bool { return f.AutoInjected }) {
-		MarkInvalid(c, "%s", MisplacedPrincipal)
-		return
-	}
 	// The record would carry none of the struct's state: it would travel as
 	// record {} and arrive as a zero value.
 	if len(fields) == 0 && c.Typ.NumField() > 0 {

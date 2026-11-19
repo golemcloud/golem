@@ -113,7 +113,7 @@ fn canonical_input_params<'a>(
     ordered.sort_by_key(|(source, param)| is_flag_param(source, param));
     let mut fields = Vec::new();
     for param in &cmd.params {
-        if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+        if is_injected_context_type(&param.ty) || is_stream_type(&param.ty) {
             continue;
         }
         let order = crate::tool::descriptor::client_surface_order(ir, cmd, param)?;
@@ -571,7 +571,7 @@ fn subtree_client_macro_leaf_command_arms(
     let params: Vec<_> = inherited_params
         .iter()
         .chain(cmd.params.iter())
-        .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
+        .filter(|param| !is_injected_context_type(&param.ty) && !is_stream_type(&param.ty))
         .cloned()
         .collect();
     let mut arms =
@@ -607,7 +607,7 @@ fn subtree_client_macro_subtree_command_arms(
     let params: Vec<_> = inherited_params
         .iter()
         .chain(cmd.params.iter())
-        .filter(|param| !is_principal_type(&param.ty))
+        .filter(|param| !is_injected_context_type(&param.ty))
         .cloned()
         .collect();
     let mut arms =
@@ -815,7 +815,7 @@ fn kept_client_args_omitting(
             !omitted_names
                 .iter()
                 .any(|omitted| omitted_matches_param(ir, cmd, param, tool_name, omitted))
-                && !is_principal_type(&param.ty)
+                && !is_injected_context_type(&param.ty)
                 && (include_stdout
                     || !matches!(stream_type(&param.ty), Some((StreamKind::Output, _))))
         })
@@ -838,7 +838,7 @@ fn value_inserts(
         .iter()
         .chain(cmd.params.iter())
         .filter_map(|param| {
-            if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+            if is_injected_context_type(&param.ty) || is_stream_type(&param.ty) {
                 return None;
             }
             if omitted_names
@@ -882,7 +882,7 @@ fn subtree_child_omitted_surfaces(
     for param in cmd
         .params
         .iter()
-        .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
+        .filter(|param| !is_injected_context_type(&param.ty) && !is_stream_type(&param.ty))
     {
         for surface in captured_param_surfaces(ir, cmd, param, tool_name) {
             if !surfaces.iter().any(|existing| existing == &surface) {
@@ -1018,7 +1018,7 @@ fn prefix_value_builders(
         .into_iter()
         .chain(current)
         .filter_map(|(param, _from_root)| {
-            if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+            if is_injected_context_type(&param.ty) || is_stream_type(&param.ty) {
                 return None;
             }
             if omitted_names
@@ -1361,7 +1361,7 @@ fn pascal_case(input: &str) -> String {
     out
 }
 
-pub(crate) fn is_principal_type(ty: &Type) -> bool {
+pub(crate) fn is_injected_context_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };
@@ -1374,15 +1374,7 @@ pub(crate) fn is_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic" | "tool", "Principal"]
-            | [
-                "golem_rust",
-                "golem_agentic",
-                "golem",
-                "agent",
-                "common",
-                "Principal"
-            ]
+        ["golem_rust", "agentic" | "tool", "InvocationContext"]
     )
 }
 

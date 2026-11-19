@@ -48,11 +48,11 @@ pub fn Presented::value_stdout(
 pub fn Presented::io(
   input : @asyncCore.Stream[Byte],
   output : @asyncCore.Sink[Byte],
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> Result[String, RunError] {
   ignore(input)
   ignore(output)
-  ignore(principal)
+  ignore(context)
   Ok("done")
 }
 
@@ -213,12 +213,12 @@ pub async fn Policy::value_stdout(
 pub async fn Policy::io(
   underlying : PresentedUnderlying,
   input : @toolMiddleware.MiddlewareStdin,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> Result[
   (String, @asyncCore.Stream[Byte]),
   @toolMiddleware.ToolInvokeError[RunError],
 ] {
-  ignore(principal)
+  ignore(context)
   match underlying.start_io(input) {
     Err(error) => Err(error)
     Ok(invocation) => collect_started_stdout(invocation)
@@ -323,14 +323,14 @@ pub async fn Adapter::value_stdout(
 pub async fn Adapter::io(
   underlying : StorageUnderlying,
   input : @toolMiddleware.MiddlewareStdin,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> Result[
   (String, @asyncCore.Stream[Byte]),
   @toolMiddleware.ToolInvokeError[RunError],
 ] {
   ignore(underlying)
   ignore(input)
-  ignore(principal)
+  ignore(context)
   abort("compile fixture")
 }
 
@@ -355,7 +355,7 @@ pub async fn audit(
 ] {
   ignore(invocation.tool_name())
   ignore(invocation.tool_metadata())
-  ignore(invocation.principal())
+  ignore(invocation.invocation_context())
   underlying.invoke_raw(
     invocation.command_path(),
     invocation.input(),

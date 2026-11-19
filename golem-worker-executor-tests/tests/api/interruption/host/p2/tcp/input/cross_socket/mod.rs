@@ -1,6 +1,7 @@
 mod completion;
 
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! cross_case {
@@ -181,7 +182,7 @@ async fn cross_socket_pending(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let source = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

@@ -17,7 +17,8 @@ use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::{CommitLevel, OplogOps, PrimaryOplogService};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::agent::AgentTypeName;
+
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
@@ -562,7 +563,7 @@ fn make_agent_metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -1153,9 +1154,7 @@ fn test_entity_request(
                 },
             })
         }),
-        principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
+        caller: crate::test_callers::agent_caller(owner.agent_id.clone()),
         plan: EntityInvocationPlanReference::Root { plan },
         authority_wallet: Vec::new(),
     };
@@ -2164,7 +2163,6 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         (
             HostFunctionName::P3SocketsTypesUdpSocketSend,
             HostRequestP3SocketsUdpSend {
-                data: vec![1, 2, 3],
                 remote_address: Some(SerializableP3IpSocketAddress {
                     address: SerializableIpAddress::IPv4 {
                         address: [127, 0, 0, 1],
@@ -2175,7 +2173,11 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 }),
             }
             .into(),
-            HostResponseP3SocketsUdpSend { result: Ok(()) }.into(),
+            HostResponseP3SocketsUdpSend {
+                result: Ok(()),
+                endpoint: None,
+            }
+            .into(),
         ),
         (
             HostFunctionName::P3SocketsTypesUdpSocketReceive,
@@ -2192,6 +2194,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                         scope_id: Some(2),
                     },
                 }),
+                endpoint: None,
             }
             .into(),
         ),

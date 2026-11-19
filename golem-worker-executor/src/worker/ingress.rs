@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use uuid::Uuid;
 
 use golem_common::model::InvocationId;
@@ -39,6 +40,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .active_agents()
             .get_or_add_oplog_processor(deps, owned_agent_id, component_revision)
             .await?;
+        // The batch runs as the processor agent itself, in both roles.
+        let mut invocation = invocation;
+        if let AgentInvocation::ProcessOplogEntries { caller, .. } = &mut invocation {
+            *caller = Caller::entry(worker.self_principal(deps.config().resolved_golem_issuer()));
+        }
         Self::start_if_needed(worker.clone()).await?;
         worker.invoke(invocation).await?;
         Ok(())
@@ -80,15 +86,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let no_cache = !ro.cacheable || is_no_cache(&ro.cfg.cache_policy);
             if !no_cache {
                 let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-                let principal_ref = if ro.cfg.uses_principal {
-                    Some(&ro.principal)
-                } else {
-                    None
-                };
                 let key = read_only_cache::build_read_only_cache_key(
                     &ro.method_name,
                     &ro.input,
-                    principal_ref,
+                    &ro.caller,
                     ro.component_revision,
                     cur_epoch,
                 );
@@ -217,7 +218,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Admits a native external-tool invocation for this exact owner.
     ///
-    /// The caller is trusted to have authenticated the supplied principal and context at its
+    /// The caller is trusted to have authenticated the supplied caller and context at its
     /// ingress boundary. This method preserves ordinary invocation queue, idempotency, scope-card,
     /// result, and cache-invalidation semantics; it does not establish a separate permission
     /// boundary.
@@ -229,7 +230,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         if self.initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor {
@@ -254,7 +255,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false,
                 None,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             )
             .await?;
@@ -271,7 +272,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         stderr: bool,
         expected_deployment_revision: Option<DeploymentRevision>,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
         let accepted_index = self
@@ -383,7 +384,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             stderr,
             activation,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         };
         if already_accepted {
@@ -508,15 +509,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Use the same key shape as the `invoke` cache HIT path so a hit
             // there and a coalesced miss here see the same entry.
             let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-            let principal_ref = if ro.cfg.uses_principal {
-                Some(&ro.principal)
-            } else {
-                None
-            };
             let key = read_only_cache::build_read_only_cache_key(
                 &ro.method_name,
                 &ro.input,
-                principal_ref,
+                &ro.caller,
                 ro.component_revision,
                 cur_epoch,
             );

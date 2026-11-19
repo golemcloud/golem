@@ -11,6 +11,7 @@ use golem_worker_executor::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -162,7 +163,7 @@ pub(super) async fn pending_promise(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;

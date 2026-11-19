@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
@@ -36,7 +37,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::InvocationResultPosition;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
@@ -1338,7 +1339,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "a".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
-                    principal: Principal::anonymous(),
+                    caller: Caller::anonymous(),
                     scope_card: None,
                 })),
                 trace_id: TraceId::generate(),
@@ -1848,7 +1849,7 @@ fn recovery_errors_are_not_invocation_results() {
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "agent:method".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
-                    principal: Principal::anonymous(),
+                    caller: Caller::anonymous(),
                     scope_card: None,
                 })),
                 trace_id: TraceId::generate(),
@@ -1893,7 +1894,7 @@ fn started_invocation(key: &InvocationId) -> OplogEntry {
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -1950,7 +1951,7 @@ fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
         OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         TraceId::generate(),
@@ -2665,6 +2666,8 @@ fn failed_update_to_revision_two() -> OplogEntry {
         None,
         None,
         None,
+        golem_common::model::oplog::UpdateFailureClass::Other,
+        None,
     )
 }
 
@@ -3260,7 +3263,7 @@ async fn multiple_reverts() {
                 fields: vec![SchemaValue::Bool(true)],
             },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .agent_invocation_finished(
@@ -3305,7 +3308,7 @@ async fn cancel_pending_invocation() {
                 fields: vec![SchemaValue::Bool(true)],
             },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .pending_invocation(AgentInvocation::AgentMethod {
@@ -3313,7 +3316,7 @@ async fn cancel_pending_invocation() {
             method_name: "b".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .cancel_pending_invocation(k1)
@@ -3331,7 +3334,7 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
             method_name: "denied".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .permission_denied_pending_invocation(idempotency_key)
@@ -4865,7 +4868,7 @@ impl TestCaseBuilder {
                         create_request: golem_common::model::oplog::CreateRequest::new(
                             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                             None,
-                            golem_common::model::agent::Principal::anonymous(),
+                            golem_common::model::caller::Caller::anonymous(),
                             &golem_common::model::invocation_context::InvocationContextStack::fresh(
                             ),
                         ),
@@ -4912,7 +4915,7 @@ impl TestCaseBuilder {
         let payload = AgentInvocationPayload::AgentMethod {
             method_name: function_name.to_string(),
             input: SchemaValue::Record { fields: request },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         };
         self.add(
@@ -5533,6 +5536,8 @@ impl TestCaseBuilder {
             None,
             update_attempt_index,
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -5574,6 +5579,8 @@ impl TestCaseBuilder {
                 pending_update: applied_update,
                 snapshot_assisted_details: None,
                 snapshot_fault: None,
+                failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+                divergence: None,
             });
 
             if status.skipped_regions.is_overridden() {
@@ -5610,6 +5617,8 @@ impl TestCaseBuilder {
             Some(details.clone()),
             Some(pending.admission_index),
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -5621,6 +5630,8 @@ impl TestCaseBuilder {
                 pending_update: applied_update,
                 snapshot_assisted_details: Some(details.clone()),
                 snapshot_fault: None,
+                failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+                divergence: None,
             });
             status
         })
@@ -8384,7 +8395,15 @@ mod region_fold {
     }
 
     pub(super) fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
-        OplogEntry::failed_update(revision(target), None, None, attempt.map(idx), None)
+        OplogEntry::failed_update(
+            revision(target),
+            None,
+            None,
+            attempt.map(idx),
+            None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
+        )
     }
 
     pub(super) fn succeeded(target: u64) -> OplogEntry {
@@ -8751,6 +8770,8 @@ mod region_fold {
                         ),
                         Some(idx(4)),
                         fault,
+                        golem_common::model::oplog::UpdateFailureClass::Other,
+                        None,
                     ),
                 ),
                 (7, automatic_admission(2)),
@@ -8807,6 +8828,8 @@ mod region_fold {
                     None,
                     Some(idx(3)),
                     Some(SnapshotFault::Incompatible),
+                    golem_common::model::oplog::UpdateFailureClass::Other,
+                    None,
                 ),
             ),
         ]));
@@ -8994,7 +9017,7 @@ mod invocation_payload_decodes {
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("input".to_string())],
                 },
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             })),
             trace_id: TraceId::generate(),

@@ -1332,6 +1332,8 @@ pub struct FailedUpdateRecord {
     /// Whether the failure is about the record that the update selected. `None` for any other
     /// failure.
     pub snapshot_fault: Option<oplog::SnapshotFault>,
+    pub failure_class: oplog::UpdateFailureClass,
+    pub divergence: Option<Box<oplog::ReplayDivergence>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

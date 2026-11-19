@@ -1480,6 +1480,7 @@ impl ForkUpdates {
                         admission.target_revision,
                         admission.index,
                         CANCELLED_BY_FORK.into(),
+                        golem_common::model::oplog::UpdateFailureClass::Other,
                     )
                 })),
             self.baseline,
@@ -1514,7 +1515,7 @@ mod tests {
     use super::*;
     use golem_common::base_model::component::ComponentRevision;
     use golem_common::model::AgentInvocationPayload;
-    use golem_common::model::agent::Principal;
+    use golem_common::model::caller::Caller;
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;
@@ -1540,7 +1541,7 @@ mod tests {
             payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                 method_name: "test".to_string(),
                 input: SchemaValue::Record { fields: Vec::new() },
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             })),
             trace_id: TraceId::generate(),
@@ -1571,7 +1572,7 @@ mod tests {
     #[test]
     fn fork_target_create_records_the_fork_request_not_the_source_request() {
         use golem_common::model::account::AccountId;
-        use golem_common::model::agent::{AgentMode, AgentPrincipal, OwnerKind};
+        use golem_common::model::agent::{AgentMode, OwnerKind};
         use golem_common::model::environment::EnvironmentId;
         use golem_common::model::invocation_context::InvocationContextStack;
         use golem_common::model::oplog::{CreateParameters, CreateRequestKind};
@@ -1581,15 +1582,13 @@ mod tests {
         let source_request = CreateRequest::new(
             CreateRequestKind::Exclusive,
             Some(IdempotencyKey::new("source-create".to_string())),
-            Principal::anonymous(),
+            Caller::anonymous(),
             &InvocationContextStack::fresh_rounded(),
         );
         let fork_request = CreateRequest::new(
             CreateRequestKind::Fork,
             None,
-            Principal::Agent(AgentPrincipal {
-                agent_id: agent_id("forker"),
-            }),
+            crate::test_callers::agent_caller(agent_id("forker")),
             &InvocationContextStack::fresh_rounded(),
         );
         let entry = OplogEntry::create(Box::new(CreateParameters {
@@ -1791,7 +1790,15 @@ mod tests {
         let (cancelled, _) = fork_updates(
             &[
                 automatic_admission(2),
-                OplogEntry::failed_update(revision(2), None, None, Some(index(3)), None),
+                OplogEntry::failed_update(
+                    revision(2),
+                    None,
+                    None,
+                    Some(index(3)),
+                    None,
+                    golem_common::model::oplog::UpdateFailureClass::Other,
+                    None,
+                ),
             ],
             &[],
         );
@@ -1891,7 +1898,9 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             not_before: None,
             invocation_id: InvocationId(Uuid::new_v4()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -1913,7 +1922,15 @@ mod tests {
             invocation,
             succeeded(3),
             manual_invocation(5),
-            OplogEntry::failed_update(revision(5), None, None, Some(index(9)), None),
+            OplogEntry::failed_update(
+                revision(5),
+                None,
+                None,
+                Some(index(9)),
+                None,
+                golem_common::model::oplog::UpdateFailureClass::Other,
+                None,
+            ),
             manual_pending_update(6, Some(FilesystemSnapshotName::update())),
             manual_invocation(7),
         ];

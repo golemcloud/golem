@@ -457,7 +457,6 @@ pub enum ToolBuildError {
     VariantInInputPosition(String),
     CommandNotFound(String),
     UnresolvedConstraintRef(String),
-    AutoInjectedToolParameter(String),
     InvalidNumericBound(String),
     RefinementTypeMismatch {
         refinement: &'static str,
@@ -560,10 +559,6 @@ impl Display for ToolBuildError {
             ToolBuildError::UnresolvedConstraintRef(s) => {
                 write!(f, "constraint references an unknown argument: {s}")
             }
-            ToolBuildError::AutoInjectedToolParameter(s) => write!(
-                f,
-                "auto-injected types are not valid tool value parameters or results: {s}"
-            ),
             ToolBuildError::InvalidNumericBound(s) => {
                 write!(f, "invalid numeric bound: {s}")
             }

@@ -344,12 +344,10 @@ fn snapshot_parse_parts(
 ///|
 pub fn encode_multipart_snapshot(
   snapshot : MultipartSnapshot,
-  principal : @common.Principal,
 ) -> Result[(Bytes, String), String] {
   try {
     let envelope : Json = Json::object({
-      "version": Json::number(1),
-      "principal": principal_to_json(principal),
+      "version": Json::number(2),
       "state": snapshot.state,
     })
     let parts : Array[(String, SnapshotPart)] = [
@@ -484,7 +482,7 @@ fn snapshot_string_end(text : String, start : Int32) -> Int32 {
 pub fn decode_multipart_snapshot(
   data : Bytes,
   mime : String,
-) -> Result[(@common.Principal, MultipartSnapshot), String] {
+) -> Result[MultipartSnapshot, String] {
   try {
     let parts = snapshot_parse_parts(data, mime)
     guard parts.search_by(p => p.0 == "state") is Some(index) else {
@@ -505,46 +503,53 @@ pub fn decode_multipart_snapshot(
       raise SnapshotCodecError("Envelope must be an object")
     }
     let raw = snapshot_raw_object(text)
+    // A 1.6 envelope (version 1) carries a principal: it is checked as before and dropped.
+    // A 2.0 envelope (version 2) carries none.
+    let version = raw.get("version")
     snapshot_check(
-      raw.get("version") == Some("1"),
-      "Multipart version must be integer 1",
+      version == Some("1") || version == Some("2"),
+      "Multipart version must be integer 1 or 2",
     )
-    guard raw.get("principal") is Some(principal_raw) &&
-      fields.get("principal") is Some(principal_json) &&
-      fields.get("state") is Some(state) else {
+    guard fields.get("state") is Some(state) else {
       raise SnapshotCodecError("Incomplete envelope")
     }
-    let principal_fields = snapshot_raw_object(principal_raw)
-    guard principal_json is Object(principal_map) else {
-      raise SnapshotCodecError("Principal must be an object")
-    }
-    if principal_map.get("tag") != Some(Json::string("anonymous")) {
-      guard principal_fields.get("val") is Some(value) else {
-        raise SnapshotCodecError("Missing principal payload")
+    if version == Some("1") {
+      guard raw.get("principal") is Some(principal_raw) &&
+        fields.get("principal") is Some(principal_json) else {
+        raise SnapshotCodecError("Incomplete envelope")
       }
-      ignore(snapshot_raw_object(value))
-      if principal_map.get("tag") == Some(Json::string("oidc")) {
-        guard principal_map.get("val") is Some(Object(value)) else {
-          raise SnapshotCodecError("Invalid principal payload")
+      let principal_fields = snapshot_raw_object(principal_raw)
+      guard principal_json is Object(principal_map) else {
+        raise SnapshotCodecError("Principal must be an object")
+      }
+      if principal_map.get("tag") != Some(Json::string("anonymous")) {
+        guard principal_fields.get("val") is Some(value) else {
+          raise SnapshotCodecError("Missing principal payload")
         }
-        for
-          name in [
-            "email", "name", "givenName", "familyName", "picture", "preferredUsername",
-          ] {
+        ignore(snapshot_raw_object(value))
+        if principal_map.get("tag") == Some(Json::string("oidc")) {
+          guard principal_map.get("val") is Some(Object(value)) else {
+            raise SnapshotCodecError("Invalid principal payload")
+          }
+          for
+            name in [
+              "email", "name", "givenName", "familyName", "picture", "preferredUsername",
+            ] {
+            snapshot_check(
+              value.get(name) is (None | Some(Null) | Some(String(_))),
+              "Invalid optional principal string",
+            )
+          }
           snapshot_check(
-            value.get(name) is (None | Some(Null) | Some(String(_))),
-            "Invalid optional principal string",
+            value.get("emailVerified")
+            is (None | Some(Null) | Some(True) | Some(False)),
+            "Invalid optional principal boolean",
           )
         }
-        snapshot_check(
-          value.get("emailVerified")
-          is (None | Some(Null) | Some(True) | Some(False)),
-          "Invalid optional principal boolean",
-        )
       }
-    }
-    let principal = principal_from_json(principal_json) catch {
-      _ => raise SnapshotCodecError("Invalid principal")
+      validate_legacy_principal_json(principal_json) catch {
+        _ => raise SnapshotCodecError("Invalid principal")
+      }
     }
     let user_parts : Map[String, SnapshotPart] = Map([])
     for entry in parts {
@@ -563,7 +568,7 @@ pub fn decode_multipart_snapshot(
         content_type: snapshot_content_type(part.content_type),
       }
     }
-    Ok((principal, { state, parts: user_parts, }))
+    Ok({ state, parts: user_parts, })
   } catch {
     SnapshotCodecError(message) => Err(message)
   }
