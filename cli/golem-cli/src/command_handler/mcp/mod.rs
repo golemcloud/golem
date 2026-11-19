@@ -42,9 +42,9 @@ use crate::error::{
     OutsideEnvironment, PipedExitCode, ProfileMissing, PromptAnswer,
 };
 use crate::log::{
-    LogColorize, OUTPUT_CAPTURE_LIMIT, Output, OutputCapture, discard_held_log,
-    error_message_for_output, log_action, log_error, log_warn, message_for_output, print_line,
-    set_log_output,
+    LogColorize, LogOutput, OUTPUT_CAPTURE_LIMIT, Output, OutputCapture, TracingSuppression,
+    discard_held_log, error_message_for_output, log_action, log_error, log_warn,
+    message_for_output, print_line, set_log_output,
 };
 use crate::model::cli_output::{
     CLI_OUTPUT_TYPE_FIELD, command_output_schema_value, command_output_types,
@@ -1105,9 +1105,14 @@ async fn run_oplog_export_call(
     arguments: OplogExportArguments,
     cancellation: Cancellation,
 ) -> CallToolResult {
-    let result = match server_ctx.for_tool_call(false, environment.clone(), cancellation) {
-        Ok(ctx) => oplog_export::run(Arc::new(ctx), arguments, OUTPUT_CAPTURE_LIMIT).await,
-        Err(error) => Err(error),
+    // The call logs nothing: the log and the tracing of a resolution or a read can quote the
+    // agent ID or data of the agent.
+    let result = {
+        let _silent = (LogOutput::new(Output::None), TracingSuppression::new());
+        match server_ctx.for_tool_call(false, environment.clone(), cancellation) {
+            Ok(ctx) => oplog_export::run(Arc::new(ctx), arguments, OUTPUT_CAPTURE_LIMIT).await,
+            Err(error) => Err(error),
+        }
     };
     match result {
         Ok(document) => {
@@ -1125,7 +1130,6 @@ async fn run_oplog_export_call(
             }
         }
         Err(error) => {
-            set_log_output(Output::Stderr);
             discard_held_log();
             let _ = capture.take();
             oplog_export_failure(&error)
@@ -1133,15 +1137,39 @@ async fn run_oplog_export_call(
     }
 }
 
+/// The platform error codes that a failed `agent_oplog_export` call keeps: those of a failed
+/// resolution of the agent or a failed read. The code of a server response is any string.
+const OPLOG_EXPORT_PLATFORM_ERRORS: &[&str] = &[
+    error_code::ACCOUNT_NOT_FOUND,
+    error_code::AGENT_NOT_FOUND,
+    error_code::AGENT_TYPE_NOT_FOUND,
+    error_code::APPLICATION_NOT_FOUND,
+    error_code::AUTH_FORBIDDEN,
+    error_code::AUTH_UNAUTHORIZED,
+    error_code::CLI_UPDATE_REQUIRED,
+    error_code::COMPONENT_NOT_FOUND,
+    error_code::ENVIRONMENT_NOT_DEPLOYED,
+    error_code::ENVIRONMENT_NOT_FOUND,
+    error_code::LIMIT_EXCEEDED,
+    error_code::SERVER_STARTING,
+];
+
 /// The error of a failed `agent_oplog_export` call. An error of the export itself has its own
 /// code and message. Another error, such as when the CLI could not make the call's [`Context`] or
 /// resolve the agent, keeps only its code, and the service and the HTTP status of a service error:
-/// its message, its log and its other details can quote the agent ID or data of the agent.
+/// its message, its log and its other details can quote the agent ID or data of the agent. A
+/// platform error code that is not in [`OPLOG_EXPORT_PLATFORM_ERRORS`] becomes `command-failed`.
 fn oplog_export_failure(error: &anyhow::Error) -> CallToolResult {
     if let Some((code, message, details)) = oplog_export::export_failure(error) {
         return error_envelope(code, message, details);
     }
-    let tool_error = classify(error, None);
+    let mut tool_error = classify(error, None);
+    if let Some(code) = find_cause::<ServiceError>(error).and_then(ServiceError::error_code)
+        && tool_error.code == platform_error_id(code)
+        && !OPLOG_EXPORT_PLATFORM_ERRORS.contains(&code)
+    {
+        tool_error.code = "command-failed".to_string();
+    }
     let details = tool_error
         .details
         .into_iter()
@@ -1528,8 +1556,19 @@ mod tests {
             requested: marker.to_string(),
             environment: "local".to_string(),
         });
+        // A server response can have any code; the error code is lowercase.
+        let unknown_code = ServiceError {
+            service_name: "Worker",
+            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                status_code: 400,
+                errors: vec![],
+                code: Some(marker.to_string()),
+                additional_fields: Default::default(),
+            }),
+        };
         let failures = [
             (outside, "outside-environment"),
+            (anyhow::Error::from(unknown_code), "command-failed"),
             (anyhow::anyhow!("{marker}"), "command-failed"),
             (
                 anyhow::Error::new(NonSuccessfulExit).context(marker),
@@ -1539,7 +1578,13 @@ mod tests {
         for (error, code) in failures {
             let report = envelope(&oplog_export_failure(&error));
             assert_eq!(report["error"], code, "{report}");
-            assert!(!report.to_string().contains(marker), "{report}");
+            assert!(
+                !report
+                    .to_string()
+                    .to_lowercase()
+                    .contains(&marker.to_lowercase()),
+                "{report}"
+            );
         }
     }
 

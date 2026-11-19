@@ -1513,23 +1513,40 @@ async fn mcp_serve_exports_one_bounded_oplog_report() {
     .await;
     assert_eq!(error_code(&outside), "outside-environment");
 
-    // An agent ID that does not resolve fails without quoting the ID.
+    // An agent ID that does not resolve fails without quoting the ID, in the result and on the
+    // server's stderr, also when the server holds its log back until an error.
     let marker = "CUSTOMER-MARKER";
-    for agent_id in [
-        format!("a/b/c/d/{marker}"),
-        format!(r#"Counter("{marker}")"#),
-    ] {
-        let unresolved = call(
-            &client,
-            "agent_oplog_export",
-            json!({"agent_id": agent_id, "from": 1, "to": 2}),
-        )
-        .await;
-        assert_eq!(unresolved.is_error, Some(true), "{unresolved:?}");
-        assert!(
-            !format!("{unresolved:?}").contains(marker),
-            "{unresolved:?}"
-        );
+    for global_args in [&["-E", "local"][..], &["-E", "local", "-q"]] {
+        let (transport, stderr) = TokioChildProcess::builder(server_command(&ctx, global_args))
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = stderr.unwrap();
+        let stderr = tokio::spawn(async move {
+            let mut text = String::new();
+            stderr.read_to_string(&mut text).await.unwrap();
+            text
+        });
+        let marker_client = ().serve(transport).await.unwrap();
+        for agent_id in [
+            format!("a/b/c/d/{marker}"),
+            format!(r#"Counter("{marker}")"#),
+        ] {
+            let unresolved = call(
+                &marker_client,
+                "agent_oplog_export",
+                json!({"agent_id": agent_id, "from": 1, "to": 2}),
+            )
+            .await;
+            assert_eq!(unresolved.is_error, Some(true), "{unresolved:?}");
+            assert!(
+                !format!("{unresolved:?}").contains(marker),
+                "{unresolved:?}"
+            );
+        }
+        marker_client.cancel().await.unwrap();
+        let stderr = stderr.await.unwrap();
+        assert!(!stderr.contains(marker), "{global_args:?}:\n{stderr}");
     }
 
     // A cancelled call returns nothing, and the next call is complete on its own.
