@@ -297,7 +297,7 @@ async fn __golem_tool_invoke_Report(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() > 0 &&
     ["admin"].contains(__golem_command_path[0]) {
@@ -307,7 +307,7 @@ async fn __golem_tool_invoke_Report(
       __golem_stdin,
       __golem_stdout,
       __golem_stderr,
-      __golem_principal,
+      __golem_context,
     )
   }
   if __golem_command_path.length() == 1 &&
@@ -463,7 +463,7 @@ async fn __golem_tool_invoke_Report_subtree_2(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     let __golem_reader = @schema.WireReader::new(__golem_input.value)
@@ -793,7 +793,7 @@ async fn __golem_tool_invoke_Administration(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     let __golem_reader = @schema.WireReader::new(__golem_input.value)
@@ -1050,7 +1050,7 @@ async fn __golem_tool_invoke_Retained(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() > 0 &&
     ["administration"].contains(__golem_command_path[0]) {
@@ -1060,7 +1060,7 @@ async fn __golem_tool_invoke_Retained(
       __golem_stdin,
       __golem_stdout,
       __golem_stderr,
-      __golem_principal,
+      __golem_context,
     )
   }
   @tool.reject_wire_invocation(
@@ -1079,7 +1079,7 @@ async fn __golem_tool_invoke_Retained_subtree_0(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 0 {
     let __golem_reader = @schema.WireReader::new(__golem_input.value)
@@ -1416,7 +1416,7 @@ async fn __golem_tool_invoke_HttpOptions(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderOutput?,
   __golem_stderr : @tool.ProviderOutput?,
-  __golem_principal : @tool.Principal,
+  __golem_context : @tool.InvocationContext,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
     ["run"].contains(__golem_command_path[0]) {
