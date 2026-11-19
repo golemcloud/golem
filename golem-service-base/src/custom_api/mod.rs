@@ -355,22 +355,43 @@ pub enum ConstructorParameter {
 #[desert(evolution())]
 pub enum MethodParameter {
     Path {
+        argument_name: String,
         path_segment_index: SafeIndex,
         parameter_type: PathSegmentType,
     },
     Query {
+        argument_name: String,
         query_parameter_name: String,
         parameter_type: QueryOrHeaderType,
     },
     Header {
+        argument_name: String,
         header_name: String,
         parameter_type: QueryOrHeaderType,
     },
     JsonObjectBodyField {
-        field_index: SafeIndex,
+        argument_name: String,
+        field_name: String,
     },
-    UnstructuredBinaryBody,
-    UnstructuredTextBody,
+    UnstructuredBinaryBody {
+        argument_name: String,
+    },
+    UnstructuredTextBody {
+        argument_name: String,
+    },
+}
+
+impl MethodParameter {
+    pub fn argument_name(&self) -> &str {
+        match self {
+            Self::Path { argument_name, .. }
+            | Self::Query { argument_name, .. }
+            | Self::Header { argument_name, .. }
+            | Self::JsonObjectBodyField { argument_name, .. }
+            | Self::UnstructuredBinaryBody { argument_name }
+            | Self::UnstructuredTextBody { argument_name } => argument_name,
+        }
+    }
 }
 
 #[derive(Debug)]

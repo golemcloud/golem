@@ -8392,6 +8392,7 @@ mod tests {
                 },
                 body: RequestBodySchema::Unused,
                 method_parameters: vec![MethodParameter::Query {
+                    argument_name: "message".into(),
                     query_parameter_name: "message".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
                 }],

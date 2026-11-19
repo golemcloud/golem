@@ -675,6 +675,7 @@ mod tests {
                 load: None,
             });
             call.method_parameters = vec![MethodParameter::Query {
+                argument_name: "required".into(),
                 query_parameter_name: "required".into(),
                 parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
             }];

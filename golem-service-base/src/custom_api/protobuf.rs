@@ -896,8 +896,13 @@ impl TryFrom<proto::golem::customapi::MethodParameter> for MethodParameter {
     fn try_from(value: proto::golem::customapi::MethodParameter) -> Result<Self, Self::Error> {
         use proto::golem::customapi::method_parameter::Kind;
 
+        let argument_name = value.argument_name;
+        if argument_name.is_empty() {
+            return Err("MethodParameter.argument_name missing".into());
+        }
         match value.kind.ok_or("MethodParameter.kind missing")? {
             Kind::Path(path) => Ok(MethodParameter::Path {
+                argument_name,
                 path_segment_index: path.path_segment_index.into(),
                 parameter_type: path
                     .parameter_type
@@ -906,6 +911,7 @@ impl TryFrom<proto::golem::customapi::MethodParameter> for MethodParameter {
             }),
 
             Kind::Query(query) => Ok(MethodParameter::Query {
+                argument_name,
                 query_parameter_name: query.query_parameter_name,
                 parameter_type: query
                     .parameter_type
@@ -914,6 +920,7 @@ impl TryFrom<proto::golem::customapi::MethodParameter> for MethodParameter {
             }),
 
             Kind::Header(header) => Ok(MethodParameter::Header {
+                argument_name,
                 header_name: header.header_name,
                 parameter_type: header
                     .parameter_type
@@ -922,12 +929,17 @@ impl TryFrom<proto::golem::customapi::MethodParameter> for MethodParameter {
             }),
 
             Kind::JsonObjectBodyField(field) => Ok(MethodParameter::JsonObjectBodyField {
-                field_index: field.field_index.into(),
+                argument_name,
+                field_name: field.field_name,
             }),
 
-            Kind::UnstructuredBinaryBody(_) => Ok(MethodParameter::UnstructuredBinaryBody),
+            Kind::UnstructuredBinaryBody(_) => {
+                Ok(MethodParameter::UnstructuredBinaryBody { argument_name })
+            }
 
-            Kind::UnstructuredTextBody(_) => Ok(MethodParameter::UnstructuredTextBody),
+            Kind::UnstructuredTextBody(_) => {
+                Ok(MethodParameter::UnstructuredTextBody { argument_name })
+            }
         }
     }
 }
@@ -938,9 +950,11 @@ impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
 
         match value {
             MethodParameter::Path {
+                argument_name,
                 path_segment_index,
                 parameter_type,
             } => Self {
+                argument_name,
                 kind: Some(Kind::Path(
                     proto::golem::customapi::method_parameter::Path {
                         path_segment_index: path_segment_index.into(),
@@ -950,9 +964,11 @@ impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
             },
 
             MethodParameter::Query {
+                argument_name,
                 query_parameter_name,
                 parameter_type,
             } => Self {
+                argument_name,
                 kind: Some(Kind::Query(
                     proto::golem::customapi::method_parameter::Query {
                         query_parameter_name,
@@ -962,9 +978,11 @@ impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
             },
 
             MethodParameter::Header {
+                argument_name,
                 header_name,
                 parameter_type,
             } => Self {
+                argument_name,
                 kind: Some(Kind::Header(
                     proto::golem::customapi::method_parameter::Header {
                         header_name,
@@ -973,21 +991,25 @@ impl From<MethodParameter> for proto::golem::customapi::MethodParameter {
                 )),
             },
 
-            MethodParameter::JsonObjectBodyField { field_index } => Self {
+            MethodParameter::JsonObjectBodyField {
+                argument_name,
+                field_name,
+            } => Self {
+                argument_name,
                 kind: Some(Kind::JsonObjectBodyField(
-                    proto::golem::customapi::method_parameter::JsonObjectBodyField {
-                        field_index: field_index.into(),
-                    },
+                    proto::golem::customapi::method_parameter::JsonObjectBodyField { field_name },
                 )),
             },
 
-            MethodParameter::UnstructuredBinaryBody => Self {
+            MethodParameter::UnstructuredBinaryBody { argument_name } => Self {
+                argument_name,
                 kind: Some(Kind::UnstructuredBinaryBody(
                     proto::golem::customapi::method_parameter::UnstructuredBinaryBody {},
                 )),
             },
 
-            MethodParameter::UnstructuredTextBody => Self {
+            MethodParameter::UnstructuredTextBody { argument_name } => Self {
+                argument_name,
                 kind: Some(Kind::UnstructuredTextBody(
                     proto::golem::customapi::method_parameter::UnstructuredTextBody {},
                 )),

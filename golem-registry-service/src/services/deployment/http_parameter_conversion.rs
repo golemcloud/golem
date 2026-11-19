@@ -140,6 +140,7 @@ pub fn build_http_agent_method_parameters<E>(
             validate_path_segment_type(segment_kind, &ty, make_error)?;
 
             per_field[idx] = Some(MethodParameter::Path {
+                argument_name: name.clone(),
                 path_segment_index: *path_index,
                 parameter_type: ty,
             });
@@ -154,6 +155,7 @@ pub fn build_http_agent_method_parameters<E>(
             })?;
 
             per_field[idx] = Some(MethodParameter::Query {
+                argument_name: name.clone(),
                 query_parameter_name: query_var.query_param_name.clone(),
                 parameter_type: ty,
             });
@@ -171,6 +173,7 @@ pub fn build_http_agent_method_parameters<E>(
             }
 
             per_field[idx] = Some(MethodParameter::Header {
+                argument_name: name.clone(),
                 header_name: header_var.header_name.clone(),
                 parameter_type: ty,
             });
@@ -183,6 +186,7 @@ pub fn build_http_agent_method_parameters<E>(
                 make_error(format!("Invalid implicit query input '{name}': {error}"))
             })?;
             per_field[idx] = Some(MethodParameter::Query {
+                argument_name: name.clone(),
                 query_parameter_name: name.clone(),
                 parameter_type: ty,
             });
@@ -193,11 +197,7 @@ pub fn build_http_agent_method_parameters<E>(
     // Second pass: classify the remaining (body) fields into `per_field`.
     let body_schema = handle_body_parameters(graph, fields, &consumed, &mut per_field, make_error)?;
 
-    // Final pass: emit method parameters in user-supplied input declaration
-    // order. The worker-service runtime relies on this ordering to build the
-    // positional `SchemaValue::Record` the executor expects (which validates
-    // the record positionally against the user-supplied fields in declaration
-    // order).
+    // Retain each argument's name so consumers can resolve bindings independently of order.
     let method_parameters: Vec<MethodParameter> = per_field.into_iter().flatten().collect();
 
     let mut query_names: Vec<(&str, bool)> = Vec::new();
@@ -208,6 +208,7 @@ pub fn build_http_agent_method_parameters<E>(
         if let MethodParameter::Query {
             query_parameter_name: name,
             parameter_type,
+            ..
         } = parameter
         {
             let map = parameter_type.is_map();
@@ -268,11 +269,15 @@ fn handle_body_parameters<E>(
         };
         return Ok(match kind {
             UnstructuredPayloadKind::Binary => {
-                per_field[input_index] = Some(MethodParameter::UnstructuredBinaryBody);
+                per_field[input_index] = Some(MethodParameter::UnstructuredBinaryBody {
+                    argument_name: field.name.clone(),
+                });
                 RequestBodySchema::BinaryBody { expected }
             }
             UnstructuredPayloadKind::Text => {
-                per_field[input_index] = Some(MethodParameter::UnstructuredTextBody);
+                per_field[input_index] = Some(MethodParameter::UnstructuredTextBody {
+                    argument_name: field.name.clone(),
+                });
                 RequestBodySchema::TextBody { expected }
             }
         });
@@ -280,8 +285,7 @@ fn handle_body_parameters<E>(
 
     // JSON object body: every leftover field must be a structural type (i.e. not
     // a raw unstructured text/binary body, which must be the sole parameter).
-    // `field_index` indexes into the JSON body record (built here in
-    // leftover/declaration order), not into the input field list.
+    // Each binding retains the JSON property name independently of record ordering.
     let mut body_fields = Vec::new();
     for (input_index, field) in &leftovers {
         if unstructured_or_raw_kind(graph, &field.schema)
@@ -295,7 +299,6 @@ fn handle_body_parameters<E>(
             ));
         }
 
-        let field_index = body_fields.len();
         body_fields.push(NamedFieldType {
             name: field.name.clone(),
             body: field.schema.clone(),
@@ -303,7 +306,8 @@ fn handle_body_parameters<E>(
         });
 
         per_field[*input_index] = Some(MethodParameter::JsonObjectBodyField {
-            field_index: SafeIndex::try_from(field_index).map_err(make_error)?,
+            argument_name: field.name.clone(),
+            field_name: field.name.clone(),
         });
     }
 
@@ -555,10 +559,10 @@ mod test {
             if bodiless {
                 assert!(matches!(body, RequestBodySchema::Unused));
                 assert!(
-                    matches!(&parameters[0], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Option { .. } } if query_parameter_name == "tags")
+                    matches!(&parameters[0], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Option { .. }, .. } if query_parameter_name == "tags")
                 );
                 assert!(
-                    matches!(&parameters[2], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Map { .. } } if query_parameter_name == "labels")
+                    matches!(&parameters[2], MethodParameter::Query { query_parameter_name, parameter_type: QueryOrHeaderType::Map { .. }, .. } if query_parameter_name == "labels")
                 );
             } else {
                 assert!(matches!(body, RequestBodySchema::JsonBody { .. }));
@@ -905,11 +909,26 @@ mod test {
         assert!(let RequestBodySchema::JsonBody { .. } = body);
         assert_eq!(params.len(), 2);
 
-        assert!(
-            params
-                .iter()
-                .all(|p| matches!(p, MethodParameter::JsonObjectBodyField { .. }))
+        assert_eq!(
+            params,
+            vec![
+                MethodParameter::JsonObjectBodyField {
+                    argument_name: "a".into(),
+                    field_name: "a".into(),
+                },
+                MethodParameter::JsonObjectBodyField {
+                    argument_name: "b".into(),
+                    field_name: "b".into(),
+                },
+            ]
         );
+        let wire: Vec<golem_api_grpc::proto::golem::customapi::MethodParameter> =
+            params.iter().cloned().map(Into::into).collect();
+        let restored: Vec<MethodParameter> = wire
+            .into_iter()
+            .map(|parameter| parameter.try_into().unwrap())
+            .collect();
+        assert_eq!(restored, params);
     }
 
     #[test]
@@ -932,7 +951,12 @@ mod test {
         .unwrap();
 
         assert!(matches!(body, RequestBodySchema::BinaryBody { .. }));
-        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
+        assert_eq!(
+            params,
+            vec![MethodParameter::UnstructuredBinaryBody {
+                argument_name: "return-type".into()
+            }]
+        );
     }
 
     #[test]
@@ -962,7 +986,12 @@ mod test {
         let_assert!(SchemaType::Binary { restrictions, .. } = expected.graph.root);
         assert!(restrictions.mime_types == Some(vec!["application/octet-stream".to_string()]));
 
-        assert_eq!(params, vec![MethodParameter::UnstructuredBinaryBody]);
+        assert_eq!(
+            params,
+            vec![MethodParameter::UnstructuredBinaryBody {
+                argument_name: "return-type".into()
+            }]
+        );
     }
 
     #[test]
@@ -1272,7 +1301,12 @@ mod test {
         .unwrap();
 
         assert!(matches!(body, RequestBodySchema::TextBody { .. }));
-        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
+        assert_eq!(
+            params,
+            vec![MethodParameter::UnstructuredTextBody {
+                argument_name: "body".into()
+            }]
+        );
     }
 
     #[test]
@@ -1303,6 +1337,11 @@ mod test {
         let_assert!(SchemaType::Text { restrictions, .. } = expected.graph.root);
         assert!(restrictions.languages == Some(vec!["en".to_string(), "de".to_string()]));
 
-        assert_eq!(params, vec![MethodParameter::UnstructuredTextBody]);
+        assert_eq!(
+            params,
+            vec![MethodParameter::UnstructuredTextBody {
+                argument_name: "body".into()
+            }]
+        );
     }
 }

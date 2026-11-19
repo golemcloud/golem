@@ -280,21 +280,17 @@ fn call_agent_route(
 ) -> RichCompiledRoute {
     let method_input = CompiledInputSchema {
         graph: SchemaGraph::empty(),
-        input_schema: InputSchema::parameters(method_parameters.iter().enumerate().map(
-            |(index, parameter)| {
-                let schema = match parameter {
-                    MethodParameter::Path { parameter_type, .. } => {
-                        SchemaType::from(parameter_type)
-                    }
-                    MethodParameter::Query { parameter_type, .. }
-                    | MethodParameter::Header { parameter_type, .. } => {
-                        SchemaType::from(parameter_type.clone())
-                    }
-                    _ => str(),
-                };
-                golem_common::schema::NamedField::user_supplied(format!("input{index}"), schema)
-            },
-        )),
+        input_schema: InputSchema::parameters(method_parameters.iter().map(|parameter| {
+            let schema = match parameter {
+                MethodParameter::Path { parameter_type, .. } => SchemaType::from(parameter_type),
+                MethodParameter::Query { parameter_type, .. }
+                | MethodParameter::Header { parameter_type, .. } => {
+                    SchemaType::from(parameter_type.clone())
+                }
+                _ => str(),
+            };
+            golem_common::schema::NamedField::user_supplied(parameter.argument_name(), schema)
+        })),
     };
     RichCompiledRoute {
         account_id: AccountId::new(),
@@ -454,10 +450,12 @@ fn phantom_selector_openapi_documents_concrete_paths_and_query_requiredness() {
             RequestBodySchema::Unused,
             vec![
                 MethodParameter::Path {
+                    argument_name: "left".into(),
                     path_segment_index: 0.into(),
                     parameter_type: PathSegmentType::U32,
                 },
                 MethodParameter::Path {
+                    argument_name: "right".into(),
                     path_segment_index: (if absent { 1 } else { 2 }).into(),
                     parameter_type: PathSegmentType::Str,
                 },
@@ -1506,23 +1504,29 @@ fn durable_stream_method_bindings_are_operation_specific() {
         (
             json_body(record(vec![field("value", str())])),
             Some(MethodParameter::JsonObjectBodyField {
-                field_index: SafeIndex::new(0),
+                argument_name: "value".into(),
+                field_name: "value".into(),
             }),
             Some("application/json"),
         ),
         (
             unrestricted_text(),
-            Some(MethodParameter::UnstructuredTextBody),
+            Some(MethodParameter::UnstructuredTextBody {
+                argument_name: "value".into(),
+            }),
             Some("text/plain"),
         ),
         (
             unrestricted_binary(),
-            Some(MethodParameter::UnstructuredBinaryBody),
+            Some(MethodParameter::UnstructuredBinaryBody {
+                argument_name: "value".into(),
+            }),
             Some("*/*"),
         ),
         (
             RequestBodySchema::Unused,
             Some(MethodParameter::Header {
+                argument_name: "value".into(),
                 header_name: "x-value".into(),
                 parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
             }),
@@ -1532,10 +1536,12 @@ fn durable_stream_method_bindings_are_operation_specific() {
         let url_bound = binding.is_none();
         let mut bindings = vec![
             MethodParameter::Path {
+                argument_name: "session".into(),
                 path_segment_index: SafeIndex::new(0),
                 parameter_type: PathSegmentType::Str,
             },
             MethodParameter::Query {
+                argument_name: "count".into(),
                 query_parameter_name: "count".into(),
                 parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
             },
@@ -1633,12 +1639,14 @@ fn durable_stream_query_selector_is_identity_on_every_operation() {
     for optional in [false, true] {
         for body_bound in [false, true] {
             let mut bindings = vec![MethodParameter::Query {
+                argument_name: "count".into(),
                 query_parameter_name: "count".into(),
                 parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
             }];
             let body = if body_bound {
                 bindings.push(MethodParameter::JsonObjectBodyField {
-                    field_index: 1.into(),
+                    argument_name: "value".into(),
+                    field_name: "value".into(),
                 });
                 json_body(record(vec![field("value", str())]))
             } else {
@@ -1755,6 +1763,7 @@ fn durable_stream_concrete_slot_yields_to_explicit_rest_route() {
             ],
             RequestBodySchema::Unused,
             vec![MethodParameter::Path {
+                argument_name: "id".into(),
                 path_segment_index: SafeIndex::new(0),
                 parameter_type: PathSegmentType::Str,
             }],
@@ -2845,6 +2854,7 @@ fn path_parameter_is_required() {
             ],
             RequestBodySchema::Unused,
             vec![MethodParameter::Path {
+                argument_name: "id".into(),
                 path_segment_index: SafeIndex::new(0),
                 parameter_type: PathSegmentType::Str,
             }],
@@ -2876,6 +2886,7 @@ fn catchall_path_parameter_has_description() {
             ],
             RequestBodySchema::Unused,
             vec![MethodParameter::Path {
+                argument_name: "tail".into(),
                 path_segment_index: SafeIndex::new(0),
                 parameter_type: PathSegmentType::Str,
             }],
@@ -2904,10 +2915,12 @@ fn optional_query_parameter_is_not_required() {
             RequestBodySchema::Unused,
             vec![
                 MethodParameter::Query {
+                    argument_name: "limit".into(),
                     query_parameter_name: "limit".to_string(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U64),
                 },
                 MethodParameter::Query {
+                    argument_name: "cursor".into(),
                     query_parameter_name: "cursor".to_string(),
                     parameter_type: QueryOrHeaderType::Option {
                         name: None,
@@ -3020,10 +3033,12 @@ fn query_schemas_preserve_constraints_and_describe_wire_collections() {
                         RequestBodySchema::Unused,
                         vec![
                             MethodParameter::Header {
+                                argument_name: "header".into(),
                                 header_name: "x-first".into(),
                                 parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
                             },
                             MethodParameter::Query {
+                                argument_name: "source_name".into(),
                                 query_parameter_name: "wire".into(),
                                 parameter_type,
                             },
@@ -3432,10 +3447,12 @@ fn optional_header_parameter_is_not_required() {
             RequestBodySchema::Unused,
             vec![
                 MethodParameter::Header {
+                    argument_name: "required".into(),
                     header_name: "x-required".to_string(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
                 },
                 MethodParameter::Header {
+                    argument_name: "optional".into(),
                     header_name: "x-optional".to_string(),
                     parameter_type: QueryOrHeaderType::Option {
                         name: None,

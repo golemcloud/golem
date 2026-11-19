@@ -214,6 +214,100 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
 }
 
 #[test]
+async fn http_method_arguments_follow_binding_names_not_binding_order() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::schema::{AgentMethodSchema, NamedField, SchemaValue};
+    use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
+
+    let input = InputSchema::parameters([
+        NamedField::user_supplied("count", SchemaType::u32()),
+        NamedField::user_supplied("message", SchemaType::string()),
+        NamedField::user_supplied("suffix", SchemaType::string()),
+    ]);
+    let harness = route_harness(
+        "oracle-agent",
+        DURABLE_STREAM_COMPONENT,
+        vec![AgentMethodSchema {
+            name: "run".into(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: input.clone(),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        }],
+    );
+    let mut route = test_route(1, "/run", Some("POST"), "typed");
+    let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        unreachable!()
+    };
+    call.component_id = harness.component_id;
+    call.agent_type = harness.agent_type.type_name.clone();
+    call.method_input = CompiledInputSchema {
+        graph: SchemaGraph::empty(),
+        input_schema: input,
+    };
+    call.body = RequestBodySchema::JsonBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record_from_fields([
+                ("text", SchemaType::string()),
+                ("tail", SchemaType::string()),
+            ])),
+        },
+    };
+    call.method_parameters = vec![
+        MethodParameter::JsonObjectBodyField {
+            argument_name: "suffix".into(),
+            field_name: "tail".into(),
+        },
+        MethodParameter::Query {
+            argument_name: "count".into(),
+            query_parameter_name: "wire".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+        },
+        MethodParameter::JsonObjectBodyField {
+            argument_name: "message".into(),
+            field_name: "text".into(),
+        },
+    ];
+    let handler = request_handler_with_worker(
+        test_resolver(vec![route]),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    );
+    let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+    let response = endpoint
+        .execute(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/run?wire=7".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json")
+                .body(r#"{"tail":"!","text":"hello"}"#),
+        )
+        .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        response.into_body().into_string().await.unwrap()
+    );
+    assert_eq!(
+        harness.recorded_method_params(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::String("hello".into()),
+                SchemaValue::String("!".into())
+            ],
+        }
+    );
+}
+
+#[test]
 async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
     use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
@@ -271,6 +365,7 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                         value: PathSegmentType::Bool,
                     };
                     MethodParameter::Query {
+                        argument_name: "amount".into(),
                         query_parameter_name: "wire".into(),
                         parameter_type: if binding == "optional-map" {
                             QueryOrHeaderType::Option {
@@ -288,14 +383,17 @@ async fn bound_input_errors_preserve_codes_names_and_protocol_bodies() {
                     }
                 }
                 "query" => MethodParameter::Query {
+                    argument_name: "amount".into(),
                     query_parameter_name: "wire".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
                 },
                 "header" => MethodParameter::Header {
+                    argument_name: "amount".into(),
                     header_name: "x-wire".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
                 },
                 _ => MethodParameter::Path {
+                    argument_name: "amount".into(),
                     path_segment_index: SafeIndex::new(0),
                     parameter_type: PathSegmentType::U32,
                 },

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::custom_api::error::RequestHandlerError;
-use golem_common::schema::{FieldSource, SchemaType, SchemaValue};
+use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{PathSegmentType, QueryOrHeaderType};
 use std::collections::HashMap;
 
@@ -42,24 +42,16 @@ pub(in crate::custom_api) fn validate_query_parameters(
         {
             continue;
         }
-        if let Some((index, MethodParameter::Query { query_parameter_name, parameter_type })) =
-            behaviour.method_parameters.iter().enumerate().find(|(_, parameter)| {
-                matches!(parameter, MethodParameter::Query { query_parameter_name, parameter_type }
+        if let Some(MethodParameter::Query { argument_name, query_parameter_name, parameter_type }) =
+            behaviour.method_parameters.iter().find(|parameter| {
+                matches!(parameter, MethodParameter::Query { query_parameter_name, parameter_type, .. }
                 if query_parameter_name == name
                     || (parameter_type.is_map() && map_entry_key(query_parameter_name, name).is_some()))
             })
         {
             if parameter_type.is_map() && query_parameter_name == name {
-                let field = behaviour.method_input.input_schema.fields().iter()
-                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-                    .filter(|field| !matches!(
-                        behaviour.method_input.graph.resolve_ref(&field.schema),
-                        Ok(SchemaType::Stream { .. })
-                    ))
-                    .nth(index)
-                    .ok_or_else(|| RequestHandlerError::invariant_violated("Method parameter has no input field"))?;
                 return Err(RequestHandlerError::InvalidParameter {
-                    name: field.name.clone(),
+                    name: argument_name.clone(),
                     error: SCALAR_MAP_ERROR.into(),
                 });
             }

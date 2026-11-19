@@ -352,12 +352,8 @@ impl CallAgentHandler {
         let query_params = request.query_params();
         let headers = request.headers();
 
-        // The producer emits `method_parameters` in user-supplied input
-        // declaration order, so iterating them in order builds the positional
-        // `SchemaValue::Record` the executor validates against (which excludes
-        // auto-injected fields like the caller).
         let mut values = Vec::with_capacity(behaviour.method_parameters.len());
-        let mut input_fields = behaviour
+        let input_fields: Vec<_> = behaviour
             .method_input
             .input_schema
             .fields()
@@ -368,11 +364,26 @@ impl CallAgentHandler {
                     behaviour.method_input.graph.resolve_ref(&field.schema),
                     Ok(SchemaType::Stream { .. })
                 )
-            });
-        for param in &behaviour.method_parameters {
-            let field = input_fields.next().ok_or_else(|| {
-                RequestHandlerError::invariant_violated("Method parameter has no input field")
+            })
+            .collect();
+        if input_fields.len() != behaviour.method_parameters.len() {
+            return Err(RequestHandlerError::invariant_violated(
+                "Method bindings do not match input fields",
+            ));
+        }
+        for field in input_fields {
+            let mut bindings = behaviour
+                .method_parameters
+                .iter()
+                .filter(|parameter| parameter.argument_name() == field.name);
+            let param = bindings.next().ok_or_else(|| {
+                RequestHandlerError::invariant_violated("Method input field has no binding")
             })?;
+            if bindings.next().is_some() {
+                return Err(RequestHandlerError::invariant_violated(
+                    "Method input field has multiple bindings",
+                ));
+            }
             let invalid =
                 |error: RequestHandlerError| RequestHandlerError::ParameterParsingFailed {
                     name: field.name.clone(),
@@ -382,6 +393,7 @@ impl CallAgentHandler {
                 MethodParameter::Path {
                     path_segment_index,
                     parameter_type,
+                    ..
                 } => {
                     let raw = resolved_route.captured_path_parameters
                         [usize::from(*path_segment_index)]
@@ -393,12 +405,14 @@ impl CallAgentHandler {
                 MethodParameter::Query {
                     query_parameter_name,
                     parameter_type,
+                    ..
                 } => parse_query_parameter(query_parameter_name, query_params, parameter_type)
                     .map_err(&invalid)?,
 
                 MethodParameter::Header {
                     header_name,
                     parameter_type,
+                    ..
                 } => {
                     let vals = headers
                         .get_all(header_name)
@@ -415,15 +429,40 @@ impl CallAgentHandler {
                     parse_query_or_header_value(&vals, parameter_type).map_err(&invalid)?
                 }
 
-                MethodParameter::JsonObjectBodyField { field_index } => match &body {
-                    ParsedRequestBody::JsonBody(SchemaValue::Record { fields }) => fields
-                        .get(usize::from(*field_index))
-                        .cloned()
-                        .ok_or_else(|| {
-                            RequestHandlerError::invariant_violated(
-                                "JSON body field index out of range for parsed body",
-                            )
-                        })?,
+                MethodParameter::JsonObjectBodyField { field_name, .. } => match &body {
+                    ParsedRequestBody::JsonBody(SchemaValue::Record { fields }) => {
+                        let RequestBodySchema::JsonBody { expected } = &behaviour.body else {
+                            return Err(RequestHandlerError::invariant_violated(
+                                "JSON body parameter used but no JSON body schema",
+                            ));
+                        };
+                        let SchemaType::Record {
+                            fields: body_fields,
+                            ..
+                        } = expected
+                            .graph
+                            .resolve_ref(&expected.graph.root)
+                            .map_err(|_| {
+                                RequestHandlerError::invariant_violated(
+                                    "JSON body schema reference is invalid",
+                                )
+                            })?
+                        else {
+                            return Err(RequestHandlerError::invariant_violated(
+                                "JSON body schema is not a record",
+                            ));
+                        };
+                        body_fields
+                            .iter()
+                            .position(|field| &field.name == field_name)
+                            .and_then(|index| fields.get(index))
+                            .cloned()
+                            .ok_or_else(|| {
+                                RequestHandlerError::invariant_violated(
+                                    "JSON body property is missing from parsed body",
+                                )
+                            })?
+                    }
 
                     ParsedRequestBody::JsonBody(_) => {
                         return Err(RequestHandlerError::invariant_violated(
@@ -438,7 +477,7 @@ impl CallAgentHandler {
                     }
                 },
 
-                MethodParameter::UnstructuredBinaryBody => match &mut body {
+                MethodParameter::UnstructuredBinaryBody { .. } => match &mut body {
                     ParsedRequestBody::UnstructuredBinary(binary_source) => {
                         let binary_source = binary_source.take().ok_or_else(|| {
                             RequestHandlerError::invariant_violated(
@@ -464,7 +503,7 @@ impl CallAgentHandler {
                     }
                 },
 
-                MethodParameter::UnstructuredTextBody => match &mut body {
+                MethodParameter::UnstructuredTextBody { .. } => match &mut body {
                     ParsedRequestBody::UnstructuredText(text_source) => {
                         let text_source = text_source.take().ok_or_else(|| {
                             RequestHandlerError::invariant_violated(
@@ -753,10 +792,12 @@ mod tests {
         let mut behaviour = behaviour.clone();
         behaviour.method_parameters = vec![
             MethodParameter::Query {
+                argument_name: "q".into(),
                 query_parameter_name: "q".into(),
                 parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
             },
             MethodParameter::Query {
+                argument_name: "labels".into(),
                 query_parameter_name: "labels".into(),
                 parameter_type: QueryOrHeaderType::Map {
                     key: PathSegmentType::Str,
@@ -885,6 +926,7 @@ mod tests {
                 )]),
             };
             behaviour.method_parameters = vec![MethodParameter::Query {
+                argument_name: "amount".into(),
                 query_parameter_name: "wire".into(),
                 parameter_type: ty,
             }];
@@ -944,6 +986,7 @@ mod tests {
                     )]),
                 };
                 behaviour.method_parameters = vec![MethodParameter::Query {
+                    argument_name: "labels".into(),
                     query_parameter_name: "lbl".into(),
                     parameter_type: QueryOrHeaderType::Map {
                         key: PathSegmentType::Str,
@@ -961,7 +1004,8 @@ mod tests {
                     behaviour
                         .method_parameters
                         .push(MethodParameter::JsonObjectBodyField {
-                            field_index: 0.into(),
+                            argument_name: "payload".into(),
+                            field_name: "payload".into(),
                         });
                     behaviour.body = RequestBodySchema::JsonBody {
                         expected: CompiledSchema {

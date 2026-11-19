@@ -1585,6 +1585,7 @@ mod tests {
             assert_eq!(
                 call.method_parameters,
                 vec![MethodParameter::Query {
+                    argument_name: "limit".into(),
                     query_parameter_name: "limit".into(),
                     parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
                 }]
@@ -2019,6 +2020,7 @@ mod tests {
                     method_input: empty_compiled_input(),
                     body: RequestBodySchema::Unused,
                     method_parameters: vec![MethodParameter::Header {
+                        argument_name: "token".into(),
                         header_name: "X-List-Token".to_string(),
                         parameter_type:
                             golem_service_base::custom_api::QueryOrHeaderType::Primitive(
