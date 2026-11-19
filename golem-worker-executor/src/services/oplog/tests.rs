@@ -5789,6 +5789,320 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
     assert_eq!(oplog.current_oplog_index().await, before);
 }
 
+/// Builds a new service, including new archive handles, over the same backing stores.
+async fn cold_ambiguity_service(
+    indexed: Arc<ReadCountingIndexedStorage>,
+    blobs: Arc<dyn BlobStorage + Send + Sync>,
+    archive: Option<Arc<dyn OplogArchiveService>>,
+) -> MultiLayerOplogService {
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed.clone(),
+            blobs,
+            100,
+            1,
+            16,
+            32,
+            append_reconciliation_retry_config(),
+        )
+        .await,
+    );
+    let archive = archive.unwrap_or_else(|| {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed,
+            1,
+            immediate_archive_retry_config(1),
+        ))
+    });
+    MultiLayerOplogService::new(primary, nev![archive], 10_000, 10_000)
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn external_payload_indeterminate_append_survives_cold_takeover(_tracing: &Tracing) {
+    for failure in [
+        InjectedAppendFailure::IndeterminateBeforeWrite,
+        InjectedAppendFailure::CommitThenIndeterminate,
+    ] {
+        let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let blobs = Arc::new(ReadCountingBlobStorage::new());
+        let service = cold_ambiguity_service(indexed.clone(), blobs.clone(), None).await;
+        let (_, owned, metadata) = archive_open_agent("cold-payload-takeover");
+        let initial = OplogEntry::recovery_succeeded().rounded();
+        let old = service
+            .create_fresh(
+                &mut service.lock_lifecycle(&owned.agent_id).await,
+                &owned,
+                AgentMode::Durable,
+                initial.clone(),
+                metadata.clone(),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(5)),
+            )
+            .await
+            .unwrap();
+        let value = AgentInvocationPayload::AgentMethod {
+            method_name: "cold-payload".to_string(),
+            input: SchemaValue::List {
+                elements: (0..513).map(|i| SchemaValue::U8((i % 251) as u8)).collect(),
+            },
+            principal: Principal::anonymous(),
+            scope_card: None,
+        };
+        let payload = old.upload_payload_owned(value.clone()).await.unwrap();
+        assert!(matches!(payload, OplogPayload::External { .. }));
+        let context = InvocationContextStack::fresh_rounded();
+        let spans = context.to_oplog_data();
+        let pending = OplogEntry::pending_agent_invocation(
+            None,
+            test_invocation_id("cold-payload".to_string()),
+            payload,
+            context.trace_id,
+            context.trace_states,
+            spans,
+        )
+        .rounded();
+        let second = old.add(pending.clone()).await.unwrap();
+        let marker = OplogEntry::grow_memory(37).rounded();
+        let third = old.add(marker.clone()).await.unwrap();
+        indexed.reset_append_observations();
+        indexed.inject_append_many_failure(failure);
+        // Even a committed append is retried when the first reconciliation read misses it.
+        indexed.hidden_reads.store(1, Ordering::Relaxed);
+        old.commit(CommitLevel::Always).await.unwrap();
+        assert_eq!(indexed.append_many_attempts(), 2);
+        assert!(old.commit(CommitLevel::Always).await.unwrap().is_empty());
+
+        let cold_service = cold_ambiguity_service(indexed.clone(), blobs.clone(), None).await;
+        let cold = cold_service
+            .open(
+                &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+                &owned,
+                AgentMode::Durable,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                Some(ShardEpoch(6)),
+            )
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&old, &cold));
+        assert_eq!(cold.current_oplog_index().await, third);
+        let expected = BTreeMap::from([
+            (OplogIndex::INITIAL, initial),
+            (second, pending),
+            (third, marker),
+        ]);
+        assert_eq!(
+            cold.read_exact(OplogIndex::INITIAL, 3).await.unwrap(),
+            expected
+        );
+        assert_eq!(cold.length().await.unwrap(), 3);
+        let OplogEntry::PendingAgentInvocation { payload, .. } = cold.read(second).await.unwrap()
+        else {
+            panic!("cold owner lost the payload entry");
+        };
+        assert_eq!(cold.download_payload(payload).await.unwrap(), value);
+        assert_eq!(blobs.puts.load(Ordering::Relaxed), 1);
+        old.add(OplogEntry::exited().rounded()).await.unwrap();
+        assert!(matches!(
+            old.commit(CommitLevel::Always).await,
+            Err(OplogError::Fenced(_))
+        ));
+        let next = OplogEntry::grow_memory(91).rounded();
+        assert_eq!(cold.add(next.clone()).await.unwrap(), third.next());
+        cold.commit(CommitLevel::Always).await.unwrap();
+        assert_eq!(cold.read(third.next()).await.unwrap(), next);
+        assert_eq!(cold.length().await.unwrap(), 4);
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn late_archive_publication_survives_cold_reopen_and_retry(_tracing: &Tracing) {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blobs: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let archive_service = blob_archive(indexed.clone(), blobs.clone(), 1);
+    let (_, owned, metadata) = archive_open_agent("cold-late-publication");
+    let archive = archive_service
+        .open_fresh(&owned, AgentMode::Durable, None)
+        .await
+        .unwrap();
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    indexed.inject_append_failure(InjectedAppendFailure::HeldThenIndeterminate);
+    assert!(archive.append(&entries).await.is_err());
+    assert_eq!(indexed.held_appends.lock().unwrap().len(), 1);
+    assert_eq!(blob_objects(&blobs, &owned, 1).await, 1);
+
+    // The request really lands after its caller observed failure, not merely after a stale read.
+    indexed.land_held_appends().await.unwrap();
+    let cold_archive_service = Arc::new(blob_archive(indexed.clone(), blobs.clone(), 1));
+    let cold_service =
+        cold_ambiguity_service(indexed, blobs.clone(), Some(cold_archive_service.clone())).await;
+    let cold = cold_service
+        .open(
+            &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cold.current_oplog_index().await, OplogIndex::from_u64(2));
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        expected
+    );
+
+    let retry = cold_archive_service
+        .open(&owned, AgentMode::Durable, Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    retry.append(&entries).await.unwrap();
+    assert_eq!(retry.length().await.unwrap(), 1);
+    assert_eq!(blob_objects(&blobs, &owned, 1).await, 1);
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        expected
+    );
+    assert_eq!(cold.length().await.unwrap(), 1);
+    let next = OplogEntry::grow_memory(83).rounded();
+    assert_eq!(
+        cold.add(next.clone()).await.unwrap(),
+        OplogIndex::from_u64(3)
+    );
+    cold.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(cold.read(OplogIndex::from_u64(3)).await.unwrap(), next);
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn deferred_writer_failure_shutdown_preserves_cold_committed_prefix(_tracing: &Tracing) {
+    let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blobs = Arc::new(InMemoryBlobStorage::new());
+    let service = cold_ambiguity_service(indexed.clone(), blobs.clone(), None).await;
+    let (_, owned, mut metadata) = archive_open_agent("cold-deferred-failure");
+    metadata.agent_mode = AgentMode::Ephemeral;
+    let initial = OplogEntry::recovery_succeeded().rounded();
+    let baseline = service
+        .create_fresh(
+            &mut service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Ephemeral,
+            initial.clone(),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            Some(ShardEpoch(4)),
+        )
+        .await
+        .unwrap();
+    let committed = OplogEntry::grow_memory(29).rounded();
+    let second = baseline.add(committed.clone()).await.unwrap();
+    baseline.commit(CommitLevel::Always).await.unwrap();
+    baseline
+        .executor_shutdown_handle()
+        .close_and_wait()
+        .await
+        .unwrap();
+
+    let (paused_tx, paused_rx) = oneshot::channel();
+    let release = Arc::new(Notify::new());
+    let gated = Arc::new(BlockingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed.clone(),
+            1,
+            immediate_archive_retry_config(1),
+        )),
+        pause_at: PausePoint::Append,
+        paused: Arc::new(Mutex::new(Some(paused_tx))),
+        release: release.clone(),
+        append_finished: Arc::new(Notify::new()),
+    });
+    let writer_service = cold_ambiguity_service(indexed.clone(), blobs.clone(), Some(gated)).await;
+    let writer = writer_service
+        .open(
+            &mut writer_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Ephemeral,
+            None,
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            Some(ShardEpoch(5)),
+        )
+        .await
+        .unwrap();
+    let failed = writer
+        .add(OplogEntry::grow_memory(47).rounded())
+        .await
+        .unwrap();
+    assert_eq!(failed, second.next());
+    assert_eq!(writer.commit(CommitLevel::Deferred).await.unwrap().len(), 1);
+    paused_rx.await.unwrap();
+    writer
+        .add(OplogEntry::grow_memory(71).rounded())
+        .await
+        .unwrap();
+    assert_eq!(writer.commit(CommitLevel::Deferred).await.unwrap().len(), 1);
+    writer
+        .add(OplogEntry::grow_memory(97).rounded())
+        .await
+        .unwrap();
+    indexed.inject_append_failure(InjectedAppendFailure::PermanentBeforeWrite);
+    release.notify_one();
+    assert!(matches!(
+        writer.commit(CommitLevel::Always).await,
+        Err(OplogError::ArchiveWrite(_))
+    ));
+    let shutdown = writer.executor_shutdown_handle();
+    shutdown.fence();
+    assert!(shutdown.close_and_wait().await.is_err());
+
+    let cold_service = cold_ambiguity_service(indexed, blobs, None).await;
+    let cold = cold_service
+        .open(
+            &mut cold_service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Ephemeral,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+    assert!(!Arc::ptr_eq(&writer, &cold));
+    assert_eq!(cold.current_oplog_index().await, second);
+    assert_eq!(cold.length().await.unwrap(), 2);
+    assert_eq!(
+        cold.read_exact(OplogIndex::INITIAL, 2).await.unwrap(),
+        BTreeMap::from([(OplogIndex::INITIAL, initial), (second, committed),])
+    );
+    assert!(
+        cold_service
+            .read_source(&owned, AgentMode::Ephemeral, failed, 3)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // Deferred acknowledges handoff, not persistence. Failed and queued batches may be absent,
+    // but a later observation must never land beyond the failed batch or replace the prefix.
+    let next = OplogEntry::grow_memory(113).rounded();
+    assert_eq!(cold.add(next.clone()).await.unwrap(), failed);
+    cold.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(cold.read(failed).await.unwrap(), next);
+    assert_eq!(cold.length().await.unwrap(), 3);
+}
+
 #[test]
 async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing) {
     for inline_limit in [1, 1_000_000] {
