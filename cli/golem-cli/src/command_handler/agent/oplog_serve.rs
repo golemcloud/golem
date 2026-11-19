@@ -395,3 +395,16 @@ pub fn open_in_browser(url: &str) {
         Err(error) => log_warn(format!("Could not open {url} in a browser: {error}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::oplog_include;
+    use golem_common::model::oplog::OplogInclude;
+    use test_r::test;
+
+    #[test]
+    fn oplog_show_claims_asks_the_server_for_the_claims() {
+        assert_eq!(oplog_include(true), Some(OplogInclude::Claims));
+        assert_eq!(oplog_include(false), None);
+    }
+}
