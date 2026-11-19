@@ -95,7 +95,7 @@ use golem_registry_service::repo::environment::{
 use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepoError;
 use golem_registry_service::repo::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRepoError;
 use golem_registry_service::repo::model::account::{
-    AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
+    AccountDeletionHoldRecord, AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
 use golem_registry_service::repo::model::account_resource_override::{
     AccountResourceOverrideDimension, AccountResourceOverrideReason, AccountResourceOverrideRecord,
@@ -1568,6 +1568,231 @@ pub async fn test_environment_deletion_racing_runtime_derivation_from_descendant
             "runtime derivation versus environment deletion must complete atomically or use the environment concurrency category, but returned {error:?}"
         ),
     }
+}
+
+pub async fn test_account_deletion_holds(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let holder = deps.create_account().await;
+    let owner_id = AccountId(owner.revision.account_id);
+    let holder_id = AccountId(holder.revision.account_id);
+
+    let placed = deps
+        .account_repo
+        .place_deletion_hold(AccountDeletionHoldRecord::new(
+            owner_id,
+            holder_id,
+            "first reason".to_string(),
+        ))
+        .await
+        .unwrap();
+    let_assert!(Some(placed) = placed);
+    check!(placed.reason == "first reason");
+
+    let replaced = deps
+        .account_repo
+        .place_deletion_hold(AccountDeletionHoldRecord::new(
+            owner_id,
+            holder_id,
+            "second reason".to_string(),
+        ))
+        .await
+        .unwrap();
+    let_assert!(Some(replaced) = replaced);
+    check!(replaced.reason == "second reason");
+    check!(replaced.created_at == placed.created_at);
+
+    let holds = deps
+        .account_repo
+        .list_deletion_holds(owner.revision.account_id)
+        .await
+        .unwrap();
+    check!(holds == vec![replaced.clone()]);
+
+    let delete_revision = AccountRevisionRecord {
+        revision_id: owner.revision.revision_id + 1,
+        audit: DeletableRevisionAuditFields::deletion(owner.revision.account_id),
+        ..owner.revision.clone()
+    };
+    let refused = deps.account_repo.delete(delete_revision.clone()).await;
+    let_assert!(Err(AccountRepoError::DeletionHeld(held_by)) = refused);
+    check!(held_by == vec![replaced]);
+    check!(
+        deps.account_repo
+            .get_by_id(owner.revision.account_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "a refused delete must roll back"
+    );
+
+    deps.account_repo
+        .remove_deletion_hold(owner.revision.account_id, holder.revision.account_id)
+        .await
+        .unwrap();
+    deps.account_repo
+        .remove_deletion_hold(owner.revision.account_id, holder.revision.account_id)
+        .await
+        .unwrap();
+    check!(
+        deps.account_repo
+            .list_deletion_holds(owner.revision.account_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let _ = deps.account_repo.delete(delete_revision).await.unwrap();
+    check!(
+        deps.account_repo
+            .get_by_id(owner.revision.account_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let on_deleted = deps
+        .account_repo
+        .place_deletion_hold(AccountDeletionHoldRecord::new(
+            owner_id,
+            holder_id,
+            "too late".to_string(),
+        ))
+        .await
+        .unwrap();
+    check!(on_deleted.is_none());
+}
+
+pub async fn test_oauth2_login_after_account_delete_creates_new_account(deps: &Deps) {
+    use golem_common::model::login::OAuth2Provider;
+    use golem_registry_service::model::login::ExternalLogin;
+
+    let external_id = new_repo_uuid().to_string();
+    let email = format!("login-{external_id}@golem");
+    let oauth2 = deps.oauth2_service(ExternalLogin {
+        external_id,
+        name: Some("Login Test".to_string()),
+        email: Some(email.clone()),
+        verified_emails: vec![email.clone()],
+    });
+    let login =
+        || oauth2.exchange_external_access_token_for_token(&OAuth2Provider::Github, "token");
+
+    let first = login().await.unwrap();
+    check!(login().await.unwrap().account_id == first.account_id);
+
+    let account_service = deps.account_service();
+    let account = account_service
+        .get(first.account_id, &AuthCtx::System)
+        .await
+        .unwrap();
+    account_service
+        .delete(first.account_id, account.revision, &AuthCtx::System)
+        .await
+        .unwrap();
+
+    let after_delete = login().await.unwrap();
+    check!(after_delete.account_id != first.account_id);
+    let new_account = account_service
+        .get(after_delete.account_id, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(new_account.email.as_str() == email);
+    check!(login().await.unwrap().account_id == after_delete.account_id);
+}
+
+/// The auth of a regular user: every account verb on the own account, and nothing else.
+fn own_account_auth(account: &AccountExtRevisionRecord) -> AuthCtx {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        AccountResourcePattern, ClassPermissionPattern, EffectiveSurface, PermissionPattern,
+    };
+    use golem_service_base::model::auth::UserAuthCtx;
+
+    let account_email = AccountEmail::new(account.revision.email.clone());
+    let recipient = RecipientPattern::Account {
+        account: account_email.clone(),
+    };
+    let effective_surface = EffectiveSurface::from_grants(
+        &[PermissionPattern::Account(ClassPermissionPattern {
+            verb: None,
+            owner: AccountOwnerPattern::Account {
+                account: account_email.clone(),
+            },
+            recipient: recipient.clone(),
+            resource: AccountResourcePattern,
+        })],
+        &[],
+        &[],
+        &[],
+        &recipient,
+    )
+    .unwrap();
+    AuthCtx::User(UserAuthCtx {
+        account_id: AccountId(account.revision.account_id),
+        account_email,
+        account_plan_id: PlanId(account.revision.plan_id),
+        account_roles: BTreeSet::new(),
+        effective_surface,
+        delegation_surface: None,
+    })
+}
+
+pub async fn test_account_deletion_holds_are_hidden_from_other_users(deps: &Deps) {
+    use golem_common::model::account::AccountDeletionHoldCreation;
+    use golem_registry_service::services::account::AccountError;
+
+    let owner = deps.create_account().await;
+    let holder = deps.create_account().await;
+    let other = deps.create_account().await;
+    let owner_id = AccountId(owner.revision.account_id);
+    let other_id = AccountId(other.revision.account_id);
+    deps.account_repo
+        .place_deletion_hold(AccountDeletionHoldRecord::new(
+            owner_id,
+            AccountId(holder.revision.account_id),
+            "unpaid overage".to_string(),
+        ))
+        .await
+        .unwrap();
+    let account_service = deps.account_service();
+    let other_auth = own_account_auth(&other);
+
+    let owner_holds = account_service
+        .list_deletion_holds(owner_id, &own_account_auth(&owner))
+        .await
+        .unwrap();
+    check!(owner_holds.len() == 1);
+
+    let listed = account_service
+        .list_deletion_holds(owner_id, &other_auth)
+        .await;
+    let_assert!(Err(AccountError::AccountNotFound(listed_id)) = listed);
+    check!(listed_id == owner_id);
+
+    let placed = account_service
+        .place_deletion_hold(
+            owner_id,
+            other_id,
+            AccountDeletionHoldCreation {
+                reason: "block the delete".to_string(),
+            },
+            &other_auth,
+        )
+        .await;
+    let_assert!(Err(AccountError::AccountNotFound(_)) = placed);
+
+    let removed = account_service
+        .remove_deletion_hold(owner_id, other_id, &other_auth)
+        .await;
+    let_assert!(Err(AccountError::AccountNotFound(_)) = removed);
+
+    let holds = deps
+        .account_repo
+        .list_deletion_holds(owner_id.0)
+        .await
+        .unwrap();
+    check!(holds.len() == 1);
 }
 
 pub async fn test_create_and_get_account(deps: &Deps) {

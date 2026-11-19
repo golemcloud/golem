@@ -94,8 +94,10 @@ fn add_own_account_grants(grants: &mut Vec<PermissionPattern>, account_email: &A
         },
     );
 
-    // Every account verb except set-plan: the plan decides what the account may use and what
-    // it pays, so only an administrator or the holder of a set-plan permission share changes it.
+    // Every account verb except set-plan and hold-deletion. The plan decides what the account may
+    // use and what it pays, so only an administrator or the holder of a set-plan permission share
+    // changes it. A deletion hold is the claim of another account, such as the billing account,
+    // that the delete must wait for, so the owner does not place one on the own account.
     grants.extend(OWNER_ACCOUNT_VERBS.map(|verb| {
         PermissionPattern::Account(ClassPermissionPattern {
             verb: Some(verb),
@@ -472,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_root_card_allows_every_account_verb_except_set_plan() {
+    fn owner_root_card_allows_every_account_verb_except_set_plan_and_hold_deletion() {
         let owner = AccountEmail::new("owner@example.com");
         let card = root_card(&owner, &[]);
 
@@ -485,6 +487,7 @@ mod tests {
             assert!(allows(&card, &owner, &owner, verb), "{verb:?}");
         }
         assert!(!allows(&card, &owner, &owner, AccountVerb::SetPlan));
+        assert!(!allows(&card, &owner, &owner, AccountVerb::HoldDeletion));
     }
 
     #[test]
