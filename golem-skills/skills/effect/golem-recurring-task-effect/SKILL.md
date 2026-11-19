@@ -199,5 +199,5 @@ idempotency key can identify a CLI-scheduled invocation for later cancellation:
 golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z -i 'poll-next' \
   'PollerAgent("my-poller")' poll
 
-golem agent cancel-invocation 'PollerAgent("my-poller")' 'poll-next'
+golem invocation cancel --agent 'PollerAgent("my-poller")' --idempotency-key 'poll-next'
 ```

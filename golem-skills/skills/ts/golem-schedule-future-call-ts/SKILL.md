@@ -61,7 +61,7 @@ const token = counter.increment.schedule(Datetime.fromDate(new Date(Date.now() +
 token.cancel();
 ```
 
-(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem agent cancel-invocation` — see `golem-cancel-queued-invocation`.)
+(To cancel an in-flight — not scheduled — RPC call, pass `{ signal }` as the trailing option to the normal awaited call and abort the `AbortSignal`, for example `method(input, { signal })`. You can also gate a method on agent state, or cancel from the CLI with a known idempotency key via `golem invocation cancel` — see `golem-cancel-queued-invocation`.)
 
 ## Use Cases
 

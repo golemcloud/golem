@@ -133,21 +133,6 @@ impl StructuredOutput for AgentRevertResult {
     const KIND: &'static str = "agent.revert";
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentCancelInvocationResult {
-    pub canceled: bool,
-    pub agent_id: String,
-    pub idempotency_key: String,
-}
-
-impl NoTextOutput for AgentCancelInvocationResult {}
-impl TextOutput for AgentCancelInvocationResult {}
-
-impl StructuredOutput for AgentCancelInvocationResult {
-    const KIND: &'static str = "agent.cancel-invocation";
-}
-
 /// Result of redeploying agents. Redeploying is best-effort: `agents` lists the agents that were
 /// redeployed and `errors` the ones that failed, so `redeployed` is only true when there are no
 /// errors.

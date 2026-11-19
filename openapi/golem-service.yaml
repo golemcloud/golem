@@ -1943,7 +1943,8 @@ paths:
           description: |-
             The invocation was accepted. `Golem-Invocation-Id` is its invocation ID, percent-encoded
             as in the REST paths of invocations, and `Golem-Environment-Id` the environment in which
-            the ID resolves.
+            the ID resolves. An awaited invocation that is accepted and then fails answers an error,
+            which carries neither header.
           headers:
             GOLEM-INVOCATION-ID:
               style: simple
@@ -2046,7 +2047,8 @@ paths:
           description: |-
             An accepted invocation carries `Golem-Invocation-Id`, its invocation ID percent-encoded as
             in the REST paths of invocations, and `Golem-Environment-Id`, the environment in which
-            the ID resolves. A lookup carries neither.
+            the ID resolves. A lookup carries neither. The ID of a standalone tool invocation, which
+            runs on a fresh owner, cannot be read through the invocation endpoints.
           headers:
             GOLEM-INVOCATION-ID:
               style: simple

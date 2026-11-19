@@ -246,6 +246,44 @@ async fn invocation_api_reads_and_cancels_invocations(
         )
         .await?;
     assert_eq!(inc_by.invocations.len(), 2);
+    // `since` and `until` are inclusive bounds on the last change.
+    let bound = completed.changed_at;
+    for (since, until) in [
+        (Some(bound), None),
+        (None, Some(bound)),
+        (Some(bound), Some(bound)),
+    ] {
+        let page = client
+            .list_invocations(
+                &env_id,
+                &agent_text,
+                None,
+                None,
+                None,
+                since.as_ref(),
+                until.as_ref(),
+                None,
+                None,
+            )
+            .await?;
+        let expected = listed
+            .iter()
+            .filter(|invocation| {
+                since.is_none_or(|since| invocation.changed_at >= since)
+                    && until.is_none_or(|until| invocation.changed_at <= until)
+            })
+            .map(|invocation| invocation.invocation_id.clone())
+            .collect::<HashSet<_>>();
+        assert!(expected.contains(&completed.invocation_id));
+        assert_eq!(
+            page.invocations
+                .iter()
+                .map(|invocation| invocation.invocation_id.clone())
+                .collect::<HashSet<_>>(),
+            expected,
+            "since {since:?}, until {until:?}"
+        );
+    }
     assert_eq!(
         error_code(
             client

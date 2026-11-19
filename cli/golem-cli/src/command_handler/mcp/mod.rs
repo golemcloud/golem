@@ -129,7 +129,7 @@ impl ManagementTool {
     }
 }
 
-/// The MCP tool name of a command path: `agent cancel-invocation` is `agent_cancel_invocation`.
+/// The MCP tool name of a command path: `invocation cancel` is `invocation_cancel`.
 pub fn tool_name(path: &[&str]) -> String {
     path.join("_").replace('-', "_")
 }

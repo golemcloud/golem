@@ -289,7 +289,8 @@ fn invocation_id_header(agent_id: &AgentId, invocation_id: InvocationId) -> Stri
 pub enum InvokeAgentResponse {
     /// The invocation was accepted. `Golem-Invocation-Id` is its invocation ID, percent-encoded
     /// as in the REST paths of invocations, and `Golem-Environment-Id` the environment in which
-    /// the ID resolves.
+    /// the ID resolves. An awaited invocation that is accepted and then fails answers an error,
+    /// which carries neither header.
     #[oai(status = 200)]
     Ok(
         Json<AgentInvocationResult>,
@@ -302,7 +303,8 @@ pub enum InvokeAgentResponse {
 pub enum InvokeToolResponse {
     /// An accepted invocation carries `Golem-Invocation-Id`, its invocation ID percent-encoded as
     /// in the REST paths of invocations, and `Golem-Environment-Id`, the environment in which
-    /// the ID resolves. A lookup carries neither.
+    /// the ID resolves. A lookup carries neither. The ID of a standalone tool invocation, which
+    /// runs on a fresh owner, cannot be read through the invocation endpoints.
     #[oai(status = 200)]
     Ok(
         Json<NativeToolInvocationResponse>,

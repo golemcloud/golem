@@ -41,8 +41,8 @@ use crate::log::{
     log_failed_to, log_warn, log_warn_action, logln, message_for_output, try_print_bytes,
 };
 use crate::model::agent::action_result::{
-    AgentCancelInvocationResult, AgentDeleteView, AgentFileContentsResult, AgentInterruptResult,
-    AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
+    AgentDeleteView, AgentFileContentsResult, AgentInterruptResult, AgentPluginToggleResult,
+    AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
 use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView};
@@ -73,10 +73,10 @@ use crate::model::agent::{
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
 };
-use golem_client::api::{AgentClient, ComponentClient, InvocationClient, WorkerClient};
+use golem_client::api::{AgentClient, ComponentClient, WorkerClient};
 use golem_client::model::ScanCursor;
 use golem_client::model::{
-    AgentInvocationMode, AgentInvocationRequest, ComponentDto, InvocationState, RevertWorkerTarget,
+    AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest, WorkersMetadataRequest,
 };
 use golem_common::model::account::AccountId;
@@ -299,10 +299,6 @@ impl AgentCommandHandler {
                     self.cmd_revert(agent_id, last_oplog_index, number_of_invocations)
                         .await
                 }
-                AgentSubcommand::CancelInvocation {
-                    agent_id,
-                    idempotency_key,
-                } => self.cmd_cancel_invocation(agent_id, idempotency_key).await,
                 AgentSubcommand::Files { agent_id, path } => self.cmd_files(agent_id, path).await,
                 AgentSubcommand::FileContents {
                     agent_id,
@@ -1192,56 +1188,6 @@ impl AgentCommandHandler {
             last_oplog_index,
             number_of_invocations,
         })?;
-
-        Ok(())
-    }
-
-    async fn cmd_cancel_invocation(
-        &self,
-        agent_id: AgentIdArgs,
-        idempotency_key: IdempotencyKey,
-    ) -> anyhow::Result<()> {
-        self.ctx.silence_app_context_init().await;
-        let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
-        let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
-
-        log_warn_action(
-            "Canceling invocation",
-            format!(
-                "for agent {} using idempotency key: {}",
-                format_agent_id_match(&agent_id_match),
-                idempotency_key.value.log_color_highlight()
-            ),
-        );
-
-        let clients = self.ctx.golem_clients().await?;
-
-        let canceled = clients
-            .invocation
-            .cancel_invocation(
-                &component.environment_id.0,
-                &format!(
-                    "{}/{}.{}",
-                    component.id.0, agent_id.0, idempotency_key.value
-                ),
-            )
-            .await
-            .map(|invocation| invocation.state == InvocationState::Cancelled)
-            .map_service_error()?;
-
-        if canceled {
-            log_action("Canceled", "");
-        } else {
-            log_warn_action("Failed", "to cancel, invocation already started");
-        }
-
-        self.ctx
-            .log_handler()
-            .log_output(AgentCancelInvocationResult {
-                canceled,
-                agent_id: agent_id.0,
-                idempotency_key: idempotency_key.value,
-            })?;
 
         Ok(())
     }

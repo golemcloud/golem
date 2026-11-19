@@ -184,11 +184,13 @@ The streaming output can be customized with the following parameters:
 
 ## Cancelling pending invocations
 
-As invocations are executed sequentially, it is possible to cancel a pending invocation before it starts executing. This can be done using the command line interface by running the `agent cancel-invocation` subcommand:
+As invocations are executed sequentially, it is possible to cancel a pending or scheduled invocation before it starts executing. Select it by the agent and the idempotency key it was invoked with:
 
 ```shell copy
-golem agent cancel-invocation <agent-id> <idempotency-key>
+golem invocation cancel --agent <agent-id> --idempotency-key <idempotency-key>
 ```
+
+Use `golem invocation get` with the same arguments to see the state and the result of an invocation, and `golem invocation list --agent <agent-id>` to list the invocations of an agent.
 
 ## Invoking native tools
 
