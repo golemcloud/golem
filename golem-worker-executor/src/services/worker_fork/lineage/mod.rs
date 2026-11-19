@@ -41,6 +41,20 @@ enum LineageSource<'a> {
 }
 
 impl LineageSource<'_> {
+    async fn first_retained_index(&self) -> Result<OplogIndex, String> {
+        match self {
+            Self::Open(oplog) => Ok(oplog.first_retained_index()),
+            Self::Service {
+                service,
+                owner,
+                mode,
+            } => service
+                .first_retained_index(owner, *mode)
+                .await
+                .map_err(|error| error.to_string()),
+        }
+    }
+
     async fn read_exact(
         &self,
         index: OplogIndex,
@@ -99,14 +113,15 @@ impl StreamForkLineage {
         from: OplogIndex,
         horizon: OplogIndex,
     ) -> Result<bool, String> {
-        if from > horizon {
-            return Ok(false);
-        }
         let source = LineageSource::Service {
             service,
             owner,
             mode,
         };
+        let from = from.max(source.first_retained_index().await?);
+        if from > horizon {
+            return Ok(false);
+        }
         let mut covered = from.previous();
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
@@ -187,11 +202,13 @@ impl StreamForkLineage {
         horizon: OplogIndex,
         pending_cut: Option<StreamForkCutRecord>,
     ) -> Result<Self, String> {
+        // Both passes start at the retained start of the oplog: the history before it is gone.
         // The first bounded pass reads no external payloads. It builds the complete deletion mask
         // used by the second pass, so payloads in deleted regions are never downloaded.
+        let retained_start = source.first_retained_index().await?;
         let mut reverts = Vec::new();
         let mut first_stream_entry = None;
-        let mut covered = OplogIndex::NONE;
+        let mut covered = retained_start.previous();
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
             let entries = source
@@ -231,7 +248,7 @@ impl StreamForkLineage {
         let mut cuts = Vec::new();
         let mut registrations = Vec::new();
         let mut finished = Vec::new();
-        let mut covered = OplogIndex::NONE;
+        let mut covered = retained_start.previous();
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
             let entries = source

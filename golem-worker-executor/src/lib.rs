@@ -88,6 +88,7 @@ use crate::services::oplog::plugin::{
     ForwardingOplogService, OplogProcessorPlugin, PerExecutorOplogProcessorPlugin,
 };
 use crate::services::oplog::rate_limited::RateLimitedOplogService;
+use crate::services::oplog::retention::RetentionOplogService;
 use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
@@ -1086,8 +1087,13 @@ async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
-    let forwarding_oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+    let retention_oplog_service: Arc<dyn OplogService> = Arc::new(RetentionOplogService::new(
         base_oplog_service,
+        key_value_storage.clone(),
+    ));
+
+    let forwarding_oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+        retention_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
         golem_config.oplog.plugin_max_commit_count,

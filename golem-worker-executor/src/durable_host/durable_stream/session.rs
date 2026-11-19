@@ -199,6 +199,7 @@ impl DurableStreamStore {
             covered = horizon;
         }
         let current = self.oplog.current_oplog_index().await;
+        covered = covered.max(self.oplog.first_retained_index().previous());
         while covered < current {
             let count = (current.as_u64() - covered.as_u64()).min(1024);
             for (position, entry) in self.oplog.read_exact(covered.next(), count).await? {

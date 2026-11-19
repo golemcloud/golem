@@ -78,6 +78,7 @@ mod primary;
 pub mod rate_limited;
 mod raw_session;
 mod reader;
+pub mod retention;
 
 mod epoch;
 mod extensions;
@@ -311,6 +312,14 @@ pub trait OplogService: Debug + Send + Sync {
             .await
             .map_err(|error| error.to_string())?)
     }
+
+    /// The first index that the oplog of the agent keeps; see [`Oplog::first_retained_index`].
+    /// Required, so that a wrapper cannot answer index 1 for an oplog whose start moved.
+    async fn first_retained_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog>;
 
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
@@ -1004,6 +1013,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// and checkpoint.
     fn fence(&self) -> Option<OplogFence> {
         self.inner().and_then(|inner| inner.fence())
+    }
+
+    /// The first index that this oplog keeps. A read below it fails as expired, except a read
+    /// of the `Create` entry alone at index 1. Only the retention layer knows it, so a wrapper
+    /// answers from the oplog it wraps, and an oplog without the layer keeps every entry.
+    fn first_retained_index(&self) -> OplogIndex {
+        self.inner()
+            .map_or(OplogIndex::INITIAL, |inner| inner.first_retained_index())
     }
 
     /// Returns the inner oplog wrapped by this implementation, if any.

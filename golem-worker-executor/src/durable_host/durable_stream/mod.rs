@@ -971,7 +971,7 @@ impl DurableStreamStore {
                 .map_err(StreamStoreError::CorruptHistory)?;
         let mut index = ProducerStreamIndex::default();
         let mut pending_nested_registrations = Vec::new();
-        let mut covered = OplogIndex::NONE;
+        let mut covered = oplog.first_retained_index().previous();
         while covered < current_index {
             let count = (current_index.as_u64() - covered.as_u64()).min(1024);
             let entries = oplog.read_exact(covered.next(), count).await?;

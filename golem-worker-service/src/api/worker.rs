@@ -676,7 +676,13 @@ impl WorkerApi {
             }
             (Some(from), None) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
+                    .get_oplog(
+                        &agent_id,
+                        Some(OplogIndex::from_u64(from)),
+                        cursor,
+                        count,
+                        auth,
+                    )
                     .await?
             }
             (None, Some(query)) => {
@@ -686,7 +692,7 @@ impl WorkerApi {
             }
             (None, None) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
+                    .get_oplog(&agent_id, None, cursor, count, auth)
                     .await?
             }
         };

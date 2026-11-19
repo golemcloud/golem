@@ -410,6 +410,23 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn the_oplog_retention_uses_persistent_storage() {
+        let storage = NamespaceRoutedKeyValueStorage::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(InMemoryKeyValueStorage::new()),
+        );
+        assert!(Arc::ptr_eq(
+            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentOplogRetention {
+                agent_id: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: "oplog-retention".to_string(),
+                },
+            }),
+            &storage.persistent,
+        ));
+    }
+
+    #[test]
     fn snapshot_rejections_use_persistent_storage_not_status_cache() {
         let storage = NamespaceRoutedKeyValueStorage::new(
             Arc::new(InMemoryKeyValueStorage::new()),

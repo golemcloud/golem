@@ -709,6 +709,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 None,
             )
             .await?;
+        // The fork copies the source history from index 1 and keeps its indexes, so it needs the
+        // whole source history. A source oplog whose retained start is after index 1 is refused.
+        let source_retained_start = source_oplog.first_retained_index();
+        if source_retained_start > OplogIndex::INITIAL {
+            return Err(WorkerExecutorError::oplog_expired(
+                owned_source_agent_id.agent_id.clone(),
+                source_retained_start,
+            ));
+        }
         let source_oplog = Ctx::wrap_oplog(
             owned_source_agent_id.clone(),
             source_oplog,

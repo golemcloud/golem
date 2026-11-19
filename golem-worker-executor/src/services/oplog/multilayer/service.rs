@@ -493,6 +493,14 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
+    async fn first_retained_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        Ok(OplogIndex::INITIAL)
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,

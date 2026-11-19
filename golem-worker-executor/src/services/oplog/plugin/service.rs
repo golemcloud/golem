@@ -389,6 +389,16 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
+    async fn first_retained_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.inner
+            .first_retained_index(owned_agent_id, agent_mode)
+            .await
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,

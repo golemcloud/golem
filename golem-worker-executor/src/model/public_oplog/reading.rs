@@ -193,6 +193,15 @@ pub async fn get_public_oplog_entry(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
         )));
     }
+    let first = oplog_service
+        .first_retained_index(owned_agent_id, agent_mode)
+        .await?;
+    if oplog_index < first {
+        return Err(WorkerExecutorError::oplog_expired(
+            owned_agent_id.agent_id.clone(),
+            first,
+        ));
+    }
     let component_revision = match component_revision {
         Some(component_revision) => component_revision,
         None => {
@@ -496,7 +505,19 @@ pub async fn find_component_revision_at(
         .await?;
     const BATCH_SIZE: u64 = 256;
     let end = start.min(last_oplog_index.next());
-    let mut current = OplogIndex::INITIAL;
+    // The scan starts at the retained start of the oplog. Below it only the `Create` entry is
+    // kept, which gives the revision that the agent started with.
+    let mut current = oplog_service
+        .first_retained_index(owned_agent_id, agent_mode)
+        .await?;
+    if current > OplogIndex::INITIAL && end > OplogIndex::INITIAL {
+        initial_component_revision = oplog_service
+            .read_exact(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+            .await?
+            .values()
+            .find_map(OplogEntry::specifies_component_revision)
+            .unwrap_or(initial_component_revision);
+    }
     while current < end {
         let count = (end.as_u64() - current.as_u64()).min(BATCH_SIZE);
         let entries = oplog_service
@@ -551,7 +572,9 @@ pub fn check_oplog_cursor_query(
 }
 
 /// Where a paged oplog read starts, and the component revision to decode its first entry with:
-/// the cursor of the previous page, or else `from` with the revision in effect there. The caller
+/// the cursor of the previous page, or else `from` with the revision in effect there. Without a
+/// cursor and `from`, the read starts at the retained start of the oplog. A start below the
+/// retained start is refused as expired, with the error that names the start. The caller
 /// checks the query of the cursor first, with [`check_oplog_cursor_query`].
 ///
 /// A page hands out a cursor only while the oplog has entries after it, and the oplog only grows,
@@ -564,8 +587,21 @@ pub async fn oplog_page_start(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     cursor: Option<OplogCursor>,
-    from: OplogIndex,
+    from: Option<OplogIndex>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
+    let first = oplog_service
+        .first_retained_index(owned_agent_id, agent_mode)
+        .await?;
+    let start = cursor.as_ref().map_or_else(
+        || from.map_or(first, |from| from.max(OplogIndex::INITIAL)),
+        |cursor| OplogIndex::from_u64(cursor.next_oplog_index),
+    );
+    if start < first {
+        return Err(WorkerExecutorError::oplog_expired(
+            owned_agent_id.agent_id.clone(),
+            first,
+        ));
+    }
     match cursor {
         Some(cursor) => {
             let last_index = oplog_service
@@ -589,8 +625,9 @@ pub async fn oplog_page_start(
         }
         None => {
             let revision =
-                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, from).await?;
-            Ok((from, revision))
+                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, start)
+                    .await?;
+            Ok((start, revision))
         }
     }
 }

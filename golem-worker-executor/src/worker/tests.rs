@@ -424,7 +424,7 @@ fn only_a_fenced_terminal_write_is_a_lost_shard() {
             level: 0,
             details: "injected archive failure".to_string(),
         })),
-        Ok(WorkerExecutorError::OplogFailed { details, .. })
+        Ok(WorkerExecutorError::OplogFailed { failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details }, .. })
             if details.contains("injected archive failure")
     ));
     let fence = OplogFence {

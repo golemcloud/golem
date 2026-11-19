@@ -3110,7 +3110,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         &owned_agent_id,
         AgentMode::Durable,
         None,
-        indices[2],
+        Some(indices[2]),
     )
     .await
     .unwrap();
@@ -3160,7 +3160,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         &owned_agent_id,
         AgentMode::Durable,
         Some(cursor),
-        OplogIndex::INITIAL,
+        None,
     )
     .await
     .unwrap();
@@ -3208,7 +3208,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
                 current_component_revision: updated_revision.into(),
                 query_hash: OplogCursor::query_hash(Some("needle")),
             }),
-            OplogIndex::INITIAL,
+            None,
         )
         .await;
         match result {
@@ -3231,4 +3231,153 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             }
         }
     }
+}
+
+#[test]
+async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as_expired() {
+    use crate::services::oplog::retention::{RetentionOplogService, advance_oplog_retention};
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+
+    let key_value_storage = Arc::new(InMemoryKeyValueStorage::new());
+    let primary = PrimaryOplogService::new(
+        Arc::new(InMemoryIndexedStorage::new()),
+        Arc::new(InMemoryBlobStorage::new()),
+        1,
+        1,
+        100,
+        32,
+        RetryConfig::default(),
+    )
+    .await;
+    let oplog_service: Arc<dyn OplogService> = Arc::new(RetentionOplogService::new(
+        Arc::new(primary),
+        key_value_storage.clone(),
+    ));
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+        agent_id: "retained-start".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &mut oplog_service.lock_lifecycle(&agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), AccountId::new(), environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await
+        .unwrap();
+    let updated_revision = ComponentRevision::new(5).unwrap();
+    for index in 1..=10 {
+        let entry = if index == 6 {
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: updated_revision,
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: None,
+            }
+        } else {
+            log_entry(0)
+        };
+        oplog.add(entry).await.unwrap();
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let retained_start = OplogIndex::from_u64(4);
+    advance_oplog_retention(
+        key_value_storage.as_ref(),
+        &agent_id,
+        AgentMode::Durable,
+        retained_start,
+    )
+    .await
+    .unwrap();
+    let expired = Err(WorkerExecutorError::oplog_expired(
+        agent_id.clone(),
+        retained_start,
+    ));
+
+    let page_start = |cursor: Option<OplogCursor>, from: Option<u64>| {
+        oplog_page_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            cursor,
+            from.map(OplogIndex::from_u64),
+        )
+    };
+    assert_eq!(
+        page_start(None, None).await,
+        Ok((retained_start, ComponentRevision::INITIAL))
+    );
+    assert_eq!(
+        page_start(None, Some(7)).await,
+        Ok((OplogIndex::from_u64(7), updated_revision)),
+        "the revision lookup reads from the retained start"
+    );
+    assert_eq!(page_start(None, Some(3)).await, expired);
+    assert_eq!(page_start(None, Some(0)).await, expired);
+    assert_eq!(
+        page_start(
+            Some(OplogCursor {
+                next_oplog_index: 2,
+                current_component_revision: ComponentRevision::INITIAL.into(),
+                query_hash: OplogCursor::query_hash(None),
+            }),
+            None,
+        )
+        .await,
+        expired
+    );
+
+    let page = get_public_oplog_page(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        ComponentRevision::INITIAL,
+        retained_start,
+        // Two entries, because rendering the update at index 6 needs the component service.
+        PublicOplogPageLimits {
+            count: 2,
+            max_bytes: 1_000_000,
+            max_entry_bytes: 1_000_000,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page_indices(&page.entries),
+        vec![
+            (OplogIndex::from_u64(4), true),
+            (OplogIndex::from_u64(5), true)
+        ]
+    );
+
+    assert_eq!(
+        get_public_oplog_entry(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            OplogIndex::from_u64(3),
+            Some(ComponentRevision::INITIAL),
+        )
+        .await
+        .unwrap_err(),
+        WorkerExecutorError::oplog_expired(agent_id, retained_start)
+    );
 }
