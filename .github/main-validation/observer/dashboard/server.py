@@ -114,6 +114,7 @@ def public_run(value):
         raise ValueError("unknown validation context")
     tests = value.get("tests") or {}
     analysis = value.get("analysis") or {}
+    evidence = value.get("evidence") or {}
     changes = value.get("changes") or {}
     baseline = changes.get("baseline") or ""
     commits = changes.get("commits") or []
@@ -151,8 +152,29 @@ def public_run(value):
                       "attempts": [text(status, 30) for status in test.get("attempts", [])]}
                      for test in tests.get(key, [])] for key in ("failed", "recovered")},
         },
+        "evidence": {
+            "tasks": [{
+                **{key: text(task.get(key), 500) for key in
+                   ("id", "lane", "name", "artifact", "log", "log_state")},
+                "exit_code": task.get("exit_code") if type(task.get("exit_code")) is int else None,
+                "reports": [{"file": text(report.get("file"), 500),
+                             "state": text(report.get("state"), 30),
+                             "tests": report.get("tests") if type(report.get("tests")) is int
+                             and report["tests"] >= 0 else None}
+                            for report in task.get("reports", [])],
+                **{key: {"line": task[key].get("line") if type(task[key].get("line")) is int else None,
+                         "message": text(task[key].get("message"), 2000)} if task.get(key) else None
+                   for key in ("first_error", "after_summary_error")},
+                "log_failures": [text(name, 1000) for name in task.get("log_failures", [])],
+            } for task in evidence.get("tasks", [])],
+            "versions": [{**{key: text(version.get(key), 500) for key in ("value", "artifact", "log")},
+                          "line": version.get("line") if type(version.get("line")) is int else None}
+                         for version in evidence.get("versions", [])],
+            "limits": [text(limit) for limit in evidence.get("limits", [])],
+        },
         "analysis": {
             "summary": text(analysis.get("summary"), 20000),
+            "published_at": date(analysis["published_at"]) if analysis.get("published_at") else None,
             "baseline": text(analysis.get("baseline")),
             "limits": [text(item) for item in analysis.get("limits", [])],
             "suspects": [{"sha": suspect["sha"], "confidence": text(suspect.get("confidence"), 20),

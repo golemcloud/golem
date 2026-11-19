@@ -26,6 +26,7 @@ const SKILL_DESTINATION: &str = ".agents/skills";
 const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "moonbit", "go"];
 
 fn main() {
+    println!("cargo::rerun-if-env-changed={SKIP_ENV_VAR_NAME}");
     export_effect_version().unwrap();
     export_golem_rust_wit_bindgen_source().unwrap();
     generate_embedded_templates().unwrap();

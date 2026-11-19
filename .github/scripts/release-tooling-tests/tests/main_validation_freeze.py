@@ -168,7 +168,7 @@ path = "binary.rs"
             temporary = self.directory / f"cycle-{cycle}"
             temporary.mkdir()
             (report / "temporary-root.txt").write_text(str(temporary))
-            for branch in ("worker", "service", "cli", "exclusive", "checks"):
+            for branch in ("worker", "service", "recovery", "cli", "exclusive", "checks"):
                 (report / (branch + ".status")).write_text("0")
             for task in ("main-validation-executor-native", "main-validation-result"):
                 result = subprocess.run([shutil.which("cargo-make"), "make", "--disable-check-for-updates",
