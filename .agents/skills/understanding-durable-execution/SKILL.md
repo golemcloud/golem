@@ -3429,12 +3429,16 @@ sets a deferred link that the delivery observer's `Delivered` branch adds, so a 
 the guest discards, also after the host call returned it, links nothing. The oplog is never
 scanned for the links: the status fold keeps them in `AgentStatusRecord::resolved_names`
 (`worker/status/resolved_names.rs`), with the same bound and LRU order. It folds a lookup's
-`Start`, its `End` and its delivery marker by `Start` index, loads external lookup payloads before
-the fold as it does for `StreamSession` records, and leaves out entity bodies, observational calls
+`Start`, its `End` and its delivery marker by `Start` index, opens a `golem:network/dns` query only
+for A and AAAA records (an answer holds only the queried type), loads external lookup payloads
+before the fold as it does for `StreamSession` records (the revert fold too), and leaves out
+entity bodies, observational calls
 and history that no replay runs (`RegionFold::unreplayed`: deleted, jumped and failed update
 attempts; a `Jump`, `Revert` or `FailedUpdate` over folded history refolds the status from the
-start). The status cache keeps the index in its own `resolved-names` field, written only when it
-changes. The primary Store starts with the folded links at construction and links only the lookups
+start). The index uses `im` collections, so a status clone shares it. The status cache keeps the
+links in their own `resolved-names` field and the lookups and entity scopes that the fold still
+follows in `followed-lookups`; each is written only when it changes, so a call that links nothing
+does not rewrite the links. The primary Store starts with the folded links at construction and links only the lookups
 whose link point it records itself (a live `End`, or a `CompletionDelivered` marker that it
 appends): every replayed lookup, also one that a bootstrap cursor replays, is in the folded links
 already, and linking it again would refresh its LRU position. So every path that continues live,

@@ -534,8 +534,9 @@ where
 
 /// Loads the request payloads of the address lookups in `entries` and the response payloads of
 /// their `End` entries, which the fold of `resolved_names` reads. An `End` is loaded only for a
-/// lookup that `baseline` keeps open or whose `Start` is in `entries`.
-pub(super) async fn hydrate_lookup_payloads<T>(
+/// lookup that `baseline` keeps open, or whose `Start` is in `entries` and can link: a DNS query
+/// of a record type other than A or AAAA downloads no response.
+pub(crate) async fn hydrate_lookup_payloads<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
@@ -546,10 +547,15 @@ pub(super) async fn hydrate_lookup_payloads<T>(
 where
     T: HasOplogService + Sync,
 {
-    let mut lookups: HashSet<OplogIndex> = baseline.resolved_names.open.keys().copied().collect();
+    let mut lookups: HashSet<OplogIndex> = baseline
+        .resolved_names
+        .following
+        .open
+        .keys()
+        .copied()
+        .collect();
     for (index, entry) in entries.iter_mut() {
         if super::resolved_names::reads_start(*index, entry, deleted_regions) {
-            lookups.insert(*index);
             if let OplogEntry::Start {
                 request: Some(request),
                 observational_owner: None,
@@ -557,6 +563,9 @@ where
             } = entry
             {
                 load_payload(this, owned_agent_id, agent_mode, *index, request).await?;
+                if super::resolved_names::opens_lookup(*index, request)? {
+                    lookups.insert(*index);
+                }
             }
         } else if let OplogEntry::End {
             start_index,

@@ -236,12 +236,38 @@ fn resolved_names_persist_in_their_own_field_written_only_when_they_change() {
 
     // An unchanged index is not written again.
     let (sets, _) = compute_status_field_writes(Some(&next), &[], &core, &parts).unwrap();
-    assert!(
-        sets.iter()
-            .all(|(name, _)| name != STATUS_RESOLVED_NAMES_FIELD)
+    assert!(sets.iter().all(|(name, _)| {
+        name != STATUS_RESOLVED_NAMES_FIELD && name != STATUS_FOLLOWED_LOOKUPS_FIELD
+    }));
+
+    // A call that links nothing changes only the followed lookups, so the links stay unwritten.
+    let mut following = next.clone();
+    following
+        .resolved_names
+        .following
+        .entity_scopes
+        .insert(OplogIndex::from_u64(7), ());
+    let mut following_core = following.clone();
+    let following_parts = split_status(&mut following_core);
+    let (sets, _) =
+        compute_status_field_writes(Some(&next), &[], &following_core, &following_parts).unwrap();
+    let written = sets
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<HashSet<_>>();
+    assert!(written.contains(STATUS_FOLLOWED_LOOKUPS_FIELD));
+    assert!(!written.contains(STATUS_RESOLVED_NAMES_FIELD));
+    let mut following_fields = fields.clone();
+    following_fields.extend(sets.into_iter().map(|(k, v)| (k, v.into())));
+    assert_eq!(
+        reassemble_cached_status(following_fields).unwrap(),
+        following
     );
 
-    // A cached status without the field is a cache miss, so the status is folded again.
-    fields.remove(STATUS_RESOLVED_NAMES_FIELD);
-    assert!(reassemble_cached_status(fields).is_none());
+    // A cached status without either field is a cache miss, so the status is folded again.
+    for field in [STATUS_RESOLVED_NAMES_FIELD, STATUS_FOLLOWED_LOOKUPS_FIELD] {
+        let mut missing = fields.clone();
+        missing.remove(field);
+        assert!(reassemble_cached_status(missing).is_none(), "{field}");
+    }
 }

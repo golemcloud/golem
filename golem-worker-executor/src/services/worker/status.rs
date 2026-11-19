@@ -37,9 +37,12 @@ pub(super) const STATUS_MEMBERSHIP_FIELD: &str = "membership";
 pub(super) const STATUS_REGIONS_FIELD: &str = "regions";
 /// Hash field holding `(failed_updates, successful_updates)`. Written only when they change.
 pub(super) const STATUS_UPDATES_FIELD: &str = "updates";
-/// Hash field holding the hostname-link index of the agent's address lookups. Written only when
-/// it changes.
+/// Hash field holding the hostname links of the agent's address lookups. Written only when they
+/// change.
 pub(super) const STATUS_RESOLVED_NAMES_FIELD: &str = "resolved-names";
+/// Hash field holding the lookups and entity scopes that the fold of the hostname links follows.
+/// Written only when they change, which calls that link nothing also do.
+pub(super) const STATUS_FOLLOWED_LOOKUPS_FIELD: &str = "followed-lookups";
 /// Prefix for per-transfer target receipt fields (`tr:{transfer_id}` -> receipt identity).
 pub(super) const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
 pub(super) fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
@@ -216,14 +219,24 @@ pub(super) fn compute_status_field_writes(
         ));
     }
 
-    let resolved_names_changed = match previous {
-        Some(previous) => previous.resolved_names != parts.resolved_names,
+    let links_changed = match previous {
+        Some(previous) => previous.resolved_names.links != parts.resolved_names.links,
         None => true,
     };
-    if resolved_names_changed {
+    if links_changed {
         sets.push((
             STATUS_RESOLVED_NAMES_FIELD.to_string(),
-            serialize(&parts.resolved_names)?,
+            serialize(&parts.resolved_names.links)?,
+        ));
+    }
+    let followed_lookups_changed = match previous {
+        Some(previous) => previous.resolved_names.following != parts.resolved_names.following,
+        None => true,
+    };
+    if followed_lookups_changed {
+        sets.push((
+            STATUS_FOLLOWED_LOOKUPS_FIELD.to_string(),
+            serialize(&parts.resolved_names.following)?,
         ));
     }
 
@@ -355,7 +368,8 @@ pub(super) fn reassemble_cached_status(
     let mut source_card_transfers = SourceCardTransferIndex::default();
     let mut entity_replay_progress = EntityReplayProgress::default();
     let mut has_entity_replay_progress = false;
-    let mut resolved_names: Option<golem_common::model::agent::ResolvedNameIndex> = None;
+    let mut resolved_name_links: Option<golem_common::model::agent::ResolvedNames> = None;
+    let mut followed_lookups: Option<golem_common::model::agent::FollowedLookups> = None;
 
     for (name, bytes) in fields {
         if name == STATUS_CORE_FIELD {
@@ -370,7 +384,9 @@ pub(super) fn reassemble_cached_status(
                     .ok()?,
             );
         } else if name == STATUS_RESOLVED_NAMES_FIELD {
-            resolved_names = Some(deserialize(&bytes).ok()?);
+            resolved_name_links = Some(deserialize(&bytes).ok()?);
+        } else if name == STATUS_FOLLOWED_LOOKUPS_FIELD {
+            followed_lookups = Some(deserialize(&bytes).ok()?);
         } else if name == STATUS_ENTITY_REPLAY_CONTINUATION_FIELD {
             has_entity_replay_progress = deserialize::<bool>(&bytes).ok()?;
         } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_BOUNDARY_PREFIX) {
@@ -423,7 +439,10 @@ pub(super) fn reassemble_cached_status(
         return None;
     }
     status.entity_replay_progress = entity_replay_progress;
-    status.resolved_names = resolved_names?;
+    status.resolved_names = golem_common::model::agent::ResolvedNameIndex {
+        links: resolved_name_links?,
+        following: followed_lookups?,
+    };
     status.invocation_results = invocation_results?;
     if let Some((skipped_regions, deleted_regions)) = regions {
         status.skipped_regions = skipped_regions;

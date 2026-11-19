@@ -16,7 +16,7 @@ use crate::base_model::OplogIndex;
 use crate::base_model::card::network_target::link_hostname;
 use crate::model::oplog::types::SerializableIpAddress;
 use desert_rust::BinaryCodec;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use im::{OrdMap, Vector};
 use std::net::IpAddr;
 
 /// The most links one index keeps. A lookup that adds a link past it evicts the link that was
@@ -25,10 +25,11 @@ use std::net::IpAddr;
 pub const MAX_RESOLVED_NAME_LINKS: usize = 1024;
 
 /// The links from addresses to the normalized hostnames that completed address lookups returned
-/// them for, the least recently added first.
+/// them for, the least recently added first. The links share their structure between clones, so
+/// a status fold that clones the status record does not copy them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BinaryCodec)]
 #[desert(transparent)]
-pub struct ResolvedNames(VecDeque<(SerializableIpAddress, String)>);
+pub struct ResolvedNames(Vector<(SerializableIpAddress, String)>);
 
 impl ResolvedNames {
     /// Links `addresses` to the hostname of the lookup of `name`. A link that exists already
@@ -78,11 +79,19 @@ impl ResolvedNames {
 #[desert(evolution())]
 pub struct ResolvedNameIndex {
     pub links: ResolvedNames,
+    pub following: FollowedLookups,
+}
+
+/// The lookups and entity scopes that the fold of the links still follows. They change with
+/// calls that link nothing, so the status cache keeps them apart from the links.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct FollowedLookups {
     /// The lookups that can still link, by their `Start` index.
-    pub open: BTreeMap<OplogIndex, OpenLookup>,
+    pub open: OrdMap<OplogIndex, OpenLookup>,
     /// The `Start` indexes of the open entity invocations and of the open calls inside them.
     /// A lookup inside an entity body belongs to the entity's own Store and links nothing here.
-    pub entity_scopes: BTreeSet<OplogIndex>,
+    pub entity_scopes: OrdMap<OplogIndex, ()>,
 }
 
 /// A lookup whose result did not link yet.
@@ -157,14 +166,17 @@ mod tests {
         let mut index = ResolvedNameIndex::default();
         index.links.insert("a.test", [ip("10.0.0.1"), ip("::1")]);
         index.links.insert("b.test", [ip("10.0.0.1")]);
-        index.open.insert(
+        index.following.open.insert(
             OplogIndex::from_u64(7),
             OpenLookup::Undelivered {
                 name: "c.test".to_string(),
                 addresses: vec![ip("10.0.0.3").into()],
             },
         );
-        index.entity_scopes.insert(OplogIndex::from_u64(9));
+        index
+            .following
+            .entity_scopes
+            .insert(OplogIndex::from_u64(9), ());
         let bytes = crate::serialization::serialize(&index).unwrap();
         let decoded: ResolvedNameIndex = crate::serialization::deserialize(&bytes).unwrap();
         assert_eq!(decoded, index);

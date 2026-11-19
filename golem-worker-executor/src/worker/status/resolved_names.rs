@@ -19,6 +19,7 @@ use crate::durable_host::sockets::dns::linked_addresses;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::agent::{OpenLookup, ResolvedNameIndex};
 use golem_common::model::oplog::host_functions::HostFunctionName;
+use golem_common::model::oplog::types::SerializableDnsRecordType;
 use golem_common::model::oplog::{
     HostRequest, HostRequestNetworkDnsResolve, HostRequestP3SocketsResolveName,
     HostRequestSocketsResolveName, HostResponse, HostResponseNetworkDnsResolve,
@@ -41,7 +42,7 @@ fn links_at_delivery(function_name: &HostFunctionName) -> Option<bool> {
 }
 
 /// Whether the fold reads the `Start` at `index`: a lookup outside the deleted regions. The
-/// fold also reads the `End` of every lookup that it opened.
+/// fold also reads the `End` of every lookup that it opened (see [`opens_lookup`]).
 pub(super) fn reads_start(index: OplogIndex, entry: &OplogEntry, deleted: &DeletedRegions) -> bool {
     matches!(entry, OplogEntry::Start { function_name, .. } if links_at_delivery(function_name).is_some())
         && !deleted.is_in_deleted_region(index)
@@ -74,10 +75,10 @@ pub(super) fn calculate_resolved_names(
                 request,
                 ..
             } => {
-                let in_entity =
-                    parent_start_index.is_some_and(|parent| names.entity_scopes.contains(&parent));
+                let in_entity = parent_start_index
+                    .is_some_and(|parent| names.following.entity_scopes.contains_key(&parent));
                 if in_entity || *function_name == HostFunctionName::GolemEntityInvoke {
-                    names.entity_scopes.insert(index);
+                    names.following.entity_scopes.insert(index, ());
                 }
                 let Some(at_delivery) = links_at_delivery(function_name) else {
                     continue;
@@ -91,15 +92,11 @@ pub(super) fn calculate_resolved_names(
                 let Some(request) = request else {
                     continue;
                 };
-                let name = match loaded(request, index)?.as_ref() {
-                    HostRequest::SocketsResolveName(HostRequestSocketsResolveName { name })
-                    | HostRequest::P3SocketsResolveName(HostRequestP3SocketsResolveName { name })
-                    | HostRequest::NetworkDnsResolve(HostRequestNetworkDnsResolve {
-                        name, ..
-                    }) => name.clone(),
-                    _ => continue,
+                let Some(name) = linking_name(loaded(request, index)?.as_ref()) else {
+                    continue;
                 };
                 names
+                    .following
                     .open
                     .insert(index, OpenLookup::Started { name, at_delivery });
             }
@@ -108,9 +105,9 @@ pub(super) fn calculate_resolved_names(
                 response,
                 ..
             } => {
-                names.entity_scopes.remove(start_index);
+                names.following.entity_scopes.remove(start_index);
                 let Some(OpenLookup::Started { name, at_delivery }) =
-                    names.open.remove(start_index)
+                    names.following.open.remove(start_index)
                 else {
                     continue;
                 };
@@ -121,7 +118,7 @@ pub(super) fn calculate_resolved_names(
                     continue;
                 };
                 if at_delivery {
-                    names.open.insert(
+                    names.following.open.insert(
                         *start_index,
                         OpenLookup::Undelivered {
                             name,
@@ -133,12 +130,12 @@ pub(super) fn calculate_resolved_names(
                 }
             }
             OplogEntry::Cancelled { start_index, .. } => {
-                names.entity_scopes.remove(start_index);
-                names.open.remove(start_index);
+                names.following.entity_scopes.remove(start_index);
+                names.following.open.remove(start_index);
             }
             OplogEntry::CompletionDelivered { start_index, .. } => {
                 if let Some(OpenLookup::Undelivered { name, addresses }) =
-                    names.open.remove(start_index)
+                    names.following.open.remove(start_index)
                 {
                     names
                         .links
@@ -146,12 +143,37 @@ pub(super) fn calculate_resolved_names(
                 }
             }
             OplogEntry::CompletionDiscarded { start_index, .. } => {
-                names.open.remove(start_index);
+                names.following.open.remove(start_index);
             }
             _ => {}
         }
     }
     Ok(names)
+}
+
+/// The name of a lookup request whose result can link: an address lookup, or a
+/// `golem:network/dns` query of A or AAAA records. An answer holds only records of the queried
+/// type, so a query of another type links nothing, and the fold neither opens it nor reads its
+/// response.
+fn linking_name(request: &HostRequest) -> Option<String> {
+    match request {
+        HostRequest::SocketsResolveName(HostRequestSocketsResolveName { name })
+        | HostRequest::P3SocketsResolveName(HostRequestP3SocketsResolveName { name })
+        | HostRequest::NetworkDnsResolve(HostRequestNetworkDnsResolve {
+            name,
+            record_type: SerializableDnsRecordType::A | SerializableDnsRecordType::Aaaa,
+        }) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// Whether the fold opens the lookup whose loaded request is `request`, and so reads the
+/// response of its `End`.
+pub(super) fn opens_lookup(
+    index: OplogIndex,
+    request: &OplogPayload<HostRequest>,
+) -> Result<bool, String> {
+    Ok(linking_name(loaded(request, index)?.as_ref()).is_some())
 }
 
 /// The addresses that a successful lookup returned.
@@ -371,7 +393,7 @@ mod tests {
         assert_eq!(names.links.len(), 2);
         // Only the lookup without an `End` stays open; the entity body is still open too.
         assert_eq!(
-            names.open.keys().copied().collect::<Vec<_>>(),
+            names.following.open.keys().copied().collect::<Vec<_>>(),
             vec![OplogIndex::from_u64(12)]
         );
     }
@@ -434,7 +456,7 @@ mod tests {
             later.resolved_names.links.hostnames(ip("10.0.0.7")),
             vec!["undelivered.test"]
         );
-        assert!(later.resolved_names.open.is_empty());
+        assert!(later.resolved_names.following.open.is_empty());
     }
 
     #[test]
@@ -521,8 +543,8 @@ mod tests {
             );
             index += entries.len() as u64;
             status = fold(status, entries).unwrap();
-            assert!(status.resolved_names.entity_scopes.is_empty());
-            assert!(status.resolved_names.open.is_empty());
+            assert!(status.resolved_names.following.entity_scopes.is_empty());
+            assert!(status.resolved_names.following.open.is_empty());
         }
         assert_eq!(status.resolved_names.links.len(), 1);
         assert_eq!(
@@ -550,6 +572,72 @@ mod tests {
             p2_end(5, "10.0.0.1"),
             outcome,
         ]
+    }
+
+    #[test]
+    fn the_fold_reads_the_answer_of_a_dns_query_only_when_its_record_type_links() {
+        // An answer that the payload store holds, as an oplog read returns it without loading.
+        let unloaded_end = OplogEntry::End {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(2),
+            response: Some(OplogPayload::External {
+                payload_id: golem_common::model::oplog::PayloadId::new(),
+                md5_hash: vec![0; 16],
+                cached: None,
+            }),
+            forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
+        };
+        let query = |record_type| {
+            start(
+                HostFunctionName::GolemNetworkDnsResolve,
+                None,
+                false,
+                Some(HostRequest::NetworkDnsResolve(
+                    HostRequestNetworkDnsResolve {
+                        name: "big.test".to_string(),
+                        record_type,
+                    },
+                )),
+            )
+        };
+        let fold_query = |record_type| {
+            update_status_with_new_entries(
+                AgentMode::Durable,
+                AgentStatusRecord::default(),
+                numbered(
+                    2,
+                    vec![query(record_type), unloaded_end.clone(), delivered(2)],
+                ),
+                &RetryConfig::default(),
+            )
+        };
+        for record_type in [
+            SerializableDnsRecordType::Txt,
+            SerializableDnsRecordType::Mx,
+            SerializableDnsRecordType::Cname,
+        ] {
+            let status = fold_query(record_type).unwrap().unwrap();
+            assert!(status.resolved_names.links.is_empty(), "{record_type:?}");
+            assert!(
+                status.resolved_names.following.open.is_empty(),
+                "{record_type:?}"
+            );
+        }
+        for record_type in [
+            SerializableDnsRecordType::A,
+            SerializableDnsRecordType::Aaaa,
+        ] {
+            assert_eq!(
+                fold_query(record_type),
+                Err(
+                    "the payload of the address lookup at oplog index 3 was not loaded before the status fold"
+                        .to_string()
+                ),
+                "{record_type:?}"
+            );
+        }
     }
 
     #[test]

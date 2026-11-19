@@ -24,7 +24,9 @@ mod status;
 
 pub use agent_uuid::AgentUuid;
 pub use key::AgentKey;
-pub use resolved_names::{MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames};
+pub use resolved_names::{
+    FollowedLookups, MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames,
+};
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,

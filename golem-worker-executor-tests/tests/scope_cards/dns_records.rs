@@ -564,6 +564,84 @@ async fn a_crash_between_a_delivered_answer_and_the_connect_keeps_the_link(
     Ok(())
 }
 
+/// A revert folds the retained history from storage, where every lookup payload is external
+/// here: it loads the A answer, which links, and keeps the link for the connect after it.
+#[test]
+#[timeout("3m")]
+#[tracing::instrument]
+async fn a_revert_keeps_the_link_of_an_external_a_answer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let dns = DnsPeer::start().await?;
+    let card_authority = authority.clone();
+    let dns_address = dns.address;
+    let overrides = TestExecutorOverrides {
+        create_card_service: Some(Arc::new(move || {
+            Arc::new(ScopeCardService {
+                authority: card_authority.clone(),
+            })
+        })),
+        configure: Some(Arc::new(move |config| {
+            config.agent_sockets.dns_servers = vec![dns_address];
+            config.oplog.max_payload_size = 1;
+        })),
+        ..TestExecutorOverrides::default()
+    }
+    .with_agent_sockets();
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let peer = CountingPeer::start("127.0.0.1:0").await?;
+    let peer_address = peer.address.to_string();
+    let component = networking_component(
+        &executor,
+        &context,
+        host_api_tests,
+        &["db.test".to_string()],
+    )
+    .await?;
+    let agent = agent_id!("Networking", "dns-revert-external");
+    configure_scope_card_root(&authority, &component, &agent)?;
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let a = dns_resolve(&executor, &component, &agent, "db.test", "a").await?;
+    assert_eq!(a, Ok(vec!["300 127.0.0.1".to_string()]));
+    let kept = executor
+        .get_oplog(&worker, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index)
+        .expect("the agent has an oplog");
+    // A TXT answer after the cut links nothing, and the revert drops it.
+    let txt = dns_resolve(&executor, &component, &agent, "db.test", "txt").await?;
+    assert!(txt.is_ok(), "the TXT lookup, got {txt:?}");
+
+    executor
+        .revert(
+            &worker,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: kept,
+            }),
+        )
+        .await?;
+    let connected = socket_operation(
+        &executor,
+        &component,
+        &agent,
+        "p3",
+        "tcp-connect",
+        &peer_address,
+    )
+    .await?;
+    assert_eq!(connected, Ok("connected".to_string()));
+    assert_eq!(peer.accepted(), 1);
+    executor.check_oplog_is_queryable(&worker).await?;
+    Ok(())
+}
+
 /// An AAAA answer links its addresses to the queried name, as an A answer does, and the A answer
 /// of an alias links to the alias, not to the name the alias points to. Each record type reaches
 /// the guest with its fields, and an existing name without records of the type is `no-data`.
