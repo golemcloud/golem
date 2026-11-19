@@ -380,6 +380,7 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
             Ok(()) => {
                 let entry = tcp_entry(self, rep).map_err(SocketError::trap)?;
                 entry.phase = SocketPhase::Connecting;
+                entry.remote_address = Some(remote_address.into());
                 entry.native_connect = connect_live;
                 Ok(())
             }
@@ -402,6 +403,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
             DurableFunctionType::WriteRemote,
             async |ctx| -> wasmtime::Result<_> {
                 let entry = tcp_entry(ctx, rep)?;
+                // The connect target that `start-connect` recorded. The native `remote-address`
+                // fails once the peer resets the connection.
+                let remote = entry.remote_address.clone();
                 if entry.phase == SocketPhase::Connecting && !entry.native_connect {
                     // The native connect started in a Store that is gone.
                     return Ok(HostResponseSocketsTcpFinishConnect {
@@ -412,14 +416,26 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
                 let mut view = wasi.sockets();
                 let result = match HostTcpSocket::finish_connect(&mut view, self_).await {
                     Ok(streams) => {
-                        native_streams = Some(streams);
                         let local =
-                            HostTcpSocket::local_address(&mut view, Resource::new_borrow(rep))
-                                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-                        let remote =
-                            HostTcpSocket::remote_address(&mut view, Resource::new_borrow(rep))
-                                .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
-                        Ok((local.into(), remote.into()))
+                            HostTcpSocket::local_address(&mut view, Resource::new_borrow(rep));
+                        match (local, remote) {
+                            (Ok(local), Some(remote)) => {
+                                native_streams = Some(streams);
+                                Ok((local.into(), remote))
+                            }
+                            (local, _) => {
+                                // The connection is gone before the guest got its streams.
+                                ctx.table().delete(streams.0)?;
+                                ctx.table().delete(streams.1)?;
+                                let error = match local {
+                                    Err(error) => recorded_error(error)?,
+                                    Ok(_) => {
+                                        SerializableSocketError::from_result(Ok(P2_CONNECTION_LOST))
+                                    }
+                                };
+                                Err(error)
+                            }
+                        }
                     }
                     Err(error) => Err(recorded_error(error)?),
                 };
