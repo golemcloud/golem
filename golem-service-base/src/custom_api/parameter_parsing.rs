@@ -2,7 +2,8 @@
 // Licensed under the Golem Source License v1.1 (https://license.golem.cloud/LICENSE).
 
 use super::{PathSegmentType, QueryOrHeaderType};
-use golem_common::schema::SchemaValue;
+use golem_common::base_model::durable_stream::MAX_STREAM_VALUE_TRAVERSAL_DEPTH;
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -21,6 +22,87 @@ pub enum HttpParameterError {
 }
 
 pub const SCALAR_MAP_ERROR: &str = "maps require name[key] entries, not a scalar value";
+
+/// Classify a scalar HTTP path binding, resolving references in the owning graph.
+pub fn schema_type_to_path_segment_type<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
+    make_error: &impl Fn(String) -> E,
+) -> Result<PathSegmentType, E> {
+    let resolved = graph
+        .resolve_ref(schema)
+        .map_err(|e| make_error(e.to_string()))?;
+    match resolved {
+        SchemaType::String { .. } => Ok(PathSegmentType::Str),
+        SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
+        SchemaType::F64 { .. } => Ok(PathSegmentType::F64),
+        SchemaType::F32 { .. } => Ok(PathSegmentType::F32),
+        SchemaType::U64 { .. } => Ok(PathSegmentType::U64),
+        SchemaType::S64 { .. } => Ok(PathSegmentType::S64),
+        SchemaType::U32 { .. } => Ok(PathSegmentType::U32),
+        SchemaType::S32 { .. } => Ok(PathSegmentType::S32),
+        SchemaType::U16 { .. } => Ok(PathSegmentType::U16),
+        SchemaType::S16 { .. } => Ok(PathSegmentType::S16),
+        SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
+        SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
+        SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
+        SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases.clone())),
+        _ => Err(make_error(
+            "Only primitive or enum types can be bound to path segments".into(),
+        )),
+    }
+}
+
+/// Classify a scalar, collection or optional HTTP query/header binding.
+pub fn schema_type_to_query_or_header_type<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
+    make_error: &impl Fn(String) -> E,
+) -> Result<QueryOrHeaderType, E> {
+    query_or_header_type_at_depth(graph, schema, make_error, 0)
+}
+
+fn query_or_header_type_at_depth<E>(
+    graph: &SchemaGraph,
+    schema: &SchemaType,
+    make_error: &impl Fn(String) -> E,
+    depth: usize,
+) -> Result<QueryOrHeaderType, E> {
+    if depth > MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
+        return Err(make_error(
+            "HTTP parameter schema exceeds the traversal depth limit".into(),
+        ));
+    }
+    let resolved = graph
+        .resolve_ref(schema)
+        .map_err(|e| make_error(e.to_string()))?;
+    match resolved {
+        SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
+            name: None,
+            owner: None,
+            inner: Box::new(query_or_header_type_at_depth(
+                graph,
+                inner,
+                make_error,
+                depth + 1,
+            )?),
+        }),
+        SchemaType::List { element, .. } => Ok(QueryOrHeaderType::List {
+            name: None,
+            owner: None,
+            inner: Box::new(schema_type_to_path_segment_type(
+                graph, element, make_error,
+            )?),
+        }),
+        SchemaType::Map { key, value, .. } => Ok(QueryOrHeaderType::Map {
+            key: schema_type_to_path_segment_type(graph, key, make_error)?,
+            value: schema_type_to_path_segment_type(graph, value, make_error)?,
+        }),
+        other => Ok(QueryOrHeaderType::Primitive(
+            schema_type_to_path_segment_type(graph, other, make_error)?,
+        )),
+    }
+}
 
 /// Recognize one decoded deepObject entry, without admitting nested brackets.
 pub fn map_entry_key<'a>(name: &str, wire_name: &'a str) -> Option<&'a str> {

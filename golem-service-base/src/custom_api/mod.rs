@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod method_input;
 pub mod parameter_parsing;
 mod protobuf;
 pub mod router;

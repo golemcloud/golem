@@ -31,9 +31,11 @@ use golem_common::schema::{
 };
 use golem_schema::http as schema_http;
 use golem_schema::http::{HeaderVariable, QueryVariable};
+use golem_service_base::custom_api::parameter_parsing::{
+    schema_type_to_path_segment_type, schema_type_to_query_or_header_type,
+};
 use golem_service_base::custom_api::{
-    CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, QueryOrHeaderType,
-    RequestBodySchema,
+    CompiledSchema, ConstructorParameter, MethodParameter, PathSegmentType, RequestBodySchema,
 };
 use golem_service_base::model::SafeIndex;
 use std::collections::HashMap;
@@ -400,73 +402,6 @@ fn collect_header_bindings(endpoint: &HttpEndpointDetails) -> HashMap<String, He
         .iter()
         .map(|v| (v.variable_name.clone(), v.clone()))
         .collect()
-}
-
-/// Classify a (possibly `Ref`) [`SchemaType`] as a scalar HTTP path-segment
-/// type. Refs are resolved against `graph` first.
-fn schema_type_to_path_segment_type<E>(
-    graph: &SchemaGraph,
-    schema: &SchemaType,
-    make_error: &impl Fn(String) -> E,
-) -> Result<PathSegmentType, E> {
-    let resolved = graph
-        .resolve_ref(schema)
-        .map_err(|e| make_error(e.to_string()))?;
-    match resolved {
-        SchemaType::String { .. } => Ok(PathSegmentType::Str),
-        SchemaType::Char { .. } => Ok(PathSegmentType::Chr),
-        SchemaType::F64 { .. } => Ok(PathSegmentType::F64),
-        SchemaType::F32 { .. } => Ok(PathSegmentType::F32),
-        SchemaType::U64 { .. } => Ok(PathSegmentType::U64),
-        SchemaType::S64 { .. } => Ok(PathSegmentType::S64),
-        SchemaType::U32 { .. } => Ok(PathSegmentType::U32),
-        SchemaType::S32 { .. } => Ok(PathSegmentType::S32),
-        SchemaType::U16 { .. } => Ok(PathSegmentType::U16),
-        SchemaType::S16 { .. } => Ok(PathSegmentType::S16),
-        SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
-        SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
-        SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
-        SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases.clone())),
-        _ => Err(make_error(
-            "Only primitive or enum types can be bound to path segments".into(),
-        )),
-    }
-}
-
-/// Classify a (possibly `Ref`) [`SchemaType`] as a query/header parameter
-/// type: a scalar, scalar collection, or optional wrapper. Refs are resolved
-/// against `graph` first.
-fn schema_type_to_query_or_header_type<E>(
-    graph: &SchemaGraph,
-    schema: &SchemaType,
-    make_error: &impl Fn(String) -> E,
-) -> Result<QueryOrHeaderType, E> {
-    let resolved = graph
-        .resolve_ref(schema)
-        .map_err(|e| make_error(e.to_string()))?;
-    match resolved {
-        SchemaType::Option { inner, .. } => Ok(QueryOrHeaderType::Option {
-            name: None,
-            owner: None,
-            inner: Box::new(schema_type_to_query_or_header_type(
-                graph, inner, make_error,
-            )?),
-        }),
-        SchemaType::List { element, .. } => Ok(QueryOrHeaderType::List {
-            name: None,
-            owner: None,
-            inner: Box::new(schema_type_to_path_segment_type(
-                graph, element, make_error,
-            )?),
-        }),
-        SchemaType::Map { key, value, .. } => Ok(QueryOrHeaderType::Map {
-            key: schema_type_to_path_segment_type(graph, key, make_error)?,
-            value: schema_type_to_path_segment_type(graph, value, make_error)?,
-        }),
-        other => Ok(QueryOrHeaderType::Primitive(
-            schema_type_to_path_segment_type(graph, other, make_error)?,
-        )),
-    }
 }
 
 fn validate_path_segment_type<E>(
