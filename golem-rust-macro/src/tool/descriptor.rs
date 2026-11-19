@@ -26,8 +26,8 @@
 use crate::tool::helpers::{StreamKind, is_stream_type, stream_type, to_kebab_case};
 use crate::tool::ir::{
     ArgIr, ArgPlacement, ArgSubKind, CommandAnnotationsIr, CommandIr, ConstraintIr, DocIr,
-    OutputChannelIr, PathDirectionIr, PathKindIr, QuantifierIr, RefIr, RepeatableMode, ResultIr,
-    ToolDefinitionIr,
+    OutputChannelIr, ParamIr, PathDirectionIr, PathKindIr, QuantifierIr, RefIr, RepeatableMode,
+    ResultIr, ToolDefinitionIr,
 };
 use crate::tool::synthesis::doc_tokens;
 use proc_macro2::TokenStream;
@@ -281,14 +281,16 @@ fn arg_has_value_refinement(arg: &ArgIr) -> bool {
         || arg.unit.is_some()
 }
 
-/// Whether the generated client must encode its input from the tool
-/// descriptor. A value refinement makes the published schema of an argument
-/// differ from the schema of its Rust type. A subtree client encodes against the
-/// root tool, whose input records also carry the globals inherited from the root.
+/// A subtree client encodes against the root descriptor, whose input records
+/// also carry the globals inherited from the root.
 pub(crate) fn client_needs_descriptor_input(ir: &ToolDefinitionIr) -> bool {
+    ir.commands.iter().any(|cmd| cmd.subtree.is_some())
+}
+
+pub(crate) fn client_has_refined_input(ir: &ToolDefinitionIr) -> bool {
     ir.commands
         .iter()
-        .any(|cmd| cmd.subtree.is_some() || cmd.args.iter().any(arg_has_value_refinement))
+        .any(|cmd| cmd.args.iter().any(arg_has_value_refinement))
 }
 
 fn constraint_has_value_is(constraint: &ConstraintIr) -> bool {
@@ -510,6 +512,57 @@ fn repeats_inherited_global(
         .any(|n| inherited.contains(n))
 }
 
+/// Effective root-global declarations in source order. A pure dispatcher keeps
+/// the first declaration of each root-global surface across all commands.
+pub(crate) fn root_global_params<'a>(
+    ir: &'a ToolDefinitionIr,
+    tool_name: &str,
+) -> Vec<(&'a CommandIr, &'a ParamIr)> {
+    if let Some(root) = ir
+        .commands
+        .iter()
+        .find(|command| to_kebab_case(&command.method_ident.to_string()) == tool_name)
+    {
+        return root
+            .params
+            .iter()
+            .filter(|param| {
+                arg_for(root, &param.ident).is_some_and(|arg| {
+                    matches!(
+                        arg.placement,
+                        Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+                    )
+                })
+            })
+            .map(|param| (root, param))
+            .collect();
+    }
+    let mut globals = Vec::new();
+    let mut seen: Vec<(String, BTreeSet<String>)> = Vec::new();
+    for command in &ir.commands {
+        for param in &command.params {
+            let Some(arg) = arg_for(command, &param.ident) else {
+                continue;
+            };
+            if arg.placement != Some(ArgPlacement::RootGlobal) {
+                continue;
+            }
+            let long = to_kebab_case(&param.ident.to_string());
+            let names = std::iter::once(long.clone())
+                .chain(arg.aliases.iter().cloned())
+                .collect::<BTreeSet<_>>();
+            if seen.iter().any(|(seen_long, seen_names)| {
+                names.contains(seen_long) || seen_names.contains(&long)
+            }) {
+                continue;
+            }
+            seen.push((long, names));
+            globals.push((command, param));
+        }
+    }
+    globals
+}
+
 /// Builds the index-0 root command node. With an implicit-body method the root
 /// is a full command (its globals + body); otherwise it is a pure dispatcher.
 fn build_root_node(
@@ -532,34 +585,16 @@ fn build_root_node(
         let aliases = ir.aliases.iter().map(|alias| quote! { #alias.to_string() });
         let mut options = Vec::new();
         let mut flags = Vec::new();
-        let mut seen_root_globals: Vec<(String, BTreeSet<String>)> = Vec::new();
-        for command in &ir.commands {
-            for param in &command.params {
-                let Some(arg) = arg_for(command, &param.ident) else {
-                    continue;
-                };
-                if arg.placement != Some(ArgPlacement::RootGlobal) {
-                    continue;
-                }
-                let long = to_kebab_case(&param.ident.to_string());
-                let names = std::iter::once(long.clone())
-                    .chain(arg.aliases.iter().cloned())
-                    .collect::<BTreeSet<_>>();
-                if seen_root_globals.iter().any(|(seen_long, seen_names)| {
-                    names.contains(seen_long) || seen_names.contains(&long)
-                }) {
-                    continue;
-                }
-                seen_root_globals.push((long, names));
-                match classify(&param.ident, &param.ty, Some(arg), true, false, repr)? {
-                    Projection::Option(spec) => options.push(spec),
-                    Projection::Flag(spec) => flags.push(spec),
-                    _ => {
-                        return Err(Error::new(
-                            param.ident.span(),
-                            "a root-global argument must project to an option or flag",
-                        ));
-                    }
+        for (command, param) in root_global_params(ir, &plan.tool_name) {
+            let arg = arg_for(command, &param.ident);
+            match classify(&param.ident, &param.ty, arg, true, false, repr)? {
+                Projection::Option(spec) => options.push(spec),
+                Projection::Flag(spec) => flags.push(spec),
+                _ => {
+                    return Err(Error::new(
+                        param.ident.span(),
+                        "a root-global argument must project to an option or flag",
+                    ));
                 }
             }
         }
@@ -1258,6 +1293,23 @@ pub(crate) fn client_surface_order(
     cmd: &CommandIr,
     param: &crate::tool::ir::ParamIr,
 ) -> Result<u8, Error> {
+    let (projection, global) = client_projection(ir, cmd, param)?;
+    Ok(match projection {
+        Projection::Option(_) if global => 0,
+        Projection::Flag(_) if global => 1,
+        Projection::Positional { .. } => 2,
+        Projection::Tail(_) => 3,
+        Projection::Option(_) => 4,
+        Projection::Flag(_) => 5,
+        Projection::Stdin(_) | Projection::Stdout(_) | Projection::Stderr(_) => 6,
+    })
+}
+
+fn client_projection(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &crate::tool::ir::ParamIr,
+) -> Result<(Projection, bool), Error> {
     let plan = Plan::analyze(ir)?;
     let is_root = to_kebab_case(&cmd.method_ident.to_string()) == plan.tool_name;
     let arg = arg_for(cmd, &param.ident);
@@ -1286,24 +1338,17 @@ pub(crate) fn client_surface_order(
         || (last_non_inherited.is_some_and(|candidate| candidate.ident == param.ident)
             && arg.and_then(|arg| arg.placement).is_none()
             && vec_tail_representable(&param.ty, arg));
-    Ok(
-        match classify(
+    Ok((
+        classify(
             &param.ident,
             &param.ty,
             arg,
             global,
             tail,
             DescriptorRepr::Wire,
-        )? {
-            Projection::Option(_) if global => 0,
-            Projection::Flag(_) if global => 1,
-            Projection::Positional { .. } => 2,
-            Projection::Tail(_) => 3,
-            Projection::Option(_) => 4,
-            Projection::Flag(_) => 5,
-            Projection::Stdin(_) | Projection::Stdout(_) | Projection::Stderr(_) => 6,
-        },
-    )
+        )?,
+        global,
+    ))
 }
 
 pub(crate) fn canonical_field_has_option_carrier(
@@ -1311,42 +1356,8 @@ pub(crate) fn canonical_field_has_option_carrier(
     cmd: &CommandIr,
     param: &crate::tool::ir::ParamIr,
 ) -> Result<bool, Error> {
-    let plan = Plan::analyze(ir)?;
-    let is_root = to_kebab_case(&cmd.method_ident.to_string()) == plan.tool_name;
     let arg = arg_for(cmd, &param.ident);
-    let global = arg.is_some_and(|arg| {
-        matches!(
-            arg.placement,
-            Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
-        )
-    });
-    let last = cmd
-        .params
-        .iter()
-        .rev()
-        .find(|candidate| is_positional_candidate(candidate, arg_for(cmd, &candidate.ident)));
-    let last_non_inherited = cmd.params.iter().rev().find(|candidate| {
-        let candidate_arg = arg_for(cmd, &candidate.ident);
-        is_positional_candidate(candidate, candidate_arg)
-            && (is_root
-                || !repeats_inherited_global(
-                    &candidate.ident,
-                    candidate_arg,
-                    &plan.root_global_names,
-                ))
-    });
-    let tail = last.is_some_and(|candidate| candidate.ident == param.ident)
-        || (last_non_inherited.is_some_and(|candidate| candidate.ident == param.ident)
-            && arg.and_then(|arg| arg.placement).is_none()
-            && vec_tail_representable(&param.ty, arg));
-    let projection = classify(
-        &param.ident,
-        &param.ty,
-        arg,
-        global,
-        tail,
-        DescriptorRepr::Wire,
-    )?;
+    let (projection, _) = client_projection(ir, cmd, param)?;
     Ok(match projection {
         Projection::Option(_) => {
             let (base, optional) = unwrap_generic1(&param.ty, "Option")
@@ -1364,6 +1375,34 @@ pub(crate) fn canonical_field_has_option_carrier(
         | Projection::Stdin(_)
         | Projection::Stdout(_)
         | Projection::Stderr(_) => false,
+    })
+}
+
+pub(crate) fn client_field_schema(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &crate::tool::ir::ParamIr,
+) -> Result<TokenStream, Error> {
+    let (projection, _) = client_projection(ir, cmd, param)?;
+    Ok(match projection {
+        Projection::Positional { tokens, .. } => quote! { (#tokens).type_ },
+        Projection::Tail(tokens) => quote! {{
+            use golem_rust::agentic::ToolSchemaRepr as _;
+            (#tokens).item_type.list()
+        }},
+        Projection::Option(tokens) => quote! {
+            golem_rust::agentic::option_collected_graph(&(#tokens).shape)
+        },
+        Projection::Flag(_) => {
+            let ty = &param.ty;
+            quote! { __golem_wire_schema.schema::<#ty>() }
+        }
+        _ => {
+            return Err(Error::new(
+                param.ident.span(),
+                "a stream has no input field schema",
+            ));
+        }
     })
 }
 

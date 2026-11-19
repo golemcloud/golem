@@ -16,7 +16,7 @@
 
 pub(crate) use crate::tool::helpers::is_stream_type;
 use crate::tool::helpers::{StreamKind, stream_type, to_kebab_case};
-use crate::tool::ir::{ArgPlacement, ArgSubKind, CommandIr, ParamIr, ToolDefinitionIr};
+use crate::tool::ir::{ArgSubKind, CommandIr, ParamIr, ToolDefinitionIr};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, GenericArgument, Ident, Path, PathArguments, ReturnType, Type};
@@ -34,7 +34,15 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         .iter()
         .filter_map(|cmd| synthesize_subtree_wrapper(ir, cmd));
     let subtree_macro = synthesize_subtree_client_macro(ir, &tool_name);
-    let (descriptor_field, descriptor_init, descriptor_parts, descriptor_param) =
+    let input_schemas = ir
+        .commands
+        .iter()
+        .filter(|&_cmd| {
+            !crate::tool::descriptor::client_needs_descriptor_input(ir)
+                && crate::tool::descriptor::client_has_refined_input(ir)
+        })
+        .map(|cmd| synthesize_input_schema(ir, cmd, &tool_name));
+    let (descriptor_field, descriptor_init) =
         if crate::tool::descriptor::client_needs_descriptor_input(ir) {
             let descriptor_fn =
                 crate::tool::descriptor::standalone_wire_descriptor_fn_ident(&ir.trait_ident);
@@ -47,19 +55,13 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
                         #descriptor_fn as golem_rust::agentic::WireToolDescriptorFn
                     ),
                 },
-                quote! { root_descriptor, },
-                format_ident!("root_descriptor"),
             )
         } else {
-            (
-                quote! {},
-                quote! {},
-                quote! {},
-                format_ident!("_root_descriptor"),
-            )
+            (quote! {}, quote! {})
         };
 
     quote! {
+        #(#input_schemas)*
         #(#subtree_wrappers)*
 
         pub struct #client_ident {
@@ -92,25 +94,6 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
             #(#methods)*
         }
 
-        impl golem_rust::agentic::ToolClientWithParts for #client_ident {
-            fn __golem_tool_client_with_parts(
-                root_tool_name: ::std::string::String,
-                #descriptor_param: ::std::option::Option<golem_rust::agentic::WireToolDescriptorFn>,
-                command_path: ::std::vec::Vec<::std::string::String>,
-                schema_path: ::std::vec::Vec<::std::string::String>,
-                inherited_prefix: ::std::vec::Vec<golem_rust::agentic::DirectInputValue>,
-            ) -> Self {
-                Self {
-                    rpc: golem_rust::agentic::ambient_tool_rpc::AmbientToolRpc::new(&root_tool_name),
-                    root_tool_name,
-                    #descriptor_parts
-                    command_path,
-                    schema_path,
-                    inherited_prefix,
-                }
-            }
-        }
-
         impl ::std::default::Default for #client_ident {
             fn default() -> Self {
                 Self::#constructor_ident()
@@ -118,6 +101,94 @@ pub fn synthesize_client(ir: &ToolDefinitionIr) -> TokenStream {
         }
 
         #subtree_macro
+    }
+}
+
+fn canonical_input_params<'a>(
+    ir: &'a ToolDefinitionIr,
+    cmd: &'a CommandIr,
+    tool_name: &str,
+) -> Result<Vec<(&'a CommandIr, &'a ParamIr)>, syn::Error> {
+    let mut ordered = crate::tool::descriptor::root_global_params(ir, tool_name);
+    ordered.sort_by_key(|(source, param)| is_flag_param(source, param));
+    let mut fields = Vec::new();
+    for param in &cmd.params {
+        if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
+            continue;
+        }
+        let order = crate::tool::descriptor::client_surface_order(ir, cmd, param)?;
+        fields.push((order, canonical_param_source(ir, cmd, param, tool_name)));
+    }
+    fields.sort_by_key(|(order, _)| *order);
+    for (_, (source, param)) in fields {
+        if !ordered
+            .iter()
+            .any(|(_, previous)| previous.ident == param.ident)
+        {
+            ordered.push((source, param));
+        }
+    }
+    Ok(ordered)
+}
+
+fn input_schema_fn_ident(ir: &ToolDefinitionIr, cmd: &CommandIr) -> Ident {
+    format_ident!(
+        "__golem_wire_input_schema_for_{}_{}",
+        ir.trait_ident,
+        cmd.method_ident
+    )
+}
+
+fn synthesize_input_schema(ir: &ToolDefinitionIr, cmd: &CommandIr, tool_name: &str) -> TokenStream {
+    let params = match canonical_input_params(ir, cmd, tool_name) {
+        Ok(params) => params,
+        Err(error) => return error.to_compile_error(),
+    };
+    let mut fields = Vec::new();
+    let mut aliases = Vec::new();
+    for (source, param) in params {
+        let name = to_kebab_case(&param.ident.to_string());
+        let schema = match crate::tool::descriptor::client_field_schema(ir, source, param) {
+            Ok(schema) => schema,
+            Err(error) => return error.to_compile_error(),
+        };
+        let optional = direct_input_needs_option_carrier(ir, source, param, tool_name);
+        let field_aliases = param_aliases(source, param);
+        aliases.push(quote! { ::std::vec![#(#field_aliases.to_string()),*] });
+        fields.push(quote! {{
+            let __type = #schema;
+            let __body = __golem_wire_schema.with_builder(|__builder| {
+                if #optional && !matches!(
+                    __builder.node(__type.index).map(|__node| &__node.body),
+                    Some(golem_rust::schema::wit::wire::SchemaTypeBody::OptionType(_))
+                ) {
+                    __builder.push(golem_rust::schema::wit::wire::SchemaTypeBody::OptionType(__type.index))
+                } else {
+                    __type.index
+                }
+            });
+            golem_rust::schema::wit::wire::NamedFieldType {
+                name: #name.to_string(),
+                body: __body,
+                metadata: golem_rust::schema::wit::direct::empty_metadata(),
+            }
+        }});
+    }
+    let ident = input_schema_fn_ident(ir, cmd);
+    quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub fn #ident() -> ::std::result::Result<golem_rust::agentic::WireCanonicalInputModel, golem_rust::agentic::ToolBuildError> {
+            let __golem_wire_schema = golem_rust::agentic::WireToolSchema::default();
+            let __fields = ::std::vec![#(#fields),*];
+            let __root = __golem_wire_schema.with_builder(|__builder| {
+                __builder.push(golem_rust::schema::wit::wire::SchemaTypeBody::RecordType(__fields))
+            });
+            ::std::result::Result::Ok(golem_rust::agentic::WireCanonicalInputModel {
+                graph: __golem_wire_schema.finish_at(__root),
+                aliases: ::std::vec![#(#aliases),*],
+            })
+        }
     }
 }
 
@@ -129,41 +200,13 @@ fn input_build_expr(
     param_values: TokenStream,
     use_descriptor: bool,
 ) -> TokenStream {
-    let mut ordered = Vec::new();
-    if let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    {
-        let mut globals = root
-            .params
-            .iter()
-            .filter(|param| is_global_param(root, param))
-            .collect::<Vec<_>>();
-        globals.sort_by_key(|param| is_flag_param(root, param));
-        ordered.extend(
-            globals
-                .into_iter()
-                .map(|param| to_kebab_case(&param.ident.to_string())),
-        );
-    }
-    let mut fields = Vec::new();
-    for param in &cmd.params {
-        if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
-            continue;
-        }
-        let order = match crate::tool::descriptor::client_surface_order(ir, cmd, param) {
-            Ok(order) => order,
-            Err(error) => return error.to_compile_error(),
-        };
-        fields.push((order, canonical_value_name(ir, cmd, param, tool_name)));
-    }
-    fields.sort_by_key(|(order, _)| *order);
-    for (_, name) in fields {
-        if !ordered.contains(&name) {
-            ordered.push(name);
-        }
-    }
+    let ordered = match canonical_input_params(ir, cmd, tool_name) {
+        Ok(params) => params
+            .into_iter()
+            .map(|(_, param)| to_kebab_case(&param.ident.to_string()))
+            .collect::<Vec<_>>(),
+        Err(error) => return error.to_compile_error(),
+    };
     let encode = if use_descriptor {
         quote! {
             golem_rust::agentic::encode_direct_tool_input_with_descriptor(
@@ -172,6 +215,11 @@ fn input_build_expr(
                 self.root_descriptor,
                 &__command_path,
             ).await
+        }
+    } else if crate::tool::descriptor::client_has_refined_input(ir) {
+        let schema = input_schema_fn_ident(ir, cmd);
+        quote! {
+            golem_rust::agentic::encode_direct_tool_input_with_schema(&__values, #schema).await
         }
     } else {
         quote! {
@@ -713,9 +761,8 @@ fn subtree_client_macro_keep_param(
     };
 
     if is_subtree_command {
-        let command_param = cmd.params.iter().any(|own| own.ident == param.ident);
-        let (new_markers, new_tag, new_ty) = if command_param && !is_stream_type(&param.ty) {
-            let surfaces = param_surfaces(cmd, param);
+        let (new_markers, new_tag, new_ty) = if !is_stream_type(&param.ty) {
+            let surfaces = captured_param_surfaces(ir, cmd, param, tool_name);
             let markers = omitted_markers(&surfaces);
             let tag = omitted_tag_append(quote! { $child_tag }, &surfaces);
             let ty = omitted_type(quote! { $child_ty }, &surfaces);
@@ -837,11 +884,7 @@ fn subtree_child_omitted_surfaces(
         .iter()
         .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
     {
-        let canonical_name = canonical_value_name(ir, cmd, param, tool_name);
-        if !surfaces.iter().any(|existing| existing == &canonical_name) {
-            surfaces.push(canonical_name);
-        }
-        for surface in param_surfaces(cmd, param) {
+        for surface in captured_param_surfaces(ir, cmd, param, tool_name) {
             if !surfaces.iter().any(|existing| existing == &surface) {
                 surfaces.push(surface);
             }
@@ -855,17 +898,22 @@ fn inherited_root_param_surfaces(
     cmd: &CommandIr,
     tool_name: &str,
 ) -> Vec<String> {
-    let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    else {
-        return Vec::new();
-    };
     inherited_root_params(ir, cmd, tool_name)
         .iter()
-        .flat_map(|param| param_surfaces(root, param))
+        .flat_map(|param| captured_param_surfaces(ir, cmd, param, tool_name))
         .collect()
+}
+
+fn captured_param_surfaces(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    param: &ParamIr,
+    tool_name: &str,
+) -> Vec<String> {
+    // Reconciliation removes a redeclaration's local surfaces; only the
+    // effective source's name and aliases remain inherited by descendants.
+    let (source, source_param) = canonical_param_source(ir, cmd, param, tool_name);
+    param_surfaces(source, source_param)
 }
 
 fn omitted_type(base: TokenStream, surfaces: &[String]) -> TokenStream {
@@ -922,35 +970,9 @@ fn omitted_matches_param(
     tool_name: &str,
     omitted: &str,
 ) -> bool {
-    if param_surfaces(cmd, param)
+    param_omission_surfaces(ir, cmd, param, tool_name)
         .iter()
         .any(|surface| surface == omitted)
-    {
-        return true;
-    }
-    if to_kebab_case(&cmd.method_ident.to_string()) == tool_name {
-        return false;
-    }
-    let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    else {
-        return false;
-    };
-    let own_name = to_kebab_case(&param.ident.to_string());
-    let own_aliases = param_aliases(cmd, param);
-    root.params.iter().any(|root_param| {
-        let root_name = to_kebab_case(&root_param.ident.to_string());
-        is_global_param(root, root_param)
-            && omitted == root_name
-            && param_surfaces_intersect(
-                &root_name,
-                &param_aliases(root, root_param),
-                &own_name,
-                &own_aliases,
-            )
-    })
 }
 
 pub(crate) fn param_omission_surfaces(
@@ -960,29 +982,11 @@ pub(crate) fn param_omission_surfaces(
     tool_name: &str,
 ) -> Vec<String> {
     let mut surfaces = param_surfaces(cmd, param);
-    if to_kebab_case(&cmd.method_ident.to_string()) == tool_name {
-        return surfaces;
-    }
-    let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    else {
-        return surfaces;
-    };
-    let own_name = to_kebab_case(&param.ident.to_string());
-    let own_aliases = param_aliases(cmd, param);
-    for root_param in &root.params {
-        if !is_global_param(root, root_param) {
-            continue;
-        }
-        let root_name = to_kebab_case(&root_param.ident.to_string());
-        let root_aliases = param_aliases(root, root_param);
-        if param_surfaces_intersect(&root_name, &root_aliases, &own_name, &own_aliases)
-            && !surfaces.iter().any(|surface| surface == &root_name)
-        {
-            surfaces.push(root_name);
-        }
+    // A graft can de-project the standalone root global through an alias.
+    // Its other surfaces do not necessarily remain inherited by this parameter.
+    let canonical_name = canonical_value_name(ir, cmd, param, tool_name);
+    if !surfaces.iter().any(|surface| surface == &canonical_name) {
+        surfaces.push(canonical_name);
     }
     surfaces
 }
@@ -1047,17 +1051,9 @@ pub(crate) fn inherited_root_params(
     if is_root {
         return Vec::new();
     }
-    let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    else {
-        return Vec::new();
-    };
-    root.params
-        .iter()
-        .filter(|param| is_global_param(root, param))
-        .filter(|param| {
+    crate::tool::descriptor::root_global_params(ir, tool_name)
+        .into_iter()
+        .filter(|(root, param)| {
             !cmd.params.iter().any(|own| {
                 param_surfaces_intersect(
                     &to_kebab_case(&param.ident.to_string()),
@@ -1067,7 +1063,7 @@ pub(crate) fn inherited_root_params(
                 )
             })
         })
-        .cloned()
+        .map(|(_, param)| param.clone())
         .collect()
 }
 
@@ -1077,31 +1073,8 @@ pub(crate) fn canonical_value_name(
     param: &ParamIr,
     tool_name: &str,
 ) -> String {
-    let own_name = to_kebab_case(&param.ident.to_string());
-    if to_kebab_case(&cmd.method_ident.to_string()) == tool_name {
-        return own_name;
-    }
-    if let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    {
-        for root_param in &root.params {
-            if !is_global_param(root, root_param) {
-                continue;
-            }
-            let root_name = to_kebab_case(&root_param.ident.to_string());
-            if param_surfaces_intersect(
-                &root_name,
-                &param_aliases(root, root_param),
-                &own_name,
-                &param_aliases(cmd, param),
-            ) {
-                return root_name;
-            }
-        }
-    }
-    own_name
+    let (_, source) = canonical_param_source(ir, cmd, param, tool_name);
+    to_kebab_case(&source.ident.to_string())
 }
 
 fn canonical_param_source<'a>(
@@ -1111,22 +1084,14 @@ fn canonical_param_source<'a>(
     tool_name: &str,
 ) -> (&'a CommandIr, &'a ParamIr) {
     let own_name = to_kebab_case(&param.ident.to_string());
-    if let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    {
-        for root_param in &root.params {
-            if is_global_param(root, root_param)
-                && param_surfaces_intersect(
-                    &to_kebab_case(&root_param.ident.to_string()),
-                    &param_aliases(root, root_param),
-                    &own_name,
-                    &param_aliases(cmd, param),
-                )
-            {
-                return (root, root_param);
-            }
+    for (root, root_param) in crate::tool::descriptor::root_global_params(ir, tool_name) {
+        if param_surfaces_intersect(
+            &to_kebab_case(&root_param.ident.to_string()),
+            &param_aliases(root, root_param),
+            &own_name,
+            &param_aliases(cmd, param),
+        ) {
+            return (root, root_param);
         }
     }
     (cmd, param)
@@ -1149,25 +1114,8 @@ fn canonical_param_aliases(
     param: &ParamIr,
     tool_name: &str,
 ) -> Vec<String> {
-    let own_name = to_kebab_case(&param.ident.to_string());
-    if let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    {
-        for root_param in &root.params {
-            if !is_global_param(root, root_param) {
-                continue;
-            }
-            let root_name = to_kebab_case(&root_param.ident.to_string());
-            let aliases = param_aliases(root, root_param);
-            if param_surfaces_intersect(&root_name, &aliases, &own_name, &param_aliases(cmd, param))
-            {
-                return aliases;
-            }
-        }
-    }
-    param_aliases(cmd, param)
+    let (source, param) = canonical_param_source(ir, cmd, param, tool_name);
+    param_aliases(source, param)
 }
 
 fn canonical_param_short(
@@ -1176,28 +1124,8 @@ fn canonical_param_short(
     param: &ParamIr,
     tool_name: &str,
 ) -> Option<char> {
-    let own_name = to_kebab_case(&param.ident.to_string());
-    if let Some(root) = ir
-        .commands
-        .iter()
-        .find(|candidate| to_kebab_case(&candidate.method_ident.to_string()) == tool_name)
-    {
-        for root_param in &root.params {
-            if !is_global_param(root, root_param) {
-                continue;
-            }
-            let root_name = to_kebab_case(&root_param.ident.to_string());
-            if param_surfaces_intersect(
-                &root_name,
-                &param_aliases(root, root_param),
-                &own_name,
-                &param_aliases(cmd, param),
-            ) {
-                return param_short(root, root_param);
-            }
-        }
-    }
-    param_short(cmd, param)
+    let (source, param) = canonical_param_source(ir, cmd, param, tool_name);
+    param_short(source, param)
 }
 
 fn param_surfaces_intersect(
@@ -1234,16 +1162,6 @@ fn option_char_tokens(value: Option<char>) -> TokenStream {
         Some(value) => quote! { ::std::option::Option::Some(#value) },
         None => quote! { ::std::option::Option::None },
     }
-}
-
-fn is_global_param(cmd: &CommandIr, param: &ParamIr) -> bool {
-    matches!(
-        cmd.args
-            .iter()
-            .find(|arg| arg.param == param.ident)
-            .and_then(|arg| arg.placement),
-        Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
-    )
 }
 
 fn is_flag_param(cmd: &CommandIr, param: &ParamIr) -> bool {

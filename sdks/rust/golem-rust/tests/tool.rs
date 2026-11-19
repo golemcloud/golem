@@ -650,8 +650,17 @@ mod tests {
 
     #[tool_definition]
     trait RefinedClientChild {
+        #[arg(region = "global", max_length = 2)]
+        fn refined_client_child(&self, region: String);
+
         #[arg(name = "positional", max_length = 4)]
-        fn leaf(&self, name: String) -> String;
+        fn leaf(&self, region: String, name: String) -> String;
+    }
+
+    #[tool_definition]
+    trait RefinedAliasClientChild {
+        #[arg(name = "positional", max_length = 4)]
+        fn leaf(&self, zone: String, name: String) -> String;
     }
 
     struct RefinedClientChildSubtree;
@@ -661,6 +670,26 @@ mod tests {
         #[command(subtree = RefinedClientChild, name = "child")]
         #[arg(region = "global", max_length = 6)]
         fn child(&self, region: String) -> RefinedClientChildSubtree;
+    }
+
+    #[tool_definition]
+    trait RefinedDispatcherParent {
+        #[arg(region = "root-global", aliases = ["area", "zone"], max_length = 6)]
+        fn configure(&self, region: String);
+
+        #[command(subtree = RefinedClientChild, name = "child")]
+        fn child(&self) -> RefinedClientChildSubtree;
+
+        #[command(subtree = RefinedAliasClientChild, name = "alias-child")]
+        fn alias_child(&self, area: String) -> RefinedClientChildSubtree;
+    }
+
+    struct RefinedDispatcherParentSubtree;
+
+    #[tool_definition]
+    trait RefinedDispatcherOuter {
+        #[command(subtree = RefinedDispatcherParent, name = "middle")]
+        fn middle(&self) -> RefinedDispatcherParentSubtree;
     }
 
     fn published_input_schema(
@@ -679,6 +708,89 @@ mod tests {
             .expect("canonical input record schema builds")
     }
 
+    #[test]
+    fn wire_client_projection_matches_native_command_inputs() {
+        use golem_rust::schema::tool::Tool;
+        use golem_rust::schema::validation::subtyping::is_equivalent_cross_graph;
+
+        fn paths(tool: &Tool, node: usize, path: Vec<String>) -> Vec<(usize, Vec<String>)> {
+            let mut result = vec![(node, path.clone())];
+            for child in &tool.commands.nodes[node].subcommands {
+                let child = child.0 as usize;
+                let command = &tool.commands.nodes[child];
+                for name in std::iter::once(&command.name).chain(&command.aliases) {
+                    let mut path = path.clone();
+                    path.push(name.clone());
+                    result.extend(paths(tool, child, path));
+                }
+            }
+            result
+        }
+
+        let descriptors: &[golem_rust::agentic::WireToolDescriptorFn] = &[
+            __golem_standalone_wire_tool_descriptor_for_RefinedClientArgs,
+            __golem_standalone_wire_tool_descriptor_for_RefinedClientParent,
+            __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherParent,
+            __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherOuter,
+            __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherGlobals,
+            __golem_standalone_wire_tool_descriptor_for_Grep,
+            __golem_standalone_wire_tool_descriptor_for_Git,
+            __golem_standalone_wire_tool_descriptor_for_Cli,
+            __golem_standalone_wire_tool_descriptor_for_Outer,
+            __golem_standalone_wire_tool_descriptor_for_RootGlobalRecursiveLeafMatch,
+            __golem_standalone_wire_tool_descriptor_for_AliasedOptionDirectRoundTrip,
+            __golem_standalone_wire_tool_descriptor_for_OptionalCaptureParent,
+            __golem_standalone_wire_tool_descriptor_for_RefinedMiddlewareArgs,
+        ];
+        for descriptor in descriptors {
+            let schema = golem_rust::agentic::WireToolSchema::default();
+            let wire = descriptor(&schema).unwrap();
+            let native_schema = golem_rust::agentic::WireToolSchema::default();
+            let native = descriptor(&native_schema)
+                .unwrap()
+                .into_wire(native_schema)
+                .unwrap();
+            let native = golem_rust::schema::tool::wit::decode_tool(native).unwrap();
+            for (index, path) in paths(&native, 0, Vec::new()) {
+                let actual = wire.canonical_wire_input_model(&schema, &path);
+                if native.commands.nodes[index].body.is_none() {
+                    assert!(actual.is_err(), "namespace {path:?} has no input record");
+                    continue;
+                }
+                let actual = actual.unwrap();
+                let graph = golem_rust::schema::wit::decode_graph(&actual.graph).unwrap();
+                let expected = native
+                    .canonical_input_record_schema_unvalidated(index)
+                    .unwrap();
+                assert!(
+                    is_equivalent_cross_graph(&graph, &graph.root, &expected, &expected.root),
+                    "{path:?}"
+                );
+                let mut actual_defs = graph.defs.iter().map(|def| &def.id).collect::<Vec<_>>();
+                let mut expected_defs = expected.defs.iter().map(|def| &def.id).collect::<Vec<_>>();
+                actual_defs.sort();
+                expected_defs.sort();
+                assert_eq!(
+                    actual_defs, expected_defs,
+                    "only input-reachable definitions at {path:?}"
+                );
+                assert_eq!(
+                    actual.aliases,
+                    native
+                        .canonical_input_fields(index)
+                        .into_iter()
+                        .map(|field| field.aliases)
+                        .collect::<Vec<_>>(),
+                    "{path:?}"
+                );
+            }
+            assert!(
+                wire.canonical_wire_input_model(&schema, &["__missing__".to_string()])
+                    .is_err()
+            );
+        }
+    }
+
     async fn encode_with_descriptor(
         values: &[golem_rust::agentic::DirectInputValue],
         descriptor: golem_rust::agentic::WireToolDescriptorFn,
@@ -691,6 +803,18 @@ mod tests {
             command_path,
         )
         .await?;
+        Ok(golem_rust::schema::wit::decode_typed(&wire).expect("encoded input decodes"))
+    }
+
+    async fn encode_with_schema(
+        values: &[golem_rust::agentic::DirectInputValue],
+        schema: fn() -> Result<
+            golem_rust::agentic::WireCanonicalInputModel,
+            golem_rust::agentic::ToolBuildError,
+        >,
+    ) -> Result<golem_rust::TypedSchemaValue, String> {
+        let wire =
+            golem_rust::agentic::encode_direct_tool_input_with_schema(values, schema).await?;
         Ok(golem_rust::schema::wit::decode_typed(&wire).expect("encoded input decodes"))
     }
 
@@ -747,7 +871,8 @@ mod tests {
         };
 
         let published = published_input_schema(descriptor, &slug_path);
-        let input = encode_with_descriptor(&slug_values("golem"), descriptor, &slug_path)
+        let slug_schema = __golem_wire_input_schema_for_RefinedClientArgs_slug;
+        let input = encode_with_schema(&slug_values("golem"), slug_schema)
             .await
             .unwrap();
         assert_matches_published(&input, &published);
@@ -768,7 +893,7 @@ mod tests {
         assert_eq!(text_value(label), Some("tiny"));
 
         for invalid in ["toolongslug", "Golem"] {
-            let input = encode_with_descriptor(&slug_values(invalid), descriptor, &slug_path)
+            let input = encode_with_schema(&slug_values(invalid), slug_schema)
                 .await
                 .unwrap();
             assert_matches_published(&input, &published);
@@ -780,10 +905,10 @@ mod tests {
 
         let limit_path = vec!["limit".to_string()];
         let published = published_input_schema(descriptor, &limit_path);
-        let refined = encode_with_descriptor(
+        let limit_schema = __golem_wire_input_schema_for_RefinedClientArgs_limit;
+        let refined = encode_with_schema(
             &[DirectInputValue::new("count", vec![], None, 2u32)],
-            descriptor,
-            &limit_path,
+            limit_schema,
         )
         .await
         .unwrap();
@@ -805,34 +930,157 @@ mod tests {
             ),
             "the `u32` field must carry the published `max` restriction"
         );
-        let too_large = encode_with_descriptor(
+        let too_large = encode_with_schema(
             &[DirectInputValue::new("count", vec![], None, 9u32)],
-            descriptor,
-            &limit_path,
+            limit_schema,
         )
         .await
         .unwrap();
         assert!(!input_is_valid(&too_large));
 
-        let missing = encode_with_descriptor(
+        let missing = encode_with_schema(
             &[DirectInputValue::new(
                 "name",
                 vec![],
                 None,
                 "golem".to_string(),
             )],
-            descriptor,
-            &slug_path,
+            slug_schema,
         )
         .await
         .unwrap_err();
         assert!(missing.contains("missing tool input field"), "{missing}");
         let mut unknown = slug_values("golem");
         unknown.push(DirectInputValue::new("other", vec![], None, 1u32));
-        let unknown = encode_with_descriptor(&unknown, descriptor, &slug_path)
-            .await
-            .unwrap_err();
+        let unknown = encode_with_schema(&unknown, slug_schema).await.unwrap_err();
         assert!(unknown.contains("matches no field"), "{unknown}");
+    }
+
+    #[tool_definition]
+    trait RefinedStandaloneGlobals {
+        #[arg(region = "global", aliases = ["area"], max_length = 6)]
+        #[arg(verbose = "global")]
+        fn refined_standalone_globals(&self, region: String, verbose: bool);
+
+        #[arg(area = "positional", max_length = 2)]
+        #[arg(paths = "option", kind = "file", extensions = ["wasm"])]
+        #[arg(label = "option", max_length = 4, default = "tiny")]
+        #[arg(extra = "tail", max = 2, max_length = 3)]
+        fn run(
+            &self,
+            area: String,
+            paths: Vec<std::path::PathBuf>,
+            label: String,
+            extra: Vec<String>,
+            verbose: bool,
+        );
+    }
+
+    #[test]
+    async fn compiled_refined_client_schema_preserves_inherited_globals_and_collections() {
+        use golem_rust::agentic::DirectInputValue;
+        let descriptor = __golem_standalone_wire_tool_descriptor_for_RefinedStandaloneGlobals;
+        let schema = __golem_wire_input_schema_for_RefinedStandaloneGlobals_run;
+        let published = published_input_schema(descriptor, &["run".to_string()]);
+        let input = encode_with_schema(
+            &[
+                DirectInputValue::new("label", vec![], None, "tiny".to_string()),
+                DirectInputValue::new(
+                    "extra",
+                    vec![],
+                    None,
+                    vec!["one".to_string(), "two".to_string()],
+                ),
+                DirectInputValue::new("area", vec![], None, "europe".to_string()),
+                DirectInputValue::new(
+                    "paths",
+                    vec![],
+                    None,
+                    vec![std::path::PathBuf::from("module.wasm")],
+                ),
+                DirectInputValue::new("verbose", vec![], None, true),
+            ],
+            schema,
+        )
+        .await
+        .unwrap();
+        assert_matches_published(&input, &published);
+        assert!(
+            input_is_valid(&input),
+            "the parent region refinement must win over the child's two-character refinement"
+        );
+        let fields = record_fields(&input);
+        assert!(
+            matches!(&fields[0], golem_rust::SchemaValue::Option { inner: Some(region) } if text_value(region) == Some("europe"))
+        );
+        assert_eq!(fields[1], golem_rust::SchemaValue::Bool(true));
+        assert!(
+            matches!(&fields[2], golem_rust::SchemaValue::List { elements } if elements.iter().map(text_value).collect::<Vec<_>>() == vec![Some("one"), Some("two")])
+        );
+    }
+
+    #[tool_definition]
+    trait RefinedDispatcherGlobals {
+        #[arg(region = "root-global", aliases = ["area"], max_length = 6)]
+        #[arg(verbose = "root-global")]
+        #[arg(zone = "root-global", required = true, max_length = 8)]
+        #[arg(label = "root-global", default = "tiny", max_length = 6)]
+        fn first(&self, region: String, verbose: bool, zone: String, label: String);
+
+        #[arg(label = "root-global", max_length = 2)]
+        #[arg(area = "root-global", max_length = 2)]
+        #[arg(zone = "root-global", max_length = 2)]
+        #[arg(verbose = "root-global")]
+        fn second(&self, label: String, area: String, zone: String, verbose: bool);
+
+        fn third(&self, item: String);
+    }
+
+    #[test]
+    async fn compiled_refined_dispatcher_schemas_match_published_globals() {
+        use golem_rust::agentic::DirectInputValue;
+        let descriptor = __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherGlobals;
+        let builders = [
+            (
+                "first",
+                __golem_wire_input_schema_for_RefinedDispatcherGlobals_first as fn() -> _,
+            ),
+            (
+                "second",
+                __golem_wire_input_schema_for_RefinedDispatcherGlobals_second as fn() -> _,
+            ),
+            (
+                "third",
+                __golem_wire_input_schema_for_RefinedDispatcherGlobals_third as fn() -> _,
+            ),
+        ];
+        for (command, schema) in builders {
+            let published = published_input_schema(descriptor, &[command.to_string()]);
+            let mut values = vec![
+                DirectInputValue::new("label", vec![], None, "tiny".to_string()),
+                DirectInputValue::new("area", vec![], None, "europe".to_string()),
+                DirectInputValue::new("verbose", vec![], None, true),
+                DirectInputValue::new("zone", vec![], None, "outside".to_string()),
+            ];
+            if command == "third" {
+                values.push(DirectInputValue::new(
+                    "item",
+                    vec![],
+                    None,
+                    "payload".to_string(),
+                ));
+            }
+            let input = encode_with_schema(&values, schema).await.unwrap();
+            assert_matches_published(&input, &published);
+            assert!(input_is_valid(&input), "{command}");
+            let fields = record_fields(&input);
+            assert!(
+                matches!(&fields[0], golem_rust::SchemaValue::Option { inner: Some(region) } if text_value(region) == Some("europe"))
+            );
+            assert_eq!(text_value(&fields[1]), Some("outside"));
+            assert_eq!(text_value(&fields[2]), Some("tiny"));
+            assert_eq!(fields[3], golem_rust::SchemaValue::Bool(true));
+        }
     }
 
     #[tool_definition]
@@ -861,15 +1109,14 @@ mod tests {
             "schema validation must reject the `[` pattern"
         );
 
-        let input = encode_with_descriptor(
+        let input = encode_with_schema(
             &[DirectInputValue::new(
                 "name",
                 vec![],
                 None,
                 "golem".to_string(),
             )],
-            descriptor,
-            &command_path,
+            __golem_wire_input_schema_for_UncheckedRegexClientArgs_run,
         )
         .await
         .expect("the client encodes against the unvalidated descriptor");
@@ -906,44 +1153,76 @@ mod tests {
         let _: Option<golem_rust::agentic::WireToolDescriptorFn> = wrapper.root_descriptor;
         let _: &[String] = &wrapper.command_path;
         let _: &str = &wrapper.inherited_prefix[0].name;
+        let _invocation = wrapper.leaf("abc".to_string());
+        let dispatcher = RefinedDispatcherParentClient::default().child("europe".to_string());
+        let _invocation = dispatcher.leaf("abc".to_string());
+        let dispatcher = RefinedDispatcherParentClient::default().alias_child("europe".to_string());
+        let _invocation = dispatcher.leaf("abc".to_string());
+        let middle = RefinedDispatcherOuterClient::default().middle();
+        let inherited = middle.child("europe".to_string());
+        let _invocation = inherited.leaf("abc".to_string());
+        let aliased = middle.alias_child("europe".to_string());
+        let _invocation = aliased.leaf("abc".to_string());
     }
 
     #[test]
     async fn refined_subtree_client_input_follows_the_published_input_schema() {
         use golem_rust::agentic::DirectInputValue;
-        let descriptor: golem_rust::agentic::WireToolDescriptorFn =
-            __golem_standalone_wire_tool_descriptor_for_RefinedClientParent;
-        let command_path = vec!["child".to_string(), "leaf".to_string()];
+        let descriptors: &[(golem_rust::agentic::WireToolDescriptorFn, &[&str])] = &[
+            (
+                __golem_standalone_wire_tool_descriptor_for_RefinedClientParent,
+                &["child", "leaf"],
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherParent,
+                &["child", "leaf"],
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherParent,
+                &["alias-child", "leaf"],
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherOuter,
+                &["middle", "child", "leaf"],
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_RefinedDispatcherOuter,
+                &["middle", "alias-child", "leaf"],
+            ),
+        ];
 
-        let encode = |name: &str| {
-            let values = vec![
-                DirectInputValue::new("region", vec![], None, "europe".to_string()),
-                DirectInputValue::new("name", vec![], None, name.to_string()),
-            ];
-            let command_path = command_path.clone();
-            async move { encode_with_descriptor(&values, descriptor, &command_path).await }
-        };
+        for &(descriptor, path) in descriptors {
+            let command_path = path.iter().map(|part| part.to_string()).collect::<Vec<_>>();
+            let encode = |name: &str| {
+                let values = vec![
+                    DirectInputValue::new("region", vec![], None, "europe".to_string()),
+                    DirectInputValue::new("name", vec![], None, name.to_string()),
+                ];
+                let command_path = command_path.clone();
+                async move { encode_with_descriptor(&values, descriptor, &command_path).await }
+            };
 
-        let published = published_input_schema(descriptor, &command_path);
-        let input = encode("abc").await.unwrap();
-        assert_matches_published(&input, &published);
-        assert!(input_is_valid(&input));
-        let fields = record_fields(&input);
-        let golem_rust::SchemaValue::Option {
-            inner: Some(region),
-        } = &fields[0]
-        else {
-            panic!(
-                "the inherited global must be a present option, got {:?}",
-                fields[0]
-            );
-        };
-        assert_eq!(text_value(region), Some("europe"));
-        assert_eq!(text_value(&fields[1]), Some("abc"));
+            let published = published_input_schema(descriptor, &command_path);
+            let input = encode("abc").await.unwrap();
+            assert_matches_published(&input, &published);
+            assert!(input_is_valid(&input));
+            let fields = record_fields(&input);
+            let golem_rust::SchemaValue::Option {
+                inner: Some(region),
+            } = &fields[0]
+            else {
+                panic!(
+                    "the inherited global must be a present option, got {:?}",
+                    fields[0]
+                );
+            };
+            assert_eq!(text_value(region), Some("europe"));
+            assert_eq!(text_value(&fields[1]), Some("abc"));
 
-        let too_long = encode("abcdef").await.unwrap();
-        assert_matches_published(&too_long, &published);
-        assert!(!input_is_valid(&too_long));
+            let too_long = encode("abcdef").await.unwrap();
+            assert_matches_published(&too_long, &published);
+            assert!(!input_is_valid(&too_long));
+        }
     }
 
     #[tool_definition]
@@ -4996,7 +5275,7 @@ fn check_sparse_nested_capture_set() {
 
     #[tool_definition]
     trait AliasDeprojectedNestedLeaf {
-        #[arg(format = "option")]
+        #[arg(format = "option", aliases = ["legacy"])]
         fn alias_deprojected_nested_leaf(&self, format: String) -> Result<(), RemoteError>;
     }
 
@@ -5020,15 +5299,39 @@ fn check_sparse_nested_capture_set() {
         ) -> Result<(), RemoteError>;
 
         #[command(subtree = AliasDeprojectedNestedMiddle)]
-        #[arg(format = "global", aliases = ["count"])]
+        #[arg(format = "global", aliases = ["count", "legacy"])]
         fn alias_deprojected_nested_middle(
             &self,
             format: u32,
         ) -> AliasDeprojectedNestedMiddleSubtree;
     }
 
+    struct AliasDeprojectedNestedParentSubtree;
+
+    #[tool_definition]
+    trait AliasDeprojectedNestedOuter {
+        #[command(subtree = AliasDeprojectedNestedParent)]
+        fn alias_deprojected_nested_parent(&self) -> AliasDeprojectedNestedParentSubtree;
+    }
+
     #[test]
-    fn deprojected_subtree_global_alias_does_not_shadow_nested_root_body() {
+    async fn deprojected_subtree_global_alias_does_not_shadow_nested_root_body() {
+        use golem_rust::agentic::DirectInputValue;
+
+        fn check_client_signatures(
+            client: AliasDeprojectedNestedParentClient,
+            outer: AliasDeprojectedNestedOuterClient,
+        ) {
+            let middle = client.alias_deprojected_nested_middle(7);
+            let leaf = middle.alias_deprojected_nested_leaf();
+            let _invocation = leaf.alias_deprojected_nested_leaf("independent".to_string());
+            let parent = outer.alias_deprojected_nested_parent();
+            let middle = parent.alias_deprojected_nested_middle(7);
+            let leaf = middle.alias_deprojected_nested_leaf();
+            let _invocation = leaf.alias_deprojected_nested_leaf("independent".to_string());
+        }
+        let _ = check_client_signatures;
+
         let tool = __golem_tool_descriptor_for_AliasDeprojectedNestedParent(&mut ToolBuildCtx::new())
             .expect(
                 "a subtree global de-projected through an alias must not remain effective under nested grafts",
@@ -5058,6 +5361,49 @@ fn check_sparse_nested_capture_set() {
             leaf_body.options.iter().any(|o| o.long == "format"),
             "the nested leaf's local `format` option must remain because no effective inherited global named `format` survives",
         );
+
+        let descriptors: &[(golem_rust::agentic::WireToolDescriptorFn, &[&str])] = &[
+            (
+                __golem_standalone_wire_tool_descriptor_for_AliasDeprojectedNestedParent,
+                &[
+                    "alias-deprojected-nested-middle",
+                    "alias-deprojected-nested-leaf",
+                ],
+            ),
+            (
+                __golem_standalone_wire_tool_descriptor_for_AliasDeprojectedNestedOuter,
+                &[
+                    "alias-deprojected-nested-parent",
+                    "alias-deprojected-nested-middle",
+                    "alias-deprojected-nested-leaf",
+                ],
+            ),
+        ];
+        for &(descriptor, path) in descriptors {
+            let path = path.iter().map(|part| part.to_string()).collect::<Vec<_>>();
+            let values = vec![
+                DirectInputValue::new("count", vec![], None, 7u32).with_option_carrier(true),
+                DirectInputValue::new("legacy", vec![], None, "independent".to_string()),
+            ];
+            let input = encode_with_descriptor(&values, descriptor, &path)
+                .await
+                .unwrap();
+            assert_matches_published(&input, &published_input_schema(descriptor, &path));
+            assert!(input_is_valid(&input));
+            assert_eq!(
+                record_fields(&input),
+                vec![
+                    golem_rust::SchemaValue::Option {
+                        inner: Some(Box::new(golem_rust::SchemaValue::U32(7)))
+                    },
+                    golem_rust::SchemaValue::Option {
+                        inner: Some(Box::new(golem_rust::SchemaValue::String(
+                            "independent".to_string()
+                        )))
+                    },
+                ]
+            );
+        }
     }
 
     #[tool_definition]
