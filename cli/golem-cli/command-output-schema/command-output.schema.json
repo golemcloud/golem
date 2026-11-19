@@ -208,6 +208,9 @@
       "$ref": "#/definitions/component.manifest-trace"
     },
     {
+      "$ref": "#/definitions/package.digest"
+    },
+    {
       "$ref": "#/definitions/deploy.deployment"
     },
     {
@@ -4419,6 +4422,19 @@
             "$ref": "#/definitions/ComponentView"
           }
         }
+      },
+      "additionalProperties": false
+    },
+    "package.digest": {
+      "type": "object",
+      "description": "The SHA-256 digest of a Golem package's OCI manifest.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "package pack",
+      "x-golem-commands": ["package pack", "publish"],
+      "required": ["$type", "digest"],
+      "properties": {
+        "$type": { "const": "package.digest" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       },
       "additionalProperties": false
     },
@@ -10935,6 +10951,10 @@
     {
       "type": "component.manifest-trace",
       "rustType": "ComponentManifestTraceView"
+    },
+    {
+      "type": "package.digest",
+      "rustType": "PackageDigest"
     },
     {
       "type": "deploy.deployment",
