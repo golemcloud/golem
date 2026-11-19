@@ -250,6 +250,7 @@ This removes the data directory that `golem server run` uses with the same confi
 
 - **Cleanup deletes all state**: Both `golem server clean` and `golem server run --clean` delete all existing agents, deployed components, and data from the resolved directory. Never run either command without explicitly asking the user for confirmation first. In a non-interactive workflow, pass `--yes` only after the user approves the exact target path.
 - **The server runs in the foreground**: It blocks the terminal. Run it in a separate terminal or background process before deploying or invoking agents.
+- **Stop the server with Ctrl+C or SIGTERM**: See [Stopping the Server](#stopping-the-server).
 - **Deploy after starting**: Components must be deployed with `golem deploy` after the server is running before agents can be invoked.
 - **File limits**: On startup the server automatically attempts to increase the OS file descriptor limit to 1,000,000 for better performance.
 
@@ -259,6 +260,16 @@ This removes the data directory that `golem server run` uses with the same confi
 2. In another terminal, deploy: `golem deploy --yes`
 3. Invoke agents or use the REPL: `golem repl`
 4. After code changes, redeploy: `golem deploy --yes --reset`
+
+## Stopping the Server
+
+Press Ctrl+C in the terminal that runs the server in the foreground. On Unix, you can also send `SIGTERM` to the `golem server run` process, for example with `kill <PID>`. On Windows, the server handles only Ctrl+C.
+
+- A server that is ready stops its services and exits with status 0.
+- A signal that arrives while the server starts can end the process with a nonzero status.
+- To confirm the stop, wait for the process to exit. Do not wait for a log line. The server logs a line that contains `Received shutdown signal` when the stop starts, not when it ends, and only at the default verbosity and at `-vv` or higher.
+
+To stop a server that runs in the background, see [Running the Server in the Background](#running-the-server-in-the-background).
 
 ## Debugging a Running Server
 
@@ -330,9 +341,24 @@ These are the **first** debug lines to grep for when a feature "doesn't seem to 
 
 ### Running the Server in the Background
 
-To keep the server running while inspecting logs from another terminal:
+To keep the server running while inspecting logs from another terminal, start it in the background and write its process ID to a file:
 
 ```shell
-golem -vvv server run > /tmp/golem-server.log 2>&1 &
+golem -vvv server run > /tmp/golem-server.log 2>&1 & echo $! > /tmp/golem-server.pid
+```
+
+`$!` is the process ID of the server only when `golem` is the whole background command, so do not put `cd <DIR> &&` in front of it. Do not run this line again while the server runs: it overwrites the log file and the PID file. If the server fails to start, the process exits and `/tmp/golem-server.log` gives the reason.
+
+To follow the log, run this command in a different shell. It does not exit:
+
+```shell
 tail -f /tmp/golem-server.log | grep -E "HTTP status retry|Semantic trap retry"
 ```
+
+To stop the background server, send SIGTERM to its process:
+
+```shell
+kill "$(cat /tmp/golem-server.pid)"
+```
+
+`kill -0 "$(cat /tmp/golem-server.pid)"` succeeds while the process exists and fails after the process exits. Delete `/tmp/golem-server.pid` after the server stops: a stale process ID can belong to a different process.

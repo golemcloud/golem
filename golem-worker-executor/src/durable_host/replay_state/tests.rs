@@ -1026,6 +1026,8 @@ fn anchored_error(entity_parent_start_index: u64, retry_from: u64) -> OplogEntry
         AgentError::TransientError("retry".to_string()),
         OplogIndex::from_u64(retry_from),
         None,
+        None,
+        None,
     )
 }
 
@@ -3287,6 +3289,8 @@ async fn error_hint_between_start_and_end_resolves() {
             AgentError::TransientError("boom".to_string()),
             OplogIndex::from_u64(2),
             None,
+            None,
+            None,
         ),
         end_for(2, 42),
     ])
@@ -3883,6 +3887,8 @@ fn invocation_error_for(
         Some(invocation_id),
         AgentError::TransientError("boom".to_string()),
         OplogIndex::from_u64(retry_from),
+        None,
+        None,
         None,
     )
 }

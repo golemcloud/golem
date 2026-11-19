@@ -39,6 +39,7 @@ use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::SchemaGraph;
 use golem_schema::schema::SchemaType;
+use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -113,6 +114,8 @@ struct TaskRetryParams<Ctx: WorkerCtx> {
     max_in_function_retry_delay: Duration,
     worker: Arc<crate::worker::Worker<Ctx>>,
     retry_point: OplogIndex,
+    /// The `Start` of the RPC call that retries.
+    retrying_start_index: OplogIndex,
     entity_parent_start_index: Option<OplogIndex>,
     invocation_id: Option<golem_common::model::InvocationId>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
@@ -221,6 +224,8 @@ enum FutureInvokeResultState {
         expected_callee_fingerprint: Option<AgentFingerprint>,
         span_id: SpanId,
         cancel_token: tokio_util::sync::CancellationToken,
+        /// The agent authority of a live scalar call, for a dispatch after a retry backoff.
+        retry_auth_ctx: Option<AuthCtx>,
     },
     /// A deterministic validation failure or an already recorded local denial.
     /// `span_id` retains an opening only when its owner has not already closed it.

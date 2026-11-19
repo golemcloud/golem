@@ -300,6 +300,17 @@ impl DurableRequestBody {
         }
     }
 
+    /// Whether this body can be resent once it reaches a clean end: nothing was
+    /// pulled yet, or every pulled frame is recorded, and neither the guest
+    /// body nor a frame recording failed. Unlike
+    /// [`Self::can_replay_after_send_failure`], a body still streaming counts.
+    pub(super) fn may_replay_after_send_failure(&self) -> bool {
+        let state = self.lock_state();
+        state.recording_failed.is_none()
+            && !matches!(state.terminal, Some(RequestBodyTerminal::Error(_)))
+            && (self.recording_enabled || state.pulled_frames == 0)
+    }
+
     /// Whether any data or trailers frames were already pulled from the live
     /// guest body — i.e. a failed attempt had started writing the request
     /// body to the network. Terminal frames alone (a bodiless send) do not
