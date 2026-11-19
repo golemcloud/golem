@@ -17890,8 +17890,14 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        requester:
+          description: Who asked for the update. It is not the caller of the update's snapshot save.
+          allOf:
+          - $ref: '#/components/schemas/PublicCaller'
+          - description: Who asked for the update. It is not the caller of the update's snapshot save.
       required:
       - targetRevision
+      - requester
     MetadataEnvelope:
       type: object
       properties:
@@ -23750,11 +23756,14 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        requester:
+          $ref: '#/components/schemas/PublicCaller'
       required:
       - timestamp
       - targetRevision
       - description
       - updateAttemptIndex
+      - requester
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object

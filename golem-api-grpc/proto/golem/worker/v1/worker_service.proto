@@ -134,6 +134,8 @@ message UpdateWorkerRequest {
   golem.worker.UpdateMode mode = 3;
   golem.auth.AuthCtx auth_ctx = 4;
   bool disable_wakeup = 5;
+  // Who requested the update. Required: a request without it is refused.
+  golem.component.Caller caller = 6;
 }
 
 message UpdateWorkerResponse {

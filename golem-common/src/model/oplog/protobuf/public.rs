@@ -306,6 +306,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .ok_or("Missing update_description field")?
                         .try_into()?,
                     update_attempt_index: OplogIndex::from_u64(pending_update.update_attempt_index),
+                    requester: pending_update
+                        .requester
+                        .ok_or("Missing requester field")?
+                        .try_into()?,
                 }))
             }
             oplog_entry::Entry::SuccessfulUpdate(successful_update) => {
@@ -1001,6 +1005,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             target_revision: pending_update.target_revision.into(),
                             update_description: Some(pending_update.description.into()),
                             update_attempt_index: pending_update.update_attempt_index.into(),
+                            requester: Some(pending_update.requester.into()),
                         },
                     )),
                 }

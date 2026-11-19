@@ -119,7 +119,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
           case OplogApi.AgentInvocation.SaveSnapshot(_)             => "save-snapshot"
           case OplogApi.AgentInvocation.LoadSnapshot(_)             => "load-snapshot"
           case OplogApi.AgentInvocation.ProcessOplogEntries(key, _) => s"process-oplog(key=$key)"
-          case OplogApi.AgentInvocation.ManualUpdate(rev)           => s"manual-update(rev=$rev)"
+          case OplogApi.AgentInvocation.ManualUpdate(rev, _)        => s"manual-update(rev=$rev)"
         }
         s"PENDING_INVOCATION @ $ts $invDesc"
       case OplogApi.OplogEntry.PendingUpdate(p) =>

@@ -617,6 +617,7 @@ impl WorkerApi {
                 params.mode,
                 params.target_revision,
                 params.disable_wakeup,
+                None,
                 auth,
             )
             .await?;

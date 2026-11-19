@@ -1185,12 +1185,15 @@ impl WorkerService {
         Ok(())
     }
 
+    /// `requester` is who asked for the update, which the agent records; `None` records the
+    /// account of `auth_ctx`.
     pub async fn update(
         &self,
         agent_id: &AgentId,
         update_mode: AgentUpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
+        requester: Option<Caller>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
         let component = self
@@ -1206,12 +1209,14 @@ impl WorkerService {
             AgentResourcePattern::Empty,
         )?;
 
+        let requester = requester.unwrap_or_else(|| self.rest_caller(&auth_ctx));
         self.worker_client
             .update(
                 agent_id,
                 update_mode,
                 target_revision,
                 disable_wakeup,
+                requester,
                 component.environment_id,
                 auth_ctx,
             )
@@ -4567,6 +4572,7 @@ mod tests {
         created_agent_ids: Mutex<Vec<AgentId>>,
         created_callers: Mutex<Vec<Caller>>,
         forked_callers: Mutex<Vec<Caller>>,
+        updated_callers: Mutex<Vec<Caller>>,
         creating_idempotency_keys: Mutex<Vec<Option<IdempotencyKey>>>,
         prepared_agent_ids: Mutex<Vec<AgentId>>,
         delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
@@ -4590,6 +4596,7 @@ mod tests {
                 created_agent_ids: Mutex::new(Vec::new()),
                 created_callers: Mutex::new(Vec::new()),
                 forked_callers: Mutex::new(Vec::new()),
+                updated_callers: Mutex::new(Vec::new()),
                 creating_idempotency_keys: Mutex::new(Vec::new()),
                 prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
@@ -4616,6 +4623,7 @@ mod tests {
                 created_agent_ids: Mutex::new(Vec::new()),
                 created_callers: Mutex::new(Vec::new()),
                 forked_callers: Mutex::new(Vec::new()),
+                updated_callers: Mutex::new(Vec::new()),
                 creating_idempotency_keys: Mutex::new(Vec::new()),
                 prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
@@ -4858,10 +4866,12 @@ mod tests {
             _: golem_common::model::agent::AgentUpdateMode,
             _: ComponentRevision,
             _: bool,
+            requester: Caller,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<OplogIndex> {
             self.effects.lock().unwrap().push("update");
+            self.updated_callers.lock().unwrap().push(requester);
             Ok(OplogIndex::INITIAL)
         }
 
@@ -5962,6 +5972,7 @@ mod tests {
                 AgentUpdateMode::Automatic,
                 ComponentRevision::new(1).unwrap(),
                 false,
+                None,
                 auth_ctx.clone(),
             )
             .await
@@ -6526,6 +6537,79 @@ mod tests {
             vec![harness.worker_service.rest_caller(&auth), explicit]
         );
         assert!(matches!(callers[0].original, Principal::Account(_)));
+    }
+
+    #[test]
+    async fn rest_update_sends_the_account_caller() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let auth = AuthCtx::system();
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "updated()".to_string(),
+        };
+
+        for mode in [AgentUpdateMode::Automatic, AgentUpdateMode::Manual] {
+            harness
+                .worker_service
+                .update(
+                    &agent_id,
+                    mode,
+                    ComponentRevision::new(1).unwrap(),
+                    false,
+                    None,
+                    auth.clone(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let requesters = harness
+            .worker_client
+            .updated_callers
+            .lock()
+            .unwrap()
+            .clone();
+        let account = harness.worker_service.rest_caller(&auth);
+        assert_eq!(requesters, vec![account.clone(), account]);
+        assert!(matches!(requesters[0].original, Principal::Account(_)));
+    }
+
+    #[test]
+    async fn update_keeps_the_given_requester() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "updated()".to_string(),
+        };
+        let requester = harness.worker_service.rest_caller(&AuthCtx::system());
+        let requester = Caller {
+            original: requester.original,
+            immediate: Principal::Anonymous,
+            tokens: Vec::new(),
+        };
+
+        harness
+            .worker_service
+            .update(
+                &agent_id,
+                AgentUpdateMode::Automatic,
+                ComponentRevision::new(1).unwrap(),
+                false,
+                Some(requester.clone()),
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            harness
+                .worker_client
+                .updated_callers
+                .lock()
+                .unwrap()
+                .clone(),
+            vec![requester]
+        );
     }
 
     #[test]

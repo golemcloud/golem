@@ -66,7 +66,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         sampleCaller
       )
     ),
-    AgentInvocation.ManualUpdate(BigInt(2)),
+    AgentInvocation.ManualUpdate(BigInt(2), sampleCaller),
     AgentInvocation.SaveSnapshot(sampleCaller)
   )
 
@@ -233,7 +233,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head, None)),
-      OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate)),
+      OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate, sampleCaller)),
       OplogEntry.SuccessfulUpdate(SuccessfulUpdateParameters(ts, BigInt(3), BigInt(1024), List(pluginDesc))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), Some("compile error"))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), None)),
@@ -290,7 +290,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("AgentInvocation exhaustive match") {
       agentInvocations.foreach {
         case AgentInvocation.ExportedFunction(p)       => Predef.assert(p.functionName.nonEmpty)
-        case AgentInvocation.ManualUpdate(rev)         => Predef.assert(rev > 0)
+        case AgentInvocation.ManualUpdate(rev, r)      => Predef.assert(rev > 0 && r.tokens.nonEmpty)
         case AgentInvocation.AgentInitialization(k, _) => Predef.assert(k == invocationUuid)
         case AgentInvocation.ExternalTool(k, _)        => Predef.assert(k == invocationUuid)
         case AgentInvocation.SaveSnapshot(c)           => Predef.assert(c.tokens.nonEmpty)

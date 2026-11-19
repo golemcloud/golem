@@ -538,6 +538,8 @@ interface oplog {
 
     record manual-update-parameters {
         target-revision: component-revision,
+        /// Who requested the update. It is not the caller of the update's snapshot save.
+        requester: public-caller,
     }
 
     record external-tool-invocation-parameters {
@@ -618,6 +620,8 @@ interface oplog {
         target-revision: component-revision,
         description: update-description,
         update-attempt-index: oplog-index,
+        /// Who requested the update. It is never the caller of the update's snapshot save or load.
+        requester: public-caller,
     }
 
     record successful-update-parameters {
@@ -1040,6 +1044,9 @@ interface oplog {
         timestamp: datetime,
         description: raw-update-description,
         update-attempt-index: option<oplog-index>,
+        /// Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+        /// caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+        requester: list<u8>,
     }
 
     record raw-successful-update-parameters {

@@ -566,6 +566,8 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
+    /** Who requested the update. It is not the caller of the update's snapshot save. */
+    requester: PublicCaller;
   };
   export type ExternalToolInvocationParameters = {
     invocationId: Uuid;
@@ -614,6 +616,8 @@ declare module 'golem:api/oplog@1.5.0' {
     targetRevision: ComponentRevision;
     description: UpdateDescription;
     updateAttemptIndex: OplogIndex;
+    /** Who requested the update. It is never the caller of the update's snapshot save or load. */
+    requester: PublicCaller;
   };
   export type SnapshotAssistedUpdateDetails = {
     pendingUpdateIndex: OplogIndex;
@@ -1135,6 +1139,11 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     description: RawUpdateDescription;
     updateAttemptIndex?: OplogIndex;
+    /**
+     * Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+     * caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+     */
+    requester: Uint8Array;
   };
   export type RawSuccessfulUpdateParameters = {
     timestamp: Datetime;

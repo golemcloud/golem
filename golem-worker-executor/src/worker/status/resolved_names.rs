@@ -567,6 +567,7 @@ mod tests {
                     filesystem_snapshot: None,
                 },
                 None,
+                Box::new(golem_common::model::caller::Caller::anonymous()),
             ),
             p2_start(None, false, "attempt.test"),
             p2_end(5, "10.0.0.1"),

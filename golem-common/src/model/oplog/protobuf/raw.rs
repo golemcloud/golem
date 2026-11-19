@@ -642,12 +642,14 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .collect(),
             }),
             OplogEntry::PendingUpdate {
+                timestamp: _,
                 description,
                 update_attempt_index,
-                ..
+                requester,
             } => Entry::PendingUpdate(RawPendingUpdateParameters {
                 description: Some(update_description_to_proto(description)?),
                 update_attempt_index: update_attempt_index.map(Into::into),
+                requester: Some((*requester).into()),
             }),
             OplogEntry::SuccessfulUpdate {
                 target_revision,
@@ -1318,6 +1320,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp,
                     description,
                     update_attempt_index: p.update_attempt_index.map(OplogIndex::from_u64),
+                    requester: Box::new(p.requester.ok_or("Missing update requester")?.try_into()?),
                 })
             }
             Entry::SuccessfulUpdate(p) => {

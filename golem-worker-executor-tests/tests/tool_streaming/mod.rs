@@ -22268,13 +22268,17 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
 
     // Agent exports exist, but an external owner must not construct or update any agent type.
     first
-        .enqueue_manual_update(caller_component.revision)
+        .enqueue_manual_update(
+            caller_component.revision,
+            golem_common::model::caller::Caller::anonymous(),
+        )
         .await
         .expect_err("virtual owners cannot update a primary guest");
     first
         .clone()
         .invoke(golem_common::model::AgentInvocation::ManualUpdate {
             target_revision: caller_component.revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
         })
         .await
         .err()

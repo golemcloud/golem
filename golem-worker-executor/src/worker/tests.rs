@@ -891,14 +891,18 @@ fn a_failure_that_is_a_lost_shard_is_given_up_on_every_path() {
 fn pending_manual_update_keeps_storage_key_but_has_no_semantic_key() {
     let target_revision = ComponentRevision::new(2).unwrap();
     let (semantic_key, storage_key, payload, _) =
-        into_pending_invocation_parts(AgentInvocation::ManualUpdate { target_revision });
+        into_pending_invocation_parts(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester: golem_common::model::caller::Caller::anonymous(),
+        });
 
     assert!(semantic_key.is_none());
     assert!(!storage_key.0.is_nil());
     assert!(matches!(
         payload,
         AgentInvocationPayload::ManualUpdate {
-            target_revision: actual
+            target_revision: actual,
+            ..
         } if actual == target_revision
     ));
 }
