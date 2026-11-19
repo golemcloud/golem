@@ -485,7 +485,6 @@ pub struct ToolRegistration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution(FieldAdded("shell", false))))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledToolBinding {
     pub deployment_revision: DeploymentRevision,
@@ -512,7 +511,6 @@ pub struct CompiledToolBinding {
     /// The built-in shell: a command that it runs is a call of the agent or tool that calls or
     /// hosts it, so the shell itself never appears as a caller. Only the registry sets it, for a
     /// release of the built-in `bash` tool.
-    #[serde(default)]
     pub shell: bool,
 }
 
