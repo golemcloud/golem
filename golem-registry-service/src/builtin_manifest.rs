@@ -11,11 +11,55 @@ pub(crate) struct InventoryEntry {
         reason = "Release build validation only uses the component mapping"
     )]
     pub path: PathBuf,
+    #[serde(default)]
+    pub optional: bool,
 }
+
+/// Selects optional built-ins for development builds: `all`, or a comma-separated list of
+/// artifact IDs. Release builds use the release manifest, which lists every built-in.
+pub(crate) const OPTIONAL_BUILTINS_ENV: &str = "GOLEM_OPTIONAL_BUILTINS";
 
 pub(crate) fn inventory() -> anyhow::Result<BTreeMap<String, InventoryEntry>> {
     serde_json::from_str(include_str!("../../builtin-artifacts.json"))
         .context("failed to parse builtin-artifacts.json")
+}
+
+/// The inventory entries a development build provisions: every mandatory built-in and the
+/// optional ones that `selection` (the value of [`OPTIONAL_BUILTINS_ENV`]) names.
+#[cfg_attr(
+    all(feature = "embed-builtin-artifacts", not(test)),
+    allow(
+        dead_code,
+        reason = "Embedded builds select their artifacts in build.rs"
+    )
+)]
+pub(crate) fn development_inventory(
+    selection: Option<&str>,
+) -> anyhow::Result<BTreeMap<String, InventoryEntry>> {
+    select_development(inventory()?, selection)
+}
+
+fn select_development(
+    mut inventory: BTreeMap<String, InventoryEntry>,
+    selection: Option<&str>,
+) -> anyhow::Result<BTreeMap<String, InventoryEntry>> {
+    let selection = selection.map(str::trim).unwrap_or_default();
+    if selection == "all" {
+        return Ok(inventory);
+    }
+    let selected = selection
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .collect::<std::collections::BTreeSet<_>>();
+    for id in &selected {
+        ensure!(
+            inventory.get(*id).is_some_and(|entry| entry.optional),
+            "{OPTIONAL_BUILTINS_ENV} names '{id}', which is not an optional built-in in builtin-artifacts.json"
+        );
+    }
+    inventory.retain(|id, entry| !entry.optional || selected.contains(id.as_str()));
+    Ok(inventory)
 }
 
 #[derive(Deserialize)]
@@ -67,4 +111,47 @@ pub(crate) fn parse_manifest(contents: &str) -> anyhow::Result<BTreeMap<String, 
         );
     }
     Ok(manifest.artifacts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn fixture() -> BTreeMap<String, InventoryEntry> {
+        serde_json::from_str(
+            r#"{
+                "bash": {"component": "bash", "path": "builtin-tools/bash.wasm"},
+                "yq": {"component": "yq", "path": "builtin-tools/yq.wasm", "optional": true},
+                "yq2": {"component": "yq2", "path": "builtin-tools/yq2.wasm", "optional": true}
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn selected(selection: Option<&str>) -> Vec<String> {
+        select_development(fixture(), selection)
+            .unwrap()
+            .into_keys()
+            .collect()
+    }
+
+    #[test]
+    fn development_builds_skip_unselected_optional_builtins() {
+        assert_eq!(selected(None), ["bash"]);
+        assert_eq!(selected(Some(" ")), ["bash"]);
+        assert_eq!(selected(Some("yq")), ["bash", "yq"]);
+        assert_eq!(selected(Some(" yq2 , ")), ["bash", "yq2"]);
+        assert_eq!(selected(Some("all")), ["bash", "yq", "yq2"]);
+    }
+
+    #[test]
+    fn a_selection_must_name_optional_builtins() {
+        for selection in ["y", "bash", "yq,all"] {
+            assert!(
+                select_development(fixture(), Some(selection)).is_err(),
+                "{selection}"
+            );
+        }
+    }
 }

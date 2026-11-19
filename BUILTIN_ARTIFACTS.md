@@ -20,6 +20,11 @@ paths, delete the affected output to rebuild it. CI uses a source-content
 and tool-version cache key, builds current sources on a cache miss, and distributes
 a checksum-verified archive. Consumers need no component build toolchains.
 
+Optional built-ins (`"optional": true`) are built, required and provisioned in development
+only when `GOLEM_OPTIONAL_BUILTINS` selects them; the `ci` profile and release preparation select
+`all`. This is temporary until `/golem/` packages replace the built-in provisioners; see
+[Optional built-in tools](builtin-tools/README.md#optional-built-in-tools).
+
 Registry development defaults use the inventory's local WASM files. Configure
 `builtin_artifacts.source_overrides` to select a different source per artifact ID.
 Local defaults are absolute `file://` URLs rooted at the source checkout, with no

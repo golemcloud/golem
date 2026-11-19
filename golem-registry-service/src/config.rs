@@ -92,7 +92,9 @@ impl BuiltinArtifactsConfig {
         manifest: &str,
     ) -> anyhow::Result<BTreeMap<String, ResolvedBuiltinArtifact>> {
         if manifest.is_empty() {
-            let inventory = crate::builtin_manifest::inventory()?;
+            let inventory = crate::builtin_manifest::development_inventory(option_env!(
+                "GOLEM_OPTIONAL_BUILTINS"
+            ))?;
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .expect("registry crate has a source checkout parent");
@@ -1114,7 +1116,14 @@ mod tests {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 8);
+        let inventory = crate::builtin_manifest::inventory().unwrap();
+        assert_eq!(
+            artifacts
+                .keys()
+                .filter(|id| !inventory[id.as_str()].optional)
+                .count(),
+            8
+        );
         assert!(artifacts.contains_key("python"));
         for (artifact_id, source) in artifacts {
             #[cfg(feature = "embed-builtin-artifacts")]
