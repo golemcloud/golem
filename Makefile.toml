@@ -790,7 +790,7 @@ script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-size-analysis --test retention -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --skip key_value_storage --skip indexed_storage --skip oplog_blob_archive --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
