@@ -308,6 +308,10 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        GolemRpcGetById {
+            remote_agent_id: AgentId,
+            agent_type_name: AgentTypeName
+        },
         GolemRpcCreateAgent {
             agent_type_name: crate::model::agent::AgentTypeName,
             keyed: bool
@@ -1038,7 +1042,7 @@ pub mod host_functions {
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemApiRetryNextRetryDelay => "golem::api::retry", "next_retry_delay", GolemRetryNextDelay, GolemRetryNextDelay),
         (GolemRpcWasmRpcUpsert => "golem::rpc::wasm-rpc", "upsert", GolemRpcCreate, GolemRpcCreate),
-        (GolemRpcWasmRpcGetById => "golem::rpc::wasm-rpc", "get-by-id", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcGetById => "golem::rpc::wasm-rpc", "get-by-id", GolemRpcGetById, GolemRpcCreated),
         (GolemRpcWasmRpcCreate => "golem::rpc::wasm-rpc", "create", GolemRpcCreateAgent, GolemRpcCreated),
         (GolemRpcWasmRpcBindSelf => "golem::rpc::wasm-rpc", "bind-self", GolemRpcBindSelf, GolemRpcUnit),
         (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),

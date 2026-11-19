@@ -120,6 +120,7 @@ async fn deploy_app(ctx: &mut TestContext) {
             pub trait OtherAgent {
                 fn new(id: String) -> Self;
                 fn ping(&self) -> String;
+                async fn describe_counter(&self, id: String) -> String;
             }
 
             struct OtherImpl {
@@ -134,6 +135,12 @@ async fn deploy_app(ctx: &mut TestContext) {
 
                 fn ping(&self) -> String {
                     format!("other:{}", self.id)
+                }
+
+                async fn describe_counter(&self, id: String) -> String {
+                    let id = golem_rust::AgentId::new(id.parse().unwrap());
+                    CounterAgentClient::get_by_id(&id).expect("existing counter")
+                        .describe().await
                 }
             }
         "# },
@@ -408,6 +415,64 @@ async fn moved_types_keep_old_component_agents_reachable_and_out_of_a_new_compon
     );
     invoke_ok(&ctx, &[&old_id, "value"], "1").await;
     invoke_ok(&ctx, &[&new_id, "value"], "0").await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn get_by_id_keeps_the_recorded_schema_live_and_after_reconstruction() {
+    let mut ctx = TestContext::new();
+    deploy_app(&mut ctx).await;
+    let target = document(
+        &cli_json(
+            &ctx,
+            [
+                cmd::AGENT,
+                cmd::CREATE,
+                r#"CounterAgent("schema-a")"#,
+                "--keyed",
+            ],
+        )
+        .await,
+        "agent.create",
+    );
+    let (target_id, _) = reference(&target);
+    let caller = document(
+        &cli_json(
+            &ctx,
+            [
+                cmd::AGENT,
+                cmd::CREATE,
+                r#"OtherAgent("caller-a")"#,
+                "--keyed",
+            ],
+        )
+        .await,
+        "agent.create",
+    );
+    let (caller_id, _) = reference(&caller);
+
+    let source = fs::read_to_string(ctx.cwd_path_join("src/counter_agent.rs")).unwrap();
+    move_types_to_second_component(&ctx, &source.replace("describe", "describe_b"));
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let argument = serde_json::to_string(&target_id).unwrap();
+    invoke_ok(
+        &ctx,
+        &[&caller_id, "describe_counter", &argument],
+        "schema-a||",
+    )
+    .await;
+    assert!(
+        ctx.cli([cmd::AGENT, "simulate-crash", &caller_id])
+            .await
+            .success_or_dump()
+    );
+    invoke_ok(
+        &ctx,
+        &[&caller_id, "describe_counter", &argument],
+        "schema-a||",
+    )
+    .await;
 }
 
 #[test]

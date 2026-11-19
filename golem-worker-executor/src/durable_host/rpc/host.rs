@@ -30,7 +30,7 @@ use super::{
     spawn_streaming_invoke_and_await_task, start_rpc_binding_call, start_rpc_connection_call,
     streaming_target_fingerprint,
 };
-use super::{EphemeralRpcTarget, RpcBinding, dispatch_target};
+use super::{EphemeralRpcTarget, dispatch_target};
 use crate::durable_host::DurabilityHost;
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::CallReplayOutcome;
@@ -91,6 +91,7 @@ use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::oplog::{HostRequestGolemApiAgentId, HostResponseGolemAgentLookupAgentId};
 use golem_common::model::oplog::{HostRequestGolemRpcBindSelf, HostResponseGolemRpcUnit};
+use golem_common::model::oplog::{HostRequestGolemRpcGetById, HostResponseGolemRpcCreated};
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::wire as core_wire;
@@ -429,7 +430,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             self,
             handle,
             span,
-            RpcBinding::Upsert(Box::new(target)),
+            Box::new(target),
             agent_type,
             component_id,
             method_streams,
@@ -446,35 +447,187 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self.check_read_only_allows("golem::rpc::wasm-rpc::get-by-id")
             .map_err(wasmtime::Error::from)?;
         let agent_id = AgentId::from(agent_id);
-        let remote = match self.remote_agent_type(&agent_type_name).await? {
-            Ok(remote) => remote,
-            Err(error) => return Ok(Err(error)),
+        let name = AgentTypeName(agent_type_name);
+        let request = HostRequestGolemRpcGetById {
+            remote_agent_id: agent_id,
+            agent_type_name: name.clone(),
         };
-        if agent_id.type_id() != Some(remote.registered.type_id) {
-            return Ok(Err(RpcError::NotFound(format!(
-                "Agent {agent_id} is not an agent of type {agent_type_name}"
-            ))));
-        }
-        let (handle, span) = start_rpc_connection_call::<_, GolemRpcWasmRpcGetById>(
+        let (mut handle, span, recorded) = start_rpc_binding_call::<_, GolemRpcWasmRpcGetById>(
             self,
-            HostRequestGolemRpcCreate {
-                remote_agent_id: agent_id,
-            },
+            request.clone(),
+            &agent_id,
             true,
         )
         .await?;
-        let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-        bind_rpc_connection(
+        if recorded != request {
+            return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                format!("get-by-id {request:?}"),
+                format!("get-by-id {recorded:?}"),
+            )));
+        }
+        let creation_index = (!self.state.snapshotting_mode).then(|| handle.start_index());
+        let target_environment_id = self.owned_agent_id.environment_id;
+        let response = 'binding: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(response) => break 'binding response,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+            let lookup_result = {
+                let auth_ctx = handle.agent_auth_ctx().clone();
+                let lookup = async {
+                    let metadata = self
+                        .state
+                        .worker_service
+                        .get(&OwnedAgentId::new(target_environment_id, &agent_id))
+                        .await?
+                        .filter(|metadata| {
+                            metadata.initial_worker_metadata.agent_type_name.as_ref() == Some(&name)
+                                && metadata.initial_worker_metadata.environment_id
+                                    == target_environment_id
+                        })
+                        .ok_or_else(|| WorkerExecutorError::worker_not_found(agent_id))?;
+                    let initial = metadata.initial_worker_metadata;
+                    let revision = metadata
+                        .last_known_status
+                        .ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "Cannot resolve the existing agent's revision",
+                            )
+                        })?
+                        .component_revision;
+                    let component = self
+                        .component_service()
+                        .get_metadata(initial.component_id, Some(revision))
+                        .await?;
+                    let agent_type = component
+                        .metadata
+                        .find_agent_type_by_name(&name)
+                        .ok_or_else(|| WorkerExecutorError::worker_not_found(agent_id))?
+                        .clone();
+                    let type_id = agent_id
+                        .type_id()
+                        .ok_or_else(|| WorkerExecutorError::worker_not_found(agent_id))?;
+                    let registered = RegisteredAgentType {
+                        type_id,
+                        agent_type,
+                        implemented_by:
+                            golem_common::model::agent::RegisteredAgentTypeImplementer {
+                                component_id: component.id,
+                                component_revision: component.revision,
+                                component_name: component.component_name.0.clone(),
+                                account_id: component.account_id,
+                                account_email: component.account_email.clone(),
+                            },
+                    };
+                    let remote = RemoteAgentType::new(
+                        registered.clone(),
+                        &component,
+                        self.owner_component_metadata(),
+                    )
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    let mut owner = remote.owner;
+                    if let AgentOwnerPattern::Agent { agent, .. } = &mut owner {
+                        *agent = AgentOwnerLeafPattern::agent(agent_id, Some(name.clone()));
+                    }
+                    auth_ctx
+                        .authorize_permission(
+                            &crate::durable_host::authorization::targets::agent_target(
+                                owner,
+                                AgentVerb::Invoke,
+                                AgentResourcePattern::Any,
+                            ),
+                        )
+                        .map_err(|error| {
+                            WorkerExecutorError::permission_denied(error.to_string())
+                        })?;
+                    Ok::<_, WorkerExecutorError>((initial.fingerprint, registered))
+                };
+                let interrupt = self.create_interrupt_signal().map(Error::from);
+                tokio::pin!(lookup);
+                match futures::future::select(lookup, interrupt).await {
+                    Either::Left((result, _)) => Ok(result),
+                    Either::Right((error, _)) => Err(error),
+                }
+            };
+            let result = match lookup_result {
+                Ok(result) => result,
+                Err(error) => return Err(handle.trap(error)),
+            };
+            let (result, agent_type, type_id) = match result {
+                Ok((fingerprint, registered)) => (
+                    Ok((agent_id, fingerprint)),
+                    Some(golem_common::schema::RegisteredAgentTypeSchema {
+                        agent_type: registered.agent_type,
+                        implemented_by: registered.implemented_by,
+                    }),
+                    Some(registered.type_id),
+                ),
+                Err(
+                    error @ (WorkerExecutorError::AgentNotFound { .. }
+                    | WorkerExecutorError::PermissionDenied { .. }),
+                ) => (Err(InternalRpcError::from(error).into()), None, None),
+                Err(error) => return Err(handle.trap(error)),
+            };
+            handle
+                .complete(
+                    self,
+                    HostResponseGolemRpcCreated {
+                        result,
+                        agent_type,
+                        type_id,
+                        target_environment_id,
+                    },
+                )
+                .await?
+        };
+        let (bound_id, fingerprint) = match response.result {
+            Ok(binding) => binding,
+            Err(error) => {
+                finish_span_in_memory(self, span.span_id())?;
+                return Ok(Err(InternalRpcError::from(error).into()));
+            }
+        };
+        let (Some(schema), Some(type_id)) = (response.agent_type, response.type_id) else {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "get-by-id End with the recorded agent type",
+                "get-by-id End without the recorded agent type",
+            )
+            .into());
+        };
+        let component = self
+            .component_service()
+            .get_metadata(
+                schema.implemented_by.component_id,
+                Some(schema.implemented_by.component_revision),
+            )
+            .await?;
+        let remote = RemoteAgentType::new(
+            RegisteredAgentType {
+                type_id,
+                agent_type: schema.agent_type,
+                implemented_by: schema.implemented_by,
+            },
+            &component,
+            self.owner_component_metadata(),
+        )?;
+        reconstruct_wasm_rpc_resource(
             self,
-            handle,
+            bound_id,
+            response.target_environment_id,
+            fingerprint,
+            vec![],
+            vec![],
             span,
-            RpcBinding::Existing(owned_agent_id),
             remote.agent_type,
             remote.registered.implemented_by.component_id,
             remote.method_streams,
             remote.owner,
+            creation_index,
         )
         .await
+        .map(Ok)
     }
 
     async fn bind_self(
@@ -1821,7 +1974,7 @@ async fn bind_rpc_connection<Ctx: WorkerCtx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: DurableCallSession<F, NotCancellable>,
     span: Arc<InvocationContextSpan>,
-    binding: RpcBinding,
+    binding: Box<ResolvedTarget>,
     agent_type: Arc<AgentTypeSchema>,
     component_id: ComponentId,
     method_streams: Arc<BTreeMap<String, bool>>,
@@ -1848,7 +2001,7 @@ where
                 };
                 return reconstruct_wasm_rpc_resource(
                     ctx,
-                    binding.owned_agent_id().agent_id,
+                    binding.owned_agent_id.agent_id,
                     response.target_environment_id,
                     fingerprint,
                     vec![],

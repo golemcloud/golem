@@ -2554,6 +2554,8 @@ offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download 
 
 ## Durable RPC exactly-once
 
+`wasm-rpc.get-by-id` binds the existing agent's recorded component revision and schema together with its fingerprint. Live binding authorizes against that recorded owner; method validation and stream classification must not use the type's current implementer. The durable result records the schema, type ID, environment and fingerprint. Completed replay reconstructs that binding without current-deployment resolution. A missing or wrong-type ID returns not-found without creation.
+
 Concrete durable client creation calls `Rpc::create_and_initialize` and waits for the child's
 recorded constructor outcome. Explicit creation requires `Invoke` on `Any` for the concrete child;
 later method calls still require their concrete method permission. The connection's `WriteRemote`
