@@ -28,6 +28,7 @@ use golem_common::model::agent::{
     AgentCreationRequest, AgentMetadataDto, AgentTarget, RevertWorkerTarget,
 };
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::caller::ClaimVisibility;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -661,7 +662,7 @@ impl WorkerApi {
                 count.0,
                 cursor.0,
                 query.0,
-                include_claims(include.0),
+                ClaimVisibility::from_include(include.0),
                 auth,
             )
             .instrument(record.span.clone())
@@ -677,7 +678,7 @@ impl WorkerApi {
         count: u64,
         cursor: Option<OplogCursor>,
         query: Option<String>,
-        include_claims: bool,
+        claims: ClaimVisibility,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
         let mut response = match (from, query) {
@@ -696,26 +697,19 @@ impl WorkerApi {
                         OplogIndex::from_u64(from),
                         cursor,
                         count,
-                        include_claims,
+                        claims,
                         auth,
                     )
                     .await?
             }
             (None, Some(query)) => {
                 self.worker_service
-                    .search_oplog(&agent_id, cursor, count, query, include_claims, auth)
+                    .search_oplog(&agent_id, cursor, count, query, claims, auth)
                     .await?
             }
             (None, None) => {
                 self.worker_service
-                    .get_oplog(
-                        &agent_id,
-                        OplogIndex::INITIAL,
-                        cursor,
-                        count,
-                        include_claims,
-                        auth,
-                    )
+                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, claims, auth)
                     .await?
             }
         };
@@ -767,7 +761,7 @@ impl WorkerApi {
                 agent_id,
                 OplogIndex::from_u64(oplog_index.0),
                 component_revision.0,
-                include_claims(include.0),
+                ClaimVisibility::from_include(include.0),
                 auth,
             )
             .instrument(record.span.clone())
@@ -781,18 +775,12 @@ impl WorkerApi {
         agent_id: AgentId,
         oplog_index: OplogIndex,
         component_revision: Option<ComponentRevision>,
-        include_claims: bool,
+        claims: ClaimVisibility,
         auth: AuthCtx,
     ) -> Result<Json<PublicOplogEntryWithIndex>> {
         let mut entry = self
             .worker_service
-            .get_oplog_entry(
-                &agent_id,
-                oplog_index,
-                component_revision,
-                include_claims,
-                auth,
-            )
+            .get_oplog_entry(&agent_id, oplog_index, component_revision, claims, auth)
             .await?;
         entry.entry.redact_host_managed_values_for_external();
         Ok(Json(entry))
@@ -1276,12 +1264,6 @@ impl WorkerApi {
             )
         })
     }
-}
-
-/// Whether an oplog read asks for the users' verified claims. The worker service passes the
-/// request on only after its oplog read check.
-fn include_claims(include: Option<OplogInclude>) -> bool {
-    matches!(include, Some(OplogInclude::Claims))
 }
 
 fn redact_worker_metadata_for_external(workers: &mut [AgentMetadataDto]) {

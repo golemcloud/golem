@@ -22,6 +22,7 @@
 use super::{AccountAuthentication, Caller, Kind, Pair, Principal, TokenProvenance};
 use crate::base_model::account::AccountId;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::oplog::OplogInclude;
 use crate::base_model::{AgentId, Timestamp};
 use golem_schema::Empty;
 use serde::{Deserialize, Serialize};
@@ -40,11 +41,10 @@ pub enum ClaimVisibility {
 
 impl ClaimVisibility {
     /// `Shown` exactly when the reader asked for the claims.
-    pub fn from_include_claims(include_claims: bool) -> Self {
-        if include_claims {
-            Self::Shown
-        } else {
-            Self::Hidden
+    pub fn from_include(include: Option<OplogInclude>) -> Self {
+        match include {
+            Some(OplogInclude::Claims) => Self::Shown,
+            None => Self::Hidden,
         }
     }
 

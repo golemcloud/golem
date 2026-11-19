@@ -14,10 +14,10 @@ use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWo
 use crate::base_model::AgentFingerprint;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::caller::{
-    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, Pair, Principal,
-    PrincipalRef, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller, PublicPrincipal,
-    PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal, TokenProvenance,
-    ToolPrincipal, UserPrincipal,
+    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, ClaimVisibility, Claims, Pair,
+    Principal, PrincipalRef, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller,
+    PublicPrincipal, PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
+    TokenProvenance, ToolPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::tool::ToolName;
@@ -894,6 +894,40 @@ impl From<PublicPrincipal> for golem_api_grpc::proto::golem::component::PublicPr
                 }
             }),
         }
+    }
+}
+
+impl From<ClaimVisibility> for golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility {
+    fn from(value: ClaimVisibility) -> Self {
+        match value {
+            ClaimVisibility::Hidden => Self::Hidden,
+            ClaimVisibility::Shown => Self::Shown,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility> for ClaimVisibility {
+    fn from(value: golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility) -> Self {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility as Proto;
+        match value {
+            Proto::Hidden => Self::Hidden,
+            Proto::Shown => Self::Shown,
+        }
+    }
+}
+
+impl ClaimVisibility {
+    /// The value of the `claims` field of the executor's oplog read requests.
+    pub fn to_protobuf(self) -> i32 {
+        golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility::from(self).into()
+    }
+
+    /// Reads the `claims` field of an oplog read request. An unknown value is refused, so a
+    /// request never gets a visibility that its sender did not ask for.
+    pub fn from_protobuf(value: i32) -> Result<Self, String> {
+        golem_api_grpc::proto::golem::workerexecutor::v1::ClaimVisibility::try_from(value)
+            .map(Self::from)
+            .map_err(|_| format!("Invalid field: claims: unknown value {value}"))
     }
 }
 
