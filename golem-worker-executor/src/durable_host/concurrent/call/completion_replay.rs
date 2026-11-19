@@ -120,7 +120,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_access_with_delivered(store, get_ctx, |_| Box::new(|| {}))
+        self.replay_access_with_delivered(store, get_ctx, |_| Box::new(|_| {}))
             .await
     }
 
@@ -170,7 +170,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessResultDestination::Host,
             false,
             Some(activity),
-            |_| Box::new(|| {}),
+            |_| Box::new(|_| {}),
         )
         .await
         .map_err(|source| TerminalCallError::new(source, context))

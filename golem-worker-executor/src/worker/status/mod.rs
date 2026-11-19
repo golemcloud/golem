@@ -59,6 +59,8 @@ pub(super) use reconstruction::calculate_status_with_reader;
 pub(super) use reconstruction::fold_committed_status;
 #[cfg(test)]
 use reconstruction::hydrate_initial_pending_evidence;
+pub(crate) use reconstruction::hydrate_lookup_payloads;
+pub(crate) use reconstruction::hydrate_stream_session_payloads;
 pub(crate) use reconstruction::skipped_regions_at;
 pub use reconstruction::try_fold_status_from;
 #[cfg(test)]
@@ -68,6 +70,7 @@ mod entity_replay;
 mod execution;
 mod fields;
 mod reconstruction;
+mod resolved_names;
 
 /// Why the status of an agent could not be folded from its oplog.
 #[derive(Clone, Debug)]
@@ -157,6 +160,7 @@ fn update_status_with_new_entries_internal(
         skipped,
         queue,
         steps,
+        unreplayed,
     } = fold_regions_from(&last_known, pending_updates, &new_entries);
 
     // If the last known status is from a deleted region based on the latest deleted region status,
@@ -177,6 +181,7 @@ fn update_status_with_new_entries_internal(
         FoldedRegions {
             deleted,
             skipped,
+            unreplayed,
             steps: &steps,
         },
         pending_updates,
@@ -233,6 +238,7 @@ fn baseline_is_invalidated(
 struct FoldedRegions<'a> {
     deleted: DeletedRegions,
     skipped: DeletedRegions,
+    unreplayed: DeletedRegions,
     steps: &'a BTreeMap<OplogIndex, UpdateStep>,
 }
 
@@ -252,6 +258,7 @@ fn update_status_with_precomputed_regions(
     let FoldedRegions {
         deleted,
         skipped,
+        unreplayed,
         steps,
     } = regions;
     let deleted_regions = &deleted;
@@ -281,6 +288,12 @@ fn update_status_with_precomputed_regions(
     let entity_replay_progress = entity_replay::calculate_entity_replay_progress(
         last_known.entity_replay_progress,
         skipped_regions,
+        deleted_regions,
+        &new_entries,
+    )?;
+    let resolved_names = resolved_names::calculate_resolved_names(
+        last_known.resolved_names,
+        &unreplayed,
         deleted_regions,
         &new_entries,
     )?;
@@ -421,6 +434,7 @@ fn update_status_with_precomputed_regions(
         received_card_transfers,
         source_card_transfers,
         entity_replay_progress,
+        resolved_names,
         durable_stream_sessions,
         export_fork_admissions,
         has_durable_stream_history,
