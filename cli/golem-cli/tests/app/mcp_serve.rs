@@ -1513,10 +1513,15 @@ async fn mcp_serve_exports_one_bounded_oplog_report() {
     .await;
     assert_eq!(error_code(&outside), "outside-environment");
 
-    // An agent ID that does not resolve fails without quoting the ID, in the result and on the
-    // server's stderr, also when the server holds its log back until an error.
+    // An agent ID that does not resolve and an argument that does not parse fail without quoting
+    // the value, in the result and on the server's stderr: also when the server holds its log
+    // back until an error, and when it traces at debug level.
     let marker = "CUSTOMER-MARKER";
-    for global_args in [&["-E", "local"][..], &["-E", "local", "-q"]] {
+    for global_args in [
+        &["-E", "local"][..],
+        &["-E", "local", "-q"],
+        &["-E", "local", "-vvv"],
+    ] {
         let (transport, stderr) = TokioChildProcess::builder(server_command(&ctx, global_args))
             .stderr(Stdio::piped())
             .spawn()
@@ -1528,16 +1533,12 @@ async fn mcp_serve_exports_one_bounded_oplog_report() {
             text
         });
         let marker_client = ().serve(transport).await.unwrap();
-        for agent_id in [
-            format!("a/b/c/d/{marker}"),
-            format!(r#"Counter("{marker}")"#),
+        for arguments in [
+            json!({"agent_id": format!("a/b/c/d/{marker}"), "from": 1, "to": 2}),
+            json!({"agent_id": format!(r#"Counter("{marker}")"#), "from": 1, "to": 2}),
+            json!({"agent_id": agent, "from": marker, "to": 2}),
         ] {
-            let unresolved = call(
-                &marker_client,
-                "agent_oplog_export",
-                json!({"agent_id": agent_id, "from": 1, "to": 2}),
-            )
-            .await;
+            let unresolved = call(&marker_client, "agent_oplog_export", arguments).await;
             assert_eq!(unresolved.is_error, Some(true), "{unresolved:?}");
             assert!(
                 !format!("{unresolved:?}").contains(marker),
