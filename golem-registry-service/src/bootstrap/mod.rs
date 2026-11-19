@@ -107,7 +107,6 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 
@@ -190,20 +189,20 @@ struct Repos {
 }
 
 impl Services {
-    /// `builtin_artifact_cancellation` is cancelled when the caller no longer needs built-in
-    /// artifact resolution to continue, such as a server shutdown signal arriving during
-    /// startup. A download or metadata extraction in progress then fails with a plain error
-    /// instead of racing the owning Tokio runtime's shutdown.
+    /// `builtin_artifact_shutdown` lets the caller stop built-in artifact resolution and wait
+    /// for it to actually stop before proceeding to drop the owning Tokio runtime, such as when
+    /// a server shutdown signal arrives during startup; see
+    /// [`crate::services::builtin_artifact::BuiltinArtifactShutdown`].
     pub async fn new(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
         startup_progress: &StartupProgress,
-        builtin_artifact_cancellation: CancellationToken,
+        builtin_artifact_shutdown: crate::services::builtin_artifact::BuiltinArtifactShutdown,
     ) -> anyhow::Result<Self> {
         Self::new_inner(
             config,
             join_set,
-            Some((startup_progress, builtin_artifact_cancellation)),
+            Some((startup_progress, builtin_artifact_shutdown)),
         )
         .await
     }
@@ -219,7 +218,10 @@ impl Services {
     async fn new_inner(
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
-        component_builtins: Option<(&StartupProgress, CancellationToken)>,
+        component_builtins: Option<(
+            &StartupProgress,
+            crate::services::builtin_artifact::BuiltinArtifactShutdown,
+        )>,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -566,12 +568,12 @@ impl Services {
             });
         }
 
-        if let Some((startup_progress, builtin_artifact_cancellation)) = component_builtins {
+        if let Some((startup_progress, builtin_artifact_shutdown)) = component_builtins {
             let artifact_resolver =
                 crate::services::builtin_artifact::BuiltinArtifactResolver::new(
                     &config.builtin_artifacts,
                     startup_progress.clone(),
-                    builtin_artifact_cancellation,
+                    builtin_artifact_shutdown,
                 )?;
             crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
                 &config.builtin_plugins,

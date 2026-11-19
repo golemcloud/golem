@@ -13,6 +13,7 @@ use golem_registry_service::config::{
     BuiltinArtifactsConfig, ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
 };
 use golem_registry_service::services::builtin_artifact::BuiltinArtifactResolver;
+use golem_registry_service::services::builtin_artifact::BuiltinArtifactShutdown;
 use golem_registry_service::services::builtin_tool_provisioner::{
     BuiltinExportDescriptor, BuiltinExportKind, provision_descriptors,
 };
@@ -24,7 +25,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use test_r::{test, timeout};
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 
 pub mod native;
 
@@ -104,13 +104,13 @@ async fn metadata_cache_reuses_content_across_resolvers_and_recovers_invalid_ent
     let resolver = BuiltinArtifactResolver::new(
         &config,
         StartupProgress::default(),
-        CancellationToken::new(),
+        BuiltinArtifactShutdown::never(),
     )
     .unwrap();
     let other = BuiltinArtifactResolver::new(
         &config,
         StartupProgress::default(),
-        CancellationToken::new(),
+        BuiltinArtifactShutdown::never(),
     )
     .unwrap();
     let filesystem = Arc::new(
@@ -169,7 +169,7 @@ async fn metadata_cache_reuses_content_across_resolvers_and_recovers_invalid_ent
     let resolver = BuiltinArtifactResolver::new(
         &config,
         StartupProgress::default(),
-        CancellationToken::new(),
+        BuiltinArtifactShutdown::never(),
     )
     .unwrap();
     let cached = resolver.extract_metadata(filesystem.clone()).await.unwrap();
@@ -341,7 +341,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             ..Default::default()
         },
         StartupProgress::default(),
-        CancellationToken::new(),
+        BuiltinArtifactShutdown::never(),
     )
     .unwrap();
     let error = provision_descriptors(
@@ -668,7 +668,7 @@ async fn shared_and_distinct_artifacts_preserve_export_validation() {
             ..Default::default()
         },
         StartupProgress::default(),
-        CancellationToken::new(),
+        BuiltinArtifactShutdown::never(),
     )
     .unwrap();
     let config = RegistryServiceConfig {
@@ -872,7 +872,7 @@ async fn provision(
             ..Default::default()
         },
         StartupProgress::default(),
-        CancellationToken::new(),
+        BuiltinArtifactShutdown::never(),
     )
     .unwrap();
     let startup_progress = StartupProgress::default();

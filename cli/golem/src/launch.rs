@@ -23,6 +23,7 @@ use anyhow::Context;
 use golem_component_compilation_service::config::ServerConfig as ComponentCompilationServiceConfig;
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{ComponentCompilationConfig, RegistryServiceConfig};
+use golem_registry_service::services::builtin_artifact::BuiltinArtifactShutdown;
 use golem_registry_service::startup::{StartupPhase, StartupProgress};
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::GolemConfig as WorkerExecutorConfig;
@@ -35,7 +36,6 @@ use serde::Serialize;
 use std::path::Path;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, warn};
 
 /// The ports the local server actually bound, which differ from the requested ones when those
@@ -48,13 +48,14 @@ pub struct StartupPorts {
     pub mcp_port: u16,
 }
 
-/// `builtin_artifact_cancellation` is cancelled when the caller no longer needs startup to
-/// continue, such as a shutdown signal arriving while a built-in artifact is still downloading.
-/// A download or metadata extraction in progress then fails with a plain error instead of
-/// racing the Tokio runtime's shutdown once this function's caller stops awaiting it.
+/// `builtin_artifact_shutdown` lets the caller stop built-in artifact resolution and wait for it
+/// to actually stop, such as when a shutdown signal arrives while an artifact is still
+/// downloading; see [`golem_registry_service::services::builtin_artifact::BuiltinArtifactShutdown`].
+/// Cancelling it alone is not enough: the caller must also await its `shutdown()` before
+/// dropping the Tokio runtime, or a download parked in a blocking task can still race teardown.
 pub async fn launch_golem_services(
     config: &GolemServerConfig,
-    builtin_artifact_cancellation: CancellationToken,
+    builtin_artifact_shutdown: BuiltinArtifactShutdown,
 ) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     check_exposure(config)?;
     // Services build rustls configurations from the process-level provider. A host that embeds
@@ -110,7 +111,7 @@ pub async fn launch_golem_services(
     let started_components = start_components(
         config,
         &startup_progress,
-        builtin_artifact_cancellation,
+        builtin_artifact_shutdown,
         router_port,
         &mut join_set,
     )
@@ -162,7 +163,7 @@ async fn write_startup_ports_file(path: &Path, ports: &StartupPorts) -> anyhow::
 async fn start_components(
     config: &GolemServerConfig,
     startup_progress: &StartupProgress,
-    builtin_artifact_cancellation: CancellationToken,
+    builtin_artifact_shutdown: BuiltinArtifactShutdown,
     router_port: u16,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
@@ -179,7 +180,7 @@ async fn start_components(
     let registry_service = run_registry_service(
         registry_service_config(config, &component_compilation_service),
         startup_progress.clone(),
-        builtin_artifact_cancellation,
+        builtin_artifact_shutdown,
         join_set,
     )
     .await?;
@@ -317,14 +318,14 @@ async fn run_component_compilation_service(
 async fn run_registry_service(
     config: RegistryServiceConfig,
     startup_progress: StartupProgress,
-    builtin_artifact_cancellation: CancellationToken,
+    builtin_artifact_shutdown: BuiltinArtifactShutdown,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<golem_registry_service::SingleExecutableRunDetails, anyhow::Error> {
     let prometheus_registry = golem_registry_service::metrics::register_all();
     let span = tracing::info_span!("registry-service", component = "registry-service");
     RegistryService::new(config, prometheus_registry)
         .with_startup_progress(startup_progress)
-        .with_builtin_artifact_cancellation(builtin_artifact_cancellation)
+        .with_builtin_artifact_shutdown(builtin_artifact_shutdown)
         .start_for_single_executable(join_set)
         .instrument(span)
         .await

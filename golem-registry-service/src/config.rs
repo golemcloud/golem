@@ -1320,8 +1320,8 @@ mod tests {
     #[test]
     pub async fn mcp_import_resolver_rejects_unrepresentable_operation_timeout() {
         use crate::bootstrap::Services;
+        use crate::services::builtin_artifact::BuiltinArtifactShutdown;
         use golem_common::config::{DbConfig, DbSqliteConfig};
-        use tokio_util::sync::CancellationToken;
 
         let mut config = RegistryServiceConfig::default();
         config.mcp_import.operation_timeout = std::time::Duration::MAX;
@@ -1338,7 +1338,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
-            CancellationToken::new(),
+            BuiltinArtifactShutdown::never(),
         )
         .await
         .err()
@@ -1381,10 +1381,10 @@ mod tests {
     #[test]
     pub async fn mcp_oauth_config_validates_before_bootstrap() {
         use crate::bootstrap::Services;
+        use crate::services::builtin_artifact::BuiltinArtifactShutdown;
         use golem_common::config::{DbConfig, DbSqliteConfig};
         use serde_json::json;
         use std::time::Duration;
-        use tokio_util::sync::CancellationToken;
 
         let mut config = RegistryServiceConfig::default();
         assert_eq!(
@@ -1419,7 +1419,7 @@ mod tests {
             &config,
             &mut tasks,
             &crate::startup::StartupProgress::default(),
-            CancellationToken::new(),
+            BuiltinArtifactShutdown::never(),
         )
         .await
         .err()

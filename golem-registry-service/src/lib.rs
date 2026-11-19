@@ -26,6 +26,7 @@ pub mod startup;
 
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;
+use self::services::builtin_artifact::BuiltinArtifactShutdown;
 use self::startup::StartupProgress;
 use anyhow::Context;
 use golem_common::poem::{
@@ -41,7 +42,6 @@ use poem::middleware::CookieJarManager;
 use poem::middleware::Cors;
 use poem::{EndpointExt, Route};
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info};
 
 #[cfg(test)]
@@ -62,7 +62,7 @@ pub struct RegistryService {
     config: RegistryServiceConfig,
     prometheus_registry: prometheus::Registry,
     startup_progress: StartupProgress,
-    builtin_artifact_cancellation: CancellationToken,
+    builtin_artifact_shutdown: BuiltinArtifactShutdown,
 }
 
 impl RegistryService {
@@ -71,7 +71,7 @@ impl RegistryService {
             config,
             prometheus_registry,
             startup_progress: StartupProgress::default(),
-            builtin_artifact_cancellation: CancellationToken::new(),
+            builtin_artifact_shutdown: BuiltinArtifactShutdown::never(),
         }
     }
 
@@ -80,14 +80,14 @@ impl RegistryService {
         self
     }
 
-    /// Cancelled when the caller no longer needs built-in artifact resolution to continue, such
-    /// as a server shutdown signal arriving during startup. A download or metadata extraction in
-    /// progress then fails with a plain error instead of racing the owning runtime's shutdown.
-    pub fn with_builtin_artifact_cancellation(
+    /// Lets the caller stop built-in artifact resolution and wait for it to actually stop before
+    /// proceeding to drop the owning Tokio runtime, such as when a server shutdown signal
+    /// arrives during startup; see [`BuiltinArtifactShutdown`].
+    pub fn with_builtin_artifact_shutdown(
         mut self,
-        builtin_artifact_cancellation: CancellationToken,
+        builtin_artifact_shutdown: BuiltinArtifactShutdown,
     ) -> Self {
-        self.builtin_artifact_cancellation = builtin_artifact_cancellation;
+        self.builtin_artifact_shutdown = builtin_artifact_shutdown;
         self
     }
 
@@ -101,7 +101,7 @@ impl RegistryService {
             &self.config,
             join_set,
             &self.startup_progress,
-            self.builtin_artifact_cancellation.clone(),
+            self.builtin_artifact_shutdown.clone(),
         )
         .await?;
 
@@ -124,7 +124,7 @@ impl RegistryService {
             &self.config,
             join_set,
             &self.startup_progress,
-            self.builtin_artifact_cancellation.clone(),
+            self.builtin_artifact_shutdown.clone(),
         )
         .await?;
 

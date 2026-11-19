@@ -22,11 +22,11 @@ use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
+use golem_registry_service::services::builtin_artifact::BuiltinArtifactShutdown;
 use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::compat::map_local_server_startup_error;
@@ -77,21 +77,21 @@ impl CommandHandlerHooks for ServerCommandHandler {
                 let shutdown = shutdown_signal();
                 tokio::pin!(shutdown);
 
-                // Cancelled together with the `shutdown` branch below, so a built-in artifact
-                // download or metadata extraction still running inside `launch_golem_services`
-                // (on a detached `spawn_blocking` task `select!` cannot reach by dropping the
-                // future) returns a plain error instead of racing this process's runtime
-                // shutdown with a live Tokio timer.
-                let builtin_artifact_cancellation = CancellationToken::new();
+                // Shared with `launch_golem_services` below, so a built-in artifact download or
+                // metadata extraction still running inside it (on a detached `spawn_blocking`
+                // task `select!` cannot reach by dropping the future) can be stopped. Cancelling
+                // alone only asks it to notice; this process must also await `shutdown()` before
+                // returning, so it does not drop the Tokio runtime while a blocking task is
+                // still parked on a timer-bearing future that the runtime would tear down from
+                // under it, which panics and aborts the process (the bug this fixes).
+                let builtin_artifact_shutdown = BuiltinArtifactShutdown::new();
                 let launch_result = tokio::select! {
-                    res = launch_golem_services(&config, builtin_artifact_cancellation.clone()) => Some(res),
-                    _ = &mut shutdown => {
-                        builtin_artifact_cancellation.cancel();
-                        None
-                    },
+                    res = launch_golem_services(&config, builtin_artifact_shutdown.clone()) => Some(res),
+                    _ = &mut shutdown => None,
                 };
 
                 let Some(launch_result) = launch_result else {
+                    builtin_artifact_shutdown.shutdown().await;
                     info!("Received shutdown signal during startup, stopping Golem server");
                     return Ok(());
                 };
@@ -148,7 +148,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         )?;
         let data_dir = config.data_dir.clone();
 
-        let (mut join_set, _, _) = launch_golem_services(&config, CancellationToken::new())
+        let (mut join_set, _, _) = launch_golem_services(&config, BuiltinArtifactShutdown::never())
             .await
             .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
