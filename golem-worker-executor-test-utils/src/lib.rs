@@ -1533,29 +1533,25 @@ impl TestWorkerExecutor {
         &self,
         agent_id: &AgentId,
     ) -> anyhow::Result<Option<AgentStatusRecord>> {
-        use golem_worker_executor::services::HasOplogService;
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
+        self.status_checkpoint_of(agent_id, fingerprint).await
+    }
 
+    /// The clean status checkpoint of the incarnation `fingerprint` of the durable agent. Reads no
+    /// oplog, so it also reads the checkpoint of a deleted incarnation.
+    pub async fn status_checkpoint_of(
+        &self,
+        agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
+    ) -> anyhow::Result<Option<AgentStatusRecord>> {
         let services = self
             .services
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let create = services
-            .oplog_service()
-            .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-            .await?
-            .remove(&OplogIndex::INITIAL)
-            .ok_or_else(|| anyhow!("agent create entry is missing: {owned_agent_id}"))?;
-        let OplogEntry::Create { parameters, .. } = create else {
-            return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
-        };
         Ok(services
             .worker_service()
-            .read_status_checkpoint(
-                &owned_agent_id,
-                AgentFingerprint(parameters.instance_id),
-                AgentMode::Durable,
-            )
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
             .await?)
     }
 

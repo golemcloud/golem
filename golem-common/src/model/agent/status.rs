@@ -725,9 +725,11 @@ pub struct UsableAutomaticSnapshot {
 
 /// Contains status information about a worker according to a given oplog index.
 ///
-/// This status is just cached information, all fields must be computable by the oplog alone.
-/// By having an associated oplog_idx, the cached information can be used together with the
-/// tail of the oplog to determine the actual status of the worker.
+/// The status at `oplog_idx` is a fold of the oplog entries up to that index. Every field must
+/// be computable from a status baseline and the oplog entries after it. The durable status
+/// baseline of an agent is one stored record of this type, and the fold of the entries after its
+/// `oplog_idx` gives the current status. The oplog alone is not sufficient: an oplog that does not
+/// start at index 1 keeps no record of the entries before its start.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AgentStatusRecord {

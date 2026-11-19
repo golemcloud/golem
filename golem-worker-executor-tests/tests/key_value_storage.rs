@@ -1709,3 +1709,72 @@ async fn query_sorted_set(
     assert_eq!(result4, vec![(2.0, value2.into()), (3.0, value3.into())]);
     assert_eq!(result5, vec![(4.0, value4.into())]);
 }
+
+/// The live status cache is written with an expiry and the status baseline without one, as the
+/// worker service writes them. In every backend the baseline outlives the expiry of the cache.
+#[test]
+async fn the_status_baseline_outlives_the_expiry_of_the_status_cache(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let storage = kvs.get_key_value_storage().await;
+    let owned_agent_id = crate::fresh_owned_agent_id();
+    let fingerprint = AgentFingerprint::new();
+    let cache = KeyValueStorageNamespace::AgentStatus {
+        owned_agent_id: owned_agent_id.clone(),
+        fingerprint,
+    };
+    let baseline = KeyValueStorageNamespace::AgentStatusCheckpoint {
+        owned_agent_id,
+        fingerprint,
+    };
+
+    assert!(
+        storage
+            .compare_and_mutate_many(
+                "test",
+                "api",
+                "entity",
+                cache.clone(),
+                "core",
+                None,
+                &[("core", b"cache")],
+                &[],
+                Duration::from_millis(50),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                baseline.clone(),
+                "core",
+                None,
+                &[],
+                &[("core", b"baseline")],
+            )
+            .await
+            .unwrap()
+    );
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let cached = storage
+        .get_all("test", "api", "entity", cache)
+        .await
+        .unwrap();
+    assert_eq!(cached.is_empty(), kvs.observes_expiry());
+    assert_eq!(
+        storage
+            .get_all("test", "api", "entity", baseline)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(field, value)| (field, value.to_vec()))
+            .collect::<Vec<_>>(),
+        vec![("core".to_string(), b"baseline".to_vec())]
+    );
+}

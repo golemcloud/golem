@@ -352,6 +352,11 @@ impl WorkerService for DefaultWorkerService {
 
         self.remove_cached_status(owned_agent_id, fingerprint)
             .await?;
+        self.remove_split_status(
+            owned_agent_id,
+            Self::checkpoint_namespace(owned_agent_id, fingerprint),
+        )
+        .await?;
         self.stream_session_index
             .clear(owned_agent_id, fingerprint)
             .await
@@ -420,18 +425,13 @@ impl WorkerService for DefaultWorkerService {
     ) -> Result<(), WorkerExecutorError> {
         record_worker_call("remove_cached_status");
         // The result index is part of the status cache. Besides deletion, the cached status is
-        // removed when the oplog is fully archived, so that an archived agent keeps nothing in
-        // primary storage; the index goes with it and is rebuilt from the oplog on next access.
+        // removed when the oplog is fully archived. The index goes with it and is rebuilt from
+        // the oplog on next access. The status baseline stays.
         self.clear_invocation_result_index(owned_agent_id, fingerprint)
             .await?;
         self.remove_split_status(
             owned_agent_id,
             Self::status_namespace(owned_agent_id, fingerprint),
-        )
-        .await?;
-        self.remove_split_status(
-            owned_agent_id,
-            Self::checkpoint_namespace(owned_agent_id, fingerprint),
         )
         .await?;
         self.remove_cached_agent_mode_if_fingerprint(owned_agent_id, fingerprint)
