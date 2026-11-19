@@ -813,6 +813,7 @@ pub trait WorkerClient: Send + Sync {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: AuthCtx,
+        caller: golem_api_grpc::proto::golem::component::Caller,
     ) -> WorkerResult<()>;
 }
 
@@ -2716,6 +2717,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: AuthCtx,
+        caller: golem_api_grpc::proto::golem::component::Caller,
     ) -> WorkerResult<()> {
         let target_agent_id = target_agent_id.clone();
         self.call_worker_executor(
@@ -2736,6 +2738,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             first_entry_index: first_entry_index.into(),
                             entries: entries.clone(),
                             auth_ctx: Some(auth_ctx.clone().into()),
+                            caller: Some(caller.clone()),
                         }),
                 )
             },

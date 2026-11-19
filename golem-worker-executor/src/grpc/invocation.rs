@@ -328,10 +328,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn get_existing_for_management(
         &self,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
         operation: &str,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id, caller).await?;
+        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id).await?;
         worker.ensure_component_agent_ingress(operation)?;
         if worker.answers_as_deleted().await {
             return Err(WorkerExecutorError::worker_not_found(
@@ -385,9 +384,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                 }
             }
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned_agent_id, request.caller()?)
-                    .await?;
+            request.caller()?;
+            let worker = Worker::get_exact_existing_suspended(self, &owned_agent_id).await?;
             if !reserved {
                 Self::not_found_if_deleting(&worker, worker.ensure_inspection_may_start().await)
                     .await?;
@@ -428,10 +426,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return Ok(None);
             }
+            request.caller()?;
             return Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owner,
-                request.caller()?,
                 expected_fingerprint,
             )
             .await
@@ -444,10 +442,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         if expected_fingerprint.is_some() {
+            request.caller()?;
             return Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
-                request.caller()?,
                 expected_fingerprint,
             )
             .await
@@ -525,10 +523,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if let Some(expected) = expected_fingerprint {
             // The incarnation is pinned before its status is read, so the failure of a re-created
             // agent never answers a caller that named the deleted incarnation.
+            request.caller()?;
             let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
-                request.caller()?,
                 Some(expected),
             )
             .await?;

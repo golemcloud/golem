@@ -412,6 +412,8 @@ mod protobuf {
                 oplog_processor_component_revision: value
                     .oplog_processor_component_revision
                     .map(|v| v.0),
+
+                installed_by: Some(value.installed_by.into()),
             }
         }
     }
@@ -443,6 +445,11 @@ mod protobuf {
                 oplog_processor_component_revision: value
                     .oplog_processor_component_revision
                     .map(ComponentRevision),
+
+                installed_by: value
+                    .installed_by
+                    .ok_or("Missing installed_by")?
+                    .try_into()?,
             })
         }
     }

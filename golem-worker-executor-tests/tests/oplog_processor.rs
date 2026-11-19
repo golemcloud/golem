@@ -20,18 +20,23 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     process_oplog_entries_response,
 };
 use golem_common::agent_id;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::{InstalledPlugin, PluginPriority};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::plugin_registration::PluginRegistrationId;
-use golem_common::model::{AgentId, AgentStatus, InvocationId, OwnedAgentId};
+use golem_common::model::{
+    AgentId, AgentInvocationPayload, AgentStatus, InvocationId, OwnedAgentId,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::{HasOplogProcessorPlugin, UsesAllDeps};
+use golem_worker_executor::services::oplog::OplogServiceOps;
+use golem_worker_executor::services::{HasOplogProcessorPlugin, HasOplogService, UsesAllDeps};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_with_overrides, test_component,
+    WorkerExecutorTestDependencies, callers, start, start_with_overrides, test_component,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -182,7 +187,20 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         .primary();
     let source_metadata = seed.get_latest_worker_metadata().await;
     let dispatcher = seed.all().oplog_processor_plugin();
+    let oplog_service = seed.all().oplog_service();
     drop(seed);
+    // Another account than the one that created the source agent installs the processor.
+    let installer = AccountId::new();
+    let batch_caller = Caller {
+        original: callers::account_principal(installer),
+        immediate: callers::agent_in(
+            source_id.clone(),
+            source_metadata.fingerprint,
+            context.default_environment_id,
+        )
+        .immediate,
+        tokens: Vec::new(),
+    };
     let plugin = InstalledPlugin {
         environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
         priority: PluginPriority(0),
@@ -192,6 +210,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
         plugin_version: "1".to_string(),
         oplog_processor_component_id: Some(processor.id),
         oplog_processor_component_revision: Some(processor.revision),
+        installed_by: installer,
     };
     let target = dispatcher
         .resolve_target(context.default_environment_id, &plugin)
@@ -213,6 +232,7 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
             .collect::<Result<_, _>>()
             .map_err(anyhow::Error::msg)?,
         auth_ctx: Some(AuthCtx::system().into()),
+        caller: Some(batch_caller.clone().into()),
     };
     let mut user_request = request.clone();
     user_request.auth_ctx = Some(executor.auth_ctx().into());
@@ -242,17 +262,37 @@ async fn processor_only_owner_recovers_accepted_batch_and_deduplicates(
     drop(dispatcher);
     gate.entered().await;
     let accepted = executor.stored_oplog(&target).await;
-    let key = accepted
+    let (key, payload) = accepted
         .iter()
         .find_map(|entry| match entry {
-            OplogEntry::PendingAgentInvocation { invocation_id, .. } => Some(*invocation_id),
+            OplogEntry::PendingAgentInvocation {
+                invocation_id,
+                payload,
+                ..
+            } => Some((*invocation_id, payload.clone())),
             _ => None,
         })
         .expect("local dispatch must durably accept the batch");
     request.idempotency_key = Some(key.into());
+    // The batch runs with the installer as the original caller and the source agent as the
+    // immediate caller, never as the source agent's creator or as the processor itself.
+    let AgentInvocationPayload::ProcessOplogEntries { caller, .. } = oplog_service
+        .download_payload(
+            &OwnedAgentId::new(context.default_environment_id, &target),
+            AgentMode::Durable,
+            payload,
+        )
+        .await
+        .map_err(anyhow::Error::msg)?
+    else {
+        panic!("the pending invocation is not an oplog batch");
+    };
+    assert_eq!(caller, batch_caller);
     let OplogEntry::Create { parameters, .. } = &accepted[0] else {
         panic!("missing Create")
     };
+    // The first batch creates the processor.
+    assert_eq!(parameters.create_request.caller, batch_caller);
     assert_eq!(parameters.owner_kind, OwnerKind::OplogProcessor);
     assert_eq!(parameters.agent_mode, AgentMode::Durable);
     assert!(parameters.agent_type_name.is_none());
@@ -442,12 +482,23 @@ async fn processor_committed_admission_survives_owner_retirement(
     };
     let target_owned = OwnedAgentId::new(context.default_environment_id, &target);
     let key = InvocationId(Uuid::new_v4());
+    let batch_caller = Caller {
+        original: callers::account_principal(AccountId::new()),
+        immediate: callers::agent_in(
+            source.clone(),
+            metadata.fingerprint,
+            context.default_environment_id,
+        )
+        .immediate,
+        tokens: Vec::new(),
+    };
     // Recovery-index publication follows the durable PendingAgentInvocation commit,
     // while admission still holds the lifecycle lock.
     let gate = faults.pause_next("add");
     let activator = seed.all().worker_activator();
     let admission = tokio::spawn({
         let target_owned = target_owned.clone();
+        let batch_caller = batch_caller.clone();
         async move {
             activator
                 .enqueue_oplog_processor(
@@ -459,7 +510,7 @@ async fn processor_committed_admission_survives_owner_retirement(
                         config: Vec::new(),
                         metadata: metadata.into(),
                         first_entry_index: golem_common::model::oplog::OplogIndex::INITIAL,
-                        caller: golem_common::model::caller::Caller::anonymous(),
+                        caller: batch_caller,
                         entries: vec![OplogEntry::GrowMemory {
                             timestamp: golem_common::model::Timestamp::now_utc(),
                             delta: 1,
@@ -477,7 +528,7 @@ async fn processor_committed_admission_survives_owner_retirement(
         )),
         "the gate must follow durable acceptance"
     );
-    // The batch runs as the processor agent itself, in both roles, whatever the sender passed.
+    // The batch keeps the caller that its sender built.
     let payload = accepted
         .iter()
         .find_map(|entry| match entry {
@@ -490,8 +541,6 @@ async fn processor_committed_admission_survives_owner_retirement(
         })
         .expect("the pending batch is in the oplog");
     // The payload is stored inline or externally: read it through the oplog service either way.
-    use golem_worker_executor::services::HasOplogService;
-    use golem_worker_executor::services::oplog::OplogServiceOps;
     let recorded = seed
         .all()
         .oplog_service()
@@ -502,15 +551,7 @@ async fn processor_committed_admission_survives_owner_retirement(
     else {
         panic!("the pending invocation is not an oplog batch");
     };
-    let golem_common::model::caller::Principal::Agent(processor_principal) = &caller.original
-    else {
-        panic!("the recorded caller is not the processor agent: {caller:?}");
-    };
-    assert_eq!(processor_principal.address, target);
-    assert!(
-        caller.original.same_record(&caller.immediate),
-        "the processor is the caller in both roles: {caller:?}"
-    );
+    assert_eq!(caller, batch_caller);
     let active = executor.active_agents();
     let retirement = active.unload_environment(context.default_environment_id);
     tokio::pin!(retirement);

@@ -824,7 +824,6 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
             worker = golem_worker_executor::worker::Worker::get_exact_existing_suspended(
                 healthy_worker.all(),
                 &owned,
-                callers::anonymous(),
             )
             .await?;
         }

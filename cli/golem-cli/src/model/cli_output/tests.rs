@@ -1199,6 +1199,7 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     plugin_version: "1.0.0".to_string(),
                     oplog_processor_component_id: None,
                     oplog_processor_component_revision: None,
+                    installed_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
                 }],
                 files: vec![],
                 initial_permissions: PolymorphicCard {
@@ -6235,6 +6236,7 @@ fn arb_installed_plugin() -> BoxedStrategy<golem_common::model::component::Insta
                                 .expect("generated revision should be valid")
                         },
                     ),
+                    installed_by: golem_common::model::account::AccountId(plugin_registration_id),
                 }
             },
         )

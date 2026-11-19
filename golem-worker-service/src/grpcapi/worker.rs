@@ -1182,6 +1182,9 @@ impl WorkerGrpcApi {
         let metadata = request
             .metadata
             .ok_or_else(|| bad_request_error("Missing metadata"))?;
+        let caller = request
+            .caller
+            .ok_or_else(|| bad_request_error("caller is missing"))?;
 
         self.worker_service
             .process_oplog_entries(
@@ -1195,6 +1198,7 @@ impl WorkerGrpcApi {
                 OplogIndex::from_u64(request.first_entry_index),
                 request.entries,
                 auth,
+                caller,
             )
             .await?;
 

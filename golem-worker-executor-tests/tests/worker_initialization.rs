@@ -2449,7 +2449,7 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
     for loader in loaders {
         let id = target(&seed, &format!("restart-creator-{loader}"));
         if loader == "existing-only" {
-            Worker::interrupt(seed.all(), &id, false, callers::anonymous()).await?;
+            Worker::interrupt(seed.all(), &id, false).await?;
         }
         let worker = acquire(&seed, &id).await?;
         let entries = worker
@@ -2537,7 +2537,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let (executor, seed, _) = setup(last_unique_id, deps, component).await?;
     let id = target(&seed, "cancelled-creator");
     let all = seed.all().clone();
-    Worker::interrupt(&all, &id, false, callers::anonymous()).await?;
+    Worker::interrupt(&all, &id, false).await?;
     assert!(!executor.worker_is_cached(&id).await);
     assert!(
         !seed
@@ -2575,7 +2575,7 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
         .expect("creator must reach the initialization enqueue");
     creating.abort();
     assert!(creating.await.err().unwrap().is_cancelled());
-    let mut existing = Box::pin(Worker::interrupt(&all, &id, false, callers::anonymous()));
+    let mut existing = Box::pin(Worker::interrupt(&all, &id, false));
     let mut competing = Box::pin(acquire(&seed, &id));
     assert!(poll!(&mut existing).is_pending());
     assert!(poll!(&mut competing).is_pending());

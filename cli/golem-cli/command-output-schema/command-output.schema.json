@@ -6195,7 +6195,8 @@
         "parameters",
         "pluginRegistrationId",
         "pluginName",
-        "pluginVersion"
+        "pluginVersion",
+        "installedBy"
       ],
       "properties": {
         "environmentPluginGrantId": { "type": "string" },
@@ -6205,7 +6206,8 @@
         "pluginName": { "type": "string" },
         "pluginVersion": { "type": "string" },
         "oplogProcessorComponentId": { "type": ["string", "null"] },
-        "oplogProcessorComponentRevision": { "type": ["integer", "null"], "minimum": 0 }
+        "oplogProcessorComponentRevision": { "type": ["integer", "null"], "minimum": 0 },
+        "installedBy": { "type": "string" }
       },
       "additionalProperties": false
     },

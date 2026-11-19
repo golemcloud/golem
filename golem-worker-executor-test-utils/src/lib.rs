@@ -720,8 +720,7 @@ impl TestWorkerExecutor {
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
-        let worker =
-            Worker::get_exact_existing_suspended(services, &owned_agent_id, caller.clone()).await?;
+        let worker = Worker::get_exact_existing_suspended(services, &owned_agent_id).await?;
         let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
             .finalize(
                 agent_id.clone(),

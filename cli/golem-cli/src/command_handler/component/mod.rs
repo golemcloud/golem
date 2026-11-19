@@ -1815,6 +1815,7 @@ impl ComponentCommandHandler {
         provision: &ToolManifestProvisionConfig,
         plugin_grants: &HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
     ) -> anyhow::Result<(ToolProvisionConfig, Vec<PendingRemoteInitialFile>)> {
+        let installed_by = self.ctx.account_id().await?;
         let plugins = provision
             .plugins
             .iter()
@@ -1842,6 +1843,7 @@ impl ComponentCommandHandler {
                     plugin_version: grant.plugin.version.clone(),
                     oplog_processor_component_id: Some(spec.component_id),
                     oplog_processor_component_revision: Some(spec.component_revision),
+                    installed_by,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;

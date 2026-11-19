@@ -1755,6 +1755,7 @@ impl WorkerService {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: AuthCtx,
+        caller: golem_api_grpc::proto::golem::component::Caller,
     ) -> WorkerResult<()> {
         auth_ctx
             .authorize_system_only("process oplog entries")
@@ -1777,6 +1778,7 @@ impl WorkerService {
                 first_entry_index,
                 entries,
                 auth_ctx,
+                caller,
             )
             .await
     }
@@ -5184,6 +5186,7 @@ mod tests {
             _: OplogIndex,
             _: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
             _: AuthCtx,
+            _: golem_api_grpc::proto::golem::component::Caller,
         ) -> WorkerResult<()> {
             self.effects.lock().unwrap().push("process-oplog-entries");
             Ok(())
@@ -5554,6 +5557,7 @@ mod tests {
                 plugin_version: "1.0.0".to_string(),
                 oplog_processor_component_id: None,
                 oplog_processor_component_revision: None,
+                installed_by: golem_common::model::account::AccountId::new(),
             }],
             files: Vec::new(),
         };
@@ -6276,6 +6280,7 @@ mod tests {
                 OplogIndex::INITIAL,
                 Vec::new(),
                 AuthCtx::System,
+                Caller::anonymous().into(),
             )
             .await
             .unwrap();
@@ -6299,6 +6304,7 @@ mod tests {
                     OplogIndex::INITIAL,
                     Vec::new(),
                     non_system_auth,
+                    Caller::anonymous().into(),
                 )
                 .await
                 .is_err()

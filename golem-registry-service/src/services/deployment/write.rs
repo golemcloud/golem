@@ -256,6 +256,15 @@ impl DeploymentWriteService {
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
+        // The deploying account installs the plugins of each remote tool's provision, whatever
+        // installer the request names.
+        let mut data = data;
+        for deployment in &mut data.remote_tools {
+            for plugin in &mut deployment.provision.plugins {
+                plugin.installed_by = auth.actor_account_id();
+            }
+        }
+
         let mcp_imports = data
             .mcp_imports
             .clone()

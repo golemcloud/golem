@@ -826,6 +826,7 @@ impl WorkerClient for RecordingWorkerClient {
         _: OplogIndex,
         _: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         _: AuthCtx,
+        _: golem_api_grpc::proto::golem::component::Caller,
     ) -> WorkerResult<()> {
         unimplemented!()
     }
