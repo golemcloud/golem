@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -71,7 +72,7 @@ func wasm_stream_lift_result_list_u8_golem_tool_streams_byte_stream_failure(src 
 
 		result0 = witTypes.Ok[[]uint8, golem_tool_streams.ByteStreamFailure](value)
 	case 1:
-		result := wasm_lift_1_t664(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t683(unsafe.Add(unsafe.Pointer(src), 4))
 
 		result0 = witTypes.Err[[]uint8, golem_tool_streams.ByteStreamFailure](result)
 	default:
@@ -99,7 +100,7 @@ func wasm_stream_lower_result_list_u8_golem_tool_streams_byte_stream_failure(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t664(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t683(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	default:
 		panic("unreachable")
@@ -132,7 +133,7 @@ func LiftStreamResultListU8GolemToolStreamsByteStreamFailure(handle int32) *witT
 }
 
 //go:noinline
-func wasm_lift_1_t664(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
+func wasm_lift_1_t683(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
 	var variant golem_tool_streams.ByteStreamFailure
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -160,7 +161,7 @@ func wasm_lift_1_t664(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
 }
 
 //go:noinline
-func wasm_lower_1_t664(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
+func wasm_lower_1_t683(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_tool_streams.ByteStreamFailureCancelled:

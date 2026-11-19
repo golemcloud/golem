@@ -143,7 +143,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|| {}))
+        self.complete_access_with_delivered(store, get_ctx, response, Box::new(|_| {}))
             .await
     }
 
@@ -154,7 +154,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         response: Pair::Resp,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: OnDelivered,
     ) -> Result<Pair::Resp, TerminalCallError>
     where
         T: 'static,
@@ -782,6 +782,7 @@ pub(super) fn response_has_bounded_encoding_stack<Resp: 'static>() -> bool {
         TypeId::of::<HostResponseP3BlobstoreIncomingValueStream>(),
         TypeId::of::<HostResponseP3HttpClientConsumeBodyChunk>(),
         TypeId::of::<HostResponseP3SocketsTcpReceiveChunk>(),
+        TypeId::of::<HostResponseP3SocketsTcpSendChunk>(),
         TypeId::of::<HostResponseGolemApiCard>(),
         TypeId::of::<HostResponseGolemApiOplogEntries>(),
         TypeId::of::<HostResponseToolAttachmentCreated>(),

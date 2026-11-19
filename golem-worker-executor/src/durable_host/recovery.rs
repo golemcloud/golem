@@ -631,12 +631,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
 
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .rebuild_resolved_names(hydrated.reference.oplog_index)
-                            .await?;
                         Self::finalize_pending_snapshot_update(instance, store).await
                     }
                     UpdateDescription::Automatic { .. }

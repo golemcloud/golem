@@ -244,7 +244,8 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
                   )
               }
             )
-          )
+          ),
+          core.commandHttp(m.sym)
         )
       }
       val root = ir.rootMethod
@@ -261,11 +262,12 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
               Option.when(m.doc.summary.nonEmpty || m.doc.description.nonEmpty || m.doc.examples.nonEmpty)(m.doc),
               Option.when(m.aliases.nonEmpty)(m.aliases),
               GlobalsBuild(c.parentOptions.map(option), c.parentFlags),
-              descriptor(c.childTrait, next)
+              descriptor(c.childTrait, next),
+              core.commandHttp(m.sym)
             )
         }
       }
-      ToolDescriptorBuilder.build(ir.identity, ir.version, ir.requiresFilesystem, root, children)
+      ToolDescriptorBuilder.build(ir.identity, ir.version, ir.requiresFilesystem, root, children, ir.httpMount)
     }
     descriptor(traitRepr, Set.empty)(new ToolBuildCtx) match {
       case Right(tool) =>

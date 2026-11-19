@@ -120,18 +120,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_access_with_delivered(store, get_ctx, Box::new(|| {}))
+        self.replay_access_with_delivered(store, get_ctx, |_| Box::new(|_| {}))
             .await
     }
 
-    /// [`Self::replay_access`] that runs `on_delivered` when the guest receives the replayed
-    /// result at its recorded boundary (see
+    /// [`Self::replay_access`] that builds a hook from the replayed response and runs it when
+    /// the guest receives that response at its recorded boundary (see
     /// [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`]).
     pub(crate) async fn replay_access_with_delivered<T, D, Ctx>(
         self,
         store: &Accessor<T, D>,
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: impl FnOnce(&Pair::Resp) -> OnDelivered,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -170,7 +170,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessResultDestination::Host,
             false,
             Some(activity),
-            Box::new(|| {}),
+            |_| Box::new(|_| {}),
         )
         .await
         .map_err(|source| TerminalCallError::new(source, context))
@@ -183,7 +183,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         destination: AccessResultDestination,
         require_completed: bool,
         drop_activity: Option<&crate::durable_host::tail_work::TailActivity>,
-        on_delivered: crate::durable_host::concurrent::OnDelivered,
+        on_delivered: impl FnOnce(&Pair::Resp) -> OnDelivered,
     ) -> Result<CallReplayOutcome<Pair, P>, WorkerExecutorError>
     where
         T: 'static,
@@ -268,7 +268,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         self.cleanup_sink.clone(),
                         self.teardown_probe(),
                     )
-                    .deliver_at_accessor_terminal_with_delivered(store, on_delivered)
+                    .deliver_at_accessor_terminal_with_delivered(store, on_delivered(&response))
                     .await?;
                 }
                 Ok(CallReplayOutcome::Replayed(response))
@@ -393,6 +393,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .map_err(|error| error.source)?;
                     return Ok(CallReplayOutcome::Replayed(response));
                 }
+                self.wait_recorded_retry_backoff(store, get_ctx).await?;
                 Ok(CallReplayOutcome::Incomplete(self))
             }
         }
@@ -561,8 +562,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_guest_deferred(&mut AccessorContext::new(store, get_ctx))
-            .await
+        match self
+            .replay_guest_deferred(&mut AccessorContext::new(store, get_ctx))
+            .await?
+        {
+            DeferredCallReplayOutcome::Incomplete(mut call) => {
+                call.wait_recorded_retry_backoff(store, get_ctx).await?;
+                Ok(DeferredCallReplayOutcome::Incomplete(call))
+            }
+            replayed => Ok(replayed),
+        }
     }
 
     pub(crate) async fn replay_guest_deferred<Ctx: WorkerCtx>(

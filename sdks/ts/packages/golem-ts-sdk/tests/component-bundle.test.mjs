@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rollup } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import ts from 'typescript';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { z } from 'zod';
 import { compileSchema } from '../src/schema/adapter';
@@ -14,6 +15,10 @@ import { ToolType } from '../src/toolReflection';
 import '../src/schema/zod';
 import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import {
+  bundleSourcePath,
+  writeBundleFixture,
+} from '../../../../javascript/js-bundle-fixtures.mjs';
 
 const nativeRequire = createRequire(import.meta.url);
 const fixtures = path.resolve('tests/components');
@@ -45,7 +50,7 @@ function configuration(main) {
   };
 }
 
-async function build(name, pluginOptions = {}, format = 'cjs') {
+async function build(name, pluginOptions = {}, format = 'cjs', outputOptions = {}) {
   const main = path.join(fixtures, `${name}.ts`);
   const config = configuration(main);
   if (expected[name]) expect(discoverCapabilities(config)).toEqual(expected[name]);
@@ -89,12 +94,52 @@ async function build(name, pluginOptions = {}, format = 'cjs') {
     ],
   });
   try {
-    const { output } = await bundle.generate({ format, inlineDynamicImports: true });
+    const { output } = await bundle.generate({
+      format,
+      inlineDynamicImports: true,
+      ...outputOptions,
+    });
     return { ...output[0], unminified };
   } finally {
     await bundle.close();
   }
 }
+
+it('builds JS guest bundle fixtures', async () => {
+  const chunk = await build('js-guest-smoke', {}, 'es', {
+    file: path.resolve(process.env.GOLEM_JS_GUEST_BUNDLE_DIR ?? fixtures, 'ts/smoke/smoke.mjs'),
+    sourcemap: true,
+    sourcemapPathTransform: bundleSourcePath,
+  });
+  expect(chunk.code).toContain('JsGuestSmoke');
+  expect(chunk.map).not.toBeNull();
+  writeBundleFixture('ts', 'smoke', {
+    'smoke.mjs': chunk.code,
+    'smoke.mjs.map': chunk.map.toString() + '\n',
+  });
+}, 30000);
+
+it('keeps JS guest fixture outputs isolated by SDK and application', () => {
+  const directory = fs.mkdtempSync(path.join(tmpdir(), 'golem-js-bundles-'));
+  vi.stubEnv('GOLEM_JS_GUEST_BUNDLE_DIR', directory);
+  try {
+    writeBundleFixture('ts', 'smoke', { 'smoke.mjs': 'old', 'obsolete.map': '{}' });
+    writeBundleFixture('ts', 'other', { 'other.mjs': 'other application' });
+    writeBundleFixture('effect', 'smoke', { 'smoke.mjs': 'other SDK' });
+    writeBundleFixture('ts', 'smoke', { 'smoke.mjs': 'new' });
+    expect(fs.readFileSync(path.join(directory, 'ts/smoke/smoke.mjs'), 'utf8')).toBe('new');
+    expect(fs.existsSync(path.join(directory, 'ts/smoke/obsolete.map'))).toBe(false);
+    expect(fs.readFileSync(path.join(directory, 'ts/other/other.mjs'), 'utf8')).toBe(
+      'other application',
+    );
+    expect(fs.readFileSync(path.join(directory, 'effect/smoke/smoke.mjs'), 'utf8')).toBe(
+      'other SDK',
+    );
+  } finally {
+    vi.unstubAllEnvs();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 const unit = { valueNodes: [{ tag: 'record-value', val: [] }], root: 0 };
 function wireValue(schema, value) {

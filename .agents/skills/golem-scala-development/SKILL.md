@@ -60,7 +60,7 @@ For the repository's complete local prerequisite flow (WIT sync, the guest runti
 cargo make build-sdk-scala
 ```
 
-Delete `sdks/scala/target/.local-publish-marker` before rerunning that cargo-make task when inputs changed. For release/CI-sensitive work, copy the explicit publish matrix from current `Makefile.toml` or `.github/workflows/ci.yaml`; do not preserve an older hand-written sequence in documentation.
+Delete `sdks/scala/target/.local-publish-marker` before rerunning that cargo-make task when inputs changed. For release/CI-sensitive work, use the current publication commands in `Makefile.toml` and `Makefile.sdk-validation.toml`; do not preserve an older hand-written sequence in documentation.
 
 ## Runtime and WIT changes
 
@@ -83,7 +83,7 @@ side against a fake runtime module in `core/js/src/test/js/schema-value-stream-m
 
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. Use the `wasm-rquickjs` version pinned by `WASM_RQUICKJS_VERSION` in `.github/workflows/ci.yaml`, at least 0.5.3: the SDK imports `wasm-rquickjs:custom-invocation-context`, and 0.5.3 runs timer sleeps in the scope that registered them. The script uses TypeScript transformation, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. Use the `wasm-rquickjs` version pinned by `wasm-rquickjs-version` in `.github/actions/setup-main-validation/action.yml`, at least 0.5.3: the SDK imports `wasm-rquickjs:custom-invocation-context`, and 0.5.3 runs timer sleeps in the scope that registered them. The script uses TypeScript transformation, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
 ## Example and end-to-end work
 

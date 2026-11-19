@@ -325,7 +325,24 @@ pub(super) fn validate_tool_with<const VALUES: bool>(
     graph_check: ToolGraphCheck,
 ) -> Result<(), ToolBuildError> {
     check_command_tree_structure(tool)?;
-    visit_command::<VALUES>(tool, 0, &[], graph_check)
+    visit_command::<VALUES>(tool, 0, &[], graph_check)?;
+    if tool.http_mount.is_some() || tool.commands.iter().any(|node| node.http.is_some()) {
+        tool.build_native_tool()?
+            .validate_http()
+            .map_err(|error| match error {
+                native::validation::ToolValidationError::InvalidHttpDeclaration {
+                    command,
+                    input,
+                    detail,
+                } => ToolBuildError::InvalidHttpDeclaration {
+                    command,
+                    input,
+                    detail,
+                },
+                other => ToolBuildError::EncodeError(other.to_string()),
+            })?;
+    }
+    Ok(())
 }
 
 /// Structural integrity of the command tree: non-empty, every subcommand index

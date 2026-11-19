@@ -17,8 +17,8 @@ mod parameter_parsing;
 mod response_mapping;
 
 use self::cache_headers::{
-    add_vary_header, build_cache_control_value, build_etag_value, headers as cache_header,
-    if_none_match_hits, parse_if_none_match_entries, supports_http_revalidation,
+    build_etag_value, headers as cache_header, if_none_match_hits, parse_if_none_match_entries,
+    supports_http_revalidation,
 };
 pub(super) use self::parameter_parsing::validate_query_parameters;
 use self::parameter_parsing::{
@@ -26,8 +26,9 @@ use self::parameter_parsing::{
 };
 use self::response_mapping::interpret_agent_response;
 use super::RichRequest;
+use super::cache_headers::{CacheRouteKind, add_vary_headers, apply_response_cache_headers};
 use super::error::RequestHandlerError;
-use super::model::{ResponseBody, RichRouteSecurity};
+use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
 use crate::service::worker::WorkerService;
@@ -95,7 +96,7 @@ impl CallAgentHandler {
             && is_cacheable_method(&request_method)
             && supports_http_revalidation(read_only)
             && let Some(not_modified) = self
-                .try_handle_if_none_match(request, behaviour, &agent_id, read_only, resolved_route)
+                .try_handle_if_none_match(request, behaviour, &agent_id, read_only)
                 .await?
         {
             return Ok(not_modified);
@@ -184,7 +185,7 @@ impl CallAgentHandler {
                 agent_fingerprint,
                 read_only,
                 behaviour,
-                resolved_route,
+                request.authenticated_session().is_some(),
             );
 
             if request_method == Method::HEAD {
@@ -207,7 +208,6 @@ impl CallAgentHandler {
         behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         read_only: &ReadOnlyConfig,
-        resolved_route: &ResolvedRouteEntry,
     ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
         let Some(raw) = request
             .headers()
@@ -240,7 +240,7 @@ impl CallAgentHandler {
             Some(current_fingerprint),
             read_only,
             behaviour,
-            resolved_route,
+            request.authenticated_session().is_some(),
         );
 
         Ok(Some(RouteExecutionResult {
@@ -530,9 +530,8 @@ fn is_cacheable_method(method: &Method) -> bool {
 
 /// Insert the cache headers for a read-only `AgentMethod` response into the
 /// given header map: `Cache-Control`, optionally `ETag` (when the cache policy
-/// supports HTTP revalidation), and `Vary` for every header that influences
-/// the response (`Authorization` / session-header for principal-aware
-/// methods, plus any header-bound method parameters).
+/// supports HTTP revalidation), and `Vary` for header-bound method parameters.
+/// Credential-related Vary headers are also applied at the response boundary.
 fn add_read_only_cache_headers(
     headers: &mut http::HeaderMap,
     agent_id: &AgentId,
@@ -540,11 +539,14 @@ fn add_read_only_cache_headers(
     agent_fingerprint: Option<AgentFingerprint>,
     read_only: &ReadOnlyConfig,
     behaviour: &CallAgentBehaviour,
-    resolved_route: &ResolvedRouteEntry,
+    request_authenticated: bool,
 ) {
-    headers.insert(
-        cache_header::CACHE_CONTROL,
-        http::HeaderValue::from_str(&build_cache_control_value(read_only)).unwrap(),
+    apply_response_cache_headers(
+        CacheRouteKind::Typed(Some(&read_only.cache_policy)),
+        headers,
+        request_authenticated,
+        false,
+        false,
     );
 
     // `CachePolicy::NoCache` explicitly opts out of HTTP caching: no ETag, and
@@ -565,32 +567,10 @@ fn add_read_only_cache_headers(
         );
     }
 
-    // Vary on every request header that may influence the response: the
-    // principal-bound header for principal-aware methods, and any header-bound
-    // method parameters bound by the route.
-    if read_only.uses_principal {
-        add_vary_header(
-            headers,
-            principal_vary_header_name(&resolved_route.route.security),
-        );
-    }
     for param in &behaviour.method_parameters {
         if let MethodParameter::Header { header_name, .. } = param {
-            add_vary_header(headers, header_name);
+            add_vary_headers(headers, &[header_name]);
         }
-    }
-}
-
-/// Return the request header used to derive the caller's principal for the
-/// route's security configuration. Defaults to `Authorization` for OIDC /
-/// session-based security; uses the configured header name for
-/// `SessionFromHeader` security.
-fn principal_vary_header_name(security: &RichRouteSecurity) -> &str {
-    match security {
-        RichRouteSecurity::SessionFromHeader(s) => s.header_name.as_str(),
-        RichRouteSecurity::None
-        | RichRouteSecurity::SecurityScheme(_)
-        | RichRouteSecurity::Unavailable => "Authorization",
     }
 }
 

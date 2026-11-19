@@ -31,6 +31,7 @@ fn node(name: &str, body: Option<CommandBody>) -> CommandNode {
         name: name.to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        http: None,
         globals: Globals::default(),
         subcommands: Vec::new(),
         body,
@@ -66,6 +67,7 @@ fn tool(root: CommandNode) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree { nodes: vec![root] },
         schema: SchemaGraph::empty(),
     }
@@ -171,6 +173,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
     let definition = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![root, child, grandchild],
         },
@@ -216,6 +219,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
     let collision = Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![
                 collision_root,

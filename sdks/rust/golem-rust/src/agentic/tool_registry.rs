@@ -144,9 +144,11 @@ mod tests {
         ExtendedToolType {
             version: "0.1.0".into(),
             requires_filesystem: false,
+            http_mount: None,
             commands: vec![ExtendedCommandNode {
                 name: name.into(),
                 aliases: vec![],
+                http: None,
                 doc: Doc {
                     summary: String::new(),
                     description: String::new(),

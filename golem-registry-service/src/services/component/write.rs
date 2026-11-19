@@ -2589,11 +2589,13 @@ mod tests {
         Tool {
             version: version.to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: Vec::new(),
                     body: None,

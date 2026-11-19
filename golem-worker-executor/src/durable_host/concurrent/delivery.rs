@@ -747,15 +747,18 @@ impl CompletionDelivery {
         T: 'static,
         D: HasData + ?Sized,
     {
-        self.deliver_at_accessor_terminal_with_delivered(store, Box::new(|| {}))
+        self.deliver_at_accessor_terminal_with_delivered(store, Box::new(|_| {}))
             .await
     }
 
-    /// [`Self::deliver_at_accessor_terminal`] that runs `on_delivered` when the observer settles
-    /// the token as delivered: when the guest receives the terminal, live or at its recorded
-    /// `CompletionDelivered` marker on replay. It runs inside Wasmtime's event loop, so it must
-    /// not access the store. A completion that the guest discards, that no observer watches, or
-    /// whose observer is dropped never runs it.
+    /// [`Self::deliver_at_accessor_terminal`] that runs `on_delivered` when the token settles as
+    /// delivered: when the guest receives the terminal, live or at its recorded
+    /// `CompletionDelivered` marker on replay, or at once for a token that needs no observer (an
+    /// unpersisted live call, or a replayed partial result of a cancelled call). The observer
+    /// runs it inside Wasmtime's event loop, so it must not access the store, block or panic. A
+    /// completion that the guest discards, a replayed completion that waits for the replay tail
+    /// without a guest-visible subtask, a token that no observer watches, and a dropped observer
+    /// never run it.
     pub(crate) async fn deliver_at_accessor_terminal_with_delivered<T, D>(
         mut self,
         store: &Accessor<T, D>,
@@ -788,7 +791,9 @@ impl CompletionDelivery {
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
         );
         if !self.is_live_armed() && !replay_barrier {
+            let recorded = matches!(self.state, CompletionDeliveryState::Unarmed);
             self.delivered();
+            on_delivered(Delivery { recorded });
             return Ok(());
         }
         let guard = AccessorDeliveryGuard {
@@ -1033,7 +1038,16 @@ pub(super) struct AccessorDeliveryGuard {
 
 /// A hook that runs when the guest receives a completion; see
 /// [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`].
-pub(crate) type OnDelivered = Box<dyn FnOnce() + Send>;
+pub(crate) type OnDelivered = Box<dyn FnOnce(Delivery) + Send>;
+
+/// How a completion that an [`OnDelivered`] hook observes reached the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Delivery {
+    /// The delivery is live: the token recorded its `CompletionDelivered` marker now, or the
+    /// call is live and unpersisted. It is unset for a delivery that replay reproduces at a
+    /// recorded marker or for a recorded partial result.
+    pub(crate) recorded: bool,
+}
 
 impl AccessorDeliveryGuard {
     pub(super) fn consume(mut self, consumption: TerminalConsumption) {
@@ -1045,9 +1059,10 @@ impl AccessorDeliveryGuard {
             // Queue the successful delivery marker immediately before Wasmtime enters the guest
             // callback (or after wait/poll/sync lowering handed the result to the guest).
             TerminalConsumption::Delivered => {
+                let recorded = delivery.is_live_armed();
                 delivery.delivered();
                 if let Some(callback) = self.on_delivered.take() {
-                    callback();
+                    callback(Delivery { recorded });
                 }
             }
             // The guest consumed the pending terminal without observing the persisted

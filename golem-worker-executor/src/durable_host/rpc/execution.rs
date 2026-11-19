@@ -586,6 +586,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         .cloned();
                     let task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: retry_params.retry_point,
+                        retrying_start_index: Some(retry_params.retrying_start_index),
                         entity_parent_start_index: retry_params.entity_parent_start_index,
                         invocation_id: retry_params.invocation_id,
                         environment_state_service: retry_params.environment_state_service,
@@ -594,6 +595,7 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         agent_config_retry_policies: retry_params.agent_config_retry_policies,
                         runtime_retry_policy_mutations: retry_params.runtime_retry_policy_mutations,
                         max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
+                        durable_wait: false,
                         current_retry_policy_state,
                         retry_properties: retry_params.retry_properties,
                         worker: retry_params.worker,
@@ -643,6 +645,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
     expected_callee_fingerprint: Option<AgentFingerprint>,
     span_id: &SpanId,
     retry_point: OplogIndex,
+    retrying_start_index: OplogIndex,
     initial_freshness_disposition: InvocationFreshnessDisposition,
     scope_card: Option<ScopeCard>,
     auth_ctx: AuthCtx,
@@ -661,6 +664,7 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
             max_in_function_retry_delay: ctx.durable_execution_state().max_in_function_retry_delay,
             worker: ctx.public_state.worker(),
             retry_point,
+            retrying_start_index,
             entity_parent_start_index: ctx.entity_parent_start_index(),
             invocation_id: ctx.state.get_current_idempotency_key(),
             execution_status: ctx.execution_status.clone(),

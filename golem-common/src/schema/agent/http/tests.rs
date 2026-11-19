@@ -434,6 +434,24 @@ fn file_response_headers_validate_names_values_duplicates_and_ownership() {
     ];
     agent.validate().unwrap();
 
+    for name in [
+        "Golem-Invocation-Id",
+        "golem-environment-id",
+        "Golem-Token",
+        "Set-Cookie",
+        "WWW-Authenticate",
+        "aCcEsS-CoNtRoL-Allow-Origin",
+    ] {
+        agent.http_mount.as_mut().unwrap().file_response_headers = vec![FileResponseHeader {
+            name: name.into(),
+            value: "value".into(),
+        }];
+        assert!(matches!(
+            validate(&agent),
+            Err(HttpAgentValidationError::InvalidFileResponseHeader(_))
+        ));
+    }
+
     for headers in [
         vec![FileResponseHeader {
             name: "Content-Length".into(),
@@ -450,6 +468,26 @@ fn file_response_headers_validate_names_values_duplicates_and_ownership() {
         vec![FileResponseHeader {
             name: "Pragma".into(),
             value: "no-cache".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "GoLeM-InVoCaTiOn-Id".into(),
+            value: "id".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Golem-Environment-Id".into(),
+            value: "id".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Golem-Token".into(),
+            value: "token".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Set-Cookie".into(),
+            value: "session=value".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "ACCESS-CONTROL-custom".into(),
+            value: "value".into(),
         }],
         vec![
             FileResponseHeader {

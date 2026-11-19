@@ -119,6 +119,7 @@ pub(all) struct ToolCommandInfo {
   examples : Array[ToolExample]
   description : String
   is_root : Bool
+  http : ToolHttpInfo?
 } derive(Debug, Eq)
 
 ///|
@@ -128,6 +129,7 @@ pub(all) struct ToolInfo {
   aliases : Array[String]
   version : String?
   requires_filesystem : Bool
+  http_mount : String?
   description : String
   examples : Array[ToolExample]
   commands : Array[ToolCommandInfo]
@@ -1460,6 +1462,7 @@ fn parse_command(
     examples,
     description: tool_doc(decl.doc),
     is_root: name == tool_name,
+    http: parse_tool_http(decl.attrs),
   }
 }
 
@@ -1586,6 +1589,7 @@ pub fn parse_tools(
                 aliases,
                 version,
                 requires_filesystem,
+                http_mount: parse_tool_mount(decl.attrs),
                 description: tool_doc(decl.doc),
                 examples: parse_examples(decl.attrs, "tool " + decl.tycon),
                 commands: [],

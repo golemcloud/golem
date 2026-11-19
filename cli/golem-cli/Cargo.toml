@@ -34,7 +34,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
-golem-common = { workspace = true, default-features = true }
+golem-common = { workspace = true, default-features = true, features = ["javascript"] }
 golem-mcp-import = { workspace = true }
 golem-schema = { workspace = true }
 

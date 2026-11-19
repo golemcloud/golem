@@ -98,7 +98,7 @@ actual = trim ${targets.stdout}
 expected = set "agent,http_router,reflection_recipe_compile,rich_tool_conformance,schema_reexport,tool,tool_canonical,ui"
 covered = eq ${actual} ${expected}
 if not ${covered}
-    echo "Test targets of sdks/rust changed; update the build-golem-rust matrix in ci.yaml and validate-sdk-rust-check:"
+    echo "Test targets of sdks/rust changed; update validate-sdk-rust-check:"
     echo "Expected: ${expected}"
     echo "Actual: ${actual}"
     trigger_error "Rust SDK test target coverage changed"

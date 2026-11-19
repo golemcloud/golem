@@ -39,7 +39,10 @@ struct PkceContext {
     scheme_id: SecuritySchemeId,
 }
 
-async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<PkceContext> {
+async fn context(
+    deps: &EnvBasedTestDependencies,
+    cookie_login: bool,
+) -> anyhow::Result<PkceContext> {
     let fixture = OidcFixture::start().await?;
     let scheme_id = Arc::new(Mutex::new(None));
     let captured_id = scheme_id.clone();
@@ -73,12 +76,16 @@ async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<PkceContext>
                         client_secret: "fixture-secret".into(),
                         redirect_url: format!("https://{}/oidc/callback", domain.0),
                         scopes: vec!["email".into(), "profile".into()],
-                        login: SecuritySchemeLogin::AuthorizationCodePkce(
-                            AuthorizationCodePkceConfig {
-                                redirect_uris: vec![FRONTEND_REDIRECT.into()],
-                                origins: vec![FRONTEND_ORIGIN.into()],
-                            },
-                        ),
+                        login: if cookie_login {
+                            SecuritySchemeLogin::Cookie(golem_schema::Empty {})
+                        } else {
+                            SecuritySchemeLogin::AuthorizationCodePkce(
+                                AuthorizationCodePkceConfig {
+                                    redirect_uris: vec![FRONTEND_REDIRECT.into()],
+                                    origins: vec![FRONTEND_ORIGIN.into()],
+                                },
+                            )
+                        },
                     },
                 )
                 .await?;
@@ -118,7 +125,7 @@ fn token_body(code: &str) -> String {
 #[test]
 #[timeout("180s")]
 async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
-    let context = context(deps).await?;
+    let context = context(deps, false).await?;
     let mut authorize = context
         .gateway
         .base_url
@@ -149,6 +156,10 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         .send()
         .await?;
     assert_eq!(callback.status(), reqwest::StatusCode::FOUND);
+    assert_eq!(
+        callback.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-store"
+    );
     assert!(
         callback
             .headers()
@@ -192,6 +203,11 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         .await?;
     assert_eq!(token.status(), reqwest::StatusCode::OK);
     assert_eq!(
+        token.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    assert_eq!(token.headers()[reqwest::header::PRAGMA], "no-cache");
+    assert_eq!(
         token.headers()[reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN],
         FRONTEND_ORIGIN
     );
@@ -205,6 +221,10 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         .join("/principal-agent/pkce-user/authed-principal")?;
     let unauthorized = context.gateway.client.get(protected.clone()).send().await?;
     assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        unauthorized.headers()[reqwest::header::CACHE_CONTROL],
+        "no-cache"
+    );
     let authenticated = context
         .gateway
         .client
@@ -213,12 +233,59 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         .send()
         .await?;
     assert_eq!(authenticated.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        authenticated.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-cache"
+    );
     let principal: Value = authenticated.json().await?;
     assert_eq!(principal["value"]["oidc"]["sub"], "fixture-user");
     assert_eq!(
         principal["value"]["oidc"]["email"],
         "fixture-user@example.com"
     );
+
+    let readonly_url = context
+        .gateway
+        .base_url
+        .join("/principal-agent/pkce-user/authed-readonly")?;
+    let readonly = context
+        .gateway
+        .client
+        .get(readonly_url.clone())
+        .bearer_auth(bearer)
+        .send()
+        .await?;
+    assert_eq!(readonly.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        readonly.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-cache"
+    );
+    let etag = readonly.headers()[reqwest::header::ETAG].clone();
+    assert_eq!(readonly.json::<String>().await?, "pkce-user");
+    let denied = context
+        .gateway
+        .client
+        .get(readonly_url.clone())
+        .bearer_auth("invalid-credential")
+        .header(reqwest::header::IF_NONE_MATCH, &etag)
+        .send()
+        .await?;
+    assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let cached = context
+        .gateway
+        .client
+        .get(readonly_url)
+        .bearer_auth(bearer)
+        .header(reqwest::header::IF_NONE_MATCH, &etag)
+        .send()
+        .await?;
+    assert_eq!(cached.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        cached.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-cache"
+    );
+    assert_eq!(cached.headers()[reqwest::header::ETAG], etag);
+    assert!(cached.bytes().await?.is_empty());
 
     let replay = context
         .gateway
@@ -232,6 +299,8 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
         .send()
         .await?;
     assert_eq!(replay.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(replay.headers()[reqwest::header::CACHE_CONTROL], "no-store");
+    assert_eq!(replay.headers()[reqwest::header::PRAGMA], "no-cache");
 
     let rejected_start = context.gateway.client.get(authorize).send().await?;
     let provider_url = Url::parse(rejected_start.headers()[reqwest::header::LOCATION].to_str()?)?;
@@ -253,4 +322,204 @@ async fn authorization_code_pkce_full_flow(deps: &EnvBasedTestDependencies) -> a
     assert!(rejected.headers().get(reqwest::header::LOCATION).is_none());
     drop(context.fixture);
     Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn cookie_callback_credentials_are_private_and_not_stored(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let context = context(deps, true).await?;
+    let protected = context
+        .gateway
+        .base_url
+        .join("/principal-agent/cookie-user/authed-principal")?;
+    let start = context.gateway.client.get(protected.clone()).send().await?;
+    assert_eq!(start.status(), reqwest::StatusCode::FOUND);
+    let provider_url = Url::parse(start.headers()[reqwest::header::LOCATION].to_str()?)?;
+    let provider = OidcFixture::client_without_redirects()
+        .get(provider_url)
+        .send()
+        .await?;
+    let callback = Url::parse(provider.headers()[reqwest::header::LOCATION].to_str()?)?;
+    let callback = context
+        .gateway
+        .client
+        .get(gateway_url(&context, &callback)?)
+        .send()
+        .await?;
+    assert_eq!(callback.status(), reqwest::StatusCode::FOUND);
+    assert_eq!(
+        callback.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-store"
+    );
+    let cookie = callback.headers()[reqwest::header::SET_COOKIE]
+        .to_str()?
+        .split(';')
+        .next()
+        .unwrap();
+    let authenticated = context
+        .gateway
+        .client
+        .get(protected)
+        .header(reqwest::header::COOKIE, cookie)
+        .send()
+        .await?;
+    assert_eq!(authenticated.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        authenticated.headers()[reqwest::header::CACHE_CONTROL],
+        "private, no-cache"
+    );
+    assert_eq!(
+        authenticated.json::<Value>().await?["value"]["oidc"]["sub"],
+        "fixture-user"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn readonly_cache_varies_when_valid_bearer_principal_changes(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let context = context(deps, false).await?;
+    let url = context
+        .gateway
+        .base_url
+        .join("/principal-agent/principal-switch/authed-readonly-principal")?;
+    let mut first_etag = None;
+    for subject in ["alice", "bob"] {
+        context.fixture.set_subject(subject);
+        let mut authorize = context
+            .gateway
+            .base_url
+            .join(&pkce_authorization_path(&context.scheme_id))?;
+        authorize
+            .query_pairs_mut()
+            .append_pair("response_type", "code")
+            .append_pair("redirect_uri", FRONTEND_REDIRECT)
+            .append_pair("state", subject)
+            .append_pair("code_challenge", CHALLENGE)
+            .append_pair("code_challenge_method", "S256");
+        let start = context.gateway.client.get(authorize).send().await?;
+        assert_eq!(start.status(), reqwest::StatusCode::FOUND);
+        let provider_url = Url::parse(start.headers()[reqwest::header::LOCATION].to_str()?)?;
+        let provider = OidcFixture::client_without_redirects()
+            .get(provider_url)
+            .send()
+            .await?;
+        assert_eq!(provider.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
+        let callback = Url::parse(provider.headers()[reqwest::header::LOCATION].to_str()?)?;
+        let callback = context
+            .gateway
+            .client
+            .get(gateway_url(&context, &callback)?)
+            .send()
+            .await?;
+        assert_eq!(callback.status(), reqwest::StatusCode::FOUND);
+        let frontend = Url::parse(callback.headers()[reqwest::header::LOCATION].to_str()?)?;
+        let code = frontend
+            .query_pairs()
+            .find(|(name, _)| name == "code")
+            .unwrap()
+            .1
+            .into_owned();
+        let token = context
+            .gateway
+            .client
+            .post(
+                context
+                    .gateway
+                    .base_url
+                    .join(&pkce_token_path(&context.scheme_id))?,
+            )
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(token_body(&code))
+            .send()
+            .await?;
+        assert_eq!(token.status(), reqwest::StatusCode::OK);
+        let token: Value = token.json().await?;
+        let bearer = token["access_token"].as_str().unwrap();
+
+        if let Some(first_etag) = &first_etag {
+            // Before Bob invokes the method, Alice's validator still matches.
+            // Credential Vary prevents a cache from selecting Alice's body here.
+            let cross_principal = context
+                .gateway
+                .client
+                .get(url.clone())
+                .bearer_auth(bearer)
+                .header(reqwest::header::IF_NONE_MATCH, first_etag)
+                .send()
+                .await?;
+            assert_eq!(cross_principal.status(), reqwest::StatusCode::NOT_MODIFIED);
+            assert_eq!(
+                cross_principal.headers()[reqwest::header::ETAG],
+                *first_etag
+            );
+            assert_credential_vary(cross_principal.headers());
+            assert!(cross_principal.bytes().await?.is_empty());
+        }
+
+        // A cache must select a different variant for the new Authorization value,
+        // rather than revalidating Alice's body using Bob's valid credential.
+        let response = context
+            .gateway
+            .client
+            .get(url.clone())
+            .bearer_auth(bearer)
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            response.headers()[reqwest::header::CACHE_CONTROL],
+            "private, no-cache"
+        );
+        let etag = response.headers()[reqwest::header::ETAG].clone();
+        let headers = response.headers().clone();
+        assert_eq!(
+            response.json::<Value>().await?["value"]["oidc"]["sub"],
+            subject
+        );
+        let cached = context
+            .gateway
+            .client
+            .get(url.clone())
+            .bearer_auth(bearer)
+            .header(reqwest::header::IF_NONE_MATCH, &etag)
+            .send()
+            .await?;
+        assert_eq!(cached.status(), reqwest::StatusCode::NOT_MODIFIED);
+        assert_eq!(cached.headers()[reqwest::header::ETAG], etag);
+        assert_eq!(
+            cached.headers()[reqwest::header::CACHE_CONTROL],
+            "private, no-cache"
+        );
+        for headers in [&headers, cached.headers()] {
+            assert_credential_vary(headers);
+        }
+        assert!(cached.bytes().await?.is_empty());
+        if first_etag.is_none() {
+            first_etag = Some(etag);
+        }
+    }
+    Ok(())
+}
+
+fn assert_credential_vary(headers: &reqwest::header::HeaderMap) {
+    let vary: Vec<_> = headers
+        .get_all(reqwest::header::VARY)
+        .iter()
+        .flat_map(|value| value.to_str().unwrap().split(',').map(str::trim))
+        .collect();
+    for credential in ["Authorization", "Cookie", "Golem-Token"] {
+        assert!(
+            vary.iter()
+                .any(|name| name.eq_ignore_ascii_case(credential)),
+            "missing Vary: {credential}"
+        );
+    }
 }

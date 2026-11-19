@@ -95,6 +95,7 @@ fn replaying_call(
                 is_live: false,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: std::time::Duration::ZERO,
+                durable_wait: false,
             },
             "test:monotonic_clock::now",
         )
