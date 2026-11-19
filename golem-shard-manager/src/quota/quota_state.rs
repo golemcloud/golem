@@ -331,12 +331,13 @@ impl QuotaState {
     ) -> Result<AcquireLeaseResult, QuotaError> {
         let expired = self.housekeep();
 
-        if let Some(existing) = self.leases.get(&pod) {
+        if let Some(existing) = self.leases.get_mut(&pod) {
             let returned = match &self.definition.limit {
                 ResourceLimit::Capacity(_) => 0,
                 ResourceLimit::Concurrency(_) => existing.allocated,
                 ResourceLimit::Rate(_) => 0,
             };
+            existing.allocated = 0;
             self.return_to_pool(returned);
         }
 

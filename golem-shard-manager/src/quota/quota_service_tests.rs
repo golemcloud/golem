@@ -235,6 +235,18 @@ impl QuotaLease {
             QuotaLease::Unlimited { .. } => panic!("allocated_amount() called on Unlimited lease"),
         }
     }
+
+    fn total_available_amount(&self) -> u64 {
+        match self {
+            QuotaLease::Bounded {
+                total_available_amount,
+                ..
+            } => *total_available_amount,
+            QuotaLease::Unlimited { .. } => {
+                panic!("total_available_amount() called on Unlimited lease")
+            }
+        }
+    }
 }
 
 fn env_id() -> EnvironmentId {
@@ -1536,6 +1548,50 @@ async fn concurrency_shrink_below_an_outstanding_lease_caps_its_return() {
         .await
         .unwrap();
     assert_eq!(l2.allocated_amount(), 5);
+}
+
+#[test]
+async fn concurrency_reacquire_by_the_same_pod_counts_its_old_lease_once() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_concurrency_definition(env, "slots", 10);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 10);
+    assert_eq!(l1.total_available_amount(), 10);
+
+    // Without a limit change, a second acquire by the same pod gets the same slots and total.
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 10);
+    assert_eq!(l2.total_available_amount(), 10);
+
+    // The limit shrinks to 5 while the lease holds all 10 slots. The second acquire replaces the
+    // old lease, so its slots count once: the grant and the total are the new limit.
+    update_limit(
+        &svc,
+        &fetcher,
+        &mut def,
+        ResourceLimit::Concurrency(ResourceConcurrencyLimit { value: 5 }),
+    )
+    .await;
+    let l3 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l3.allocated_amount(), 5);
+    assert_eq!(l3.total_available_amount(), 5);
 }
 
 #[test]
