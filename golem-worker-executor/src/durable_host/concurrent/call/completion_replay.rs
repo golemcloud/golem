@@ -393,6 +393,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     .map_err(|error| error.source)?;
                     return Ok(CallReplayOutcome::Replayed(response));
                 }
+                self.wait_recorded_retry_backoff(store, get_ctx).await?;
                 Ok(CallReplayOutcome::Incomplete(self))
             }
         }
@@ -561,8 +562,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         D: HasData + ?Sized,
         Ctx: WorkerCtx,
     {
-        self.replay_guest_deferred(&mut AccessorContext::new(store, get_ctx))
-            .await
+        match self
+            .replay_guest_deferred(&mut AccessorContext::new(store, get_ctx))
+            .await?
+        {
+            DeferredCallReplayOutcome::Incomplete(mut call) => {
+                call.wait_recorded_retry_backoff(store, get_ctx).await?;
+                Ok(DeferredCallReplayOutcome::Incomplete(call))
+            }
+            replayed => Ok(replayed),
+        }
     }
 
     pub(crate) async fn replay_guest_deferred<Ctx: WorkerCtx>(

@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::durability::{
+    retry_backoff_waits_durably, wait_recorded_retry_backoff, wait_retry_backoff,
+};
 pub(in crate::durable_host::concurrent) fn ambient_trap_context<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
 ) -> DurableCallTrapContext {
@@ -52,12 +55,13 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for ContextRetryHost<'_, Ctx> {
         &mut self,
         retry_from: OplogIndex,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+        retry_at: golem_common::model::Timestamp,
     ) -> Result<(), crate::services::oplog::OplogError> {
         if self.durable_execution_state().snapshotting_mode {
             return Ok(());
         }
         self.task
-            .append_retry_error_entry(retry_from, retry_policy_state)
+            .append_retry_error_entry(retry_from, retry_policy_state, retry_at)
             .await
     }
 }
@@ -103,9 +107,10 @@ impl<H: InFunctionRetryHost + Send + Sync> InFunctionRetryHost for ScopedRetryHo
         &mut self,
         retry_from: OplogIndex,
         retry_policy_state: Option<golem_common::model::RetryPolicyState>,
+        retry_at: golem_common::model::Timestamp,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.inner
-            .append_retry_error_entry(retry_from, retry_policy_state)
+            .append_retry_error_entry(retry_from, retry_policy_state, retry_at)
             .await
     }
 }
@@ -387,6 +392,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         result: &Result<Ok, Err>,
         classify: impl Fn(&Err) -> HostFailureKind,
+        mut properties: RetryProperties,
     ) -> anyhow::Result<InternalRetryResult>
     where
         T: 'static,
@@ -402,12 +408,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         if kind == HostFailureKind::Permanent {
             return Ok(InternalRetryResult::Persist);
         }
-        let mut properties = RetryProperties::new();
         let task = self
             .retry_context_snapshot(store, get_ctx, &mut properties)
             .await;
-        let execution_state =
-            || store.with(|mut access| get_ctx(access.data_mut()).durable_execution_state());
+        let durable_wait = retry_backoff_waits_durably(store, get_ctx);
+        let execution_state = || DurableExecutionState {
+            durable_wait,
+            ..store.with(|mut access| get_ctx(access.data_mut()).durable_execution_state())
+        };
         let mut context_host = ContextRetryHost {
             task,
             execution_state: &execution_state,
@@ -420,13 +428,34 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 result,
                 |_| kind,
                 properties,
-                |_| store.with(|mut access| get_ctx(access.data_mut()).create_interrupt_signal()),
+                |_, delay| wait_retry_backoff(store, get_ctx, delay),
                 |host, failure, properties| {
                     Box::pin(try_trigger_host_trap_retry(host, failure, properties))
                 },
             )
             .await;
         outcome.map_err(|err| self.trap(err))
+    }
+
+    /// Before repair runs an incomplete call again, waits the rest of the backoff that its latest
+    /// in-function retry recorded. An interrupt or suspension during the wait leaves the `Start`
+    /// incomplete.
+    pub(crate) async fn wait_recorded_retry_backoff<T, D, Ctx>(
+        &mut self,
+        store: &(impl DurableAccess<T, D> + ?Sized),
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    ) -> Result<(), WorkerExecutorError>
+    where
+        T: 'static,
+        D: HasData + ?Sized,
+        Ctx: WorkerCtx,
+    {
+        wait_recorded_retry_backoff(store, get_ctx, self.start_idx)
+            .await
+            .map_err(|kind| {
+                self.abandon_for_trap();
+                WorkerExecutorError::Interrupted { kind }
+            })
     }
 
     async fn retry_context_snapshot<T, D, Ctx>(
@@ -469,6 +498,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
 
         TaskRetryContext {
             retry_point,
+            retrying_start_index: Some(self.start_idx),
             entity_parent_start_index: self.execution_scope.entity_parent_start_index,
             invocation_id: self.execution_scope.agent_invocation,
             environment_state_service,
@@ -480,6 +510,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .retry
                 .durable_execution_state()
                 .max_in_function_retry_delay,
+            durable_wait: retry_backoff_waits_durably(store, get_ctx),
             current_retry_policy_state,
             retry_properties: properties.clone(),
             worker,

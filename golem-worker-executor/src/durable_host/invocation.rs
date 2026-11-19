@@ -874,6 +874,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 retry_policy_state,
+                                None,
+                                None,
                             )
                         }
                     }),
@@ -939,6 +941,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 error.clone(),
                 *retry_from,
                 retry_policy_state,
+                None,
+                None,
             )),
         };
 

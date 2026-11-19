@@ -196,6 +196,10 @@ pub(crate) trait DurableAccess<T: 'static, D: HasData + ?Sized>: Sync {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         observed_by_custom_invocation: bool,
     ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError>;
+
+    /// The runtime activity that runs this access, which a passive wait registers with the
+    /// suspension coordinator. `None` when the access runs outside a Store's runtime.
+    fn runtime_activity(&self) -> Option<wasmtime::component::RuntimeActivityId>;
 }
 
 pub(crate) struct ContextWindow<'a, T> {
@@ -233,6 +237,10 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
         observed_by_custom_invocation: bool,
     ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError> {
         super::call::guest_import_invocation_id(self, get_ctx, observed_by_custom_invocation)
+    }
+
+    fn runtime_activity(&self) -> Option<wasmtime::component::RuntimeActivityId> {
+        Accessor::runtime_activity(self)
     }
 }
 
@@ -311,6 +319,10 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
         self.with_worker_ctx(|ctx| {
             super::call::import_invocation_id(get_ctx(ctx), None).map(|source| source.reserved())
         })
+    }
+
+    fn runtime_activity(&self) -> Option<wasmtime::component::RuntimeActivityId> {
+        None
     }
 }
 

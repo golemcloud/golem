@@ -234,6 +234,7 @@ fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
                 is_live: false,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: Duration::ZERO,
+                durable_wait: false,
             },
             GolemRpcWasmRpcNew::FQFN,
         );
