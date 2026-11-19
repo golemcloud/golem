@@ -539,6 +539,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             )) if matches!(&error, WorkerExecutorError::InvalidRequest { details } if details.starts_with("IdempotencyConflict:")) => {
                 error.into()
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+                error @ WorkerExecutorError::AgentKeyCollision { .. },
+            )) => error.into(),
             RequestHandlerError::AgentInvocationFailed(
                 WorkerServiceError::AgentNotFound(_)
                 | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }),

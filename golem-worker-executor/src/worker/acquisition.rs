@@ -777,18 +777,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         owner: Option<&NewOwner>,
     ) -> Result<(), WorkerExecutorError> {
-        let Some(owner) = owner.filter(|owner| owner.keyed) else {
+        let Some(owner) = owner else {
             return Ok(());
         };
-        let requested_key = owner.canonical_key(self.agent_mode());
-        if self.initial_worker_metadata.canonical_key == requested_key {
-            Ok(())
-        } else {
-            Err(WorkerExecutorError::AgentKeyCollision {
-                agent_id: self.agent_id(),
-                requested_key: requested_key.unwrap_or_default(),
-            })
-        }
+        owner.ensure_owns_key(
+            self.agent_id(),
+            self.agent_mode(),
+            self.initial_worker_metadata.canonical_key.as_deref(),
+        )
     }
 
     pub(crate) async fn ensure_existing_with_fingerprint(

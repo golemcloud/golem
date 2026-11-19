@@ -299,6 +299,26 @@ impl NewOwner {
             .filter(|_| self.keyed && agent_mode == AgentMode::Durable)
             .map(ToString::to_string)
     }
+
+    pub(crate) fn ensure_owns_key(
+        &self,
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        stored_key: Option<&str>,
+    ) -> Result<(), WorkerExecutorError> {
+        if !self.keyed {
+            return Ok(());
+        }
+        let requested_key = self.canonical_key(agent_mode);
+        if stored_key == requested_key.as_deref() {
+            Ok(())
+        } else {
+            Err(WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key: requested_key.unwrap_or_default(),
+            })
+        }
+    }
 }
 
 /// What a caller asks for when it may create an owner. Only the request that actually writes the

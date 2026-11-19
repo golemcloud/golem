@@ -196,7 +196,21 @@ impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest
 {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
-        &self.agent_id
+        &None
+    }
+
+    fn proto_agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
+        self.target
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("target not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
+    }
+
+    fn proto_component_id(&self) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        self.component_id
+            .map(|id| id.try_into().map_err(WorkerExecutorError::invalid_request))
+            .transpose()
     }
 
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
@@ -405,6 +419,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .ok_or_else(|| {
                         WorkerExecutorError::worker_not_found(owned_agent_id.agent_id())
                     })?;
+                if let Some(owner) = &resolved.new_owner {
+                    owner.ensure_owns_key(
+                        owned_agent_id.agent_id,
+                        metadata.agent_mode,
+                        metadata.canonical_key.as_deref(),
+                    )?;
+                }
                 if metadata.agent_mode != AgentMode::Ephemeral {
                     self.ensure_not_failed(
                         &owned_agent_id,
@@ -417,10 +438,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker =
                 Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal())
                     .await?;
-            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
             if !reserved {
-                Self::not_found_if_deleting(&worker, worker.ensure_inspection_may_start().await)
-                    .await?;
+                Self::not_found_if_deleting(
+                    &worker,
+                    worker
+                        .ensure_inspection_may_start(resolved.new_owner.as_ref())
+                        .await,
+                )
+                .await?;
             }
             Self::not_found_if_deleting(&worker, Worker::start_if_needed(worker.clone()).await)
                 .await?;
@@ -548,6 +573,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
+            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
             if worker.pending_startup_attempt().is_some() {
                 None
             } else {
@@ -559,7 +585,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
                 .await?
-                .map(|metadata| (metadata.agent_mode, Arc::new(metadata.last_known_status)))
+                .map(|metadata| -> Result<_, WorkerExecutorError> {
+                    if let Some(owner) = &resolved.new_owner {
+                        owner.ensure_owns_key(
+                            owned_agent_id.agent_id,
+                            metadata.agent_mode,
+                            metadata.canonical_key.as_deref(),
+                        )?;
+                    }
+                    Ok((metadata.agent_mode, Arc::new(metadata.last_known_status)))
+                })
+                .transpose()?
         };
 
         if let Some((agent_mode, status)) = &failure_check

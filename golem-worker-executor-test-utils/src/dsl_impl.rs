@@ -1387,7 +1387,10 @@ impl TestDsl for TestWorkerExecutor {
             .client
             .clone()
             .get_file_contents(GetFileContentsRequest {
-                agent_id: Some(agent_id.agent_id.into()),
+                target: Some(ProtoAgentTarget {
+                    target: Some(agent_target::Target::Id(agent_id.agent_id.into())),
+                }),
+                component_id: None,
                 file_path: path.to_string(),
                 environment_id: Some(agent_id.environment_id.into()),
                 component_owner_account_id: Some(self.context.account_id.into()),

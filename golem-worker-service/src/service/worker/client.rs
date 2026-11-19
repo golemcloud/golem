@@ -620,7 +620,7 @@ pub trait WorkerClient: Send + Sync {
 
     async fn get_file_contents(
         &self,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         path: CanonicalFilePath,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
@@ -1793,7 +1793,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
 
     async fn get_file_contents(
         &self,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         path: CanonicalFilePath,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
@@ -1802,7 +1802,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     ) -> WorkerResult<FileReadResponse> {
         validate_file_read_path(path.as_abs_str()).map_err(WorkerServiceError::FileRead)?;
         selection.validate().map_err(WorkerServiceError::FileRead)?;
-        let agent_id = *agent_id;
+        let agent_id = target.agent_id;
+        let (target, _, component_id) = target.invoke_fields();
         let path_clone = path.clone();
         let (first, stream) = self
             .call_worker_executor(
@@ -1810,7 +1811,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 "read_file",
                 move |worker_executor_client| {
                     let request = workerexecutor::v1::GetFileContentsRequest {
-                            agent_id: Some(agent_id.into()),
+                            target: Some(target.clone()),
+                            component_id,
                             component_owner_account_id: Some(account_id.into()),
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),

@@ -3157,6 +3157,58 @@ pub async fn copy_create_entry_to(
     Ok(())
 }
 
+/// Copies a durable agent's complete oplog to another ID while retaining the source's key.
+/// Both executors must be stopped, as for [`copy_create_entry_to`].
+pub async fn copy_agent_oplog_to(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    source: &OwnedAgentId,
+    target: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    copy_create_entry_to(deps, context, source, target).await?;
+    let storage = sqlite_indexed_storage(deps, context).await?;
+    let namespace = |agent: &OwnedAgentId| IndexedStorageNamespace::OpLog {
+        owned_agent_id: agent.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let last = storage
+        .last_id(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+        )
+        .await?
+        .ok_or_else(|| anyhow!("the oplog of {source} is empty"))?;
+    let entries = storage
+        .read(
+            "oplog",
+            "test_read",
+            "entry",
+            namespace(source),
+            &source.storage_key(),
+            OplogIndex::INITIAL.as_u64() + 1,
+            last,
+        )
+        .await?;
+    for (id, value) in entries {
+        storage
+            .append(
+                "oplog",
+                "test_copy",
+                "entry",
+                namespace(target),
+                &target.storage_key(),
+                id,
+                value,
+                None,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
 /// How many entries the agent's durable oplog holds in storage, read without going through any
 /// executor - the same storage [`take_agent_oplog_over_at_epoch`] writes to.
 pub async fn agent_oplog_length(

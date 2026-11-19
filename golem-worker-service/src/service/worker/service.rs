@@ -1535,7 +1535,7 @@ impl WorkerService {
             RoutedTarget::keyed(environment_id, registered.type_id, &component, constructor)?;
         self.worker_client
             .get_file_contents(
-                &target.agent_id,
+                &target,
                 path,
                 selection,
                 environment_id,
@@ -1564,7 +1564,7 @@ impl WorkerService {
         let contents_stream = self
             .worker_client
             .get_file_contents(
-                &agent_id.agent_id,
+                &RoutedTarget::existing(agent_id.agent_id, agent.metadata.agent_type_name.clone()),
                 path.clone(),
                 FileByteSelection::Full,
                 agent_id.environment_id,
@@ -5125,7 +5125,7 @@ mod tests {
 
         async fn get_file_contents(
             &self,
-            _: &AgentId,
+            _: &RoutedTarget,
             _: CanonicalFilePath,
             _: FileByteSelection,
             _: EnvironmentId,

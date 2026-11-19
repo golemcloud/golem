@@ -363,6 +363,7 @@ impl LimitService for NoopLimitService {
 
 pub(crate) struct FileReadCall {
     pub agent_id: AgentId,
+    pub target: RoutedTarget,
     pub path: String,
     pub selection: FileByteSelection,
     pub environment_id: EnvironmentId,
@@ -638,7 +639,7 @@ impl WorkerClient for RecordingWorkerClient {
 
     async fn get_file_contents(
         &self,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         path: CanonicalFilePath,
         selection: FileByteSelection,
         environment_id: EnvironmentId,
@@ -646,7 +647,8 @@ impl WorkerClient for RecordingWorkerClient {
         auth: AuthCtx,
     ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
         self.file_reads.calls.lock().unwrap().push(FileReadCall {
-            agent_id: *agent_id,
+            agent_id: target.agent_id,
+            target: target.clone(),
             path: path.to_string(),
             selection,
             environment_id,

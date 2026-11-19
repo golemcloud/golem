@@ -3494,3 +3494,75 @@ async fn a_key_whose_id_holds_an_agent_of_another_key_collides(
     executor.shutdown_and_wait_for_invocation_loops().await?;
     Ok(())
 }
+
+#[test]
+#[timeout("2m")]
+async fn a_key_collision_hides_the_other_agents_constructor_failure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentStatus;
+    use golem_common::model::agent::Principal;
+    use golem_worker_executor::services::UsesAllDeps;
+    use std::time::Duration;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let owner = agent_key!("RustMethodFailure", "fail-constructor");
+    let owner_id = keyed_agent_id(component.environment_id, &owner);
+    let error = executor
+        .start_agent(&component.id, owner.clone())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("constructor gave up"));
+    executor
+        .wait_for_status(&owner_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let requested = agent_key!("RustMethodFailure", "collision-requested");
+    let collided = keyed_agent_id(component.environment_id, &requested);
+    golem_worker_executor_test_utils::copy_agent_oplog_to(deps, &context, &owner_id, &collided)
+        .await?;
+
+    let executor = start(deps, &context).await?;
+    let before = executor.stored_oplog(&collided.agent_id).await;
+    for resident in [false, true] {
+        if resident {
+            let healthy = executor
+                .start_agent(&component.id, agent_key!("RustMethodFailure", "healthy"))
+                .await?;
+            let worker = executor.active_agent(&healthy).await.unwrap().primary();
+            golem_worker_executor::worker::Worker::get_exact_existing_suspended(
+                worker.all(),
+                &collided,
+                Principal::anonymous(),
+            )
+            .await?;
+        }
+        let error = executor
+            .invoke_and_await_agent(&component, &requested, "increment", data_value!())
+            .await
+            .unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("has another key than the requested"),
+            "resident={resident}: {error}"
+        );
+        assert!(!error.contains("constructor gave up"), "{error}");
+        assert_eq!(executor.stored_oplog(&collided.agent_id).await, before);
+    }
+    let error = executor
+        .invoke_and_await_agent(&component, &owner, "increment", data_value!())
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("constructor gave up"));
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}

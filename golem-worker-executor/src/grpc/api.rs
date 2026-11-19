@@ -904,10 +904,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<GetFileContentsRequest>,
     ) -> ResponseResult<Self::GetFileContentsStream> {
         let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "get_file_contents",
-            agent_id = proto_agent_id_string(&request.agent_id),
-        );
+        let record = recorded_grpc_api_request!("get_file_contents",);
 
         let result = self
             .get_file_contents_internal(request)

@@ -467,7 +467,7 @@ message GetAgentWalletSuccess {
 }
 
 message GetFileContentsRequest {
-  golem.worker.AgentId agent_id = 1;
+  golem.worker.AgentTarget target = 1;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 2;
   // Component's owner project
@@ -476,6 +476,7 @@ message GetFileContentsRequest {
   golem.auth.AuthCtx auth_ctx = 5;
   optional golem.component.Principal principal = 6;
   golem.worker.FileByteSelection selection = 7;
+  optional golem.component.ComponentId component_id = 8;
 }
 
 message GetFileContentsResponse {

@@ -1408,11 +1408,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
     /// the constructor before a schedule whose commit the caller may still be repairing. A
     /// worker that a delete has claimed gives the deletion error, as starting it would.
-    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn ensure_inspection_may_start(
+        &self,
+        owner: Option<&NewOwner>,
+    ) -> Result<(), WorkerExecutorError> {
+        {
+            let instance = self.instance.lock().await;
+            instance.ensure_not_deleting()?;
+            self.ensure_owns_key(owner)?;
+        }
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
-        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
