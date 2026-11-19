@@ -32,7 +32,7 @@ use golem_common::model::{
 use golem_common::{agent_id, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::model::{LookupResult, TrapType};
+use golem_worker_executor::model::{FailureProvenance, LookupResult, TrapType};
 use golem_worker_executor::worker::invocations::{
     InvocationFilter, InvocationState, MAX_INVOCATION_PAGE_SIZE,
 };
@@ -135,6 +135,7 @@ async fn late_rejection_after_cancel(
                 error,
                 retry_from: OplogIndex::INITIAL,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::Host,
             },
         )
         .await;
@@ -604,6 +605,7 @@ async fn cancel_decides_before_reading_recent_results(
                 error: AgentError::DeterministicTrap("trapped".to_string()),
                 retry_from: OplogIndex::INITIAL,
                 semantic_trap_retry_override: None,
+                provenance: FailureProvenance::TargetInstruction,
             },
         )
         .await;
