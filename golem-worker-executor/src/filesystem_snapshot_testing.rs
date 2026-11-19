@@ -51,6 +51,9 @@ struct Faults {
     saves: AtomicUsize,
     /// The hold of the next save, when a test asked for one.
     hold: Mutex<Option<SaveHold>>,
+    /// A publication that has read its tree and can land even after executor shutdown.
+    publication_hold: Mutex<Option<SaveHold>>,
+    publication_results: Mutex<std::collections::HashMap<String, Result<(), String>>>,
     restored: Mutex<Vec<Box<str>>>,
     /// The names of the restores that gave a tree, in the order of their ends.
     completed_restores: Mutex<Vec<Box<str>>>,
@@ -109,10 +112,18 @@ impl HeldSave {
 }
 
 /// A filesystem snapshot store in memory, with faults and counts for tests.
-#[derive(Clone)]
 pub struct TestFilesystemSnapshotStore {
-    inner: InMemorySnapshotStore,
+    inner: Arc<InMemorySnapshotStore>,
     faults: Arc<Faults>,
+}
+
+impl Clone for TestFilesystemSnapshotStore {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::new(self.inner.as_ref().clone()),
+            faults: Arc::clone(&self.faults),
+        }
+    }
 }
 
 /// The failure of a test whose store got a write into an agent after a delete of all its
@@ -145,7 +156,7 @@ impl TestFilesystemSnapshotStore {
     /// [`with_snapshot_store`].
     fn new() -> Self {
         Self {
-            inner: InMemorySnapshotStore::new(),
+            inner: Arc::new(InMemorySnapshotStore::new()),
             faults: Arc::default(),
         }
     }
@@ -182,6 +193,37 @@ impl TestFilesystemSnapshotStore {
             started: started_receiver,
             released,
         }
+    }
+
+    /// Holds the next save after it reads its tree, as a submitted storage PUT whose answer is
+    /// delayed. The publication survives cancellation and executor shutdown. Dropping the hold
+    /// releases it; `publication_result` reports when the storage write actually ends.
+    pub fn hold_next_publication(&self) -> HeldSave {
+        let (started, started_receiver) = watch::channel(None);
+        let (released, released_receiver) = watch::channel(false);
+        *self
+            .faults
+            .publication_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SaveHold {
+            started,
+            released: released_receiver,
+        });
+        HeldSave {
+            started: started_receiver,
+            released,
+        }
+    }
+
+    /// The result of a held publication once its storage write ended, even if the executor that
+    /// submitted it has stopped waiting for the answer.
+    pub fn publication_result(&self, name: &str) -> Option<Result<(), String>> {
+        self.faults
+            .publication_results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     /// Holds the next copy that starts: it reports its target, then waits before it copies
@@ -483,11 +525,64 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             drop(slot);
             return Err(self.failed_runs(slots).await);
         }
-        let info = self
-            .inner
-            .save(agent, name, tree, parent, cancel, &Unlimited)
-            .await;
-        drop(slot);
+        let publication = self
+            .faults
+            .publication_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let info = if let Some(hold) = publication {
+            let mut started = hold.started.subscribe();
+            let (inner, faults) = (Arc::clone(&self.inner), Arc::clone(&self.faults));
+            let (agent, name, tree, cancel) = (
+                agent.clone(),
+                name.clone(),
+                tree.to_path_buf(),
+                cancel.clone(),
+            );
+            // The task is the storage write already in flight, not executor work. It owns the
+            // read tree before it reports the gate, so teardown can discard the capture safely.
+            let mut saving = tokio::spawn(async move {
+                let result = inner
+                    .save_with_publication(
+                        &agent,
+                        &name,
+                        &tree,
+                        &cancel,
+                        &Unlimited,
+                        hold.hold(name.as_str()),
+                    )
+                    .await;
+                faults
+                    .publication_results
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(
+                        name.as_str().to_string(),
+                        result.as_ref().map(|_| ()).map_err(ToString::to_string),
+                    );
+                result
+            });
+            tokio::select! {
+                result = &mut saving => {
+                    drop(slot);
+                    result
+                }
+                () = async { let _ = started.wait_for(|name| name.is_some()).await; } => {
+                    drop(slot);
+                    slots.waiting_for_late_writes();
+                    saving.await
+                }
+            }
+            .map_err(|error| SaveError::Failed(Failed::new(error.into())))?
+        } else {
+            let result = self
+                .inner
+                .save(agent, name, tree, parent, cancel, &Unlimited)
+                .await;
+            drop(slot);
+            result
+        };
         let info = info?;
         let offset = *self
             .faults
