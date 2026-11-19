@@ -43,6 +43,8 @@ message AgentMetadata {
   OwnerKind owner_kind = 21;
   // Identifies whether last_error came from an invocation or from startup/recovery.
   optional OplogErrorKind last_error_kind = 22;
+  // The folded status underneath `status`. Set only when `status` is SANDBOXED.
+  optional AgentStatus underlying_status = 23;
 }
 
 message UpdateRecord {

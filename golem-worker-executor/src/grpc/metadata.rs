@@ -182,6 +182,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
+        let reported_status = latest_status.reported_status();
+        let underlying_status = latest_status.underlying_status();
         for pending_invocation in &latest_status.pending_invocations {
             if let Some(target_revision) = pending_invocation.manual_update_target_revision {
                 updates.push(golem::worker::UpdateRecord {
@@ -274,7 +276,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })?,
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
-            status: Into::<golem::worker::AgentStatus>::into(latest_status.status).into(),
+            status: Into::<golem::worker::AgentStatus>::into(reported_status).into(),
+            underlying_status: underlying_status
+                .map(|status| Into::<golem::worker::AgentStatus>::into(status).into()),
             retry_count: last_error_and_retry_count
                 .as_ref()
                 .and_then(|last_error| {

@@ -1025,7 +1025,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let current_status_snapshot = current_status.load_full();
-        let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
+        let metrics_status = Arc::new(WorkerStatusMetric::new(
+            current_status_snapshot.reported_status(),
+        ));
         let last_oplog_idx = current_status_snapshot.oplog_idx;
         drop(current_status_snapshot);
 
@@ -1623,6 +1625,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         original_phantom_id: initial_worker_metadata.original_phantom_id,
                         instance_id,
                         create_request: initial_worker_metadata.create_request.clone(),
+                        never_live: false,
                     }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));

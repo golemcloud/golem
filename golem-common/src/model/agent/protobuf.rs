@@ -955,6 +955,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()?,
             status: value.status.try_into()?,
+            underlying_status: value
+                .underlying_status
+                .map(crate::model::AgentStatus::try_from)
+                .transpose()?,
             component_revision: value.component_revision.try_into()?,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -1033,6 +1037,7 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             status: value.status.into(),
+            underlying_status: value.underlying_status.map(Into::into),
             component_revision: value.component_revision.into(),
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,

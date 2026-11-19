@@ -61,6 +61,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
+                    never_live,
                 } = *parameters;
                 let metadata = components
                     .get_metadata(owner_component_id, Some(component_revision))
@@ -105,6 +106,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     local_agent_config,
                     original_phantom_id,
                     instance_id,
+                    never_live,
                 }));
             }
             golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,

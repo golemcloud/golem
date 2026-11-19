@@ -4792,6 +4792,7 @@ mod tests {
                     env: HashMap::new(),
                     config: Vec::new(),
                     status: AgentStatus::Idle,
+                    underlying_status: None,
                     component_revision,
                     retry_count: 0,
                     pending_invocation_count: 0,

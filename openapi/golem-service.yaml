@@ -15053,6 +15053,11 @@ components:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
+        underlyingStatus:
+          description: The folded status underneath `status`. Present only when `status` is `Sandboxed`.
+          allOf:
+          - $ref: '#/components/schemas/AgentStatus'
+          - description: The folded status underneath `status`. Present only when `status` is `Sandboxed`.
         componentRevision:
           type: integer
           format: uint64
@@ -15253,6 +15258,7 @@ components:
       - Retrying
       - Failed
       - Exited
+      - Sandboxed
     AgentStatusFilter:
       title: AgentStatusFilter
       type: object
@@ -23366,6 +23372,8 @@ components:
         instanceId:
           type: string
           format: uuid
+        neverLive:
+          type: boolean
       required:
       - timestamp
       - agentId
@@ -23380,6 +23388,7 @@ components:
       - initialActivePlugins
       - localAgentConfig
       - instanceId
+      - neverLive
     r#CreateResourceParams:
       title: r#CreateResourceParams
       type: object

@@ -90,6 +90,7 @@ fn metadata_redaction_redacts_the_capabilities_in_the_divergence_of_a_failed_upd
         env: Default::default(),
         config: vec![],
         status: AgentStatus::Idle,
+        underlying_status: None,
         component_revision: ComponentRevision::INITIAL,
         retry_count: 0,
         pending_invocation_count: 0,
