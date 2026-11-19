@@ -120,6 +120,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         arb_invocation_get_result
     ),
     registry_entry!(
+        "InvocationGetMatchesView",
+        "invocation.get-matches",
+        arb_invocation_get_matches_result
+    ),
+    registry_entry!(
         "InvocationListView",
         "invocation.list",
         arb_invocation_list_result
@@ -5404,6 +5409,20 @@ fn arb_invocation_get_result() -> OutputDocumentStrategy {
                     result,
                 })
             }),
+    )
+}
+
+fn arb_invocation_get_matches_result() -> OutputDocumentStrategy {
+    serialized_output(
+        proptest::collection::vec(
+            (
+                arb_invocation_summary(),
+                proptest::option::of(arb_invocation_outcome()),
+            )
+                .prop_map(|(summary, result)| golem_client::model::Invocation { summary, result }),
+            2..4,
+        )
+        .prop_map(|invocations| crate::model::invocation::InvocationGetMatchesView { invocations }),
     )
 }
 

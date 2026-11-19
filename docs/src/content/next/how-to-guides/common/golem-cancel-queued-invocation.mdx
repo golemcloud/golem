@@ -13,7 +13,7 @@ An invocation is selected in one of two ways:
 - by its **agent and idempotency key**: set a key explicitly when triggering an invocation with `--idempotency-key`, or use `--idempotency-key -` to have Golem generate one;
 - by its **invocation ID**, `<component UUID>/<agent name>.<UUID>`, as printed by `golem invocation list`.
 
-If the same idempotency key was used for more than one method of the agent, add `--method <METHOD>` to choose one, using the method name as shown in the Operation column of `golem invocation list`.
+The same idempotency key used for more than one method of the agent selects one invocation per method. `invocation get` shows all of them, each with its operation; `invocation cancel` needs `--method <METHOD>` to choose one, using the method name as shown in the Operation column of `golem invocation list`.
 
 A key is found only for the account that made the invocation, and keys of invocations made through an HTTP route are never found by key. An invocation ID is resolved in the current environment; select another one with `--environment`.
 
@@ -24,7 +24,7 @@ golem invocation get --agent <AGENT_ID> --idempotency-key <IDEMPOTENCY_KEY>
 golem invocation get <INVOCATION_ID>
 ```
 
-Shows the invocation's state (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`), its operation and timestamps, and the result of a `completed` or `failed` invocation. The command exits with code **130** when the invocation was cancelled.
+Shows the invocation's state (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`), its operation and timestamps, and the result of a `completed` or `failed` invocation. The command exits with code **130** when the invocation, or one of the invocations that the key selects, was cancelled.
 
 ## `invocation list` — List the Invocations of an Agent
 

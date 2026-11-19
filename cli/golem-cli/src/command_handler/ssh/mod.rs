@@ -997,12 +997,18 @@ impl SshCommandHandler {
         let request = cancel_call(&self.ctx, &session.owner, key);
         classify_cancel(match tokio::time::timeout(CANCEL_WAIT, request).await {
             Ok(Ok(cancelled)) => Ok(cancelled),
-            Ok(Err(error)) => Err(match error_response(&error) {
-                Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
-                Some((_, rendered, _)) => rendered,
-                None => format!("{error:#}"),
-            }),
-            Err(_) => Err("no answer to the cancel request".to_string()),
+            Ok(Err(error)) => Err((
+                error
+                    .downcast_ref::<ServiceError>()
+                    .and_then(|error| error.error_code())
+                    .map(str::to_string),
+                match error_response(&error) {
+                    Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
+                    Some((_, rendered, _)) => rendered,
+                    None => format!("{error:#}"),
+                },
+            )),
+            Err(_) => Err((None, "no answer to the cancel request".to_string())),
         })
     }
 

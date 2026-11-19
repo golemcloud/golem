@@ -61,6 +61,9 @@
       "$ref": "#/definitions/invocation.get"
     },
     {
+      "$ref": "#/definitions/invocation.get-matches"
+    },
+    {
       "$ref": "#/definitions/invocation.list"
     },
     {
@@ -1855,6 +1858,29 @@
         "$type": { "const": "invocation.get" },
         "summary": { "$ref": "#/definitions/InvocationSummary" },
         "result": { "oneOf": [{ "$ref": "#/definitions/InvocationOutcome" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "invocation.get-matches": {
+      "type": "object",
+      "description": "Every invocation that `--agent` and `--idempotency-key` select when the key was used for more than one operation of the agent. Each invocation names its operation in `summary.operation`. Emitted by `golem invocation get` instead of `invocation.get` when the key selects more than one invocation.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "invocation get",
+      "required": ["$type", "invocations"],
+      "properties": {
+        "$type": { "const": "invocation.get-matches" },
+        "invocations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["summary", "result"],
+            "properties": {
+              "summary": { "$ref": "#/definitions/InvocationSummary" },
+              "result": { "oneOf": [{ "$ref": "#/definitions/InvocationOutcome" }, { "type": "null" }] }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -10907,6 +10933,10 @@
     {
       "type": "invocation.get",
       "rustType": "InvocationGetView"
+    },
+    {
+      "type": "invocation.get-matches",
+      "rustType": "InvocationGetMatchesView"
     },
     {
       "type": "invocation.list",

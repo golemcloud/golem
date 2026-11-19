@@ -19,10 +19,12 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::MapServiceError;
 use crate::error::{NonSuccessfulExit, PipedExitCode};
-use crate::log::{log_error, logln};
+use crate::log::log_error;
 use crate::model::agent::RawAgentId;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::invocation::{InvocationCancelView, InvocationGetView, InvocationListView};
+use crate::model::invocation::{
+    InvocationCancelView, InvocationGetMatchesView, InvocationGetView, InvocationListView,
+};
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::api::InvocationClient;
@@ -66,17 +68,30 @@ impl InvocationCommandHandler {
     }
 
     async fn cmd_get(&self, selector: InvocationSelector) -> anyhow::Result<()> {
-        let (environment_id, invocation_id) = self.resolve(selector).await?;
+        let (environment_id, invocation_ids) = self.resolve_all(selector).await?;
         let clients = self.ctx.golem_clients().await?;
-        let invocation = clients
-            .invocation
-            .get_invocation(&environment_id, &invocation_id)
-            .await
-            .map_service_error()?;
-        let cancelled = invocation.summary.state == InvocationState::Cancelled;
-        self.ctx
-            .log_handler()
-            .log_output(InvocationGetView(invocation))?;
+        let mut invocations = Vec::with_capacity(invocation_ids.len());
+        for invocation_id in &invocation_ids {
+            invocations.push(
+                clients
+                    .invocation
+                    .get_invocation(&environment_id, invocation_id)
+                    .await
+                    .map_service_error()?,
+            );
+        }
+        let cancelled = invocations
+            .iter()
+            .any(|invocation| invocation.summary.state == InvocationState::Cancelled);
+        if invocations.len() == 1 {
+            self.ctx
+                .log_handler()
+                .log_output(InvocationGetView(invocations.remove(0)))?;
+        } else {
+            self.ctx
+                .log_handler()
+                .log_output(InvocationGetMatchesView { invocations })?;
+        }
         if cancelled {
             bail!(PipedExitCode(CANCELLED_EXIT));
         }
@@ -133,8 +148,25 @@ impl InvocationCommandHandler {
         Ok(())
     }
 
-    /// The environment and the invocation ID that a selector names.
+    /// The environment and the invocation ID that a selector names. A key that several
+    /// operations used is ambiguous here.
     async fn resolve(&self, selector: InvocationSelector) -> anyhow::Result<(Uuid, String)> {
+        let (environment_id, mut invocation_ids) = self.resolve_all(selector).await?;
+        if invocation_ids.len() == 1 {
+            return Ok((environment_id, invocation_ids.remove(0)));
+        }
+        bail!(
+            "the idempotency key was used for more than one operation of the agent; select one \
+             with --method, as `golem invocation get` lists them"
+        )
+    }
+
+    /// The environment and every invocation ID that a selector names: one for an invocation
+    /// ID, and one per operation that used the key for `--agent` and `--idempotency-key`.
+    async fn resolve_all(
+        &self,
+        selector: InvocationSelector,
+    ) -> anyhow::Result<(Uuid, Vec<String>)> {
         let InvocationSelector {
             invocation_id,
             agent,
@@ -150,14 +182,14 @@ impl InvocationCommandHandler {
                 .environment_handler()
                 .resolve_environment(EnvironmentResolveMode::Any)
                 .await?;
-            return Ok((environment.environment_id.0, invocation_id));
+            return Ok((environment.environment_id.0, vec![invocation_id]));
         }
         let (Some(agent), Some(idempotency_key)) = (agent, idempotency_key) else {
             bail!("select an invocation by its ID, or by --agent and --idempotency-key");
         };
         let (environment_id, agent_text) = self.resolve_agent(agent).await?;
         let clients = self.ctx.golem_clients().await?;
-        let mut found = clients
+        let found = clients
             .invocation
             .lookup_invocations(
                 &environment_id,
@@ -169,28 +201,19 @@ impl InvocationCommandHandler {
             .map_service_error_not_found_as_opt()?
             .map(|found| found.invocations)
             .unwrap_or_default();
-        match found.len() {
-            1 => Ok((environment_id, found.remove(0).invocation_id)),
-            0 => {
-                log_error(format!(
-                    "No invocation of agent {agent_text} has the idempotency key {idempotency_key}"
-                ));
-                bail!(NonSuccessfulExit)
-            }
-            _ => {
-                log_error(format!(
-                    "The idempotency key {idempotency_key} was used for more than one operation of agent {agent_text}"
-                ));
-                logln("Select one with --method:");
-                for invocation in &found {
-                    logln(format!(
-                        "  {}",
-                        invocation.operation.as_deref().unwrap_or("<constructor>")
-                    ));
-                }
-                bail!(NonSuccessfulExit)
-            }
+        if found.is_empty() {
+            log_error(format!(
+                "No invocation of agent {agent_text} has the idempotency key {idempotency_key}"
+            ));
+            bail!(NonSuccessfulExit)
         }
+        Ok((
+            environment_id,
+            found
+                .into_iter()
+                .map(|invocation| invocation.invocation_id)
+                .collect(),
+        ))
     }
 
     /// The environment of an agent, and the agent as `<component UUID>/<agent name>`.

@@ -89,6 +89,76 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
     assert!(outputs.success_or_dump());
     assert_eq!(single_json(&outputs)["summary"], completed["summary"]);
 
+    // The same key used for a second method selects one invocation per method: `get` shows both,
+    // each as `--method` selects it, and `cancel` needs `--method`.
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "--idempotency-key",
+            "completed-key",
+            &agent,
+            "value",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let get_by_key = |method: Option<&'static str>| {
+        let mut args = vec![
+            flag::FORMAT,
+            "json",
+            INVOCATION,
+            cmd::GET,
+            "--agent",
+            agent.as_str(),
+            "--idempotency-key",
+            "completed-key",
+        ];
+        if let Some(method) = method {
+            args.extend(["--method", method]);
+        }
+        args.into_iter().map(str::to_string).collect::<Vec<_>>()
+    };
+    let outputs = ctx.cli(get_by_key(None)).await;
+    assert!(outputs.success_or_dump());
+    let matches = single_json(&outputs);
+    assert_eq!(matches["$type"], "invocation.get-matches");
+    let matches = matches["invocations"].as_array().unwrap().clone();
+    let mut operations = matches
+        .iter()
+        .map(|invocation| {
+            invocation["summary"]["operation"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    operations.sort();
+    assert_eq!(operations, vec!["increment", "value"]);
+    for method in ["increment", "value"] {
+        let outputs = ctx.cli(get_by_key(Some(method))).await;
+        assert!(outputs.success_or_dump());
+        let selected = single_json(&outputs);
+        assert_eq!(selected["$type"], "invocation.get");
+        assert!(
+            matches
+                .iter()
+                .any(|invocation| invocation["summary"] == selected["summary"]),
+            "{method}: {selected:?} in {matches:?}"
+        );
+    }
+    let outputs = ctx
+        .cli([
+            INVOCATION,
+            "cancel",
+            "--agent",
+            &agent,
+            "--idempotency-key",
+            "completed-key",
+        ])
+        .await;
+    assert!(!outputs.success());
+
     // A call scheduled for later is `scheduled` until it is cancelled.
     let schedule_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
     let outputs = ctx
@@ -147,7 +217,7 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
         .collect::<Vec<_>>();
     assert_eq!(ids, vec![scheduled_id]);
 
-    // Pages of one return every invocation once: the constructor run and the two calls.
+    // Pages of one return every invocation once: the constructor run and the three calls.
     let mut listed = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -178,10 +248,10 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
             Some(next) => cursor = Some(next.to_string()),
             None => break,
         }
-        assert!(listed.len() <= 3, "{listed:?}");
+        assert!(listed.len() <= 4, "{listed:?}");
     }
-    assert_eq!(listed.len(), 3, "{listed:?}");
-    assert_eq!(listed.iter().collect::<HashSet<_>>().len(), 3);
+    assert_eq!(listed.len(), 4, "{listed:?}");
+    assert_eq!(listed.iter().collect::<HashSet<_>>().len(), 4);
     assert!(listed.contains(&completed_id));
     assert!(listed.iter().any(|id| id == scheduled_id));
 

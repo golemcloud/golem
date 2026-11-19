@@ -63,6 +63,30 @@ impl StructuredOutput for InvocationGetView {
     const KIND: &'static str = "invocation.get";
 }
 
+/// Every invocation that an idempotency key selects, each with its operation: the same key
+/// used for several operations of an agent gives several invocations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvocationGetMatchesView {
+    pub invocations: Vec<Invocation>,
+}
+
+impl Masked for InvocationGetMatchesView {}
+
+impl StructuredOutput for InvocationGetMatchesView {
+    const KIND: &'static str = "invocation.get-matches";
+}
+
+impl TextOutput for InvocationGetMatchesView {
+    fn log(&self) {
+        for (index, invocation) in self.invocations.iter().enumerate() {
+            if index > 0 {
+                logln("");
+            }
+            InvocationGetView(invocation.clone()).log();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InvocationListView(pub InvocationPage);
 

@@ -301,7 +301,7 @@ golem invocation get --agent 'CounterAgent("my-counter")' --idempotency-key my-k
 golem invocation list --agent 'CounterAgent("my-counter")' --status pending --status scheduled
 ```
 
-`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`) and, once it finished, its result. It exits with code 130 when the invocation was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
+`invocation get` shows the state of the invocation (`scheduled`, `pending`, `running`, `waiting`, `retrying`, `interrupted`, `completed`, `failed` or `cancelled`) and, once it finished, its result. When the key was used for more than one method of the agent, it shows the invocation of each method, and `--method` selects one. It exits with code 130 when an invocation it shows was cancelled. `invocation list` lists the invocations of an agent, newest change first, and prints a cursor for the next page.
 
 A key is found only for the account that made the invocation, and invocations made through an HTTP route are not found by their key. An invocation ID is resolved in the current environment; select another one with `--environment`.
 
