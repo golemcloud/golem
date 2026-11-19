@@ -28,7 +28,7 @@ final case class WebsiteConfig(greeting: String) derives Schema
   cors = Array("*")
 )
 trait ScalaWebsite extends BaseAgent with AgentConfig[WebsiteConfig] {
-  @httpHandler def serve(request: HttpRequest, principal: golem.Principal): Future[HttpResponse]
+  @httpHandler def serve(request: HttpRequest, context: golem.InvocationContext): Future[HttpResponse]
   @openApiProvider def describe(): Future[String]
 }
 
@@ -89,7 +89,7 @@ final class ScalaWebsiteImpl(config: Config[WebsiteConfig]) extends ScalaWebsite
       case _                     => request.body.close().map(_ => text(config.value.greeting))
     }
 
-  def serve(request: HttpRequest, principal: golem.Principal): Future[HttpResponse] =
+  def serve(request: HttpRequest, context: golem.InvocationContext): Future[HttpResponse] =
     HttpHandler.ensuring(handler)(() => Future.successful(())).apply(request)
 
   def describe(): Future[String] = Future.successful(

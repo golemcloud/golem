@@ -6,14 +6,15 @@ use golem_api_grpc::proto::golem::worker::{
     StreamEnd, StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result, stream_terminal,
 };
+use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{AgentMode, GolemUserPrincipal, Principal};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{HasOplog, HasOplogService};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use test_r::{inherit_test_dep, test};
 use tokio_stream::wrappers::ReceiverStream;
@@ -142,12 +143,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
                 agent_id: Some(id.clone().into()),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    })
-                    .into(),
-                ),
+                caller: Some(callers::account(context.account_id).into()),
                 environment_id: Some(context.default_environment_id.into()),
                 component_owner_account_id: Some(context.account_id.into()),
                 expected_callee_fingerprint: Some(fingerprint.0.into()),

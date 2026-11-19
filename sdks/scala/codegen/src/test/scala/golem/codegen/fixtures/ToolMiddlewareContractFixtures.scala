@@ -21,7 +21,7 @@ object ToolMiddlewareContractFixtures {
   val toolDefinitions: String =
     """|package example.middleware
        |
-       |import golem.Principal
+       |import golem.InvocationContext
        |import golem.runtime.annotations._
        |import golem.tool.{ToolInputStream, ToolOutputStream}
        |
@@ -40,7 +40,7 @@ object ToolMiddlewareContractFixtures {
        |  @arg("config", scope = "global")
        |  def publicEcho(config: String): Unit
        |
-       |  def echo(value: String, principal: Principal): Either[PublicError, String]
+       |  def echo(value: String, context: InvocationContext): Either[PublicError, String]
        |
        |  def copy(stdin: ToolInputStream, stdout: ToolOutputStream): Long
        |
@@ -79,7 +79,7 @@ object ToolMiddlewareContractFixtures {
        |    underlying: PublicEchoUnderlying,
        |    config: String,
        |    value: String,
-       |    principal: golem.Principal
+       |    context: golem.InvocationContext
        |  ): Future[Either[ToolInvokeError[PublicError], String]] =
        |    underlying.echo(config, value)
        |
@@ -121,7 +121,7 @@ object ToolMiddlewareContractFixtures {
        |    underlying: BackendEchoUnderlying,
        |    config: String,
        |    value: String,
-       |    principal: golem.Principal
+       |    context: golem.InvocationContext
        |  ): Future[Either[ToolInvokeError[PublicError], String]] =
        |    underlying.execute(s"$config:$value").map {
        |      case Right(result) => Right(result.toString)
@@ -215,7 +215,7 @@ object ToolMiddlewareContractFixtures {
   val ordinaryClientBaselineSource: String =
     """|package example.baseline
        |
-       |import golem.Principal
+       |import golem.InvocationContext
        |import golem.runtime.annotations._
        |import golem.tool.{ToolInputStream, ToolOutputStream}
        |import scala.concurrent.Future
@@ -230,7 +230,7 @@ object ToolMiddlewareContractFixtures {
        |    value: String,
        |    stdin: ToolInputStream,
        |    stdout: ToolOutputStream,
-       |    principal: Principal
+       |    context: InvocationContext
        |  ): Future[Either[BaselineError, Long]]
        |  def nested(prefix: String): BaselineNested
        |}

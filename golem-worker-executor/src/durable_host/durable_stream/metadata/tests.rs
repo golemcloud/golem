@@ -120,7 +120,7 @@ impl Fixture {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         };
@@ -145,7 +145,7 @@ impl Fixture {
             create_request: golem_common::model::oplog::CreateRequest::new(
                 golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                 None,
-                golem_common::model::agent::Principal::anonymous(),
+                golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
         }));

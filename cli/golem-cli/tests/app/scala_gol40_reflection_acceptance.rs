@@ -67,16 +67,28 @@ async fn scala_gol40_generated_and_reflected_clients_match_live() {
     assert_eq!(observation["typedErrorMatches"], true);
     assert_eq!(observation["principalMatches"], true);
     assert_eq!(observation["streamMatches"], true);
-    assert_eq!(
-        observation["generatedNested"],
-        "Gol40ReflectionOutput(nested/inspect,shared-prefix:asymmetric,89,golem-user)"
+    // The caller is the CLI's account: its kind and its pair, under the server's Golem issuer.
+    let generated_principal = observation["generatedPrincipal"].as_str().unwrap();
+    assert!(
+        generated_principal.starts_with("account (\"")
+            && generated_principal.contains(",\"account:"),
+        "{generated_principal}"
     );
     assert_eq!(
-        observation["reflectedNested"],
-        "{\n  \"path\": \"nested/inspect\",\n  \"label\": \"shared-prefix:asymmetric\",\n  \"weighted\": \"89\",\n  \"principal\": \"golem-user\"\n}"
+        observation["generatedNested"].as_str().unwrap(),
+        format!(
+            "Gol40ReflectionOutput(nested/inspect,shared-prefix:asymmetric,89,{generated_principal})"
+        )
     );
-    assert_eq!(observation["generatedPrincipal"], "golem-user");
-    assert_eq!(observation["reflectedPrincipal"], "\"golem-user\"");
+    let reflected_nested: serde_json::Value =
+        serde_json::from_str(observation["reflectedNested"].as_str().unwrap()).unwrap();
+    assert_eq!(reflected_nested["path"], "nested/inspect");
+    assert_eq!(reflected_nested["label"], "shared-prefix:asymmetric");
+    assert_eq!(reflected_nested["weighted"], "89");
+    assert_eq!(reflected_nested["principal"], generated_principal);
+    let reflected_principal: String =
+        serde_json::from_str(observation["reflectedPrincipal"].as_str().unwrap()).unwrap();
+    assert_eq!(reflected_principal, generated_principal);
     let expected_stream_bytes = json!({
         "elements": [
             {"kind": "s32", "value": 0},

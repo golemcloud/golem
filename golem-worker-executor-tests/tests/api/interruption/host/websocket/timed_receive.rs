@@ -8,6 +8,7 @@ use golem_common::model::oplog::{
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, HasWebSocketConnectionPool, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -247,7 +248,7 @@ async fn pending_timed_receive(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let mut peer = Peer::start().await?;
@@ -664,7 +665,7 @@ async fn durable_websocket_timed_receive_timeout_before_quota_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let pool = worker.websocket_connection_pool();

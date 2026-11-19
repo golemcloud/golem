@@ -208,6 +208,9 @@
       "$ref": "#/definitions/component.manifest-trace"
     },
     {
+      "$ref": "#/definitions/package.digest"
+    },
+    {
       "$ref": "#/definitions/deploy.deployment"
     },
     {
@@ -4422,6 +4425,19 @@
       },
       "additionalProperties": false
     },
+    "package.digest": {
+      "type": "object",
+      "description": "The SHA-256 digest of a Golem package's OCI manifest.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "package pack",
+      "x-golem-commands": ["package pack", "publish"],
+      "required": ["$type", "digest"],
+      "properties": {
+        "$type": { "const": "package.digest" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
     "component.manifest-trace": {
       "type": "object",
       "description": "Single structured output document emitted by `golem component manifest-trace`.",
@@ -8039,25 +8055,14 @@
           "required": ["tag"],
           "properties": { "tag": { "const": "user-supplied" } },
           "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["tag", "value"],
-          "properties": { "tag": { "const": "auto-injected" }, "value": { "$ref": "#/definitions/AutoInjectedKind" } },
-          "additionalProperties": false
         }
       ]
     },
-    "AutoInjectedKind": {
-      "type": "string",
-      "enum": ["principal"]
-    },
     "ReadOnlyConfig": {
       "type": "object",
-      "required": ["cachePolicy", "usesPrincipal"],
+      "required": ["cachePolicy"],
       "properties": {
-        "cachePolicy": { "$ref": "#/definitions/CachePolicy" },
-        "usesPrincipal": { "type": "boolean" }
+        "cachePolicy": { "$ref": "#/definitions/CachePolicy" }
       },
       "additionalProperties": false
     },
@@ -10946,6 +10951,10 @@
     {
       "type": "component.manifest-trace",
       "rustType": "ComponentManifestTraceView"
+    },
+    {
+      "type": "package.digest",
+      "rustType": "PackageDigest"
     },
     {
       "type": "deploy.deployment",

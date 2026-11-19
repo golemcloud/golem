@@ -12,6 +12,7 @@ use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithInd
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use request_tasks::{finish_input_test, join_request, request_is_finished, start_refresh};
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -323,7 +324,7 @@ async fn pending_input(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

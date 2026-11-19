@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 
 mod initialization {
     use super::*;
@@ -115,7 +116,7 @@ mod initialization {
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
         )
         .await?;
         let mut initializer = worker

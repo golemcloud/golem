@@ -819,27 +819,23 @@ fn capability_values_render_as_redacted_in_every_language() {
     }
 }
 
-/// The host fills an auto-injected principal, so an agent id carries only the
-/// user-supplied constructor parameters.
+/// An agent id carries every declared constructor parameter.
 #[test]
-fn agent_id_params_skip_the_auto_injected_principal() {
+fn agent_id_params_are_every_declared_field() {
     let input_schema = InputSchema::parameters(vec![
         NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::auto_injected(
-            "owner",
-            golem_common::schema::agent::AutoInjectedKind::Principal,
-            SchemaType::record(vec![]),
-        ),
+        NamedField::user_supplied("owner", SchemaType::u32()),
     ]);
     let graph = SchemaGraph::anonymous(SchemaType::string());
     let parsed =
-        parse_agent_id_params("\"a\"", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
+        parse_agent_id_params("\"a\",7", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
     assert_eq!(
         parsed,
         SchemaValue::Record {
-            fields: vec![SchemaValue::String("a".to_string())]
+            fields: vec![SchemaValue::String("a".to_string()), SchemaValue::U32(7)]
         }
     );
+    assert!(parse_agent_id_params("\"a\"", &graph, &input_schema, &SourceLanguage::Rust).is_err());
 }
 
 // ── Go ───────────────────────────────────────────────────────────────────────

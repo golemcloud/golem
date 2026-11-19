@@ -35,7 +35,7 @@ import scala.collection.mutable
  *     descriptor / per-command canonical input models / error schemas, and the
  *     SDK-internal client and subtree-wrapper classes
  *
- * The generated code mirrors the Rust SDK's client macro: `Principal`
+ * The generated code mirrors the Rust SDK's client macro: `InvocationContext`
  * parameters are excluded, stdout parameters move into the result tuple, stdin
  * stays a parameter, root-level global arguments are inherited by subcommand
  * signatures, and subtree navigation packs inherited globals into the
@@ -131,12 +131,12 @@ object ToolRpcCodegen {
 
     private def keptLeafParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
       (inheritedRootParams(tool, m) ++ m.params).filter { p =>
-        !p.isPrincipal && !p.isStdout && !p.isStderr && !omittedMatches(tool, m, p, omitted)
+        !p.isInvocationContext && !p.isStdout && !p.isStderr && !omittedMatches(tool, m, p, omitted)
       }
 
     private def keptSubtreeParams(tool: Tool, m: Method, omitted: List[String]): List[Param] =
       (inheritedRootParams(tool, m) ++ m.params).filter { p =>
-        !p.isPrincipal && !omittedMatches(tool, m, p, omitted)
+        !p.isInvocationContext && !omittedMatches(tool, m, p, omitted)
       }
 
     private def okResultType(okType: Option[String]): String =
@@ -310,7 +310,7 @@ $indent}"""
         val inherited = inheritedRootParams(tool, m).sortBy(p => if (isFlagParam(p)) 1 else 0)
         val own       = m.params.sortBy(p => if (isFlagParam(p)) 1 else 0)
         (inherited ++ own).filter { p =>
-          !p.isPrincipal && !isStreamParam(p) && !omittedMatches(tool, m, p, omitted)
+          !p.isInvocationContext && !isStreamParam(p) && !omittedMatches(tool, m, p, omitted)
         }
       }
       val prefixEntries = prefixParams.map(wireField(tool, m, _))

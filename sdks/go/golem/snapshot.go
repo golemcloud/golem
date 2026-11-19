@@ -41,35 +41,36 @@ const (
 	snapshotJSONMIME = "application/json"
 )
 
-// The agent's principal travels with its state, since a restore has no
-// initialize call to supply it. The layout is the
-// Rust SDK's: a JSON snapshot is {"version":1,"principal":…,"state":…}; a raw one
-// is a version byte (2), the principal's length as a big-endian uint32, the
-// principal, then the Snapshotter's bytes.
+// A 2.0 snapshot carries nothing but the agent's state: the caller of an
+// invocation comes from the host, never from saved state. A JSON snapshot is
+// {"version":2,"state":…}; a raw one is a version byte (3) then the
+// Snapshotter's bytes. A snapshot written by a 1.6 SDK still loads: it is
+// {"version":1,"principal":…,"state":…} or a raw version byte (2), the
+// principal's length as a big-endian uint32, the principal, then the
+// Snapshotter's bytes. Its principal is checked as before and dropped. A raw
+// snapshot of version 1 (state only) was never written by this SDK, and is
+// refused.
 const (
-	snapshotJSONVersion = 1
-	snapshotRawVersion  = 2
+	snapshotJSONVersion       = 2
+	snapshotLegacyJSONVersion = 1
+	snapshotRawVersion        = 3
+	snapshotLegacyRawVersion  = 2
 )
 
 type jsonSnapshot struct {
 	Version   int             `json:"version"`
-	Principal json.RawMessage `json:"principal"`
+	Principal json.RawMessage `json:"principal,omitempty"`
 	State     json.RawMessage `json:"state"`
 }
 
-// saveState serializes an agent instance's state and principal into a host
-// snapshot.
-func saveState(state any, principal Principal) (host.Snapshot, error) {
-	p, err := marshalPrincipal(principal)
-	if err != nil {
-		return host.Snapshot{}, err
-	}
+// saveState serializes an agent instance's state into a host snapshot.
+func saveState(state any) (host.Snapshot, error) {
 	if mp, ok := state.(MultipartSnapshotter); ok {
 		parts, err := mp.SaveParts()
 		if err != nil {
 			return host.Snapshot{}, err
 		}
-		payload, mime, err := encodeMultipart(parts, p)
+		payload, mime, err := encodeMultipart(parts)
 		if err != nil {
 			return host.Snapshot{}, err
 		}
@@ -80,10 +81,8 @@ func saveState(state any, principal Principal) (host.Snapshot, error) {
 		if err != nil {
 			return host.Snapshot{}, err
 		}
-		out := make([]byte, 0, 5+len(p)+len(payload))
+		out := make([]byte, 0, 1+len(payload))
 		out = append(out, snapshotRawVersion)
-		out = binary.BigEndian.AppendUint32(out, uint32(len(p)))
-		out = append(out, p...)
 		out = append(out, payload...)
 		return host.Snapshot{Payload: out, MimeType: snapshotRawMIME}, nil
 	}
@@ -91,52 +90,61 @@ func saveState(state any, principal Principal) (host.Snapshot, error) {
 	if err != nil {
 		return host.Snapshot{}, err
 	}
-	payload, err := json.Marshal(jsonSnapshot{Version: snapshotJSONVersion, Principal: p, State: s})
+	payload, err := json.Marshal(jsonSnapshot{Version: snapshotJSONVersion, State: s})
 	if err != nil {
 		return host.Snapshot{}, err
 	}
 	return host.Snapshot{Payload: payload, MimeType: snapshotJSONMIME}, nil
 }
 
-// savedState is a snapshot without its principal: the payload [loadState]
+// savedState is the state a snapshot carries: the payload [loadState]
 // reads, or the decoded parts of a multipart snapshot.
 type savedState struct {
 	Payload   []byte
 	multipart *MultipartSnapshot
 }
 
-// splitSnapshot separates a snapshot into the agent's principal and the state
-// [loadState] reads.
-func splitSnapshot(snap host.Snapshot) (Principal, savedState, error) {
+// splitSnapshot reads the state out of a snapshot, in the 2.0 form or in a
+// 1.6 form (whose principal it checks and drops).
+func splitSnapshot(snap host.Snapshot) (savedState, error) {
 	if _, ok := extractBoundary(snap.MimeType); ok {
-		principal, parts, err := decodeMultipart(snap.Payload, snap.MimeType)
+		parts, err := decodeMultipart(snap.Payload, snap.MimeType)
 		if err != nil {
-			return nil, savedState{}, err
+			return savedState{}, err
 		}
-		p, err := unmarshalPrincipal(principal)
-		return p, savedState{multipart: &parts}, err
+		return savedState{multipart: &parts}, nil
 	}
 	if snap.MimeType == snapshotJSONMIME {
 		var js jsonSnapshot
 		if err := json.Unmarshal(snap.Payload, &js); err != nil {
-			return nil, savedState{}, fmt.Errorf("golem: decoding the snapshot: %w", err)
+			return savedState{}, fmt.Errorf("golem: decoding the snapshot: %w", err)
 		}
-		if js.Version != snapshotJSONVersion {
-			return nil, savedState{}, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
+		switch js.Version {
+		case snapshotJSONVersion:
+		case snapshotLegacyJSONVersion:
+			if err := validateLegacyPrincipal(js.Principal); err != nil {
+				return savedState{}, err
+			}
+		default:
+			return savedState{}, fmt.Errorf("golem: unsupported JSON snapshot version %d", js.Version)
 		}
-		p, err := unmarshalPrincipal(js.Principal)
-		return p, savedState{Payload: js.State}, err
+		return savedState{Payload: js.State}, nil
 	}
 	b := snap.Payload
-	if len(b) < 5 || b[0] != snapshotRawVersion {
-		return nil, savedState{}, errors.New("golem: not a snapshot this SDK wrote")
+	if len(b) >= 1 && b[0] == snapshotRawVersion {
+		return savedState{Payload: b[1:]}, nil
+	}
+	if len(b) < 5 || b[0] != snapshotLegacyRawVersion {
+		return savedState{}, errors.New("golem: not a snapshot this SDK wrote")
 	}
 	n := binary.BigEndian.Uint32(b[1:5])
 	if uint64(len(b)-5) < uint64(n) {
-		return nil, savedState{}, errors.New("golem: snapshot too short for its principal")
+		return savedState{}, errors.New("golem: snapshot too short for its principal")
 	}
-	p, err := unmarshalPrincipal(b[5 : 5+n])
-	return p, savedState{Payload: b[5+n:]}, err
+	if err := validateLegacyPrincipal(b[5 : 5+n]); err != nil {
+		return savedState{}, err
+	}
+	return savedState{Payload: b[5+n:]}, nil
 }
 
 // restoreState rebuilds an agent's state from a snapshot without running its
@@ -145,13 +153,13 @@ func splitSnapshot(snap host.Snapshot) (Principal, savedState, error) {
 // replaces, and must not happen again. The state starts from its zero value,
 // the snapshot is loaded into it, and the [AgentImpl.OnRestore] hook, if any,
 // rebuilds what the snapshot does not carry.
-func restoreState(e *agentEntry, idVal reflect.Value, principal Principal, snap savedState) (any, error) {
+func restoreState(e *agentEntry, idVal reflect.Value, caller func() Caller, snap savedState) (any, error) {
 	state := e.zeroState()
 	if err := loadState(state, snap); err != nil {
 		return nil, err
 	}
 	if e.restore != nil {
-		if err := e.restore(state, idVal, principal); err != nil {
+		if err := e.restore(state, idVal, caller); err != nil {
 			return nil, fmt.Errorf("restoring %s: %w", e.name, err)
 		}
 	}

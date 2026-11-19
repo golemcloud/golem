@@ -97,13 +97,27 @@ pub(all) struct ConstructedAgent {
 }
 
 ///|
+pub using @caller {
+  type Caller,
+  type InvocationContext,
+  type Principal,
+  type PrincipalKind,
+  type PrincipalRef,
+  type TokenProvenance,
+  type UserPrincipal,
+  type AccountPrincipal,
+  type AgentPrincipal,
+  type ToolPrincipal,
+  type AccountAuthentication,
+}
+
+///|
 /// Information available while constructing a fresh agent from a snapshot.
 pub(all) struct SnapshotRestoreContext {
   agent_id : String
   agent_type : String
   identity_fields : SnapshotIdentity
   phantom_id : @schema.Uuid?
-  principal : @common.Principal
 }
 
 ///|
@@ -120,7 +134,7 @@ pub fn[T : @schema.FromWire] SnapshotRestoreContext::identity(
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
-  construct : async (@types.SchemaValueTree, @common.Principal) -> Result[
+  construct : async (@types.SchemaValueTree, InvocationContext) -> Result[
     ConstructedAgent,
     @common.AgentError,
   ]
@@ -132,11 +146,10 @@ pub(all) struct RegisteredAgent {
 
 ///|
 /// A live agent instance with its name, type definition, dispatch interface,
-/// snapshot support, and the principal that initialized it.
+/// and snapshot support.
 pub(all) struct AgentInstance {
   name : String
   agent_type : @common.AgentType
-  principal : @common.Principal
   interface : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
@@ -147,13 +160,11 @@ pub(all) struct AgentInstance {
 /// Installs a complete agent returned by an initialization or restoration factory.
 fn install_constructed_agent(
   registered_agent : RegisteredAgent,
-  principal : @common.Principal,
   constructed : ConstructedAgent,
 ) -> Unit {
   set_agent_instance({
     name: registered_agent.name,
     agent_type: registered_agent.agent_type,
-    principal,
     interface: constructed.raw,
     snapshottable: constructed.snapshottable,
     snapshot_format: constructed.snapshot_format,
@@ -165,13 +176,12 @@ fn install_constructed_agent(
 /// Commits a restoration result atomically to the agent singleton.
 fn finish_restoration(
   registered_agent : RegisteredAgent,
-  principal : @common.Principal,
   restored : Result[ConstructedAgent, String],
 ) -> Result[Unit, String] {
   match restored {
     Err(e) => Err(e)
     Ok(constructed) => {
-      install_constructed_agent(registered_agent, principal, constructed)
+      install_constructed_agent(registered_agent, constructed)
       Ok(())
     }
   }
@@ -183,7 +193,7 @@ fn finish_restoration(
 pub async fn construct_and_set_instance(
   agent_type : String,
   input : @types.SchemaValueTree,
-  principal : @common.Principal,
+  context : InvocationContext,
 ) -> Result[Unit, @common.AgentError] {
   match get_registered_agent(agent_type) {
     None =>
@@ -192,10 +202,10 @@ pub async fn construct_and_set_instance(
         "Agent type not found: \{agent_type}",
       )
     Some(registered_agent) => {
-      let constructed = (registered_agent.construct)(input, principal)
+      let constructed = (registered_agent.construct)(input, context)
       match constructed {
         Ok(constructed) => {
-          install_constructed_agent(registered_agent, principal, constructed)
+          install_constructed_agent(registered_agent, constructed)
           Ok(())
         }
         Err(e) => Err(e)
@@ -219,7 +229,6 @@ pub async fn restore_and_set_instance(
       match registered_agent.load_snapshot {
         None => Err("Agent does not support snapshots")
         Some(load_snapshot) => {
-          let principal = context.principal
           let restored = match load_snapshot(snapshot, context) {
             Ok(restored) => restored
             Err(error) => return Err(error)
@@ -227,7 +236,7 @@ pub async fn restore_and_set_instance(
           context.identity_fields.finish() catch {
             error => return Err("Invalid agent identity: \{repr(error)}")
           }
-          finish_restoration(registered_agent, principal, Ok(restored))
+          finish_restoration(registered_agent, Ok(restored))
         }
       }
   }
@@ -248,6 +257,6 @@ pub(open) trait RawAgent {
     Self,
     method_name : String,
     input : @types.SchemaValueTree,
-    principal : @common.Principal,
+    context : InvocationContext,
   ) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }

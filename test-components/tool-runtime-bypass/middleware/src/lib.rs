@@ -1,8 +1,8 @@
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::spawn_local;
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
-    ToolInvokeError, UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, RawCustomToolError,
+    Tool, ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaValue, ToolError,
@@ -93,7 +93,7 @@ fn inject_principal(input: TypedSchemaValue, principal: &Principal) -> TypedSche
     let SchemaValue::Record { fields } = &mut value else {
         panic!("chain input is a record");
     };
-    fields[2] = SchemaValue::String(format!("{principal:?}"));
+    fields[2] = SchemaValue::String(principal.to_string());
     TypedSchemaValue::new(graph, value)
 }
 
@@ -138,11 +138,11 @@ async fn universal_one(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    principal: Principal,
+    context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let input = if tool_name == "chain-probe" {
-        inject_principal(input, &principal)
+        inject_principal(input, context.caller().immediate())
     } else {
         input
     };
@@ -161,7 +161,7 @@ async fn universal_one(
             result: Some(
                 ChainEvidence {
                     claimed_principal: "stale-return".to_string(),
-                    actual_principal: format!("{principal:?}"),
+                    actual_principal: context.caller().immediate().to_string(),
                     owner_config: "stale-return".to_string(),
                     owner_secret: "stale-return".to_string(),
                     nested: NestedEvidence {
@@ -257,7 +257,7 @@ async fn universal_two(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     if tool_name == "validation-probe" {
@@ -403,7 +403,7 @@ async fn permission_layer(
     stdin: Option<InputStream>,
     _stdout: Option<OutputStream>,
     _stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let path = permission_path(&input);

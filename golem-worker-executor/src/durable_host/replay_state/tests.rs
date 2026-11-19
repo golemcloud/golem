@@ -268,7 +268,9 @@ fn invocation_started_for(
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id,
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        })),
         trace_id: TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),

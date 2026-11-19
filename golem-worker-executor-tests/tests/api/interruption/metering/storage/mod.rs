@@ -141,7 +141,7 @@ async fn pending_managed_xfs_storage(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();

@@ -2940,8 +2940,8 @@ fn optional_query_parameter_is_not_required() {
 
 #[test]
 fn query_schemas_preserve_constraints_and_describe_wire_collections() {
+    use golem_common::schema::NamedField;
     use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
-    use golem_common::schema::{AutoInjectedKind, NamedField};
     use golem_service_base::custom_api::{AgentRouteMode, PhantomSelection};
 
     let bounded = SchemaType::U32 {
@@ -3043,11 +3043,6 @@ fn query_schemas_preserve_constraints_and_describe_wire_collections() {
                     input.metadata.doc = Some("Search values".into());
                     input.metadata.deprecated = Some("Use the next endpoint".into());
                     call.method_input.input_schema = InputSchema::parameters([
-                        NamedField::auto_injected(
-                            "principal",
-                            AutoInjectedKind::Principal,
-                            SchemaType::string(),
-                        ),
                         NamedField::user_supplied("header", SchemaType::string()),
                         NamedField::user_supplied(
                             "events",

@@ -26,7 +26,9 @@ message InvocationStart {
   golem.worker.IdempotencyKey idempotency_key = 4;
   golem.worker.InvocationContext context = 5;
   golem.auth.AuthCtx auth_ctx = 6;
-  golem.component.Principal principal = 7;
+  reserved 7;
+  reserved "principal";
+  golem.component.Caller caller = 21;
   golem.common.EnvironmentId environment_id = 8;
   repeated golem.worker.AgentConfigEntryDto config = 9;
   golem.common.AccountId component_owner_account_id = 10;
@@ -66,7 +68,9 @@ message ResumeAttach {
   ResumeOperation operation = 8;
   repeated StreamCursor cursors = 9;
   golem.auth.AuthCtx auth_ctx = 10;
-  golem.component.Principal principal = 11;
+  reserved 11;
+  reserved "principal";
+  golem.component.Caller caller = 12;
 }
 
 enum ResumeOperation {

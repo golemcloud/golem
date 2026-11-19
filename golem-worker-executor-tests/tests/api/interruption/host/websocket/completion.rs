@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 #[test]
@@ -61,7 +62,7 @@ async fn websocket_handshake_completion_before_quota_exhaustion(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let pool = worker.websocket_connection_pool();

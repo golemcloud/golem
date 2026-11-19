@@ -282,6 +282,7 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
         "component.manifest-trace",
         arb_component_manifest_trace_result
     ),
+    registry_entry!("PackageDigest", "package.digest", arb_package_digest),
     registry_entry!(
         "DeploymentNewView",
         "deploy.deployment",
@@ -1344,9 +1345,8 @@ fn sample_agent_type_schema(
             description: String::new(),
             prompt_hint: None,
             input_schema: golem_common::schema::agent::InputSchema::parameters([
-                golem_common::schema::agent::NamedField::auto_injected(
-                    "principal",
-                    golem_common::schema::agent::AutoInjectedKind::Principal,
+                golem_common::schema::agent::NamedField::user_supplied(
+                    "name",
                     golem_common::schema::SchemaType::string(),
                 ),
             ]),
@@ -3280,13 +3280,7 @@ fn arb_metadata_envelope() -> BoxedStrategy<golem_common::schema::MetadataEnvelo
 }
 
 fn arb_field_source() -> BoxedStrategy<golem_common::schema::FieldSource> {
-    prop_oneof![
-        Just(golem_common::schema::FieldSource::UserSupplied),
-        Just(golem_common::schema::FieldSource::AutoInjected(
-            golem_common::schema::AutoInjectedKind::Principal,
-        )),
-    ]
-    .boxed()
+    Just(golem_common::schema::FieldSource::UserSupplied).boxed()
 }
 
 fn arb_named_field() -> BoxedStrategy<golem_common::schema::NamedField> {
@@ -3324,13 +3318,8 @@ fn arb_output_schema() -> BoxedStrategy<golem_common::schema::agent::OutputSchem
 }
 
 fn arb_read_only_config() -> BoxedStrategy<golem_common::model::agent::ReadOnlyConfig> {
-    (arb_cache_policy(), any::<bool>())
-        .prop_map(
-            |(cache_policy, uses_principal)| golem_common::model::agent::ReadOnlyConfig {
-                cache_policy,
-                uses_principal,
-            },
-        )
+    arb_cache_policy()
+        .prop_map(|cache_policy| golem_common::model::agent::ReadOnlyConfig { cache_policy })
         .boxed()
 }
 
@@ -5608,6 +5597,15 @@ fn arb_new_app_result() -> OutputDocumentStrategy {
             },
         ),
     )
+}
+
+fn arb_package_digest() -> OutputDocumentStrategy {
+    serialized_output(any::<[u8; 32]>().prop_map(|bytes| {
+        use sha2::{Digest, Sha256};
+        crate::package::PackageDigest {
+            digest: format!("sha256:{:x}", Sha256::digest(bytes)),
+        }
+    }))
 }
 
 fn arb_template_list_result() -> OutputDocumentStrategy {

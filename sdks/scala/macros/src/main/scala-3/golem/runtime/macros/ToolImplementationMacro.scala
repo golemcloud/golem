@@ -25,8 +25,8 @@ import scala.quoted.*
 /**
  * Generates the [[ToolImplementationHandle]] for a tool implementation class:
  * the tool descriptor plus the invocation surface (per-method bindings that
- * decode canonical input fields, inject Principal/stdin/stdout, call the
- * implementation, and encode the outcome; and subtree forwarding links).
+ * decode canonical input fields, inject InvocationContext/stdin/stdout, call
+ * the implementation, and encode the outcome; and subtree forwarding links).
  */
 object ToolImplementationMacro {
 
@@ -129,10 +129,10 @@ private[macros] class ToolImplementationAssembler(val core: ToolMacroCore) {
               )
             '{ ToolParamDecoder.Field(${ Expr(name) }, ToolInvokerRuntime.fieldDecoder[t]($from)) }
         }
-      case core.ParamBindingIR.PrincipalB => '{ ToolParamDecoder.PrincipalParam }
-      case core.ParamBindingIR.StdinB     => '{ ToolParamDecoder.StdinParam }
-      case core.ParamBindingIR.StdoutB    => '{ ToolParamDecoder.StdoutParam }
-      case core.ParamBindingIR.StderrB    => '{ ToolParamDecoder.StderrParam }
+      case core.ParamBindingIR.InvocationContextB => '{ ToolParamDecoder.InvocationContextParam }
+      case core.ParamBindingIR.StdinB             => '{ ToolParamDecoder.StdinParam }
+      case core.ParamBindingIR.StdoutB            => '{ ToolParamDecoder.StdoutParam }
+      case core.ParamBindingIR.StderrB            => '{ ToolParamDecoder.StderrParam }
     })
 
     '{

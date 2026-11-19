@@ -42,14 +42,15 @@ object HttpValidation {
 
   /**
    * Validates an HTTP endpoint at the trait level (method params are known),
-   * including rejection of Principal-typed parameters from HTTP bindings.
+   * including rejection of InvocationContext-typed parameters from HTTP
+   * bindings.
    */
   def validateEndpointVars(
     agentName: String,
     methodName: String,
     endpoint: HttpEndpointDetails,
     methodParamNames: Set[String],
-    principalParamNames: Set[String],
+    contextParamNames: Set[String],
     hasMount: Boolean
   ): Either[String, Unit] =
     if (!hasMount)
@@ -59,33 +60,33 @@ object HttpValidation {
       )
     else
       for {
-        _ <- validateEndpointVarsAreNotPrincipal(methodName, endpoint, principalParamNames)
+        _ <- validateEndpointVarsAreNotInvocationContext(methodName, endpoint, contextParamNames)
         _ <- validatePathVars(methodName, endpoint.pathSuffix, methodParamNames)
         _ <- validateHeaderVars(methodName, endpoint.headerVars, methodParamNames)
         _ <- validateQueryVars(methodName, endpoint.queryVars, methodParamNames)
       } yield ()
 
-  private def validateEndpointVarsAreNotPrincipal(
+  private def validateEndpointVarsAreNotInvocationContext(
     methodName: String,
     endpoint: HttpEndpointDetails,
-    principalParamNames: Set[String]
+    contextParamNames: Set[String]
   ): Either[String, Unit] =
-    if (principalParamNames.isEmpty) Right(())
+    if (contextParamNames.isEmpty) Right(())
     else {
-      val pathPrincipal = endpoint.pathSuffix.collectFirst {
-        case PathSegment.PathVariable(v) if principalParamNames.contains(v)          => v
-        case PathSegment.RemainingPathVariable(v) if principalParamNames.contains(v) => v
+      val pathContext = endpoint.pathSuffix.collectFirst {
+        case PathSegment.PathVariable(v) if contextParamNames.contains(v)          => v
+        case PathSegment.RemainingPathVariable(v) if contextParamNames.contains(v) => v
       }
-      val headerPrincipal = endpoint.headerVars.collectFirst {
-        case hv if principalParamNames.contains(hv.variableName) => hv.variableName
+      val headerContext = endpoint.headerVars.collectFirst {
+        case hv if contextParamNames.contains(hv.variableName) => hv.variableName
       }
-      val queryPrincipal = endpoint.queryVars.collectFirst {
-        case qv if principalParamNames.contains(qv.variableName) => qv.variableName
+      val queryContext = endpoint.queryVars.collectFirst {
+        case qv if contextParamNames.contains(qv.variableName) => qv.variableName
       }
-      pathPrincipal.orElse(headerPrincipal).orElse(queryPrincipal) match {
+      pathContext.orElse(headerContext).orElse(queryContext) match {
         case Some(varName) =>
           Left(
-            s"HTTP endpoint variable '$varName' in method '$methodName' cannot reference a Principal-typed parameter."
+            s"HTTP endpoint variable '$varName' in method '$methodName' cannot reference a InvocationContext-typed parameter."
           )
         case None => Right(())
       }
@@ -189,22 +190,22 @@ object HttpValidation {
   }
 
   /**
-   * Validates that mount path variables do not reference Principal-typed
-   * constructor parameters.
+   * Validates that mount path variables do not reference
+   * InvocationContext-typed constructor parameters.
    */
-  def validateMountVarsAreNotPrincipal(
+  def validateMountVarsAreNotInvocationContext(
     agentName: String,
     mount: HttpMountDetails,
-    principalParamNames: Set[String]
+    contextParamNames: Set[String]
   ): Either[String, Unit] =
-    if (principalParamNames.isEmpty) Right(())
+    if (contextParamNames.isEmpty) Right(())
     else
       mount.pathPrefix.collectFirst {
-        case PathSegment.PathVariable(v) if principalParamNames.contains(v) => v
+        case PathSegment.PathVariable(v) if contextParamNames.contains(v) => v
       } match {
         case Some(varName) =>
           Left(
-            s"HTTP mount path variable '$varName' for agent '$agentName' cannot reference a Principal-typed constructor parameter."
+            s"HTTP mount path variable '$varName' for agent '$agentName' cannot reference a InvocationContext-typed constructor parameter."
           )
         case None => Right(())
       }
@@ -220,25 +221,25 @@ object HttpValidation {
     validateHttpMount(agentName, mount, constructorParamNames, Set.empty)
 
   /**
-   * Runs all mount-level validations including Principal rejection.
+   * Runs all mount-level validations including InvocationContext rejection.
    */
   def validateHttpMount(
     agentName: String,
     mount: HttpMountDetails,
     constructorParamNames: Set[String],
-    principalParamNames: Set[String]
+    contextParamNames: Set[String]
   ): Either[String, Unit] =
     for {
       _ <- mount.phantomIdBinding match {
              case Some(binding) if binding.name.isEmpty => Left("Phantom selector name must not be empty")
              case Some(PhantomIdBinding.Path(name, _))
-                 if (constructorParamNames ++ principalParamNames).contains(name) ||
+                 if (constructorParamNames ++ contextParamNames).contains(name) ||
                    mount.pathPrefix.count { case PathSegment.PathVariable(n) => n == name; case _ => false } != 1 =>
                Left("Phantom path selector must name exactly one mount capture, not a constructor parameter")
              case _ => Right(())
            }
       _ <- validateNoCatchAllInMount(agentName, mount)
-      _ <- validateMountVarsAreNotPrincipal(agentName, mount, principalParamNames)
+      _ <- validateMountVarsAreNotInvocationContext(agentName, mount, contextParamNames)
       _ <- validateMountVarsExistInConstructor(mount, constructorParamNames)
       _ <- validateConstructorVarsSatisfied(mount, constructorParamNames)
     } yield ()

@@ -16,7 +16,7 @@
 
 package golem.runtime.tool
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.wire.WitTypedSchemaValue
 import golem.tool.{
   ExtendedToolType,
@@ -53,7 +53,7 @@ private[golem] object ToolRegistry {
 
   /**
    * Dispatches one `guest.invoke` call: `(command-path, input, stdin, stdout,
-   * principal)` to either a successful [[ToolInvocationResult]] or a
+   * context)` to either a successful [[ToolInvocationResult]] or a
    * [[WitToolError]].
    */
   type ToolInvoker =
@@ -63,7 +63,7 @@ private[golem] object ToolRegistry {
       Option[ToolInputStream],
       Option[ToolOutputStream],
       Option[ToolOutputStream],
-      Principal
+      InvocationContext
     ) => Future[Either[WitToolError, ToolInvocationResult]]
 
   private final case class Entry(

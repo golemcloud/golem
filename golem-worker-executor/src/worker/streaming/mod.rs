@@ -869,7 +869,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if attempt.effective_identity != prepared.attempt.effective_identity {
             return Err(WorkerExecutorError::invalid_request(
-                "Unauthorized: resume identity differs from the pinned principal and grant",
+                "Unauthorized: resume identity differs from the pinned caller and grant",
             ));
         }
 

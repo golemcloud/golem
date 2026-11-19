@@ -1864,7 +1864,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(error.getMessage.contains("parameter name `__golemInput` is reserved"), error.getMessage)
   }
 
-  test("pipeline converts discovery methods to IR with principalParams") {
+  test("pipeline converts discovery methods to IR with contextParams") {
     val source = SourceDiscovery.SourceInput(
       "Agent.scala",
       """|package example
@@ -1872,7 +1872,7 @@ class CodegenPipelineSpec extends munit.FunSuite {
          |@agentDefinition()
          |trait MyAgent {
          |  class Id()
-         |  def process(caller: Principal, data: String): String
+         |  def process(caller: InvocationContext, data: String): String
          |}
          |""".stripMargin
     )
@@ -1882,9 +1882,9 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assert(result.rpc.files.nonEmpty)
     val content = result.rpc.files.head.content
-    // Principal param should be filtered out
+    // InvocationContext param should be filtered out
     assert(content.contains("def apply(data: String)"), s"missing filtered apply in:\n$content")
-    assert(!content.contains("caller: Principal"), s"principal param should be filtered:\n$content")
+    assert(!content.contains("caller: InvocationContext"), s"context param should be filtered:\n$content")
   }
 
   private def rpcClient(source: String): String = {

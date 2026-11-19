@@ -21,7 +21,7 @@ use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
 use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, ScopeCard, StoredCard,
     parse_polymorphic_permission,
@@ -237,7 +237,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
@@ -250,7 +250,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
                 caller_env,
                 caller_stack,
                 config,
-                principal,
+                caller,
                 auth_ctx,
                 idempotency_key,
                 freshness_disposition,
@@ -265,7 +265,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
@@ -276,7 +276,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
                 caller_env,
                 caller_stack,
                 config,
-                principal,
+                caller,
                 auth_ctx,
                 idempotency_key,
             )
@@ -297,7 +297,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -316,7 +316,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
                 caller_env,
                 caller_stack,
                 config,
-                principal,
+                caller,
                 environment_id,
                 auth_ctx,
                 scope_card,
@@ -380,7 +380,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -388,7 +388,7 @@ impl WorkerProxy for LocalCardDeliveryProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
-                principal,
+                caller,
                 auth_ctx,
             )
             .await

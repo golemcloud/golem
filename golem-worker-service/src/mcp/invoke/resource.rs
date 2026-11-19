@@ -18,7 +18,7 @@ use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_
 use crate::service::worker::WorkerService;
 use base64::Engine;
 use golem_common::base_model::AgentId;
-use golem_common::base_model::agent::Principal;
+use golem_common::base_model::caller::Caller;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{AgentTarget, ParsedAgentKey};
 use golem_common::schema::agent::OutputSchema;
@@ -89,8 +89,8 @@ pub async fn invoke_resource(
             ErrorData::internal_error(format!("Failed to encode method parameters: {error}"), None)
         })?;
 
-    let principal = Principal::anonymous();
-    let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+    let caller = Caller::anonymous();
+    let proto_caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
 
     let agent_id = AgentId {
         component_id: mcp_resource.component_id,
@@ -112,7 +112,7 @@ pub async fn invoke_resource(
             golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
             Vec::new(),
             auth_ctx,
-            proto_principal,
+            proto_caller,
             None,
             None,
             None,

@@ -34,17 +34,10 @@ pub struct OwnerSummary {
 )]
 pub enum PrincipalSummary {
     Anonymous,
-    Oidc {
-        issuer: String,
-        subject: String,
-    },
-    Agent {
-        component_id: String,
-        agent_id: String,
-    },
-    GolemUser {
-        account_id: String,
-    },
+    User { issuer: String, subject: String },
+    Account { issuer: String, subject: String },
+    Agent { issuer: String, subject: String },
+    Tool { issuer: String, subject: String },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,7 +295,7 @@ mod tests {
                 component_id: "component".to_string(),
                 agent_id: "owner".to_string(),
             },
-            principal: PrincipalSummary::Oidc {
+            principal: PrincipalSummary::User {
                 issuer: "issuer".to_string(),
                 subject: "subject".to_string(),
             },
@@ -315,6 +308,6 @@ mod tests {
         second.occurrence_label = "operations".to_string();
         assert_ne!(first.occurrence_label, second.occurrence_label);
         assert_eq!(first.owner.agent_id, "owner");
-        assert!(matches!(first.principal, PrincipalSummary::Oidc { .. }));
+        assert!(matches!(first.principal, PrincipalSummary::User { .. }));
     }
 }

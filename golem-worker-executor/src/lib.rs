@@ -39,6 +39,9 @@ pub mod workerctx;
 pub mod span_test_support;
 
 #[cfg(test)]
+pub(crate) mod test_callers;
+
+#[cfg(test)]
 use span_test_support::Tracing;
 #[cfg(test)]
 use test_r::test_dep;
@@ -128,7 +131,7 @@ use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::postgres::PostgresSchedulerStorage;
 use crate::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use crate::workerctx::WorkerCtx;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
@@ -1280,7 +1283,18 @@ pub async fn bootstrap_and_run_worker_executor<
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing worker executor");
     golem_config.validate()?;
-    golem_config.resolve_golem_issuer();
+    // The installation's Golem issuer lives in the registry database; every service of the
+    // installation asks the registry for it. No configuration sets the field, so it is already
+    // set only by code that embeds the executor and gives the issuer itself (the tests).
+    if golem_config.golem_issuer.is_none() {
+        let golem_issuer = GrpcRegistryService::new(&golem_config.registry_service)
+            .get_golem_issuer()
+            .await
+            .context(
+                "Failed to get the Golem issuer of the installation from the registry service",
+            )?;
+        golem_config.set_golem_issuer(golem_issuer);
+    }
     // The agent socket policy refuses connects to these ports. They are bound before any agent
     // runs, so the configuration carries the bound ports also when it asks for port 0.
     let grpc_listener = golem_service_base::net::bind_tcp_listener(golem_config.grpc_addr())?;

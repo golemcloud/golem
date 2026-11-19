@@ -1863,7 +1863,9 @@ async fn append_prepared_pending(
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -3418,6 +3420,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: IdempotencyKey,
@@ -3518,6 +3521,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
@@ -3539,6 +3543,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<golem_common::base_model::card::ScopeCard>,
@@ -3609,6 +3614,7 @@ impl Rpc for AttachedProducerRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: golem_common::model::invocation_context::InvocationContextStack,
+        _caller: &golem_common::model::caller::Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -10895,7 +10901,9 @@ async fn detach_resume_and_takeover_advance_authority_and_fence_old_epochs() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -11535,7 +11543,9 @@ async fn forwarded_topology_is_committed_before_visibility_and_replays_exactly()
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -12081,7 +12091,9 @@ async fn local_topology_cannot_activate_before_exact_session_attachment() {
         .add(OplogEntry::pending_agent_invocation(
             None,
             identity.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -12504,7 +12516,9 @@ async fn packed_output_keeps_an_unanswered_batch_read_transient_and_resumes_with
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -12733,7 +12747,9 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
         .add(OplogEntry::pending_agent_invocation(
             None,
             session_key.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -13283,7 +13299,9 @@ async fn resumed_foreign_parent_and_nested_output_cursors_use_the_accepted_epoch
         .add(OplogEntry::pending_agent_invocation(
             None,
             consumer.invocation.idempotency_key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                caller: golem_common::model::caller::Caller::anonymous(),
+            })),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
