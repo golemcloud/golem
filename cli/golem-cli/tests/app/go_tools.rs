@@ -159,14 +159,14 @@ async fn test_go_tools_e2e() {
         outputs.stdout_text()
     };
 
-    // The tool sees the calling agent as its immediate caller; the CLI's
-    // user stays the original caller.
+    // A tool sees the calling agent as its immediate caller, also behind a
+    // middleware; the CLI's user stays the original caller.
     let own = run("VcsSelfCaller").await;
     assert!(own.contains("ok:.|self|anonymous|agent:1"), "{own}");
 
     let generated = run("VcsUser").await;
     assert!(
-        generated.contains("ok:.|checked:fix|ada|account:protected forbidden"),
+        generated.contains("ok:.|checked:fix|ada|agent:protected forbidden"),
         "{generated}"
     );
 }
