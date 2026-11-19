@@ -159,9 +159,9 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         types::HostUdpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family).await
     }
 
-    fn disconnect(&mut self, socket: Resource<UdpSocket>) -> SocketResult<()> {
+    async fn disconnect(&mut self, socket: Resource<UdpSocket>) -> SocketResult<()> {
         observe_function_call(&*self.0, "sockets::types::udp-socket", "disconnect");
-        types::HostUdpSocket::disconnect(&mut WasiSocketsView::sockets(self.0), socket)
+        types::HostUdpSocket::disconnect(&mut WasiSocketsView::sockets(self.0), socket).await
     }
 
     fn get_local_address(

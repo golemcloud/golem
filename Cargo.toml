@@ -364,10 +364,10 @@ x509-parser = "0.18.1"
 zstd = "0.13"
 
 [patch.crates-io]
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
-wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v50.0.1-p3" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", rev = "012c803ec040c0fbaf28ef63dc6e6f14d3e66057" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", rev = "012c803ec040c0fbaf28ef63dc6e6f14d3e66057" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", rev = "012c803ec040c0fbaf28ef63dc6e6f14d3e66057" }
+wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", rev = "012c803ec040c0fbaf28ef63dc6e6f14d3e66057" }
 # The head of the branch `golem-rustic_core-v0.13.0` of the fork.
 rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "2269cbb0b2b89dc55cd4dca0172ead894b7b43fd" }
 
