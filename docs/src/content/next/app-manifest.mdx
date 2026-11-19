@@ -1996,7 +1996,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "agents.<agent-type-name>.initialCard",
   }}>
-    ***Optional initial permission card*** with the same shape as <FieldLink path="components.<component-name>.initialCard"/>. Agent templates and presets can also set this field. The layers apply in this order: component template, component, component preset, agent template, agent, agent preset. The most specific layer that sets a card wins, and its card replaces the inherited card completely; cards are never merged. When no layer sets a card, the agent gets the default card. `golem component manifest-trace` shows which layer set the card of each agent type of a built component.
+    ***Optional initial permission card*** with the same shape as <FieldLink path="components.<component-name>.initialCard"/>. Agent templates and presets can also set this field. The layers apply in this order: component template, component, component preset, agent template, agent, agent preset. The most specific layer that sets a card wins, and its card replaces the inherited card completely; cards are never merged. When no layer sets a card, the agent gets the default card. `golem component manifest-trace` shows which layer set the card of each agent type of a built component; pass `--build` to build the component first.
   </Field>
 
   <Field meta={{

@@ -137,9 +137,10 @@ impl ComponentCommandHandler {
                     self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
-                ComponentSubcommand::ManifestTrace { component_name } => {
-                    self.cmd_manifest_trace(component_name).await
-                }
+                ComponentSubcommand::ManifestTrace {
+                    component_name,
+                    build,
+                } => self.cmd_manifest_trace(component_name, build).await,
             }
         })
     }
@@ -339,7 +340,18 @@ impl ComponentCommandHandler {
     async fn cmd_manifest_trace(
         &self,
         component_names: OptionalComponentNames,
+        build: bool,
     ) -> anyhow::Result<()> {
+        if build {
+            self.ctx
+                .app_handler()
+                .build(
+                    &BuildConfig::new(),
+                    component_names.component_name.clone(),
+                    &ApplicationComponentSelectMode::All,
+                )
+                .await?;
+        }
         self.ctx
             .app_handler()
             .must_select_components(
@@ -397,7 +409,7 @@ impl ComponentCommandHandler {
                 log_warn_action(
                     "Skipping",
                     format!(
-                        "the agent traces of {}, because the component is not built; build it to see them",
+                        "the agent traces of {}, because the component is not built; build it or pass --build to see them",
                         component_name.as_str().log_color_highlight()
                     ),
                 );
