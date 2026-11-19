@@ -1171,9 +1171,10 @@ async fn p2_tcp_completed_read_replays_with_the_peer_silent(
     session.finish().await
 }
 
-/// A write error is recorded and returned. After the peer resets the connection, a write fails;
-/// replay after a restart returns the same results, with the same error, and the peer saw the
-/// first message once and nothing after it.
+/// A write error is recorded and returned. After the peer resets the connection, a write fails,
+/// and the oplog records the socket error code of the native stream; replay after a restart
+/// returns the same results, with the same error, and the peer saw the first message once and
+/// nothing after it.
 #[test]
 #[timeout("3m")]
 async fn p2_tcp_write_error_replays_and_is_not_sent_again(
@@ -1238,6 +1239,20 @@ async fn p2_tcp_write_error_replays_and_is_not_sent_again(
     let (got, reconnected) = peer.await??;
     assert_eq!(got, b"one".to_vec());
     assert!(!reconnected, "no second connection");
+    let ends = ends_of(
+        &session.oplog().await?,
+        "sockets::tcp::output_stream::blocking_write_and_flush",
+    );
+    let failed = ends
+        .iter()
+        .find(|end| end.contains("Result(Err {"))
+        .expect("the failed write is recorded");
+    // `connection-reset` and `connection-aborted` are the cases 15 and 16 of the socket error
+    // code; `None` would mean that only the message was recorded.
+    assert!(
+        failed.contains("Enum { case: 15 }") || failed.contains("Enum { case: 16 }"),
+        "the failed write records the socket error code of the native stream: {failed}"
+    );
 
     session.restart_executor().await?;
     let replayed: Vec<Result<(), String>> = session.call("sends", data_value!()).await?;

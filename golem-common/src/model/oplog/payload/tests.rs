@@ -3162,6 +3162,15 @@ fn p2_tcp_stream_error_keeps_its_errno_and_kind_through_the_oplog() {
     assert_eq!(kind.raw_os_error(), None);
     assert_eq!(kind.kind(), std::io::ErrorKind::ConnectionReset);
 
+    // The native P2 TCP streams fail with a socket error code, not with an I/O error.
+    let native = wasmtime_wasi::p2::bindings::sockets::network::ErrorCode::ConnectionAborted;
+    let code = replayed(StreamError::LastOperationFailed(wasmtime::Error::from(
+        native,
+    )));
+    assert_eq!(code.raw_os_error(), None);
+    assert_eq!(code.kind(), std::io::ErrorKind::ConnectionAborted);
+    assert_eq!(code.to_string(), native.to_string(), "the message is kept");
+
     let closed = SerializableTcpStreamError::from_stream_error(StreamError::Closed).unwrap();
     assert!(matches!(StreamError::from(closed), StreamError::Closed));
     assert!(SerializableTcpStreamError::from_stream_error(StreamError::trap("trap")).is_err());

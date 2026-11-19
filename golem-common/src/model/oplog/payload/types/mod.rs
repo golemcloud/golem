@@ -376,8 +376,8 @@ pub enum SerializableTcpStreamError {
 pub struct SerializableTcpStreamFailure {
     /// The errno of an I/O error that the OS reported.
     pub os_error: Option<i32>,
-    /// The socket error code of an I/O error without an errno; `None` if the error is not an
-    /// I/O error.
+    /// The socket error code of an I/O error without an errno, or the socket error code that a
+    /// native P2 TCP stream failed with; `None` if the error is neither.
     pub code: Option<SerializableSocketErrorCode>,
     pub message: String,
 }

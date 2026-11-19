@@ -69,17 +69,22 @@ impl From<SerializableSocketError> for SocketError {
 
 impl SerializableTcpStreamError {
     /// The recorded form of a P2 TCP stream error. A trap is never recorded, so it is returned.
+    /// The native P2 TCP streams fail with a socket error code instead of an I/O error; the code
+    /// is recorded, so the guest's `network-error-code` gives it live and on replay.
     pub fn from_stream_error(error: StreamError) -> Result<Self, wasmtime::Error> {
         match error {
             StreamError::Closed => Ok(Self::Closed),
             StreamError::LastOperationFailed(error) => {
                 let io = error.downcast_ref::<std::io::Error>();
                 let os_error = io.and_then(std::io::Error::raw_os_error);
+                let code = match io {
+                    Some(_) if os_error.is_some() => None,
+                    Some(io) => Some(SocketErrorCode::from(io)),
+                    None => error.downcast_ref::<SocketErrorCode>().copied(),
+                };
                 Ok(Self::LastOperationFailed(SerializableTcpStreamFailure {
                     os_error,
-                    code: io
-                        .filter(|_| os_error.is_none())
-                        .map(|io| SerializableSocketErrorCode(SocketErrorCode::from(io))),
+                    code: code.map(SerializableSocketErrorCode),
                     message: error.to_string(),
                 }))
             }
@@ -108,7 +113,7 @@ impl From<SerializableTcpStreamError> for StreamError {
     }
 }
 
-/// The I/O error kind that the socket error code of an I/O error without an errno came from.
+/// The I/O error kind that gives `code` back as the guest's `network-error-code`.
 fn io_error_kind(code: SocketErrorCode) -> std::io::ErrorKind {
     use std::io::ErrorKind;
     match code {

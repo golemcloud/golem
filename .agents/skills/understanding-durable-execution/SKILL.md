@@ -977,13 +977,12 @@ durable call with no request payload:
 | `write`, `write-zeroes`, `blocking-write-and-flush`, `blocking-write-zeroes-and-flush` | `sockets::tcp::output_stream::*` | `WriteRemote` | the count, never the bytes |
 | `flush`, `blocking-flush` | `sockets::tcp::output_stream::{flush, blocking_flush}` | `WriteRemote` | the result |
 
-An error is recorded as `SerializableTcpStreamError`. For an `std::io::Error` it keeps the errno
-(or the socket error code of an I/O error without one), and always the message, so the guest gets
-the same error, with the same message and `network-error-code`, live and on replay; live calls also
-return the recorded form. The native P2 TCP streams of the Wasmtime fork wrap a socket `ErrorCode`,
-not an `std::io::Error`, so a real reset records only its message and `network-error-code` is
-`None`, as on main; only the lost-connection stand-in gives `connection-reset`. A trap is not
-recorded. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
+An error is recorded as `SerializableTcpStreamError` with its message and either the errno of an
+`std::io::Error` or a socket error code: that of an I/O error without an errno, or the P2 `ErrorCode`
+that the native P2 TCP streams of the Wasmtime fork fail with. Replay and live calls return the
+recorded form, rebuilt as an `std::io::Error` of the matching kind, so the guest gets the same error,
+message and `network-error-code` (for example `connection-reset` after a real peer reset) live and
+on replay. A trap is not recorded. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
 the destination (`check_write`, or `write_ready` for `blocking-splice`), the read of at most that
 many bytes, and the write of what was read. `blocking-splice` writes with `blocking_write_and_flush`
 like Wasmtime, so its bytes are sent when it returns; `splice` writes with `write`. A non-TCP side
