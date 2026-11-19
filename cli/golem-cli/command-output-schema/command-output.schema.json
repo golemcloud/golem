@@ -7809,9 +7809,10 @@
     },
     "ComponentDiffPayload": {
       "type": "object",
-      "required": ["wasmChanged", "componentConfigChanged"],
+      "required": ["wasmChanged", "packageMetadataChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "packageMetadataChanged": { "type": "boolean" },
         "agentTypeChanges": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }

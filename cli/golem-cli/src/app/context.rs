@@ -327,8 +327,7 @@ pub struct ApplicationContext {
     application: Application,
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
-    pub(crate) packaged_metadata:
-        BTreeMap<ComponentName, golem_common::model::agent::extraction::ExtractedComponentMetadata>,
+    pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
     _package_dir: Option<crate::package::UnpackRoot>,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
@@ -354,7 +353,7 @@ impl ApplicationContext {
                 false,
             ),
             publisher_package: None,
-            packaged_metadata: BTreeMap::new(),
+            installed_components: BTreeMap::new(),
             _package_dir: None,
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
@@ -489,7 +488,7 @@ impl ApplicationContext {
                     loaded
                         .raw_apps
                         .push(package_manifest(dir.path(), &expanded.declarations)?);
-                    (publisher_package, expanded.metadata, Some(dir))
+                    (publisher_package, expanded.components, Some(dir))
                 }
             }
             _ => (None, Default::default(), None),
@@ -513,7 +512,7 @@ impl ApplicationContext {
             }),
         )?;
         ctx.publisher_package = publisher_package;
-        ctx.packaged_metadata = expanded;
+        ctx.installed_components = expanded;
         ctx._package_dir = package_dir;
 
         if ctx.config.offline {
@@ -561,7 +560,7 @@ impl ApplicationContext {
                 application,
                 component_metadata,
                 publisher_package: None,
-                packaged_metadata: BTreeMap::new(),
+                installed_components: BTreeMap::new(),
                 _package_dir: None,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),

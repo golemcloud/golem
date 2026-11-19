@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::ComponentPackageMetadata;
 use crate::model::diff::DiffError;
 use crate::model::diff::agent::AgentTypeProvisionConfig;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
@@ -32,6 +33,8 @@ use uuid::Uuid;
 #[serde(rename_all = "camelCase")]
 pub struct Component {
     pub wasm_hash: Hash,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_metadata: Option<ComponentPackageMetadata>,
     /// Agent type declarations by agent type name. The registry stores the declarations
     /// that the component update sends, so they are not derived from `wasm_hash`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -56,6 +59,7 @@ pub struct Component {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDiff {
     pub wasm_changed: bool,
+    pub package_metadata_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_type_changes: BTreeMapDiff<String, HashOf<AgentTypeSchema>>,
     pub component_config_changed: bool,
@@ -73,6 +77,7 @@ impl Diffable for Component {
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let wasm_changed = new.wasm_hash != current.wasm_hash;
+        let package_metadata_changed = new.package_metadata != current.package_metadata;
         let agent_type_changes = new
             .agent_types
             .diff_with_current(&current.agent_types)?
@@ -93,6 +98,7 @@ impl Diffable for Component {
 
         Ok(
             if wasm_changed
+                || package_metadata_changed
                 || !agent_type_changes.is_empty()
                 || component_config_changed
                 || !agent_type_provision_config_changes.is_empty()
@@ -101,6 +107,7 @@ impl Diffable for Component {
             {
                 Some(ComponentDiff {
                     wasm_changed,
+                    package_metadata_changed,
                     agent_type_changes,
                     component_config_changed,
                     agent_type_provision_config_changes,
@@ -315,11 +322,42 @@ mod tests {
     fn component(tool_config: ToolDeploymentConfig) -> Component {
         Component {
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             agent_types: BTreeMap::new(),
             component_config: super::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([("grep".to_string(), tool_config.into())]),
             tool_middleware_deployment_configs: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn package_provenance_alone_changes_the_deployment_diff() {
+        use crate::model::component::ComponentPackageMetadata;
+        use crate::model::diff::{Deployment, DeploymentDiff};
+
+        let local = component(tool_config(None));
+        let mut packaged = local.clone();
+        packaged.package_metadata = Some(ComponentPackageMetadata {
+            source: "./fixture.tar".into(),
+            package_digest: format!("sha256:{}", "12".repeat(32)),
+            layer_digest: format!("sha256:{}", "34".repeat(32)),
+        });
+        assert_ne!(local.hash().unwrap(), packaged.hash().unwrap());
+        for (current, new) in [(local.clone(), packaged.clone()), (packaged, local)] {
+            let deployment = |component: Component| Deployment {
+                components: BTreeMap::from([("tool".to_string(), component.into())]),
+                ..Default::default()
+            };
+            let diff: DeploymentDiff = deployment(new)
+                .diff_with_current(&deployment(current))
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                diff.components.get("tool"),
+                Some(BTreeMapDiffValue::Update(DiffForHashOf::ValueDiff { diff }))
+                    if diff.package_metadata_changed && !diff.wasm_changed
+            ));
         }
     }
 

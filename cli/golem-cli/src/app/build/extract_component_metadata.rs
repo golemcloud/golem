@@ -35,14 +35,14 @@ pub async fn extract_and_store_component_metadata(
     {
         return Ok(metadata);
     }
-    if let Some(metadata) = ctx
+    if let Some(installed) = ctx
         .application_context()
-        .packaged_metadata
+        .installed_components
         .get(component_name)
     {
         let metadata = ctx
             .component_metadata()
-            .add_cached_component_metadata(component_name, metadata.clone())
+            .add_cached_component_metadata(component_name, installed.metadata.clone())
             .await?;
         ctx.extracted_metadata
             .lock()
