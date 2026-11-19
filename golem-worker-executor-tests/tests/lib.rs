@@ -14,13 +14,14 @@
 
 #![recursion_limit = "256"]
 
+use crate::persistent_storage::PersistentStorage;
 use golem_common::tracing::{TracingConfig, init_tracing_returning_provider};
 use golem_worker_executor_test_utils::{
     LastUniqueId, LastUniqueIdOwner, PrecompiledComponent, WorkerExecutorTestDependencies,
     test_component,
 };
 use std::fmt::Debug;
-use std::sync::Once;
+use std::sync::{Arc, Once};
 use test_r::{sequential_suite, tag_suite, test_dep};
 
 pub mod active_agents;
@@ -68,6 +69,7 @@ pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
 mod panic_watch;
 pub mod permission_cards_scala;
+mod persistent_storage;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -95,6 +97,23 @@ pub mod websocket;
 pub mod worker_initialization;
 
 test_r::enable!();
+
+#[test_dep(scope = Shared, tagged_as = "durable_sqlite")]
+fn durable_sqlite() -> Arc<PersistentStorage> {
+    Arc::new(persistent_storage::PersistentStorage::Sqlite)
+}
+
+#[test_dep(scope = Shared, tagged_as = "durable_postgres")]
+async fn durable_postgres() -> Arc<PersistentStorage> {
+    let postgres = golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb::new(
+        &uuid::Uuid::new_v4().to_string(),
+        false,
+    )
+    .await;
+    Arc::new(persistent_storage::PersistentStorage::Postgres(Box::new(
+        postgres,
+    )))
+}
 
 /// Build the schema-native invocation input carrier from already-encoded
 /// parameter [`SchemaValue`](golem_common::schema::SchemaValue)s.

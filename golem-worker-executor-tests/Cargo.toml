@@ -27,6 +27,7 @@ golem-schema = { workspace = true, features = ["host", "protobuf"] }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
+golem-worker-service = { workspace = true }
 
 anyhow = { workspace = true }
 async-lock = { workspace = true }
@@ -51,6 +52,7 @@ http-body-util = { workspace = true }
 log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
 pgvector = { workspace = true }
+poem = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
 proptest = { workspace = true }
 prost = { workspace = true }

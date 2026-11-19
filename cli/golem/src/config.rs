@@ -58,9 +58,10 @@ use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentWebhooksServiceConfig, EnvironmentStateServiceConfig, FilesystemStorageConfig,
     FilesystemStorageMode, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, IndexedStoragePostgresConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig, KeyValueStorageMultiSqliteConfig, KeyValueStoragePostgresConfig,
-    SchedulerStorageConfig, SchedulerStoragePostgresConfig,
+    IndexedStorageKVStoreMultiSqliteConfig, IndexedStoragePostgresConfig,
+    KeyValueStorageCacheConfig, KeyValueStorageConfig, KeyValueStorageInnerConfig,
+    KeyValueStorageMultiSqliteConfig, KeyValueStoragePostgresConfig, SchedulerStorageConfig,
+    SchedulerStoragePostgresConfig,
 };
 use golem_worker_service::config::{
     DEFAULT_POSTGRES_SESSION_STORE_SCHEMA, PostgresSessionStoreConfig, RouteResolverConfig,
@@ -483,7 +484,7 @@ impl GolemServerConfig {
             KeyValueStorageInnerConfig::Sqlite(sqlite) => sqlite_inside(sqlite),
             KeyValueStorageInnerConfig::MultiSqlite(config) => inside(&config.root_dir),
             KeyValueStorageInnerConfig::InMemory(_) => true,
-            KeyValueStorageInnerConfig::Redis(_) | KeyValueStorageInnerConfig::Postgres(_) => false,
+            KeyValueStorageInnerConfig::Postgres(_) => false,
         };
         let blob_storage_inside = |blob_storage: &BlobStorageConfig| match blob_storage {
             BlobStorageConfig::LocalFileSystem(config) => inside(&config.root),
@@ -531,9 +532,15 @@ impl GolemServerConfig {
                     KeyValueStorageConfig::MultiSqlite(config) => inside(&config.root_dir),
                     KeyValueStorageConfig::InMemory(_) => true,
                     KeyValueStorageConfig::NamespaceRouted(config) => {
-                        key_value_inside(&config.cache) && key_value_inside(&config.persistent)
+                        let cache_inside = match &config.cache {
+                            KeyValueStorageCacheConfig::Redis(_) => false,
+                            KeyValueStorageCacheConfig::Storage(storage) => {
+                                key_value_inside(storage)
+                            }
+                        };
+                        cache_inside && key_value_inside(&config.persistent)
                     }
-                    KeyValueStorageConfig::Redis(_) | KeyValueStorageConfig::Postgres(_) => false,
+                    KeyValueStorageConfig::Postgres(_) => false,
                 },
             ),
             (
@@ -2724,18 +2731,33 @@ mod tests {
         let mut routed = local.clone();
         routed.worker_executor.key_value_storage = KeyValueStorageConfig::NamespaceRouted(
             golem_worker_executor::services::golem_config::KeyValueStorageNamespaceRoutedConfig {
-                cache: local_key_value.clone(),
+                cache: KeyValueStorageCacheConfig::Storage(local_key_value.clone()),
                 persistent: local_key_value,
             },
         );
         assert!(routed.state_outside(&clean_root).is_empty());
+        let mut external_cache = routed.clone();
+        let KeyValueStorageConfig::NamespaceRouted(external_cache_key_value) =
+            &mut external_cache.worker_executor.key_value_storage
+        else {
+            unreachable!()
+        };
+        external_cache_key_value.cache =
+            KeyValueStorageCacheConfig::Redis(golem_common::config::RedisConfig::default());
+        assert_eq!(
+            external_cache.state_outside(&clean_root),
+            vec!["worker_executor.key_value_storage"]
+        );
+
         let KeyValueStorageConfig::NamespaceRouted(routed_key_value) =
             &mut routed.worker_executor.key_value_storage
         else {
             unreachable!()
         };
         routed_key_value.persistent =
-            KeyValueStorageInnerConfig::Redis(golem_common::config::RedisConfig::default());
+            KeyValueStorageInnerConfig::Postgres(KeyValueStoragePostgresConfig {
+                postgres: example_postgres(),
+            });
         assert_eq!(
             routed.state_outside(&clean_root),
             vec!["worker_executor.key_value_storage"]

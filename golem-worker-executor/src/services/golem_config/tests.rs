@@ -28,6 +28,78 @@ use std::time::Duration;
 use test_r::test;
 
 #[test]
+fn redis_is_rejected_for_durable_storage_but_accepted_for_the_cache() {
+    use figment::Jail;
+
+    Jail::expect_with(|jail| {
+        jail.create_dir("config")?;
+        let redis = json!({
+            "type": "Redis",
+            "config": toml::Value::try_from(golem_common::config::RedisConfig::default()).unwrap(),
+        });
+        [
+            json!({"key_value_storage": redis}),
+            json!({"indexed_storage": redis}),
+            json!({"indexed_storage": {"type": "KVStoreRedis", "config": {}}}),
+            json!({"key_value_storage": {
+                "type": "NamespaceRouted", "config": {"persistent": redis},
+            }}),
+        ]
+        .into_iter()
+        .try_for_each(|settings| {
+            jail.create_file(
+                "config/worker-executor.toml",
+                toml::to_string(&settings).unwrap(),
+            )?;
+            assert!(
+                super::make_config_loader().load().is_err(),
+                "Redis must not load as durable storage: {settings}"
+            );
+            Ok::<_, figment::Error>(())
+        })?;
+
+        [
+            json!({"type": "Redis", "config": toml::Value::try_from(golem_common::config::RedisConfig {
+                host: "cache.example.com".into(),
+                port: 6391,
+                ..Default::default()
+            }).unwrap()}),
+            json!({"type": "Sqlite", "config": {
+                "database": "cache.db", "max_connections": 3, "foreign_keys": false,
+            }}),
+            json!({"type": "MultiSqlite", "config": {
+                "root_dir": "cache", "max_connections": 7, "foreign_keys": true,
+            }}),
+            json!({"type": "Postgres", "config": {
+                "host": "db.example.com", "database": "cache", "username": "", "password": "",
+                "port": 5433, "max_connections": 5, "schema": "cache", "acquire_timeout": "2s",
+            }}),
+            json!({"type": "InMemory", "config": {}}),
+        ]
+        .into_iter()
+        .try_for_each(|cache| {
+            jail.create_file(
+                "config/worker-executor.toml",
+                toml::to_string(&json!({"key_value_storage": {
+                    "type": "NamespaceRouted", "config": {"cache": cache},
+                }}))
+                .unwrap(),
+            )?;
+            let config = super::make_config_loader().load()?;
+            config.validate().unwrap();
+            let super::KeyValueStorageConfig::NamespaceRouted(routed) = config.key_value_storage else {
+                panic!("Cache configuration must use namespace routing");
+            };
+            assert_eq!(json!(toml::Value::try_from(&routed.cache).unwrap()), cache);
+            let roundtrip: super::KeyValueStorageCacheConfig =
+                serde_json::from_value(cache.clone()).unwrap();
+            assert_eq!(json!(toml::Value::try_from(roundtrip).unwrap()), cache);
+            Ok(())
+        })
+    });
+}
+
+#[test]
 fn the_storage_mode_shows_its_name_and_its_root() {
     let root = || Box::from(std::path::Path::new("/var/lib/golem/agents"));
     assert_eq!(

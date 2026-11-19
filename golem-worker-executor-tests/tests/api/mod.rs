@@ -14,6 +14,7 @@
 
 use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
+use crate::persistent_storage::PersistentStorage;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;
@@ -65,11 +66,10 @@ use golem_worker_executor::worker::{
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, fake_ownership, registry_test_card, start,
-    start_customized, start_with_overrides, start_with_redis_storage,
-    start_with_resource_limits_and_configure, take_agent_oplog_over_at_epoch,
+    start_customized, start_with_overrides, start_with_resource_limits_and_configure,
+    take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::assert_eq;
-use redis::Commands;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
@@ -80,7 +80,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::sync::Semaphore;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
@@ -94,6 +94,9 @@ const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
+inherit_test_dep!(#[tagged_as("durable_sqlite")] Arc<PersistentStorage>);
+inherit_test_dep!(#[tagged_as("durable_postgres")] Arc<PersistentStorage>);
+define_matrix_dimension!(durable_storage: Arc<PersistentStorage> -> "durable_sqlite", "durable_postgres");
 inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
@@ -8214,9 +8217,10 @@ async fn reconstruct_interrupted_state(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_redis_storage(deps, &context).await?;
+    let executor = durable_storage.start(deps, &context, None).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -8257,18 +8261,11 @@ async fn reconstruct_interrupted_state(
     executor.interrupt(&worker_id).await?;
     let result = fiber.await?;
 
-    // Explicitly deleting the status information from Redis to check if it can be
-    // reconstructed from Redis
-
-    let mut redis = executor.redis().get_connection(0);
-    let _: () = redis
-        .del(format!(
-            "{}instance:status:{}",
-            context.redis_prefix(),
-            worker_id.to_redis_key()
-        ))
-        .unwrap();
-    debug!("Deleted status information from Redis");
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    executor.remove_cached_status(&worker_id).await?;
+    drop(executor);
+    let executor = durable_storage.start(deps, &context, None).await?;
 
     let status = executor.get_worker_metadata(&worker_id).await?.status;
 
@@ -8277,7 +8274,218 @@ async fn reconstruct_interrupted_state(
     assert!(err_msg.contains("Interrupted via the Golem API"));
     assert_eq!(status, AgentStatus::Interrupted);
 
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        after
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        before
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+    );
+    assert_eq!(
+        after
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        before
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("6m")]
+async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
+) -> anyhow::Result<()> {
+    use golem_common::config::RedisConfig;
+    use golem_common::model::account::AccountEmail;
+    use golem_common::model::application::ApplicationName;
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::redis::RedisPool;
+    use golem_service_base::mcp::CompiledMcp;
+    use golem_worker_service::mcp::McpDeployment;
+    use golem_worker_service::mcp::session::store::{
+        McpSessionId, McpSessionRecord, McpSessionStore, RedisMcpSessionStore,
+    };
+    use golem_worker_service::mcp::session::{McpReplica, McpSessionLayer};
+    use poem::{Endpoint, EndpointExt};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = durable_storage.start_with_cache(deps, &context).await?;
+    let entered = Arc::new(Semaphore::new(0));
+    let release = Arc::new(Semaphore::new(0));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let http_server = tokio::spawn({
+        let entered = entered.clone();
+        let release = release.clone();
+        let requests = requests.clone();
+        async move {
+            let route = Router::new().route(
+                "/post-example",
+                axum::routing::post(move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let requests = requests.clone();
+                    async move {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        entered.add_permits(1);
+                        release.acquire().await.unwrap().forget();
+                        axum::Json(serde_json::json!({
+                            "percentage": 17.5,
+                            "message": "cache loss did not interrupt the request"
+                        }))
+                    }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    });
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemWasiHttp", "cache-loss");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), port.to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let before = executor.oplog_max_index(&worker_id).await?;
+
+    let session_store = Arc::new(RedisMcpSessionStore::new(
+        RedisPool::configured(&RedisConfig {
+            host: deps.redis.public_host(),
+            port: deps.redis.public_port(),
+            key_prefix: context.redis_prefix(),
+            ..Default::default()
+        })
+        .await?,
+    ));
+    let session_id = McpSessionId::generate()?;
+    let session = McpSessionRecord {
+        domain: Domain("cache-loss.example.com".into()),
+        environment_id: context.default_environment_id,
+        deployment_revision: DeploymentRevision::INITIAL,
+    };
+    assert!(
+        session_store
+            .create(session_id, &session, Duration::from_secs(300))
+            .await?
+    );
+    let deployment = Arc::new(McpDeployment::new(CompiledMcp {
+        account_id: AccountId::new(),
+        account_email: AccountEmail::new("owner@example.com"),
+        application_name: ApplicationName("cache-loss".into()),
+        environment_id: session.environment_id,
+        environment_name: EnvironmentName("test".into()),
+        deployment_revision: session.deployment_revision,
+        domain: session.domain,
+        security_scheme_name: None,
+        security_scheme: None,
+        registered_agent_types: Vec::new(),
+        tools: Vec::new(),
+    }));
+    let session_endpoint = poem::endpoint::make_sync(|_| poem::Response::default()).with(
+        McpSessionLayer::new(McpReplica::new(
+            session_store,
+            &golem_worker_service::config::McpConfig::default(),
+        )),
+    );
+    let session_request = || {
+        let mut request = poem::Request::builder()
+            .method(poem::http::Method::POST)
+            .header("mcp-session-id", session_id.to_string())
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        request.extensions_mut().insert(deployment.clone());
+        request
+    };
+    assert_eq!(
+        session_endpoint.call(session_request()).await?.status(),
+        poem::http::StatusCode::OK
+    );
+
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(30), entered.acquire())
+        .await??
+        .forget();
+
+    let mut redis = deps.redis.get_async_connection(0).await;
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{}*", context.redis_prefix()))
+        .query_async(&mut redis)
+        .await?;
+    assert!(!keys.is_empty());
+    let removed: u64 = redis::cmd("DEL").arg(keys).query_async(&mut redis).await?;
+    assert!(removed > 0);
+    assert_eq!(
+        session_endpoint.call(session_request()).await?.status(),
+        poem::http::StatusCode::NOT_FOUND
+    );
+    release.add_permits(1);
+    invocation.await??;
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 1);
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg(format!("{}*", context.redis_prefix()))
+        .query_async(&mut redis)
+        .await?;
+    if !keys.is_empty() {
+        let _: u64 = redis::cmd("DEL").arg(keys).query_async(&mut redis).await?;
+    }
+    let executor = durable_storage.start_with_cache(deps, &context).await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 1);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<u64>()?, 2);
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(count_agent_invocation_pair_since(&entries, before), (5, 5));
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    http_server.abort();
     Ok(())
 }
 

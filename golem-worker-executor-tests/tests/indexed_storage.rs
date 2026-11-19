@@ -14,19 +14,16 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::config::{DbPostgresConfig, RedisConfig};
+use golem_common::config::DbPostgresConfig;
 use golem_common::model::AgentId;
 use golem_common::model::ShardEpoch;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
-use golem_common::redis::RedisPool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::components::redis::Redis;
 use golem_worker_executor::services::golem_config::IndexedStoragePostgresConfig;
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
-use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -85,67 +82,6 @@ async fn in_memory_storage(
     _deps: &WorkerExecutorTestDependencies,
 ) -> Arc<dyn GetIndexedStorage + Send + Sync> {
     Arc::new(InMemoryIndexedStorageWrapper)
-}
-
-struct RedisIndexedStorageWrapper {
-    redis: Arc<dyn Redis + Send + Sync>,
-}
-
-impl Debug for RedisIndexedStorageWrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RedisIndexedStorageWrapper")
-    }
-}
-
-#[async_trait]
-impl GetIndexedStorage for RedisIndexedStorageWrapper {
-    async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
-        Arc::new(RedisIndexedStorage::new(
-            self.pool(&Uuid::new_v4().to_string()).await,
-        ))
-    }
-
-    async fn get_two_writers(
-        &self,
-    ) -> (
-        Arc<dyn IndexedStorage + Send + Sync>,
-        Arc<dyn IndexedStorage + Send + Sync>,
-    ) {
-        let prefix = Uuid::new_v4().to_string();
-        let first = RedisIndexedStorage::new(self.pool(&prefix).await);
-        let second = RedisIndexedStorage::new(self.pool(&prefix).await);
-        (Arc::new(first), Arc::new(second))
-    }
-}
-
-impl RedisIndexedStorageWrapper {
-    async fn pool(&self, key_prefix: &str) -> RedisPool {
-        RedisPool::configured(&RedisConfig {
-            host: self.redis.public_host(),
-            port: self.redis.public_port(),
-            database: 0,
-            tracing: false,
-            pool_size: 1,
-            retries: Default::default(),
-            key_prefix: key_prefix.to_string(),
-            username: None,
-            password: None,
-            tls: false,
-        })
-        .await
-        .unwrap()
-    }
-}
-
-#[test_dep(scope = Shared, tagged_as = "redis")]
-async fn redis_storage(
-    deps: &WorkerExecutorTestDependencies,
-) -> Arc<dyn GetIndexedStorage + Send + Sync> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-    Arc::new(RedisIndexedStorageWrapper { redis })
 }
 
 struct SqliteIndexedStorageWrapper {
@@ -414,7 +350,7 @@ fn ns2() -> IndexedStorageNamespaces {
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
-define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "sqlite", "multi_sqlite", "postgres");
 define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
 
 #[test]
