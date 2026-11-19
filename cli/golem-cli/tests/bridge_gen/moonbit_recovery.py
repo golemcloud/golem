@@ -7,6 +7,9 @@ import sys
 import time
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "success"
+target_mode = mode
+if mode in ("success-id", "success-key-known"):
+    mode = "success"
 
 
 def read_exact(conn, length):
@@ -32,7 +35,19 @@ def receive_frame(conn):
 
 
 def receive(conn):
-    return json.loads(receive_frame(conn))
+    message = json.loads(receive_frame(conn))
+    if message["type"] == "invocationStart":
+        target = (
+            {"kind": "id", "agentId": "00000000-0000-8000-8000-000000000abc",
+             "expectedFingerprint": "pinned"}
+            if target_mode == "success-id"
+            else {"kind": "key", "constructorParameters": {"kind": "tuple", "value": {"elements": []}}}
+        )
+        assert message["selector"] == {
+            "application": "app", "environment": "env", "agentType": "RecoveryAgent",
+            "method": "run", "target": target,
+        }, message["selector"]
+    return message
 
 
 def send(conn, **message):

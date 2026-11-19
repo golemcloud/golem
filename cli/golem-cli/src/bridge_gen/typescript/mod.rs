@@ -98,7 +98,7 @@ pub(crate) const EXTERNAL_MEMBER_NAMES: &[&str] = &[
     "publicParameters",
     "constructor",
     "__getConfig",
-    "__getPublicParameters",
+    "__getPublicTarget",
     "agentId",
 ];
 pub(crate) const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
@@ -1449,8 +1449,7 @@ impl TypeScriptBridgeGenerator {
     ///
     /// A client of `upsert` stores the encoded constructor parameters, and its invocations name
     /// the agent by them. A durable client of `create` or `getById` stores the agent's ID in
-    /// `#target`, and its invocations name the agent by that ID. Only a keyed agent keeps its
-    /// parameters, which streaming invocations need because they name the agent by its key.
+    /// `#target`, and its scalar and streaming invocations name the agent by that ID.
     fn generate_ts_class_fields(&self, writer: &mut TsWriter) {
         let durable = self.agent_type.mode == AgentMode::Durable;
         writer.declare_field(
@@ -1586,7 +1585,7 @@ impl TypeScriptBridgeGenerator {
         let names = self.external_constructor_names(&local_configs)?;
         let agent_type_name = &self.agent_type.type_name.0;
         writer.write_doc(&format!(
-            "Creates an agent, and resolves after its initialization. With `keyed`, it creates the keyed agent of the constructor parameters, and rejects with a `GolemServiceError` of status 409 when that agent exists; otherwise the new agent has no key and a new ID. `config` overrides local configuration values, and `env` adds environment variables to the ones the manifest defines.\n{}",
+            "Creates an agent, and resolves after its initialization. With `keyed`, it creates the keyed agent of the constructor parameters, and rejects with a `GolemConflictError` when that agent exists; otherwise the new agent has no key and a new ID. `config` overrides local configuration values, and `env` adds environment variables to the ones the manifest defines.\n{}",
             self.agent_type.constructor.description
         ));
         let mut method = writer.begin_static_async_method("create");
@@ -1778,18 +1777,20 @@ impl TypeScriptBridgeGenerator {
         get_config.write_line(format!("return {};", config_var));
     }
 
-    /// Generates a private helper method for the constructor parameters of a streaming
-    /// invocation, which names the agent by its key
+    /// Generates the target of a streaming invocation, preserving the client's addressing mode.
     fn generate_ts_streaming_parameters_getter(&self, writer: &mut TsWriter) {
-        let mut getter = writer.begin_private_method("__getPublicParameters");
-        getter.result("base.PublicValue");
+        let mut getter = writer.begin_private_method("__getPublicTarget");
+        getter.result("base.PublicAgentTarget");
+        if self.agent_type.mode == AgentMode::Durable {
+            getter.write_line("if (this.#target !== undefined) {");
+            getter.write_line("  return { kind: 'id', agentId: this.#target.agentId, expectedFingerprint: this.#target.agentFingerprint };");
+            getter.write_line("}");
+        }
         getter.write_line("if (this.publicParameters === undefined) {");
-        getter.write_line(format!(
-            "  throw new Error(\"A streaming invocation names the agent by its key: use a {} client of upsert, or of a keyed create\");",
-            self.agent_type.type_name.0
-        ));
+        getter
+            .write_line("  throw new Error(\"An upsert client requires constructor parameters\");");
         getter.write_line("}");
-        getter.write_line("return this.publicParameters;");
+        getter.write_line("return { kind: 'key', constructorParameters: this.publicParameters };");
     }
 
     /// Generates the public method that returns the agent's ID
@@ -1943,7 +1944,7 @@ impl TypeScriptBridgeGenerator {
         };
         writer.write_doc(&method.description);
         writer.write_line(format!(
-            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig(), () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.__getPublicParameters(), config: [], method: {:?} }}), {}, (value: any, stream: any) => {{ {decode_body} }});",
+            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig(), () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, target: this.__getPublicTarget(), config: [], method: {:?} }}), {}, (value: any, stream: any) => {{ {decode_body} }});",
             self.agent_type.type_name.0, method.name, encode.build().trim()
         ));
         Ok(())
