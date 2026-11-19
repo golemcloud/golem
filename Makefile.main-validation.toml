@@ -106,8 +106,8 @@ script_runner = "@duckscript"
 script = '''
 rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
 rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json.manifest.json
-exec --fail-on-error cargo build --profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common
-metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common --list-type binaries-only --message-format json
+exec --fail-on-error cargo build --profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common -p golem-size-analysis
+metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common -p golem-size-analysis --list-type binaries-only --message-format json
 echo ${metadata.stderr}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json ${metadata.stdout}
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
