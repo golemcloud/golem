@@ -1707,17 +1707,7 @@ impl AgentCommandHandler {
                 )
                 .await?;
 
-            view.agents.extend(
-                self.agent_views(
-                    target
-                        .component_name_filter
-                        .as_ref()
-                        .filter(|name| **name == target.component.component_name)
-                        .map(|_| &target.component),
-                    agents,
-                )
-                .await?,
-            );
+            view.agents.extend(self.agent_views(agents).await?);
             for (agent_type, type_scan_cursor) in type_scan_cursors {
                 next_cursor.insert(target.component.id, &agent_type, type_scan_cursor);
             }
@@ -1739,23 +1729,20 @@ impl AgentCommandHandler {
     /// The views of listed agents, with their keys rendered in their source language.
     async fn agent_views(
         &self,
-        component: Option<&ComponentDto>,
         agents: Vec<AgentMetadata>,
     ) -> anyhow::Result<Vec<AgentMetadataView>> {
         let mut views = Vec::with_capacity(agents.len());
-        for agent in agents {
-            let Some(_) = component else {
-                views.push(AgentMetadataView::from(agent));
-                continue;
-            };
+        for mut agent in agents {
             let Ok((agent_component, _)) = self
                 .recorded_agent_component(agent.environment_id, agent.agent_id)
                 .await
             else {
+                agent.component_name = ComponentName(String::new());
                 views.push(AgentMetadataView::from(agent));
                 continue;
             };
 
+            agent.component_name = agent_component.component_name.clone();
             let parsed_agent_type_name = agent.agent_type_name.clone();
             let component_metadata: ComponentMetadata = agent_component.metadata.into();
 
@@ -1860,15 +1847,7 @@ impl AgentCommandHandler {
                     )
                     .await?;
                 Ok((
-                    self.agent_views(
-                        target
-                            .component_name_filter
-                            .as_ref()
-                            .filter(|name| **name == component.component_name)
-                            .map(|_| component),
-                        agents,
-                    )
-                    .await?,
+                    self.agent_views(agents).await?,
                     cursors.into_iter().next().map(|(_, cursor)| cursor),
                 ))
             },
@@ -2089,10 +2068,7 @@ impl AgentCommandHandler {
                 .unwrap_or_else(|| ComponentName(String::new())),
             result,
         );
-        let metadata_view = self
-            .agent_views(component.as_ref(), vec![metadata])
-            .await?
-            .remove(0);
+        let metadata_view = self.agent_views(vec![metadata]).await?.remove(0);
 
         self.ctx
             .log_handler()

@@ -376,6 +376,18 @@ async fn moved_types_keep_old_component_agents_reachable_and_out_of_a_new_compon
         "agent.create",
     );
     let (new_id, _) = reference(&new);
+    let listed = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::LIST, "CounterAgent"]).await,
+        "agent.list",
+    );
+    let agents = listed["agents"].as_array().unwrap();
+    for (id, owner) in [(&old_id, COMPONENT_NAME), (&new_id, MOVED_COMPONENT_NAME)] {
+        let row = agents
+            .iter()
+            .find(|row| row["agentId"] == id.as_str())
+            .unwrap();
+        assert_eq!(row["componentName"], owner);
+    }
     for (component, expected) in [(COMPONENT_NAME, &old_id), (MOVED_COMPONENT_NAME, &new_id)] {
         let listed = document(
             &cli_json(
