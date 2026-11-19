@@ -1030,6 +1030,7 @@ impl From<crate::model::type_id::TypeIdKind>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::sharding::{ShardAssignmentEvent, transition_shard_assignment};
     use crate::model::{ShardAssignment, ShardEpoch, ShardId, ShardLeaseRevision};
     use std::collections::HashMap;
     use std::time::Instant;
@@ -1173,17 +1174,23 @@ mod tests {
             shard_epochs_from_proto(on_the_wire).expect("a well-formed push decodes");
         assert_eq!(received, pushed);
 
-        let mut assignment = ShardAssignment::default();
         let manager = uuid::Uuid::new_v4();
-        assignment.set_shards(
-            1024,
-            &received,
-            ShardLeaseRevision {
-                incarnation: manager,
-                number: 1,
+        let (assignment, outcome) = transition_shard_assignment(
+            Some(ShardAssignment::unexpiring(1024, [])),
+            ShardAssignmentEvent::Assign {
+                number_of_shards: 1024,
+                shard_epochs: &received,
+                revision: ShardLeaseRevision {
+                    incarnation: manager,
+                    number: 1,
+                },
+                executor_count: 3,
             },
         );
+        assert!(outcome.is_some());
+        let assignment = assignment.unwrap();
 
+        assert_eq!(assignment.executor_count, 3);
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));
         assert_eq!(assignment.epoch_of(&ShardId::new(7)), Some(ShardEpoch(42)));
         assert_eq!(

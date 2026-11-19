@@ -245,6 +245,8 @@ message AssignShardsRequest {
   uint64 revision = 4;
   // See golem.shardmanager.v1.RegisterSuccess.incarnation_id.
   string incarnation_id = 5;
+  // See golem.shardmanager.v1.RegisterSuccess.executor_count.
+  uint32 executor_count = 6;
 }
 
 message AssignShardsResponse {

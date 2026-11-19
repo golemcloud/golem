@@ -8900,9 +8900,10 @@ impl ShardService for FakeOwnership {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
-            .assign_shards(number_of_shards, shard_epochs, revision)
+            .assign_shards(number_of_shards, shard_epochs, revision, executor_count)
     }
 
     fn register(
@@ -8911,9 +8912,15 @@ impl ShardService for FakeOwnership {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<std::time::Instant>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> ShardDeliveryOutcome {
-        self.inner
-            .register(number_of_shards, shard_epochs, expires_at, revision)
+        self.inner.register(
+            number_of_shards,
+            shard_epochs,
+            expires_at,
+            revision,
+            executor_count,
+        )
     }
 
     fn install_unexpiring(
@@ -8938,8 +8945,10 @@ impl ShardService for FakeOwnership {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: std::time::Instant,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
-        self.inner.update_lease(shard_epochs, expires_at, revision)
+        self.inner
+            .update_lease(shard_epochs, expires_at, revision, executor_count)
     }
 
     fn clear_assignment(&self) {
@@ -8952,6 +8961,10 @@ impl ShardService for FakeOwnership {
 
     fn try_get_current_assignment(&self) -> Option<ShardAssignment> {
         self.inner.try_get_current_assignment()
+    }
+
+    fn executor_count(&self) -> Option<usize> {
+        self.inner.executor_count()
     }
 }
 

@@ -99,6 +99,8 @@ message RegisterSuccess {
   // RevokeShards from any other, renewing at once to hear from the one in
   // charge. Always a UUID: a delivery without one is malformed.
   string incarnation_id = 5;
+  // Number of executors with a lease in the state at revision.
+  uint32 executor_count = 6;
 }
 
 // An executor's shard lease: the complete set of shards it owns with the epoch
@@ -112,6 +114,8 @@ message ShardLease {
   uint64 revision = 3;
   // See RegisterSuccess.incarnation_id.
   string incarnation_id = 4;
+  // See RegisterSuccess.executor_count.
+  uint32 executor_count = 5;
 }
 
 // Extends the executor's shard lease before it expires. shard_epochs is the

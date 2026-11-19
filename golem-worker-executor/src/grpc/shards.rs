@@ -77,26 +77,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             shard_epochs_from_proto(request.shard_epochs)
                 .map_err(WorkerExecutorError::invalid_request)?;
 
-        let number_of_shards: usize = request
-            .number_of_shards
-            .try_into()
-            .map_err(|_| WorkerExecutorError::invalid_request("Invalid number of shards"))?;
-
-        // `ShardId::from_agent_id` divides by it.
-        if number_of_shards == 0 {
-            return Err(WorkerExecutorError::invalid_request(
-                "AssignShardsRequest.number_of_shards must not be 0",
-            ));
-        }
+        let number_of_shards = decode_assignment_shard_count(request.number_of_shards)?;
 
         let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
             .map_err(|error| {
                 WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
             })?;
-        match self
-            .shard_service()
-            .assign_shards(number_of_shards, &shard_epochs, revision)?
-        {
+        match self.shard_service().assign_shards(
+            number_of_shards,
+            &shard_epochs,
+            revision,
+            request.executor_count as usize,
+        )? {
             ShardDeliveryOutcome::Applied { .. } => {}
             ShardDeliveryOutcome::Stale { delivered, applied } => {
                 // Crossed on the network with a newer delivery, which has already
@@ -206,5 +198,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ctx::on_shard_assignment_changed(this).await?;
         this.shard_manager_service().recovery_succeeded(ticket);
         Ok(RecoveryOutcome::Recovered)
+    }
+}
+
+fn decode_assignment_shard_count(value: u32) -> Result<usize, WorkerExecutorError> {
+    let number_of_shards: usize = value
+        .try_into()
+        .map_err(|_| WorkerExecutorError::invalid_request("Invalid number of shards"))?;
+
+    // `ShardId::from_agent_id` divides by it.
+    if number_of_shards == 0 {
+        return Err(WorkerExecutorError::invalid_request(
+            "AssignShardsRequest.number_of_shards must not be 0",
+        ));
+    }
+
+    Ok(number_of_shards)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerExecutorError, decode_assignment_shard_count};
+    use test_r::test;
+
+    #[test]
+    fn assignment_shard_count_rejects_zero_and_preserves_the_positive_wire_range() {
+        assert_eq!(
+            decode_assignment_shard_count(0),
+            Err(WorkerExecutorError::invalid_request(
+                "AssignShardsRequest.number_of_shards must not be 0"
+            ))
+        );
+        [
+            (1, 1),
+            (1024, 1024),
+            (1025, 1025),
+            (u32::MAX, 4_294_967_295),
+        ]
+        .into_iter()
+        .for_each(|(value, expected)| {
+            assert_eq!(decode_assignment_shard_count(value).unwrap(), expected);
+        });
     }
 }
