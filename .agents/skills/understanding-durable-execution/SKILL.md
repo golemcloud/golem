@@ -3459,8 +3459,9 @@ history, and replayed connects return the decision recorded in their `Start`. A 
 update keeps the links of the history before its `PendingUpdate`, which the agent ran, and its
 target initializer's lookups link after them. A tool entity Store keeps its own index, starts
 empty, and links on replay too. The lookup itself is
-checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
-a port needs a portless grant for the lookup too.
+checked against `dns_target(name)`, a request-only `NetworkResourcePattern::Lookup` that a grant of
+the host matches whatever ports it names, so `db.internal:5432` allows the lookup and only port 5432
+for the connect. A denial covers a lookup only when it covers every port of the host.
 
 **DNS record lookups.** `golem:network/dns` (`durable_host/sockets/dns.rs`) queries one record
 type of one name (A, AAAA, CNAME, MX, NS, PTR, SRV, TXT, CAA, SOA, NAPTR) with `hickory-resolver`

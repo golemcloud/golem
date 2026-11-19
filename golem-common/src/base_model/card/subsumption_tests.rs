@@ -2408,6 +2408,88 @@ fn denials_of_a_linked_hostname_cover_the_address() {
 }
 
 #[test]
+fn a_lookup_matches_grants_of_its_host_whatever_their_ports() {
+    let holder = RecipientPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let surface = |positive: &str, negative: Option<&str>| {
+        EffectiveSurface::from_grants(
+            &[network("*", network_grant(positive))],
+            &negative
+                .map(|negative| vec![network("*", network_grant(negative))])
+                .unwrap_or_default(),
+            &[],
+            &[],
+            &holder,
+        )
+        .unwrap()
+    };
+    let lookup = |host: &str| network_target::lookup_target(host).unwrap();
+    // A grant that names a port allows the lookup of its host, not of another host.
+    for grant in [
+        "db.test:5432",
+        "db.test:5000-6000",
+        "db.test",
+        "*.test:5432",
+        "*",
+    ] {
+        assert!(
+            surface(grant, None).authorize(&lookup("DB.test.")).unwrap(),
+            "{grant}"
+        );
+    }
+    assert!(
+        !surface("other.test:5432", None)
+            .authorize(&lookup("db.test"))
+            .unwrap()
+    );
+    assert!(
+        !surface("*.other:5432", None)
+            .authorize(&lookup("db.test"))
+            .unwrap()
+    );
+    // The connect is still checked against the port.
+    let connect = |port| {
+        network_target::socket_target(
+            std::net::SocketAddr::new("10.0.0.5".parse().unwrap(), port),
+            false,
+            vec!["db.test".to_string()],
+        )
+    };
+    assert!(
+        surface("db.test:5432", None)
+            .authorize(&connect(5432))
+            .unwrap()
+    );
+    assert!(
+        !surface("db.test:5432", None)
+            .authorize(&connect(5433))
+            .unwrap()
+    );
+    // A denial covers a lookup only when it covers every port of the host.
+    assert!(
+        !surface("*", Some("db.test"))
+            .authorize(&lookup("db.test"))
+            .unwrap()
+    );
+    assert!(
+        !surface("*", Some("*.test"))
+            .authorize(&lookup("db.test"))
+            .unwrap()
+    );
+    assert!(
+        surface("*", Some("db.test:5432"))
+            .authorize(&lookup("db.test"))
+            .unwrap()
+    );
+    // HTTP targets keep their port.
+    let PermissionTarget::Network(http) =
+        network_target::network_target("db.test", Some(443)).unwrap()
+    else {
+        unreachable!()
+    };
+    assert!(!network_grant("db.test:5432").subsumes(&http.resource));
+}
+
+#[test]
 fn looked_up_names_link_as_grants_name_them() {
     assert_eq!(
         network_target::link_hostname("DB.Test."),
