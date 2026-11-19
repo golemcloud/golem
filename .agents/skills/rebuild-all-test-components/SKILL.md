@@ -37,7 +37,7 @@ Run those dedicated tasks only when their sources or committed WASMs must change
 
 `build-test-components` depends on `build-sdk-ts`, which skips work if both the SDK `dist` directory and `wasm/agent_guest.wasm` already exist. This does not prove freshness. After TS SDK changes, clean and rebuild the SDK and agent template before the full rebuild.
 
-Required tools follow current CI and scoped SDK instructions: Rust targets, cargo-make, Node/pnpm, WASI SDK, and the configured `wasm-rquickjs-cli` version. Read `sdks/ts/AGENTS.md` and `.github/workflows/ci.yaml` rather than copying versions into this skill.
+Required tools follow current CI and scoped SDK instructions: Rust targets, cargo-make, Node/pnpm, WASI SDK, and the configured `wasm-rquickjs-cli` version. Read `sdks/ts/AGENTS.md` and `.github/actions/setup-main-validation/action.yml` rather than copying versions into this skill.
 
 ## Focused Alternatives
 

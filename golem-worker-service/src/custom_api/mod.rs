@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod api_definition_lookup;
+pub mod cache_headers;
 pub mod call_agent;
 mod cors;
 pub(crate) mod durable_streams;

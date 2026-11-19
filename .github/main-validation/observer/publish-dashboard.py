@@ -78,6 +78,8 @@ elif len(sys.argv) == 3:
     report = json.loads(Path(sys.argv[2]).read_text())
     payload["classification"] = report["classification"]
     payload["analysis"] = report["analysis"]
+    if report["classification"] != "running":
+        payload["analysis"]["published_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     payload["changes"] = changes_since_previous_run(payload)
     endpoint = "/api/run"
     link = f'{url}/#run-{payload["run_id"]}-a{payload["attempt"]}'

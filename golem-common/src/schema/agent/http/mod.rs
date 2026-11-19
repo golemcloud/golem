@@ -294,7 +294,7 @@ pub fn validate_file_response_headers(
         })?;
         let normalized = name.as_str();
         if !names.insert(normalized.to_owned())
-            || golem_schema::http::is_managed_response_header(normalized)
+            || schema_http::is_managed_response_header(normalized)
         {
             return Err(HttpAgentValidationError::InvalidFileResponseHeader(
                 header.name.clone(),

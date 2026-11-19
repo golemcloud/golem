@@ -47,6 +47,7 @@
     <div class="page-heading"><div><div class="eyebrow">The state of the build</div><h1>Main validation</h1><p class="subtle">A shared view of progress, failures, and what changed.</p></div><div class="refresh-area"><button class="refresh" id="refresh" type="button">↻ Refresh</button><div class="feed-status" id="feed-status" role="status" aria-live="polite">Connecting to the observer…</div></div></div>
     <div id="preview" class="notice preview" hidden>Preview fixtures · not live CI</div>
     <div id="notice" class="notice" role="status" hidden></div>
+    <p id="evidence-health" class="small subtle"></p>
     <section class="live-section" aria-labelledby="live-heading"><div class="section-label"><h2 id="live-heading" class="eyebrow">Current activity</h2><span class="rule"></span><span class="small subtle" id="active-count"></span></div><div id="live-runs" class="live-grid"><div class="live-card subtle">Waiting for observer data…</div></div></section>
     <div class="workspace">
       <aside class="run-panel" aria-labelledby="history-heading"><div class="panel-head"><h2 id="history-heading">Run history</h2><div class="filters"><label><span class="field-label">Context</span><select id="context"><option value="">All contexts</option><option>Main validation</option><option>Main validation (acceptance)</option><option value="__unknown">Unspecified context</option></select></label><label><span class="field-label">Search runs</span><input id="search" type="search" placeholder="Branch, SHA, run…" autocomplete="off"></label></div><div class="history-caption"><span>Finished runs · newest first</span><span id="history-count">—</span></div></div><nav id="run-list" class="run-list" aria-label="Finished validation runs"><div class="empty">Loading run history…</div></nav></aside>
@@ -335,14 +336,49 @@
       box.append(el('p','small subtle','Full logs are retained in GitHub Actions artifacts, subject to repository access. Open the run on GitHub to download them. Raw logs are not published here.'));
       card.append(box);
     }
+    function renderFailureEvidence(run, card) {
+      const evidence = run.evidence || {}, tasks = [...list(evidence.tasks)];
+      for (const task of list(run.progress?.tasks).filter(t=>t.status === 'failed')) {
+        if (!tasks.some(t=>t.id === task.id)) tasks.push(task);
+      }
+      if (!tasks.length && !list(evidence.versions).length && !list(evidence.limits).length && run.conclusion !== 'failure') return;
+      const box = section('Failure evidence'); box.id = 'failure-evidence';
+      box.append(el('p','small subtle','Task exits and log findings are independent of Actions job conclusions and reported test totals. Log matches are evidence, not a confirmed cause.'));
+      if (!tasks.length && run.conclusion === 'failure') box.append(el('p','notice','Failed-task evidence is unavailable. Inspect the failed jobs and their retained logs; zero reported failures does not establish that no tests failed.'));
+      for (const task of tasks) {
+        const group = el('div','recovered-group');
+        group.append(el('h3','',`${task.id || task.name} · exit ${task.exit_code ?? 'unavailable'}`));
+        group.append(el('p','report-name',`Artifact: ${task.artifact || 'See GitHub run'} · Log: ${task.log || 'unavailable'}`));
+        if (task.log_state !== 'available') group.append(el('p','small subtle','Retained log diagnostics are unavailable or not yet collected.'));
+        const reports = list(task.reports), incomplete = !reports.length || reports.some(r=>r.state !== 'reported');
+        if (incomplete) group.append(el('p','notice',reports.length ? 'Incomplete test coverage: a linked CTRF report is empty, missing or unreadable. The totals below exclude unreported test results.' : 'No linked CTRF report was identified. This task may not produce CTRF; its test coverage cannot be determined.'));
+        for (const report of reports) group.append(el('p','report-name',`CTRF: ${report.file} · ${report.state}${report.tests == null ? '' : ` · ${numeric(report.tests)} reported tests`}`));
+        for (const [field,label] of [['first_error','First matching error in the task log'],['after_summary_error','Error after the failed-test summary (possible retry/reporting failure)']]) {
+          if (task[field]) group.append(el('p','small subtle',`${label} · line ${task[field].line ?? 'unavailable'}`),el('pre','test-message',task[field].message));
+        }
+        if (list(task.log_failures).length) {
+          const details = el('details','test-details'); details.dataset.testKey = `${key(run)}:log-failures:${task.id}`;
+          details.append(el('summary','',`${task.log_failures.length} distinct failed tests observed in the log`),el('pre','test-message',task.log_failures.join('\n')));
+          group.append(details,el('p','small subtle','Log-derived failures are not added to CTRF totals. Later retries may have recovered them; inspect the report for final outcomes.'));
+        }
+        box.append(group);
+      }
+      if (list(evidence.versions).length) {
+        box.append(el('h3','recovered-group','CLI build versions'));
+        for (const version of evidence.versions) box.append(el('p','mono',version.value),el('p','report-name',`${version.artifact}/${version.log} · line ${version.line ?? 'unavailable'}`));
+      } else if (tasks.length) box.append(el('p','small subtle','CLI build versions were not retained in the available evidence.'));
+      for (const limit of list(evidence.limits)) box.append(el('p','notice',limit));
+      box.append(el('p','small subtle','Full logs remain in GitHub Actions artifacts, subject to repository access. Only reviewed excerpts appear here.'));
+      card.append(box);
+    }
     function renderTests(run, card) {
       const tests = run.tests || {}, totals = tests.totals || {}, available = Array.isArray(tests.reports) && tests.reports.length > 0;
-      const box = section('Test results');
+      const box = section('Reported tests'); box.id = 'reported-tests';
       if (!available) {
         box.append(el('p','subtle small','CTRF reports unavailable. Test totals cannot be determined for this run.'));
       } else {
         const grid = el('div','metric-grid');
-        for (const [label,value,cls] of [['Total tests',totals.tests,''],['Passed',totals.passed,''],['Failed',totals.failed,'failed'],['Recovered',list(tests.recovered).length,'recovered']]) {
+        for (const [label,value,cls] of [['Reported tests',totals.tests,''],['Reported passed',totals.passed,''],['Reported failed',totals.failed,'failed'],['Recovered',list(tests.recovered).length,'recovered']]) {
           const metric = el('div',`metric ${cls}`); metric.append(el('div','metric-value',numeric(value)),el('div','metric-label',label)); grid.append(metric);
         }
         box.append(grid,el('div','test-note',`${numeric(totals.skipped)} skipped · ${numeric(totals.pending)} pending · ${numeric(totals.other)} other · ${tests.reports.length} CTRF report${tests.reports.length === 1 ? '' : 's'}`));
@@ -419,7 +455,7 @@
       const card = el('article','detail-card'), heading = el('header','detail-heading'), top = el('div','detail-top'), title = el('div');
       title.append(el('div','eyebrow',contextName(run)),el('h2','detail-title',runName(run))); top.append(title,runBadge(run)); heading.append(top);
       const links = el('div','detail-links'); links.append(githubLink('View on GitHub ↗',run.url)); const permalink = el('a','','Permalink'); permalink.href = `#${key(run)}`; links.append(permalink); heading.append(links);
-      const meta = el('dl','metadata'); addMetadata(meta,'Branch',run.branch); addMetadata(meta,'Workflow SHA',run.workflow_sha,true); addMetadata(meta,'Event',run.event); addMetadata(meta,'Created',formatted(run.created_at)); addMetadata(meta,'Updated',formatted(run.updated_at)); addMetadata(meta,'Source',run.source || 'Not provided',true); heading.append(meta);
+      const meta = el('dl','metadata'); addMetadata(meta,'Branch',run.branch); addMetadata(meta,'Workflow SHA',run.workflow_sha,true); addMetadata(meta,'Event',run.event); addMetadata(meta,'Created',formatted(run.created_at)); addMetadata(meta,'CI run updated',formatted(run.updated_at)); addMetadata(meta,'Source',run.source || 'Not provided',true); addMetadata(meta,'CI progress',formatted(run.progress?.updated_at)); addMetadata(meta,'Analysis published',formatted(run.analysis?.published_at)); heading.append(meta);
       heading.append(el('p','selection-note',run.selected === true ? 'Selected for validation.' : run.selected === false ? 'Not selected for validation.' : 'Validation selection is not available.')); card.append(heading);
       const jobs = section('Jobs'); jobs.firstChild.append(el('span','small subtle',`${list(run.jobs).length} reported`));
       if (!list(run.jobs).length) jobs.append(el('p','small subtle','Job information is not available yet.'));
@@ -429,7 +465,7 @@
         if (list(job.failed_steps).length) { const steps = el('ul','steps'); job.failed_steps.forEach(step=>steps.append(el('li','',step))); info.append(steps); }
         row.append(info,badge(job.conclusion || 'running',job.conclusion || (job.completed_at ? 'Unknown' : job.started_at ? 'In progress' : 'Pending'))); jobs.append(row);
       }
-      renderProgress(run,card); card.append(jobs); renderTests(run,card); renderChanges(run,card); renderAnalysis(run,card); root.replaceChildren(card);
+      renderFailureEvidence(run,card); renderProgress(run,card); card.append(jobs); renderTests(run,card); renderChanges(run,card); renderAnalysis(run,card); root.replaceChildren(card);
       let testIndex = 0;
       for (const details of root.querySelectorAll('details')) {
         details.dataset.testKey ||= `${key(run)}:test:${testIndex++}`;
@@ -442,9 +478,12 @@
       $('preview').hidden = !state.data?.demo;
       const updated = date(state.data?.updated_at), stale = updated && Date.now()-updated.getTime() > 45*60000;
       const problems = [];
+      const progressDates = list(state.data?.runs).map(r=>date(r.progress?.updated_at)).filter(Boolean);
+      const lastProgress = progressDates.length ? new Date(Math.max(...progressDates.map(d=>d.getTime()))).toISOString() : null;
+      $('evidence-health').textContent = `Last CI progress: ${formatted(lastProgress)} · Last observer refresh: ${formatted(state.data?.updated_at)} · Webhook delivery health: not reported`;
       if (state.error) problems.push(state.error + (state.data ? ' Showing the last successfully loaded results.' : ' No results have been loaded yet.'));
       if (state.data && !updated) problems.push('The observer has not provided a data timestamp. Freshness cannot be verified.');
-      else if (stale) problems.push(`Observer data is older than 45 minutes (updated ${formatted(state.data.updated_at)}). Current activity may have changed.`);
+      else if (stale) problems.push(`The last observer refresh was over 45 minutes ago (${formatted(state.data.updated_at)}). CI progress has its own clock; this does not establish a webhook delivery failure.`);
       $('notice').hidden = !problems.length; $('notice').textContent = problems.join(' ');
       $('feed-status').textContent = state.busy ? 'Refreshing…' : state.data ? `${state.data.demo ? 'Preview' : stale || !updated || state.error ? 'Attention' : 'Observer connected'} · updated ${updated ? ago(state.data.updated_at) : 'time unavailable'}` : 'Observer unavailable · retrying every 30s';
       $('refresh').disabled = state.busy;
