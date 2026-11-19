@@ -9,6 +9,7 @@ use golem_common::model::oplog::{AgentError, OplogEntry, PublicOplogEntryWithInd
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -151,7 +152,7 @@ async fn pending_multi_poll(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,
@@ -496,7 +497,7 @@ async fn pending_multi_poll(
                 None,
                 None,
                 &InvocationContextStack::fresh(),
-                Principal::anonymous(),
+                callers::anonymous(),
                 golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
                 invocation_create_intent(
                     &executor,

@@ -41,6 +41,7 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { PermissionCard, PolymorphicPermissionCard } from '../src/host/permissions';
+import { PrincipalRef } from '../src/caller';
 import {
   fakeRawCard,
   permissionCardFromRaw,
@@ -538,7 +539,7 @@ describe('defineAgent', () => {
     expect(AgentInitiatorRegistry.exists('counter')).toBe(true);
   });
 
-  it('accepts an async init and exposes id/principal helpers on `this`', () => {
+  it('accepts an async init and exposes id helpers on `this` and the caller on `ctx`', () => {
     const asyncCounter = defineAgent({
       name: 'asyncCounter',
       id: { name: z.string() },
@@ -551,11 +552,11 @@ describe('defineAgent', () => {
       // async `init` is now supported (may return State | Promise<State>).
       init: async () => ({ count: 0 }),
       methods: {
-        whoami() {
-          // Identity + principal helpers are available on `this`.
+        whoami(_input, ctx) {
+          // Identity helpers are available on `this`; the caller is on `ctx`.
           const id = this.getId();
           void this.getPhantomId();
-          void this.getPrincipal();
+          void ctx.caller;
           return id.value;
         },
       },
@@ -1214,19 +1215,26 @@ describe('RPC client', () => {
     expect(isRemoteCallError(new Error('not remote'))).toBe(false);
   });
 
-  it('omits auto-injected principal fields from RPC constructor input', () => {
+  it('sends every id field in RPC constructor input, a PrincipalRef included', () => {
     const def = defineAgent({
       name: 'PrincipalIdClientAgent',
-      id: { tenant: z.string(), caller: s.principal() },
+      id: { tenant: z.string(), owner: s.principalRef() },
       methods: { ping: method({ input: {}, returns: z.void() }) },
     });
     const factory = def.client;
+    const owner = new PrincipalRef('https://login.example', 'u-1');
 
-    expect(() => factory.upsert({ tenant: 'acme' })).not.toThrow();
+    expect(() => factory.upsert({ tenant: 'acme', owner })).not.toThrow();
     const constructorTree = vi.mocked(WasmRpc.upsert).mock.calls.at(-1)![1];
     expect(schemaValueFromWit(constructorTree)).toEqual({
       tag: 'record',
-      fields: [{ tag: 'string', value: 'acme' }],
+      fields: [
+        { tag: 'string', value: 'acme' },
+        { tag: 'record', fields: [
+          { tag: 'string', value: 'https://login.example' },
+          { tag: 'string', value: 'u-1' },
+        ] },
+      ],
     });
   });
 

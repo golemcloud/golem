@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! pool_case {
@@ -209,7 +210,7 @@ async fn pending_pool_acquire(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,

@@ -431,6 +431,8 @@ message ErrorParameters {
   optional RetryPolicyState retry_policy_state = 5;
   OplogErrorKind kind = 6;
   optional golem.common.UUID invocation_id = 7;
+  google.protobuf.Timestamp retry_at = 8;
+  optional uint64 retrying_start_index = 9;
 }
 
 message OplogRegion {

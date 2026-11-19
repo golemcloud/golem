@@ -694,6 +694,17 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         build: BuildArgs,
     },
+    /// Work with local Golem packages
+    Package {
+        #[command(subcommand)]
+        subcommand: PackageSubcommand,
+    },
+    /// Preview a package's OCI manifest digest without contacting a server
+    Publish {
+        /// Compute the digest locally without saving an archive or publishing it
+        #[arg(long, required = true)]
+        dry_run: bool,
+    },
     /// Generate Bridge SDK(s) for the selected agent(s).
     ///
     /// A "Bridge SDK" is generated, language-specific client code that wraps
@@ -1020,6 +1031,16 @@ pub enum GolemCliSubcommand {
     Completion {
         /// Select shell
         shell: clap_complete::Shell,
+    },
+}
+
+#[derive(clap::Subcommand, Debug, Clone)]
+pub enum PackageSubcommand {
+    /// Pack the application's built components into a local OCI archive
+    Pack {
+        /// Destination tar file
+        #[arg(short, long, default_value = "golem-package.tar")]
+        output: PathBuf,
     },
 }
 

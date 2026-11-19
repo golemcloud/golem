@@ -31,7 +31,9 @@ var hostOps agentHost = noHost{}
 // replace it.
 var selfEnv = os.Getenv
 
-// immediateCaller off the wasm target is anonymous; tests may replace it.
-var immediateCaller = func() common.Principal { return common.MakePrincipalAnonymous() }
+// currentCaller off the wasm target is anonymous; tests may replace it.
+var currentCaller = func() common.Caller {
+	return common.Caller{Original: common.MakePrincipalAnonymous(), Immediate: common.MakePrincipalAnonymous()}
+}
 
 type noHost struct{ agentHost }

@@ -596,6 +596,10 @@ pub struct AgentStatusRecord {
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub source_card_transfers: SourceCardTransferIndex,
     pub entity_replay_progress: EntityReplayProgress,
+    /// The links from addresses to the hostnames that the address lookups of the primary Store
+    /// returned them for. A Store that starts takes them, so its hostname grants match the same
+    /// raw-socket connects as in the run that recorded the lookups.
+    pub resolved_names: super::ResolvedNameIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
     pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
@@ -630,6 +634,10 @@ pub struct AgentStatusRecord {
     pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
+    /// The backoff deadline of each host call that waits for an in-function retry, keyed by the
+    /// call's `Start` index until its terminal. Repair of the incomplete call waits until this
+    /// time, so a restart does not shorten its backoff.
+    pub current_retry_at: HashMap<OplogIndex, Timestamp>,
     /// Mandatory recovery snapshot established by a successful update. Agent will call
     /// load_snapshot on this payload before starting replay.
     pub authoritative_snapshot: Option<AuthoritativeSnapshot>,
@@ -671,6 +679,7 @@ impl Default for AgentStatusRecord {
             received_card_transfers: ReceivedCardTransferIndex::default(),
             source_card_transfers: SourceCardTransferIndex::default(),
             entity_replay_progress: EntityReplayProgress::default(),
+            resolved_names: super::ResolvedNameIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
@@ -690,6 +699,7 @@ impl Default for AgentStatusRecord {
             component_revision_for_replay: ComponentRevision::INITIAL,
             component_revision_start_index: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
+            current_retry_at: HashMap::new(),
             authoritative_snapshot: None,
             last_automatic_snapshot: None,
             previous_usable_automatic_snapshot: None,

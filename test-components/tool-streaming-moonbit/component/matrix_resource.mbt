@@ -255,7 +255,7 @@ struct MatrixPermissionIssuer {}
 ///|
 #derive.command
 pub fn MatrixPermissionIssuer::issue(
-  _principal : @tool.Principal,
+  _context : @tool.InvocationContext,
 ) -> PermissionIssue {
   abort("matrix-permission-issuer is a definition-only MoonBit tool")
 }
@@ -305,19 +305,14 @@ pub fn MatrixResource::typed() -> Unit {
 struct MatrixResourceTyped {}
 
 ///|
-fn matrix_resource_principal(principal : @tool.Principal) -> String {
-  match principal {
-    Anonymous => "anonymous"
-    Oidc(oidc) => "oidc:" + oidc.sub
-    Agent(_) => "agent"
-    GolemUser(_) => "golem-user"
-  }
+fn matrix_resource_principal(context : @tool.InvocationContext) -> String {
+  context.caller().immediate.to_string()
 }
 
 ///|
 pub fn MatrixResourceSecret::exchange(
   secret : MatrixSecret,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> SecretExchange {
   {
     provider: "moonbit",
@@ -331,7 +326,7 @@ pub fn MatrixResourceSecret::exchange(
 ///|
 pub fn MatrixResourceQuota::exchange(
   token : MatrixQuotaToken,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> QuotaExchange {
   {
     provider: "moonbit",
@@ -345,7 +340,7 @@ pub fn MatrixResourceQuota::exchange(
 ///|
 pub fn MatrixResourcePermissions::exchange(
   card : @permissions.PermissionCard,
-  principal : @tool.Principal,
+  context : @tool.InvocationContext,
 ) -> PermissionExchange {
   {
     provider: "moonbit",

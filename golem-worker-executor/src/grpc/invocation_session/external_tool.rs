@@ -94,13 +94,7 @@ where
                 ));
             }
         };
-        let principal = request
-            .principal
-            .clone()
-            .map(TryInto::try_into)
-            .transpose()
-            .map_err(WorkerExecutorError::invalid_request)?
-            .unwrap_or_else(Principal::anonymous);
+        let caller = crate::grpc::extract_caller(&request.caller)?;
         let context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
         let scope_card: Option<ScopeCard> = request
@@ -148,7 +142,7 @@ where
                 let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
                     self,
                     &owned,
-                    principal,
+                    caller,
                     Some(expected),
                 )
                 .await?;
@@ -176,10 +170,9 @@ where
                     )?;
                     return Ok(response);
                 };
-                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
-                    self, &owned, principal, None,
-                )
-                .await?;
+                let (worker, response_lease) =
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, caller, None)
+                        .await?;
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
@@ -333,7 +326,7 @@ where
                     &owner_key,
                     component.revision,
                     &context,
-                    principal.clone(),
+                    caller.clone(),
                 )
                 .await?;
             scope
@@ -354,7 +347,7 @@ where
                 stderr: false,
                 activation,
                 invocation_context: context.clone(),
-                principal: principal.clone(),
+                caller: caller.clone(),
                 scope_card,
             };
             worker.schedule_invocation(invocation, at).await?;
@@ -377,7 +370,7 @@ where
                     owned.environment_id,
                     &owner_key,
                     &context,
-                    principal.clone(),
+                    caller.clone(),
                 )
                 .await?;
         }
@@ -387,7 +380,7 @@ where
         let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
             self,
             &owned,
-            principal.clone(),
+            caller.clone(),
             expected_fingerprint,
         )
         .await?;
@@ -427,7 +420,7 @@ where
                 tool.stderr,
                 expected_deployment_revision,
                 context,
-                principal,
+                caller,
                 scope_card,
             )
             .await?;

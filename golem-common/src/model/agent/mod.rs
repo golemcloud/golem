@@ -19,9 +19,13 @@ mod invocation;
 mod key;
 mod normalisation;
 mod protobuf;
+mod resolved_names;
 mod status;
 
 pub use key::AgentKey;
+pub use resolved_names::{
+    FollowedLookups, MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames,
+};
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
@@ -379,12 +383,6 @@ pub fn constructor_parameter_record(agent_type: &AgentTypeSchema) -> SchemaType 
             .input_schema
             .fields()
             .iter()
-            .filter(|field| {
-                matches!(
-                    field.source,
-                    crate::schema::agent::FieldSource::UserSupplied
-                )
-            })
             .map(|field| NamedFieldType {
                 name: field.name.clone(),
                 body: field.schema.clone(),

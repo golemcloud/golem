@@ -414,42 +414,42 @@ class SourceDiscoverySpec extends munit.FunSuite {
     assertEquals(methods.head.name, "get")
   }
 
-  test("detect Principal param type") {
+  test("detect InvocationContext param type") {
     val code =
       """|package example
          |
          |@agentDefinition()
-         |trait PrincipalAgent {
+         |trait InvocationContextAgent {
          |  class Id()
-         |  def foo(principal: Principal): String
+         |  def foo(context: InvocationContext): String
          |}
          |""".stripMargin
 
-    val result = SourceDiscovery.discover(Seq(src("PrincipalAgent.scala", code)))
+    val result = SourceDiscovery.discover(Seq(src("InvocationContextAgent.scala", code)))
 
     assertEquals(result.traits.size, 1)
     val methods = result.traits.head.methods
     assertEquals(methods.size, 1)
-    assertEquals(methods.head.principalParams, List(true))
+    assertEquals(methods.head.contextParams, List(true))
   }
 
-  test("detect golem.Principal param type") {
+  test("detect golem.InvocationContext param type") {
     val code =
       """|package example
          |
          |@agentDefinition()
-         |trait QualifiedPrincipalAgent {
+         |trait QualifiedInvocationContextAgent {
          |  class Id()
-         |  def bar(p: golem.Principal, key: String): String
+         |  def bar(p: golem.InvocationContext, key: String): String
          |}
          |""".stripMargin
 
-    val result = SourceDiscovery.discover(Seq(src("QualifiedPrincipal.scala", code)))
+    val result = SourceDiscovery.discover(Seq(src("QualifiedInvocationContext.scala", code)))
 
     assertEquals(result.traits.size, 1)
     val methods = result.traits.head.methods
     assertEquals(methods.size, 1)
-    assertEquals(methods.head.principalParams, List(true, false))
+    assertEquals(methods.head.contextParams, List(true, false))
   }
 
   test("extract config fields from AgentConfig trait parent") {

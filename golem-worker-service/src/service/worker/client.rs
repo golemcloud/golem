@@ -48,7 +48,8 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::{AgentMetadataDto, Principal, ResolvedRevert, RevertWorkerTarget};
+use golem_common::model::agent::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -497,7 +498,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
@@ -512,7 +513,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
@@ -671,7 +672,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
@@ -718,7 +719,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput>;
@@ -1024,7 +1025,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
@@ -1048,7 +1049,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         environment_id: Some(environment_id.into()),
                         ignore_already_existing,
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: principal.clone(),
+                        caller: Some(caller.clone()),
                         invocation_context: invocation_context.clone(),
                         idempotency_key: idempotency_key.clone().map(Into::into),
                         freshness_disposition: match freshness_disposition {
@@ -1083,7 +1084,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id = target.agent_id;
@@ -1112,7 +1113,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             environment_id: Some(environment_id.into()),
                             ignore_already_existing,
                             auth_ctx: Some(auth_ctx.clone().into()),
-                            principal: principal.clone(),
+                            caller: Some(caller.clone()),
                             invocation_context: invocation_context.clone(),
                             idempotency_key: Some(idempotency_key.clone().into()),
                             freshness_disposition: 0,
@@ -1157,7 +1158,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        // The 1.6 load caller; the caller of Golem-started work is set later.
+                        caller: Some(Caller::anonymous().into()),
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
@@ -1199,7 +1201,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             )),
             environment_id: Some(environment_id.into()),
             auth_ctx: Some(auth_ctx.into()),
-            principal: None,
+            caller: Some(Caller::anonymous().into()),
             expected_fingerprint: Some(expected_fingerprint.0.into()),
         };
 
@@ -1311,7 +1313,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         environment_id: Some(environment_id.into()),
                         expected_fingerprint: Some(expected_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1438,7 +1440,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1481,7 +1483,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1708,7 +1710,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         path: path_clone.to_string(),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1768,7 +1770,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         component_owner_account_id: Some(account_id.into()),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     },
                 ))
             },
@@ -1828,7 +1830,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
-                            principal: None,
+                            caller: Some(Caller::anonymous().into()),
                             selection: Some(selection.into()),
                         };
                     Box::pin(async move {
@@ -1877,7 +1879,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         environment_id: Some(environment_id.into()),
                         expected_fingerprint: Some(expected_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1919,7 +1921,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         environment_id: Some(environment_id.into()),
                         expected_fingerprint: Some(expected_fingerprint.0.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1948,13 +1950,13 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: AgentFingerprint,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_agent_id = *source_agent_id;
         let target_agent_id = *target_agent_id;
-        let principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+        let caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
         self.call_worker_executor(
             source_agent_id,
             "fork_worker",
@@ -1970,7 +1972,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: Some(expected_fingerprint.0.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: Some(principal.clone()),
+                    caller: Some(caller.clone()),
                 }))
             },
             |response| match response.into_inner() {
@@ -2011,7 +2013,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     expected_fingerprint: Some(expected_fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                     resolved_revert: resolved_revert.map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
@@ -2108,7 +2110,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                     scheduled,
                 }))
             },
@@ -2301,7 +2303,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -2333,7 +2335,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         request_key: Some(request_key.clone().into()),
                         context: invocation_context.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: Some(principal.clone()),
+                        caller: Some(caller.clone()),
                         environment_id: Some(environment_id.into()),
                         config: config.clone().into_iter().map(Into::into).collect(),
                         component_owner_account_id: Some(account_id.into()),
@@ -3478,7 +3480,8 @@ mod rejection_mapping_tests {
     };
     use golem_api_grpc::proto::golem::workerexecutor::v1::*;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+    use golem_common::model::agent::InvocationFreshnessDisposition;
+    use golem_common::model::caller::Caller;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
@@ -3679,6 +3682,7 @@ mod rejection_mapping_tests {
         create_sharding_error: bool,
         delete_requests: Arc<std::sync::Mutex<Vec<DeleteWorkerRequest>>>,
         delete_sharding_error: bool,
+        cancel_requests: Arc<std::sync::Mutex<Vec<CancelInvocationRequest>>>,
         accept: bool,
         calls: Arc<AtomicUsize>,
         /// The opening frame's freshness disposition, one per call in call order.
@@ -3851,11 +3855,18 @@ mod rejection_mapping_tests {
             ResolveRevertLastInvocationsRequest,
             ResolveRevertLastInvocationsResponse
         );
-        unimplemented_unary!(
-            cancel_invocation,
-            CancelInvocationRequest,
-            CancelInvocationResponse
-        );
+        async fn cancel_invocation(
+            &self,
+            request: Request<CancelInvocationRequest>,
+        ) -> Result<Response<CancelInvocationResponse>, Status> {
+            self.cancel_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            Ok(Response::new(CancelInvocationResponse {
+                result: Some(cancel_invocation_response::Result::Success(true)),
+            }))
+        }
         unimplemented_unary!(
             control_durable_stream_attachment,
             DurableStreamAttachmentControlRequest,
@@ -4164,7 +4175,7 @@ mod rejection_mapping_tests {
                 EnvironmentId::new(),
                 AccountId::new(),
                 AuthCtx::System,
-                Principal::anonymous().into(),
+                Caller::anonymous().into(),
                 None,
                 None,
             )
@@ -4205,6 +4216,58 @@ mod rejection_mapping_tests {
 
     #[test]
     #[test_r::timeout("30s")]
+    async fn delete_request_has_a_decodable_caller() {
+        let executor = RejectingExecutor::default();
+        let requests = executor.delete_requests.clone();
+        let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
+        client
+            .delete(
+                &agent_id,
+                EnvironmentId::new(),
+                golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+                AuthCtx::system(),
+            )
+            .await
+            .unwrap();
+        let requests = requests.lock().unwrap();
+        assert!(!requests.is_empty());
+        for request in requests.iter() {
+            let caller = request
+                .caller
+                .clone()
+                .expect("executor rejects a missing caller");
+            Caller::try_from(caller).expect("executor rejects a malformed caller");
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cancel_request_has_a_decodable_caller() {
+        let executor = RejectingExecutor::default();
+        let requests = executor.cancel_requests.clone();
+        let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
+        client
+            .cancel_invocation(
+                &agent_id,
+                &golem_common::model::InvocationId(uuid::Uuid::new_v4()),
+                EnvironmentId::new(),
+                AuthCtx::system(),
+                None,
+                Some(golem_common::model::AgentFingerprint(uuid::Uuid::new_v4())),
+            )
+            .await
+            .unwrap();
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let caller = requests[0]
+            .caller
+            .clone()
+            .expect("executor rejects a missing caller");
+        Caller::try_from(caller).expect("executor rejects a malformed caller");
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
     async fn exclusive_create_retries_the_same_identity_after_a_lost_response() {
         for create_sharding_error in [false, true] {
             let executor = RejectingExecutor {
@@ -4225,7 +4288,7 @@ mod rejection_mapping_tests {
                     environment_id,
                     AuthCtx::System,
                     None,
-                    None,
+                    Caller::anonymous().into(),
                     None,
                 )
             };

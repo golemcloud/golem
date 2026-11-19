@@ -52,7 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetCurrentEnvironmentStateSuccessResponse, GetDeployedAgentTypeRequest,
     GetDeployedAgentTypeResponse, GetDeployedAgentTypeSuccessResponse,
     GetDeployedComponentMetadataRequest, GetDeployedComponentMetadataResponse,
-    GetDeployedComponentMetadataSuccessResponse, GetResourceDefinitionByIdRequest,
+    GetDeployedComponentMetadataSuccessResponse, GetGolemIssuerRequest, GetGolemIssuerResponse,
+    GetGolemIssuerSuccessResponse, GetResourceDefinitionByIdRequest,
     GetResourceDefinitionByIdResponse, GetResourceDefinitionByIdSuccessResponse,
     GetResourceDefinitionByNameRequest, GetResourceDefinitionByNameResponse,
     GetResourceDefinitionByNameSuccessResponse, GetResourceLimitsRequest,
@@ -73,9 +74,9 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_component_metadata_response,
     get_current_environment_state_response, get_deployed_agent_type_response,
-    get_deployed_component_metadata_response, get_resource_definition_by_id_response,
-    get_resource_definition_by_name_response, get_resource_limits_response,
-    get_tool_deployment_state_response, registry_service_error,
+    get_deployed_component_metadata_response, get_golem_issuer_response,
+    get_resource_definition_by_id_response, get_resource_definition_by_name_response,
+    get_resource_limits_response, get_tool_deployment_state_response, registry_service_error,
     resolve_agent_type_by_names_response, resolve_component_response, resolve_type_id_response,
     revoke_card_response, update_worker_connection_limit_response,
 };
@@ -104,6 +105,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::type_id::{TypeId, TypeIdKind};
@@ -140,6 +142,7 @@ pub struct RegistryServiceGrpcApi {
     resource_definition_service: Arc<ResourceDefinitionService>,
     mcp_oauth_service: Arc<McpOAuthService>,
     mcp_import_resolver: Arc<McpImportResolver>,
+    golem_issuer: GolemIssuer,
 }
 
 impl RegistryServiceGrpcApi {
@@ -158,6 +161,7 @@ impl RegistryServiceGrpcApi {
         resource_definition_service: Arc<ResourceDefinitionService>,
         mcp_oauth_service: Arc<McpOAuthService>,
         mcp_import_resolver: Arc<McpImportResolver>,
+        golem_issuer: GolemIssuer,
     ) -> Self {
         Self {
             auth_service,
@@ -174,6 +178,7 @@ impl RegistryServiceGrpcApi {
             resource_definition_service,
             mcp_oauth_service,
             mcp_import_resolver,
+            golem_issuer,
         }
     }
 
@@ -1007,6 +1012,19 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(AuthenticateTokenResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_golem_issuer(
+        &self,
+        _request: Request<GetGolemIssuerRequest>,
+    ) -> Result<Response<GetGolemIssuerResponse>, tonic::Status> {
+        let response = get_golem_issuer_response::Result::Success(GetGolemIssuerSuccessResponse {
+            golem_issuer: self.golem_issuer.to_string(),
+        });
+
+        Ok(Response::new(GetGolemIssuerResponse {
             result: Some(response),
         }))
     }

@@ -1,5 +1,5 @@
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, RawCustomToolError, Tool,
     ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{
@@ -320,7 +320,7 @@ async fn path_policy(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let input = apply_path_policy(

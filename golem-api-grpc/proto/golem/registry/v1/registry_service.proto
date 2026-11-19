@@ -27,6 +27,9 @@ service RegistryService {
   rpc AuthenticateToken (AuthenticateTokenRequest) returns (AuthenticateTokenResponse);
   rpc AuthorizeEnvironment (AuthorizeEnvironmentRequest) returns (AuthorizeEnvironmentResponse);
 
+  // installation api
+  rpc GetGolemIssuer (GetGolemIssuerRequest) returns (GetGolemIssuerResponse);
+
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
@@ -102,6 +105,21 @@ message AuthenticateTokenResponse {
 
 message AuthenticateTokenSuccessResponse {
     golem.auth.AuthCtx auth_ctx = 1;
+}
+
+message GetGolemIssuerRequest {
+}
+
+message GetGolemIssuerResponse {
+  oneof result {
+    GetGolemIssuerSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message GetGolemIssuerSuccessResponse {
+  // The Golem issuer of the installation: an https URL, or urn:golem:issuer:<uuid>.
+  string golem_issuer = 1;
 }
 
 message GetResourceLimitsRequest {

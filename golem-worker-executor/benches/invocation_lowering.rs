@@ -25,16 +25,17 @@
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use golem_common::base_model::InvocationId;
-use golem_common::base_model::agent::{AgentMode, AgentTypeName, Principal, Snapshotting};
+use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::AgentInvocation;
 use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::schema::{
-    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
-    MetadataEnvelope, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaTypeDef,
-    SchemaValue, TypeId, TypedSchemaValue,
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, MetadataEnvelope,
+    NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId,
+    TypedSchemaValue,
 };
 use golem_schema::Empty;
 use golem_worker_executor::worker::invocation::lower_invocation;
@@ -84,11 +85,6 @@ fn representative_agent_type() -> AgentTypeSchema {
         NamedField::user_supplied("maybe", SchemaType::option(SchemaType::bool())),
         NamedField::user_supplied("first", SchemaType::ref_to(TypeId::new("t000"))),
         NamedField::user_supplied("last", SchemaType::ref_to(TypeId::new("t031"))),
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
     ];
 
     AgentTypeSchema {
@@ -174,7 +170,7 @@ fn agent_method_invocation() -> AgentInvocation {
         method_name: METHOD_NAME.to_string(),
         input: method_input_value(),
         invocation_context: InvocationContextStack::fresh(),
-        principal: Principal::anonymous(),
+        caller: Caller::anonymous(),
         scope_card: None,
     }
 }

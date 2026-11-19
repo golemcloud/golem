@@ -11,6 +11,7 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_service_base::model::agent_secret::AgentSecret;
+use golem_worker_executor_test_utils::callers;
 use test_r::{test, timeout};
 
 #[derive(Debug, FromSchema)]
@@ -68,19 +69,12 @@ fn root_tool_name(tool: &golem_common::schema::tool::Tool) -> &str {
         .as_str()
 }
 
-fn oidc_principal() -> Principal {
-    Principal::Oidc(OidcPrincipal {
-        sub: "matrix-resource-acceptance".to_string(),
-        issuer: "https://matrix-conformance.test".to_string(),
-        email: None,
-        name: None,
-        email_verified: None,
-        given_name: None,
-        family_name: None,
-        picture: None,
-        preferred_username: None,
-        claims: "{}".to_string(),
-    })
+fn oidc_principal() -> golem_common::model::caller::Caller {
+    callers::user_with_claims(
+        "https://matrix-conformance.test",
+        "matrix-resource-acceptance",
+        "{}",
+    )
 }
 
 fn push_eq<T: std::fmt::Debug + PartialEq + ?Sized>(
@@ -134,7 +128,10 @@ fn assert_resource_contract(
     provider: &str,
     owner_agent_id: &str,
 ) {
-    let principal = "oidc:matrix-resource-acceptance".to_string();
+    let caller = callers::user_text(
+        "https://matrix-conformance.test",
+        "matrix-resource-acceptance",
+    );
     let provider = provider.to_string();
     let owner_agent_id = owner_agent_id.to_string();
     match contract {
@@ -165,7 +162,7 @@ fn assert_resource_contract(
                 failures,
                 &format!("{path}.secretPrincipal"),
                 &observation.secret_principal,
-                &principal,
+                &caller,
             );
             push_eq(
                 failures,
@@ -200,7 +197,7 @@ fn assert_resource_contract(
                 failures,
                 &format!("{path}.quotaPrincipal"),
                 &observation.quota_principal,
-                &principal,
+                &caller,
             );
             push_eq(
                 failures,
@@ -235,7 +232,7 @@ fn assert_resource_contract(
                 failures,
                 &format!("{path}.permissionPrincipal"),
                 &observation.permission_principal,
-                &principal,
+                &caller,
             );
             push_eq(
                 failures,
@@ -478,7 +475,7 @@ async fn run_resource_contract(
                 ResourceContract::TypedStream => "matrix_typed_stream_observation",
             };
             match executor
-                .invoke_and_await_agent_as_principal(
+                .invoke_and_await_agent_as_caller(
                     caller_component,
                     &agent_id,
                     oidc_principal(),

@@ -7,7 +7,7 @@ import {
   DynamicClient,
   InvocationId,
   method,
-  Principal,
+  InvocationContext,
   Quota,
   Reflection,
   Tool,
@@ -63,7 +63,7 @@ const RustPeer = defineAgent({
 
 const TsPrincipalPeer = defineAgent({
   name: "TsPrincipalPeer",
-  id: { tenant: Schema.String, caller: Principal.PrincipalSchema },
+  id: { tenant: Schema.String, owner: InvocationContext.PrincipalRefSchema },
   methods: { value: method({ input: {}, success: Schema.String }) },
 })
 
@@ -139,6 +139,7 @@ defineAgent({
       Effect.scoped(
         Effect.gen(function* () {
           const tenant = `principal-effect-${name}`
+          const owner = new InvocationContext.PrincipalRef("https://cross-sdk.example", "effect")
           const reflected = yield* Reflection.getAgentType("TsPrincipalPeer")
           if (reflected === undefined || reflected.mode !== "durable")
             return "missing-principal-type"

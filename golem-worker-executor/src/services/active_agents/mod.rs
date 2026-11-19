@@ -84,7 +84,8 @@ use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::entity::{
@@ -333,7 +334,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -346,7 +347,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             InvocationFreshnessDisposition::MayExist,
             CreateIntent::Existing,
         )
@@ -362,7 +363,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
@@ -378,7 +379,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 component_revision,
                 parent,
                 invocation_context_stack.clone(),
-                principal,
+                caller,
                 freshness_disposition,
                 WorkerCreationMode::ComponentAgent,
                 create_intent,
@@ -407,7 +408,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 Some(component_revision),
                 None,
                 InvocationContextStack::fresh(),
-                Principal::anonymous(),
+                Caller::anonymous(),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::OplogProcessor,
                 CreateIntent::Create {
@@ -428,7 +429,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         environment_id: EnvironmentId,
         idempotency_key: &IdempotencyKey,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -444,7 +445,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             idempotency_key,
             component.revision,
             invocation_context_stack,
-            principal,
+            caller,
         )
         .await
     }
@@ -457,7 +458,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         idempotency_key: &IdempotencyKey,
         component_revision: ComponentRevision,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -484,7 +485,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 Some(component_revision),
                 None,
                 invocation_context_stack.clone(),
-                principal,
+                caller,
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::EphemeralExternalTool,
                 CreateIntent::Create {
@@ -505,12 +506,12 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        self.get_existing_with_fingerprint(deps, owned_agent_id, principal, None)
+        self.get_existing_with_fingerprint(deps, owned_agent_id, caller, None)
             .await
     }
 
@@ -518,7 +519,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
@@ -527,7 +528,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
         let result = worker
-            .ensure_existing_with_fingerprint(principal, expected_fingerprint)
+            .ensure_existing_with_fingerprint(caller, expected_fingerprint)
             .in_current_span()
             .await
             .and_then(|()| {

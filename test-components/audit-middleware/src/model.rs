@@ -299,7 +299,7 @@ mod tests {
             owner: OwnerSummary {
                 agent_id: "owner".to_string(),
             },
-            principal: PrincipalSummary::Oidc {
+            principal: PrincipalSummary::User {
                 issuer: "issuer".to_string(),
                 subject: "subject".to_string(),
             },
@@ -312,6 +312,6 @@ mod tests {
         second.occurrence_label = "operations".to_string();
         assert_ne!(first.occurrence_label, second.occurrence_label);
         assert_eq!(first.owner.agent_id, "owner");
-        assert!(matches!(first.principal, PrincipalSummary::Oidc { .. }));
+        assert!(matches!(first.principal, PrincipalSummary::User { .. }));
     }
 }

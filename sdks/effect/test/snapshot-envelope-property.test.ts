@@ -1,13 +1,11 @@
 import { describe, expect } from "@effect/vitest"
 import { Schema } from "effect"
 import * as fc from "fast-check"
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import {
   decodeEnvelope,
   encodeBinaryEnvelope,
   encodeJsonEnvelope,
   encodeMultipartJsonEnvelope,
-  serializePrincipal,
 } from "../src/internal/snapshotEnvelope.js"
 import { prop } from "./property.js"
 
@@ -131,23 +129,21 @@ describe("snapshot-envelope properties", () => {
   )
 
   prop(
-    "binary envelope round-trips arbitrary principal + arbitrary user payload",
-    { principal: principalArb, userPayload: fc.uint8Array({ maxLength: 1024 }) },
-    ({ principal, userPayload }) => {
-      const env = encodeBinaryEnvelope(principal, userPayload)
+    "binary envelope round-trips an arbitrary user payload",
+    { userPayload: fc.uint8Array({ maxLength: 1024 }) },
+    ({ userPayload }) => {
+      const env = encodeBinaryEnvelope(userPayload)
       expect(env.mimeType).toBe("application/octet-stream")
       const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("binary")
       if (decoded.kind !== "binary") throw new Error("expected binary envelope")
-      expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
       expect(Array.from(decoded.userPayload)).toEqual(Array.from(userPayload))
     },
   )
 
   prop(
-    "multipart envelope round-trips arbitrary principal + state + DB parts",
+    "multipart envelope round-trips arbitrary state + DB parts",
     {
-      principal: principalArb,
       state: stateArb,
       // De-duplicate DB names to avoid the multipart decoder's
       // duplicate-name check (an unrelated, well-tested invariant).
@@ -163,13 +159,12 @@ describe("snapshot-envelope properties", () => {
           })),
         ),
     },
-    ({ principal, state, databases }) => {
-      const env = encodeMultipartJsonEnvelope(principal, state, databases)
+    ({ state, databases }) => {
+      const env = encodeMultipartJsonEnvelope(state, databases)
       expect(env.mimeType.startsWith("multipart/mixed")).toBe(true)
       const decoded = decodeEnvelope(env)
       expect(decoded.kind).toBe("multipart")
       if (decoded.kind !== "multipart") throw new Error("expected multipart envelope")
-      expect(serializePrincipal(decoded.principal)).toEqual(serializePrincipal(principal))
       expect(decoded.state).toEqual(state)
       // Order is preserved by `encodeMultipartJsonEnvelope` (state first,
       // then DBs in input order); decoder strips the state part and

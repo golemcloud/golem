@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::{Caller, Principal};
 
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
@@ -20,7 +21,7 @@ use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::AgentStatusRecord;
 use golem_common::model::agent::ScheduleId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
@@ -154,13 +155,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, principal)
+            .get_existing(deps, owned_agent_id, caller)
             .await
     }
 
@@ -168,20 +169,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker =
-            Self::get_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
+        let mut worker = Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await?;
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         loop {
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id, principal.clone())
-                .await
+            worker = match Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await
             {
                 Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
                     worker
@@ -196,13 +195,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = match Self::get_existing_suspended(deps, owned_agent_id, principal).await {
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id, caller).await {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
@@ -271,13 +270,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -347,13 +346,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         mode: UpdateMode,
         target_revision: ComponentRevision,
         disable_wakeup: bool,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<OplogIndex, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -491,13 +490,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -560,7 +559,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -570,7 +569,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            principal,
+            caller,
             true,
             expected_fingerprint,
         )
@@ -581,7 +580,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -591,7 +590,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            principal,
+            caller,
             false,
             expected_fingerprint,
         )
@@ -602,14 +601,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        principal: Principal,
+        caller: Caller,
         activate: bool,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -1140,8 +1139,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(false);
         }
         let invocation = self.hydrate_pending_invocation(pending).await?.invocation;
-        if !matches!(invocation.principal(), Some(Principal::Agent(principal)) if &principal.agent_id == owner)
-        {
+        if !matches!(
+            invocation.caller().map(|caller| &caller.immediate),
+            Some(Principal::Agent(agent)) if &agent.address == owner
+        ) {
             return Ok(false);
         }
         self.withdraw_pending_invocation(&instance_guard, &status, idempotency_key)
@@ -1388,6 +1389,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 invocation_results: self.config().invocation_results.membership(),
                 ..Default::default()
             };
+            // The entries come from storage, where an external payload keeps no decoded value.
+            crate::worker::status::hydrate_stream_session_payloads(
+                self,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &last_known_status.deleted_regions,
+                &mut prospective_entries,
+            )
+            .await?;
+            crate::worker::status::hydrate_lookup_payloads(
+                self,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &retained_status,
+                &last_known_status.deleted_regions,
+                &mut prospective_entries,
+            )
+            .await?;
             let retained_status = update_status_with_new_entries(
                 self.agent_mode(),
                 retained_status,

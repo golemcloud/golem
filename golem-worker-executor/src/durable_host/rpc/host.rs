@@ -961,6 +961,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let remote_result = {
                 let rpc = self.rpc();
                 let agent_id = *self.agent_id();
+                let caller = golem_common::model::caller::Caller::entry(self.self_principal());
                 let created_by = self.created_by();
                 let stack = self.clone_as_inherited_stack(span.span_id());
                 let interrupt_signal = interrupt_signal.map(Error::from);
@@ -982,6 +983,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         &agent_id,
                         &prepared.env,
                         stack,
+                        &caller,
                         prepared.config,
                         &auth_ctx,
                         scope_card,
@@ -1644,6 +1646,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .retry_properties("invoke-and-await", &remote_agent_id),
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: None,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1826,10 +1829,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 expected_callee_fingerprint,
                 retry_properties.clone(),
                 span.span_id(),
+                handle.trap_context().retry_from,
                 handle.start_index(),
                 initial_freshness_disposition,
                 scope_card,
-                auth_ctx,
+                auth_ctx.clone(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -1847,6 +1851,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     retry_properties: retry_properties.clone(),
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: Some(auth_ctx),
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,
@@ -1876,6 +1881,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     retry_properties: retry_properties.clone(),
                     span_id: span.span_id().clone(),
                     cancel_token: tokio_util::sync::CancellationToken::new(),
+                    retry_auth_ctx: None,
                 }),
                 child_pollables: Vec::new(),
                 drop_pending: false,

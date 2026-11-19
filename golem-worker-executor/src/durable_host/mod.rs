@@ -246,9 +246,7 @@ use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
-use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
-};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
@@ -611,7 +609,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 parent,
                 call_mode,
                 activation: scope.activation().clone(),
-                principal: self.invocation_principal(),
+                caller: self.invocation_caller(),
                 descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
                     golem_common::model::entity::ToolInvocationDescriptor {
                         attempt_ordinal: 0,

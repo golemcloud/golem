@@ -582,11 +582,11 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component: &ComponentDto,
         agent_id: &ParsedAgentKey,
         idempotency_key: Option<&IdempotencyKey>,
-        principal: Option<golem_common::model::agent::Principal>,
+        caller: Option<golem_common::model::caller::Caller>,
         method_name: &str,
         params: TypedSchemaValue,
     ) -> anyhow::Result<AgentResult> {
-        if principal.is_some() {
+        if caller.is_some() {
             // The HTTP `AgentInvocationRequest` has no per-request `principal`
             // field — principal is derived from the request's auth headers.
             // Tests that need to override the principal must use the

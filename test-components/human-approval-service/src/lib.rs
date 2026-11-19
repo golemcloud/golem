@@ -49,9 +49,10 @@ pub struct ApprovalRequest {
 #[serde(rename_all = "kebab-case")]
 pub enum AuthenticatedPrincipalKind {
     Anonymous,
-    Oidc,
+    User,
+    Account,
     Agent,
-    GolemUser,
+    Tool,
 }
 
 impl TryFrom<&str> for AuthenticatedPrincipalKind {
@@ -60,9 +61,10 @@ impl TryFrom<&str> for AuthenticatedPrincipalKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "anonymous" => Ok(Self::Anonymous),
-            "oidc" => Ok(Self::Oidc),
+            "user" => Ok(Self::User),
+            "account" => Ok(Self::Account),
             "agent" => Ok(Self::Agent),
-            "golem-user" => Ok(Self::GolemUser),
+            "tool" => Ok(Self::Tool),
             _ => Err(()),
         }
     }
@@ -432,7 +434,7 @@ async fn register_request(
     AuthenticatedPrincipalKind::try_from(request.principal.as_str()).map_err(|_| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
-            "principal must be one of anonymous, oidc, agent, or golem-user".to_string(),
+            "principal must be one of anonymous, user, account, agent, or tool".to_string(),
         )
     })?;
     let mut store = state.store.lock().unwrap();
@@ -638,7 +640,7 @@ mod tests {
             policy: "production-change".to_string(),
             tool_name: "deploy".to_string(),
             command_path: vec!["apply".to_string()],
-            principal: "golem-user".to_string(),
+            principal: "account".to_string(),
         }
     }
 

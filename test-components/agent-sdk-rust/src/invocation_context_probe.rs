@@ -1,4 +1,6 @@
-use golem_rust::agentic::{Principal, SnapshotRestoreContext, spawn_local};
+use golem_rust::agentic::{
+    Caller, InvocationContext, Principal, SnapshotRestoreContext, spawn_local,
+};
 use golem_rust::golem_agentic::golem::agent::host::WasmRpc;
 use golem_rust::golem_agentic::golem::agent::invocation_context;
 use golem_rust::schema::SchemaValue;
@@ -17,6 +19,7 @@ struct Observation {
     immediate: String,
 }
 
+/// `"<kind> <pair text>"`, or `"anonymous"`. It never includes claims.
 fn principal_text(principal: &Principal) -> String {
     match principal {
         Principal::Oidc(oidc) => format!("oidc:{}", oidc.sub),
@@ -41,8 +44,8 @@ fn observe() -> Observation {
             };
             format!("{owner}.{}", golem_rust::Uuid::from(id.id))
         }),
-        original: principal_text(&caller.original),
-        immediate: principal_text(&caller.immediate),
+        original: principal_text(&Principal::from(caller.original)),
+        immediate: principal_text(&Principal::from(caller.immediate)),
     }
 }
 
@@ -50,30 +53,43 @@ fn observe() -> Observation {
 #[serde(rename_all = "camelCase")]
 struct Report<'a> {
     constructor: &'a Observation,
-    constructor_principal: &'a str,
+    constructor_caller: &'a str,
     saved: &'a Option<Observation>,
     loaded: &'a Option<Observation>,
     method: Observation,
-    method_principal: String,
+    method_caller: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SavedState {
     constructor: Observation,
-    constructor_principal: String,
+    constructor_caller: String,
     saved: Observation,
+    claims_digests: Vec<String>,
     spawned: Vec<Observation>,
     after_return: Vec<Observation>,
 }
 
 #[agent_definition(snapshotting = "enabled")]
 pub trait InvocationContextProbe {
-    fn new(name: String, principal: Principal) -> Self;
+    fn new(name: String, ctx: InvocationContext) -> Self;
 
     /// Returns the observations of the constructor, of the last snapshot save and load, and of
-    /// this method, as JSON, together with the principals the SDK injected.
-    fn report(&self, principal: Principal) -> String;
+    /// this method, as JSON, together with the callers that the SDK handed to the constructor
+    /// and to this method.
+    fn report(&self, ctx: InvocationContext) -> String;
+
+    /// The caller of this call: `original=<text> immediate=<text> tokens=<count>`, where each
+    /// text is `<kind> <pair text>` or `anonymous`.
+    fn caller_summary(&self, ctx: InvocationContext) -> String;
+
+    /// Records the digest of the original caller's claims text: its hex blake3 and its length
+    /// in bytes, as `<hex>:<length>`. Returns the recorded entry.
+    fn record_caller_claims_digest(&mut self, ctx: InvocationContext) -> String;
+
+    /// Every digest that `record_caller_claims_digest` recorded, oldest first.
+    fn recorded_caller_claims_digests(&self) -> Vec<String>;
 
     /// Awaits `report` on the probe named `peer`, then triggers another `report` on it. Returns
     /// the awaited report and the invocation ID from the metadata of the triggered call.
@@ -98,36 +114,52 @@ pub trait InvocationContextProbe {
 
 struct InvocationContextProbeImpl {
     constructor: Observation,
-    constructor_principal: String,
+    constructor_caller: String,
     saved: Option<Observation>,
     loaded: Option<Observation>,
+    claims_digests: Vec<String>,
     spawned: Vec<Observation>,
     after_return: Rc<RefCell<Vec<Observation>>>,
 }
 
 #[agent_implementation]
 impl InvocationContextProbe for InvocationContextProbeImpl {
-    fn new(_name: String, principal: Principal) -> Self {
+    fn new(_name: String, ctx: InvocationContext) -> Self {
         Self {
             constructor: observe(),
-            constructor_principal: principal_text(&principal),
+            constructor_caller: caller_text(ctx.caller()),
             saved: None,
             loaded: None,
+            claims_digests: Vec::new(),
             spawned: Vec::new(),
             after_return: Rc::default(),
         }
     }
 
-    fn report(&self, principal: Principal) -> String {
+    fn report(&self, ctx: InvocationContext) -> String {
         serde_json::to_string(&Report {
             constructor: &self.constructor,
-            constructor_principal: &self.constructor_principal,
+            constructor_caller: &self.constructor_caller,
             saved: &self.saved,
             loaded: &self.loaded,
             method: observe(),
-            method_principal: principal_text(&principal),
+            method_caller: caller_text(ctx.caller()),
         })
         .expect("report should serialize")
+    }
+
+    fn caller_summary(&self, ctx: InvocationContext) -> String {
+        caller_text(ctx.caller())
+    }
+
+    fn record_caller_claims_digest(&mut self, ctx: InvocationContext) -> String {
+        let digest = claims_digest(ctx.caller());
+        self.claims_digests.push(digest.clone());
+        digest
+    }
+
+    fn recorded_caller_claims_digests(&self) -> Vec<String> {
+        self.claims_digests.clone()
     }
 
     async fn report_of_peer(&self, peer: String) -> String {
@@ -184,8 +216,9 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&SavedState {
             constructor: self.constructor.clone(),
-            constructor_principal: self.constructor_principal.clone(),
+            constructor_caller: self.constructor_caller.clone(),
             saved: observe(),
+            claims_digests: self.claims_digests.clone(),
             spawned: self.spawned.clone(),
             after_return: self.after_return.borrow().clone(),
         })
@@ -200,9 +233,10 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
             serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
         Ok(Self {
             constructor: state.constructor,
-            constructor_principal: state.constructor_principal,
+            constructor_caller: state.constructor_caller,
             saved: Some(state.saved),
             loaded: Some(observe()),
+            claims_digests: state.claims_digests,
             spawned: state.spawned,
             after_return: Rc::new(RefCell::new(state.after_return)),
         })

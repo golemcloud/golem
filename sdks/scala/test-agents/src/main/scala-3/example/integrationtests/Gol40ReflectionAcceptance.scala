@@ -10,7 +10,7 @@
 
 package example.integrationtests
 
-import golem.{BaseAgent, Principal}
+import golem.{BaseAgent, InvocationContext}
 import golem.reflection.{Reflection, ToolClientDefinition}
 import golem.runtime.annotations.*
 import golem.tool.{ToolError, ToolOutputStream}
@@ -41,33 +41,33 @@ enum Gol40ReflectionError {
 
 @toolDefinition(name = "nested", version = "1.0.0")
 trait Gol40ReflectionNested {
-  def inspect(input: Gol40ReflectionInput, principal: Principal): Gol40ReflectionOutput
+  def inspect(input: Gol40ReflectionInput, context: InvocationContext): Gol40ReflectionOutput
 }
 
 @toolDefinition(name = "scala-gol40-reflection-acceptance", version = "1.0.0")
 trait Gol40ReflectionTool {
   def nested(prefix: String): Gol40ReflectionNested
   def typedFailure(message: String): Either[Gol40ReflectionError, String]
-  def principal(principal: Principal): String
+  def principal(context: InvocationContext): String
   def streaming(label: String, stdout: ToolOutputStream): Future[String]
 }
 
 @toolImplementation()
 final class Gol40ReflectionToolImpl extends Gol40ReflectionTool {
   override def nested(prefix: String): Gol40ReflectionNested = new Gol40ReflectionNested {
-    override def inspect(input: Gol40ReflectionInput, principal: Principal): Gol40ReflectionOutput =
+    override def inspect(input: Gol40ReflectionInput, context: InvocationContext): Gol40ReflectionOutput =
       Gol40ReflectionOutput(
         path = "nested/inspect",
         label = s"$prefix:${input.label}",
         weighted = input.left * 7L + input.right * 3L,
-        principal = principalLabel(principal)
+        principal = context.caller.immediate.toString
       )
   }
 
   override def typedFailure(message: String): Either[Gol40ReflectionError, String] =
     Left(Gol40ReflectionError.Rejected(Gol40ReflectionErrorPayload("message", message)))
 
-  override def principal(principal: Principal): String = principalLabel(principal)
+  override def principal(context: InvocationContext): String = context.caller.immediate.toString
 
   override def streaming(label: String, stdout: ToolOutputStream): Future[String] =
     stdout
@@ -77,12 +77,6 @@ final class Gol40ReflectionToolImpl extends Gol40ReflectionTool {
         case Left(error) => Future.failed(new IllegalStateException(error.toString))
       }(ExecutionContext.parasitic)
 
-  private def principalLabel(principal: Principal): String = principal match {
-    case Principal.Anonymous                            => "anonymous"
-    case Principal.Agent(id)                            => s"agent:$id"
-    case Principal.GolemUser(_)                         => "golem-user"
-    case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-  }
 }
 
 final case class Gol40ReflectionObservation(
@@ -204,11 +198,11 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
           reflectedNested.contains("nested/inspect") &&
           reflectedNested.contains("shared-prefix:asymmetric") &&
           reflectedNested.contains("89") &&
-          reflectedNested.contains(generatedPrincipal),
+          reflectedNested.contains(jsonString(generatedPrincipal)),
         generatedNested = generatedNested.toString,
         reflectedNested = reflectedNested,
         typedErrorMatches = generatedErrorMatches && reflectedErrorMatches,
-        principalMatches = reflectedPrincipal.contains(generatedPrincipal),
+        principalMatches = reflectedPrincipal == jsonString(generatedPrincipal),
         generatedPrincipal = generatedPrincipal,
         reflectedPrincipal = reflectedPrincipal,
         streamMatches = generatedBytes == List(0, 2, 5, 9, -1) &&
@@ -235,6 +229,10 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
     expectRight(invoked)
       .map(_.map(_.toString).getOrElse(""))
   }
+
+  // The principal text holds double quotes, so inside JSON text it appears in its escaped form.
+  private def jsonString(text: String): String =
+    "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
   private def expectRight[E, A](future: Future[Either[E, A]]): Future[A] =
     future.flatMap {

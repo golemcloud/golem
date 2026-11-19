@@ -1,6 +1,7 @@
 mod completion;
 
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! cross_case {
@@ -181,7 +182,7 @@ async fn cross_socket_pending(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(&executor, component.id, &name, durable, &key, METHOD),
     )

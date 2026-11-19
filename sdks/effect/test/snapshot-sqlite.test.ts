@@ -31,11 +31,9 @@ import { DatabaseSync } from "node:sqlite"
 import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { userPrincipal } from "./callers.js"
 
-const oidcZoe = {
-  tag: "oidc",
-  val: { sub: "zoe", issuer: "https://example.test", claims: "{}" },
-} as const
+const oidcZoe = userPrincipal("zoe")
 
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
 
@@ -186,7 +184,7 @@ describe("snapshot + sqlite databases", () => {
     // the multipart body. Simpler: build via encodeMultipartJsonEnvelope
     // directly (re-importing for the test).
     const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
-    const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [
+    const tampered = encodeMultipartJsonEnvelope({ note: "zoe" }, [
       { name: "counters", bytes: new Uint8Array([1]) },
       { name: "bogus", bytes: new Uint8Array([2]) },
     ])
@@ -234,8 +232,8 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
       databases: names,
     }
     const restoration = {
-      restore: (_saved: unknown, context: Snapshot.SnapshotRestorationContext) => {
-        restored(context.principal)
+      restore: (_saved: unknown) => {
+        restored()
         return open()
       },
       databases: (state: Record<string, Snapshot.AttachableDatabase>) => state,
@@ -274,7 +272,6 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
       files: Record<string, string> = {},
     ) =>
       encodeMultipartJsonEnvelope(
-        oidcZoe,
         { note: "saved" },
         images,
         mode === "multipart" ? parts : new Map(),
@@ -356,7 +353,6 @@ describe.each(["auto", "multipart"] as const)("managed SQLite ownership (%s)", (
         expect(agent.methods).toHaveBeenCalledTimes(2)
         const savedAgain = decodeEnvelope(await dispatchSaveSnapshot())
         if (savedAgain.kind !== "multipart") throw new Error("expected multipart")
-        expect(savedAgain.principal).toEqual(oidcZoe)
         expect(savedAgain.parts).toEqual(mode === "multipart" ? parts : new Map())
         await __resetAgents()
       }

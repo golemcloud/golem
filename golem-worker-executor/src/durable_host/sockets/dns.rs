@@ -68,9 +68,8 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
     {
         reserve_invocation_id_before_await(store, durable_worker_ctx::<Ctx, U>)?;
         let custom_invocation = store.guest_task_context::<GuestTaskContext>()?;
-        // The A and AAAA records link when the guest receives the answer, where the rebuild after
-        // a snapshot reads them from the delivery marker: an answer that the guest discards links
-        // nothing.
+        // The A and AAAA records link when the guest receives the answer, where the status fold
+        // reads them from the delivery marker: an answer that the guest discards links nothing.
         let links = store.with(|mut access| {
             let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
             ctx.lookup_links(custom_invocation.as_deref())
@@ -108,9 +107,9 @@ async fn resolve<U: Send + 'static, Ctx: WorkerCtx>(
                         let names = names.clone();
                         let name = name.clone();
                         let addresses: Vec<IpAddr> = linked_addresses(records).collect();
-                        Box::new(move || names.with(|names| names.insert(&name, addresses)))
+                        Box::new(move |delivery| names.link(&name, addresses, delivery.recorded))
                     }
-                    _ => Box::new(|| {}),
+                    _ => Box::new(|_| {}),
                 }
             },
             || async {

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use golem_common::model::{IdempotencyKey, InvocationId};
 
 mod acquisition;
@@ -191,8 +192,8 @@ use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
-    ResolvedOwnerContext, Snapshotting, SnapshottingConfig,
+    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, ResolvedOwnerContext,
+    Snapshotting, SnapshottingConfig,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::CanonicalFilePath;
@@ -351,7 +352,7 @@ impl CreateIntent {
 
     fn request(
         &self,
-        principal: Principal,
+        caller: Caller,
         invocation_context: &InvocationContextStack,
     ) -> CreateRequest {
         let (kind, idempotency_key) = match self {
@@ -377,7 +378,7 @@ impl CreateIntent {
                 ..
             } => (CreateRequestKind::GetOrCreate, idempotency_key.clone()),
         };
-        CreateRequest::new(kind, idempotency_key, principal, invocation_context)
+        CreateRequest::new(kind, idempotency_key, caller, invocation_context)
     }
 }
 
@@ -397,7 +398,7 @@ impl WorkerCreationMode {
 struct ReadOnlyContext {
     method_name: String,
     input: golem_common::schema::SchemaValue,
-    principal: Principal,
+    caller: Caller,
     cfg: golem_common::base_model::agent::ReadOnlyConfig,
     component_revision: ComponentRevision,
     cacheable: bool,
@@ -921,6 +922,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn get_initial_worker_metadata(&self) -> AgentMetadata {
         self.initial_worker_metadata.clone()
+    }
+
+    /// This agent as a principal, under the Golem issuer. An owner that has no agent type gets
+    /// the fixed type name of its owner kind.
+    pub(crate) fn self_principal(
+        &self,
+        issuer: &golem_common::model::golem_issuer::GolemIssuer,
+    ) -> golem_common::model::caller::Principal {
+        use golem_common::model::agent::{AgentTypeName, OwnerKind};
+        use golem_common::model::caller::{AgentPrincipal, Principal};
+
+        let metadata = &self.initial_worker_metadata;
+        let agent_type = match (&metadata.agent_type_name, metadata.owner_kind) {
+            (Some(agent_type), _) => agent_type.clone(),
+            (None, OwnerKind::EphemeralExternalTool) => {
+                AgentTypeName("~golem-external-tool-owner".to_string())
+            }
+            (None, OwnerKind::OplogProcessor) => {
+                AgentTypeName("~golem-oplog-processor".to_string())
+            }
+            (None, OwnerKind::ComponentAgent) => AgentTypeName(String::new()),
+        };
+        Principal::Agent(AgentPrincipal::of_agent(
+            issuer.to_string(),
+            self.owned_agent_id.agent_id.clone(),
+            metadata.fingerprint,
+            agent_type,
+            self.owned_agent_id.environment_id,
+        ))
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {

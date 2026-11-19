@@ -152,9 +152,17 @@ private[golem] object Derivation {
   // Stable, generic-aware TypeId rendering
   // ---------------------------------------------------------------------------
 
+  /**
+   * The def id every SDK uses for `golem.PrincipalRef`: the named record
+   * `principal-ref`.
+   */
+  private val PrincipalRefFqn = "golem.PrincipalRef"
+  private val PrincipalRefId  = "principal-ref"
+
   private def stableId(id: TypeId[?]): String = {
     val n = TypeId.normalize(id)
-    if (n.typeArgs.isEmpty) n.fullName
+    if (n.typeArgs.isEmpty && n.fullName == PrincipalRefFqn) PrincipalRefId
+    else if (n.typeArgs.isEmpty) n.fullName
     else n.fullName + "<" + n.typeArgs.map(renderRepr).mkString(",") + ">"
   }
 
@@ -168,14 +176,21 @@ private[golem] object Derivation {
 
   private def shortName(reflect: Reflect.Bound[?]): Option[String] = {
     val raw = reflect.typeId.name.stripSuffix("$")
-    Option.when(raw.nonEmpty)(raw)
+    if (normalizedName(reflect) == PrincipalRefFqn) Some(PrincipalRefId)
+    else Option.when(raw.nonEmpty)(raw)
   }
 
   // ---------------------------------------------------------------------------
   // Shared classification helpers
   // ---------------------------------------------------------------------------
 
-  private def failIfUnsupported(reflect: Reflect.Bound[?]): Unit =
+  private def failIfUnsupported(reflect: Reflect.Bound[?]): Unit = {
+    if (golem.LiveValues.TypeNames.contains(TypeId.normalize(reflect.typeId).fullName))
+      throw SchemaEncodeError(golem.LiveValues.Message)
+    failIfSecret(reflect)
+  }
+
+  private def failIfSecret(reflect: Reflect.Bound[?]): Unit =
     if (TypeId.normalize(reflect.typeId).fullName == SecretFqn)
       throw SchemaEncodeError(
         "golem.config.Secret is not supported by structural schema derivation; " +

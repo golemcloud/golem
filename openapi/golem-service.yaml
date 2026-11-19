@@ -23641,6 +23641,12 @@ components:
           format: uint64
         retryPolicyState:
           $ref: '#/components/schemas/PublicRetryPolicyState'
+        retryAt:
+          type: string
+          format: date-time
+        retryingStartIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - kind
@@ -25034,10 +25040,6 @@ components:
       required:
       - redirectUris
       - origins
-    AutoInjectedKind:
-      type: string
-      enum:
-      - principal
     CachePolicy:
       discriminator:
         propertyName: type
@@ -26702,17 +26704,6 @@ components:
             - user-supplied
         required:
         - tag
-      - type: object
-        properties:
-          tag:
-            type: string
-            enum:
-            - auto-injected
-          value:
-            $ref: '#/components/schemas/AutoInjectedKind'
-        required:
-        - tag
-        - value
     FileMapping:
       discriminator:
         propertyName: type
@@ -28634,11 +28625,8 @@ components:
       properties:
         cachePolicy:
           $ref: '#/components/schemas/CachePolicy'
-        usesPrincipal:
-          type: boolean
       required:
       - cachePolicy
-      - usesPrincipal
     RegisteredAgentTypeImplementer:
       title: RegisteredAgentTypeImplementer
       type: object

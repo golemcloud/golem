@@ -41,9 +41,10 @@ use crate::model::oplog::payload::types::{
     SecretRevealAudit, SecretRevealError, SerializableDateTime, SerializableDnsError,
     SerializableDnsRecord, SerializableDnsRecordType, SerializableFileTimes,
     SerializableP3FileSystemError, SerializableP3IpSocketAddress, SerializableP3SocketErrorCode,
-    SerializableP3UdpDatagram, SerializablePermissionCardLiveness, SerializablePermissionError,
-    SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
-    SerializableWebsocketMessage, SerializableWebsocketReconstructionPolicy,
+    SerializableP3UdpDatagram, SerializableP3UdpEndpoint, SerializablePermissionCardLiveness,
+    SerializablePermissionError, SerializableSocketError, SerializableToolDiscoverySnapshot,
+    SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializableWebsocketReconstructionPolicy,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -350,7 +351,6 @@ oplog_payload! {
             nanos: u64
         },
         P3SocketsUdpSend {
-            data: Vec<u8>,
             remote_address: Option<SerializableP3IpSocketAddress>
         },
         P3HttpClientSend {
@@ -403,6 +403,19 @@ oplog_payload! {
         },
         P3SocketsBind {
             local_address: SerializableP3IpSocketAddress
+        },
+        SocketsUdpBind {
+            local_address: SerializableP3IpSocketAddress
+        },
+        SocketsUdpStream {
+            remote_address: Option<SerializableP3IpSocketAddress>
+        },
+        SocketsUdpReceive {
+            max_results: u64
+        },
+        SocketsUdpSend {
+            /// The destination of each datagram; the datagrams themselves are never stored.
+            remote_addresses: Vec<Option<SerializableP3IpSocketAddress>>
         },
         GolemToolInvoke {
             tool_name: String,
@@ -720,10 +733,12 @@ oplog_payload! {
             contents: Vec<u8>
         },
         P3SocketsUdpSend {
-            result: Result<(), SerializableP3SocketErrorCode>
+            result: Result<(), SerializableP3SocketErrorCode>,
+            endpoint: Option<SerializableP3UdpEndpoint>,
         },
         P3SocketsUdpReceive {
-            result: Result<SerializableP3UdpDatagram, SerializableP3SocketErrorCode>
+            result: Result<SerializableP3UdpDatagram, SerializableP3SocketErrorCode>,
+            endpoint: Option<SerializableP3UdpEndpoint>,
         },
         P3FileSystemStat {
             result: Result<SerializableFileTimes, SerializableP3FileSystemError>,
@@ -797,8 +812,16 @@ oplog_payload! {
         ConfigGetAllResponse {
             result: Result<Vec<(String, String)>, String>,
         },
-        P3SocketsConnect {
-            result: Result<(), SerializableP3SocketErrorCode>
+        P3SocketsUdpConnect {
+            result: Result<(), SerializableP3SocketErrorCode>,
+            endpoint: Option<SerializableP3UdpEndpoint>,
+            disconnected: bool,
+        },
+        /// `local_address` is the native local address that the disconnect left, when it is not
+        /// the one the entry derives: a rebuilt socket keeps the port it was bound on.
+        P3SocketsUdpDisconnect {
+            result: Result<(), SerializableP3SocketErrorCode>,
+            local_address: Option<SerializableP3IpSocketAddress>,
         },
         P3SocketsTcpConnect {
             result: Result<(SerializableP3IpSocketAddress, SerializableP3IpSocketAddress), SerializableP3SocketErrorCode>,
@@ -806,6 +829,41 @@ oplog_payload! {
         },
         P3SocketsBind {
             result: Result<SerializableP3IpSocketAddress, SerializableP3SocketErrorCode>
+        },
+        SocketsUdpBind {
+            result: Result<SerializableP3IpSocketAddress, SerializableSocketError>
+        },
+        /// `lost` is set when the call found that the socket could not get its recorded local
+        /// address back after a reconstruction.
+        /// `local_address` is the new native local address when the call changed it, as P3 UDP
+        /// records an endpoint change: the interface address that a connect selects for a
+        /// wildcard bind, or a port that a failed connect released. `disconnected` is set, as in
+        /// `P3SocketsUdpConnect`, when a failed call left the socket disconnected.
+        SocketsUdpStream {
+            result: Result<(), SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+            disconnected: bool,
+        },
+        /// `local_address` is the new native local address when the call changed it: the port
+        /// that an endpoint rebuild on port 0 selected.
+        SocketsUdpReceive {
+            result: Result<Vec<SerializableP3UdpDatagram>, SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+        },
+        /// `local_address` is as in `SocketsUdpReceive`.
+        SocketsUdpCheckSend {
+            result: Result<u64, SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
+        },
+        /// The number of datagrams sent. `local_address` is the new native local address when
+        /// the send changed it: after a disconnect released the port, the send binds a new one.
+        SocketsUdpSend {
+            result: Result<u64, SerializableSocketError>,
+            lost: bool,
+            local_address: Option<SerializableP3IpSocketAddress>,
         },
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
@@ -1111,7 +1169,9 @@ pub mod host_functions {
         (P3FilesystemTypesDescriptorAppendViaStream => "filesystem::types::descriptor", "append-via-stream", NoInput, P3FileSystemWriteAdmission, denied = denied::filesystem::p3_write_admission),
         (P3SocketsTypesTcpSocketConnect => "sockets::types::tcp-socket", "connect", P3SocketsConnect, P3SocketsTcpConnect, denied = denied::sockets::p3_tcp_connect),
         (P3SocketsTypesTcpSocketBind => "sockets::types::tcp-socket", "bind", P3SocketsBind, P3SocketsBind),
-        (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsConnect, denied = denied::sockets::p3_connect),
+        (P3SocketsTypesUdpSocketConnect => "sockets::types::udp-socket", "connect", P3SocketsConnect, P3SocketsUdpConnect, denied = denied::sockets::p3_udp_connect),
+        (P3SocketsTypesUdpSocketBind => "sockets::types::udp-socket", "bind", P3SocketsBind, P3SocketsBind),
+        (P3SocketsTypesUdpSocketDisconnect => "sockets::types::udp-socket", "disconnect", NoInput, P3SocketsUdpDisconnect),
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
@@ -1138,6 +1198,11 @@ pub mod host_functions {
         (FilesystemPermissionCheck => "filesystem::permissions", "check", FileSystemPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsTcpConnectPermissionCheck => "sockets::tcp::permissions", "check-connect", SocketsTcpConnectPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
         (SocketsUdpPermissionCheck => "sockets::udp::permissions", "check", SocketsUdpPermissionCheck, PermissionCheck, denied = denied::filesystem::permission_check),
+        (SocketsUdpStartBind => "sockets::udp", "start_bind", SocketsUdpBind, SocketsUdpBind),
+        (SocketsUdpStream => "sockets::udp", "stream", SocketsUdpStream, SocketsUdpStream),
+        (SocketsUdpReceive => "sockets::udp", "receive", SocketsUdpReceive, SocketsUdpReceive),
+        (SocketsUdpCheckSend => "sockets::udp", "check_send", NoInput, SocketsUdpCheckSend),
+        (SocketsUdpSend => "sockets::udp", "send", SocketsUdpSend, SocketsUdpSend),
         (GolemPermissionsSelfWallet => "golem::permissions::wallet", "self-wallet", NoInput, PermissionWallet),
         (GolemPermissionsSelfVersion => "golem::permissions::wallet", "self-version", NoInput, PermissionWalletVersion)
     }

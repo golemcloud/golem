@@ -26,7 +26,7 @@ use golem_common::model::account_usage::{AccountUsagePeriod, MonthlyUsageMode};
 use golem_common::model::agent::{
     AgentConfigEntryDto, AgentMetadataDto, ResolvedRevert, RevertToOplogIndex, RevertWorkerTarget,
 };
-use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -63,6 +63,7 @@ use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor::worker::{
     INVOCATION_OWNERSHIP_RECHECK_INTERVAL, Worker, WorkerDeletionHook, WorkerDeletionStage,
 };
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, agent_oplog_length, fake_ownership, registry_test_card, start,
@@ -928,7 +929,7 @@ async fn get_agent_wallet_cards(
             component_owner_account_id: Some(executor.context.account_id.into()),
             environment_id: Some(executor.context.default_environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
         })
         .await?
         .into_inner();
@@ -960,7 +961,7 @@ async fn assert_management_finds_no_agent(
             component_owner_account_id: Some(executor.context.account_id.into()),
             environment_id: Some(agent.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
         })
         .await?
         .into_inner();
@@ -992,7 +993,7 @@ async fn assert_management_finds_no_agent(
             environment_id: Some(agent.environment_id.into()),
             component_owner_account_id: Some(executor.context.account_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
         })
         .await
         .unwrap_err();
@@ -1400,7 +1401,7 @@ async fn reads_waiting_behind_guest_work_when_a_delete_starts_find_no_agent(
                     component_owner_account_id: Some(executor.context.account_id.into()),
                     environment_id: Some(executor.context.default_environment_id.into()),
                     auth_ctx: Some(executor.auth_ctx().into()),
-                    principal: None,
+                    caller: Some(callers::anonymous().into()),
                 })
                 .await
         }
@@ -1499,7 +1500,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
@@ -1512,7 +1513,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 caller_env,
                 caller_stack,
                 config,
-                principal,
+                caller,
                 auth_ctx,
                 idempotency_key,
                 freshness_disposition,
@@ -1528,7 +1529,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
@@ -1540,7 +1541,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 caller_env,
                 caller_stack,
                 config,
-                principal,
+                caller,
                 auth_ctx,
                 idempotency_key,
             )
@@ -1561,7 +1562,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -1580,7 +1581,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 caller_env,
                 caller_stack,
                 config,
-                principal,
+                caller,
                 environment_id,
                 auth_ctx,
                 scope_card,
@@ -1688,7 +1689,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -1696,7 +1697,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 source_agent_id,
                 target_agent_id,
                 oplog_index_cutoff,
-                principal,
+                caller,
                 auth_ctx,
             )
             .await
@@ -5500,7 +5501,7 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
                         force: Some(force),
                         environment_id: Some(agent_id.environment_id.into()),
                         auth_ctx: Some(auth_ctx.into()),
-                        principal: None,
+                        caller: Some(callers::anonymous().into()),
                         expected_fingerprint: None,
                     })
                     .await?
@@ -5665,7 +5666,9 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
                 old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
                     None,
                     golem_common::model::InvocationId(uuid::Uuid::new_v4()),
-                    OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+                    OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                        caller: callers::anonymous(),
+                    })),
                     TraceId::generate(),
                     Vec::new(),
                     Vec::new(),
@@ -5683,7 +5686,7 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
         )
         .await?;
         assert!(!Arc::ptr_eq(&old, &new));
@@ -5932,7 +5935,7 @@ async fn stale_delete_does_not_follow_its_agent_id_to_a_replacement_generation(
         agent_id: Some(worker_id.agent_id.into()),
         environment_id: Some(worker_id.environment_id.into()),
         auth_ctx: Some(AuthCtx::System.into()),
-        principal: None,
+        caller: Some(callers::anonymous().into()),
         expected_fingerprint: Some(original.fingerprint.0.into()),
     };
     for _ in 0..2 {
@@ -9013,7 +9016,7 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
             method_name: "inc_global_by".to_string(),
             input: data_value!(value).into_parts().1,
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: callers::anonymous(),
             scope_card,
         };
     let changed_card = ScopeCard {
@@ -9216,6 +9219,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
                         seconds: at.timestamp(),
                         nanos: at.timestamp_subsec_nanos() as i32,
                     }),
+                    caller: Some(callers::anonymous().into()),
                     ..Default::default()
                 })),
             };
@@ -9650,7 +9654,7 @@ async fn local_schedule_rejects_recreated_cached_target(
                 method_name: "inc_global_by".to_string(),
                 input: data_value!(91u64).into_parts().1,
                 invocation_context: InvocationContextStack::fresh(),
-                principal: Principal::anonymous(),
+                caller: callers::anonymous(),
                 scope_card: None,
             },
             Utc::now() + chrono::Duration::hours(1),
@@ -9680,7 +9684,6 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
 ) -> anyhow::Result<()> {
     use anyhow::Context;
     use golem_common::model::AgentInvocation;
-    use golem_common::model::agent::AgentPrincipal;
     use golem_common::model::oplog::PublicAgentInvocation;
 
     let context = TestContext::new(last_unique_id);
@@ -9711,9 +9714,12 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                     method_name: "inc_global_by".to_string(),
                     input: data_value!(value).into_parts().1,
                     invocation_context: InvocationContextStack::fresh(),
-                    principal: Principal::Agent(AgentPrincipal {
-                        agent_id: owner.agent_id,
-                    }),
+                    caller: callers::agent(
+                        owner.agent_id,
+                        golem_common::model::agent::AgentTypeName(
+                            "ScheduledInvocationClient".to_string(),
+                        ),
+                    ),
                     scope_card: None,
                 },
                 due,
@@ -9859,7 +9865,6 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_common::model::AgentInvocation;
-    use golem_common::model::agent::AgentPrincipal;
     use golem_common::model::oplog::OplogEntry;
     use golem_worker_executor::model::LookupResult;
 
@@ -9890,9 +9895,10 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
             method_name: "inc_global_by".to_string(),
             input: data_value!(value).into_parts().1,
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
+            caller: callers::agent(
+                owner.agent_id,
+                golem_common::model::agent::AgentTypeName("ScheduledInvocationClient".to_string()),
+            ),
             scope_card: None,
         };
     let owned = target.clone();
@@ -10004,7 +10010,6 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::agent::AgentPrincipal;
     use golem_common::model::{AgentInvocation, ScheduleId};
     use golem_worker_executor::services::worker_activator::ExactExistingDelivery;
     use golem_worker_executor::services::{HasWorkerActivator, UsesAllDeps};
@@ -10117,9 +10122,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
                     method_name: "inc_global_by".to_string(),
                     input: data_value!(91u64).into_parts().1,
                     invocation_context: InvocationContextStack::fresh(),
-                    principal: Principal::Agent(AgentPrincipal {
-                        agent_id: caller_id.agent_id,
-                    }),
+                    caller: callers::agent(caller_id.agent_id, caller.agent_type.clone()),
                     scope_card: None,
                 },
                 due,
@@ -10427,7 +10430,7 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
@@ -10524,7 +10527,7 @@ async fn create_rejects_an_environment_that_does_not_own_the_component(
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
@@ -10664,7 +10667,7 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
@@ -12239,6 +12242,7 @@ async fn send_increment(
             golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
         expected_callee_fingerprint: fingerprint.map(|fingerprint| fingerprint.0.into()),
         request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let result = tokio::time::timeout(
@@ -12662,6 +12666,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             request_key: Some(
                 golem_common::model::InvocationRequestKey::external(None, None).into(),
             ),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         })
         .await?;
@@ -12699,7 +12704,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             recover_immediately: false,
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             expected_fingerprint: None,
         };
         async move {
@@ -12720,7 +12725,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             plugin_priority: 0,
             environment_id: Some(component.environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             expected_fingerprint: None,
         };
         async move {
@@ -12964,6 +12969,7 @@ async fn expected_fingerprint_external_tool_lookup_is_guarded(
                     ..Default::default()
                 },
             ),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         };
     let answer = |result: anyhow::Result<_>| match result {

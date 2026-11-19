@@ -118,11 +118,6 @@ describe('explicit multipart snapshots', () => {
         };
         selectSelfAgent('PromiseSnapshot');
         const initial = await register();
-        const invocationContext = await import('golem:agent/invocation-context@2.0.0');
-        vi.mocked(invocationContext.caller).mockReturnValueOnce({
-          original: principal,
-          immediate: principal,
-        });
         await initial.golemAgent200Guest.initialize('PromiseSnapshot', input);
         const saved = await initial.saveSnapshot.save();
         expect(saved.mimeType).toMatch(
@@ -189,7 +184,7 @@ describe('explicit multipart snapshots', () => {
     await expect(sdk.saveSnapshot.save()).rejects.toThrow(/not initialized/);
   });
 
-  it('persists schema input, restores transformed output into independent live state, and preserves principal/bytes', async () => {
+  it('persists schema input, restores transformed output into independent live state, and installs no principal', async () => {
     const sdk = await import('../src');
     let initCalls = 0;
     let loads = 0;
@@ -223,7 +218,7 @@ describe('explicit multipart snapshots', () => {
           async load(saved, ctx) {
             loads++;
             expect(saved.state.revision).toBe(17);
-            expect(ctx.principal).toMatchObject({ sub: principal.val.sub });
+            expect(ctx.caller.original.kind).toBe('anonymous');
             loadedBytes = sdk.Snapshot.requirePart(
               saved.parts,
               'index',
@@ -248,9 +243,8 @@ describe('explicit multipart snapshots', () => {
     expect(loadedBytes).toEqual(bytes);
     const saved = await sdk.saveSnapshot.save();
     const parts = decodeMultipart(saved.payload, extractBoundary(saved.mimeType)!);
-    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toMatchObject({
-      version: 1,
-      principal,
+    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toEqual({
+      version: 2,
       state: { revision: '17' },
     });
     expect(JSON.parse(new TextDecoder().decode(parts[0].body))).not.toHaveProperty('fileDatabases');

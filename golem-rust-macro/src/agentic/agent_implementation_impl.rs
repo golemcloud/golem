@@ -366,12 +366,12 @@ fn generate_method_param_extraction(
     post_method_param_extraction_logic: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let input_variant = fresh_method_local(params, "__golem_input_variant");
-    let invocation_principal = fresh_method_local(params, "__golem_invocation_principal");
+    let invocation_context = fresh_method_local(params, "__golem_invocation_context");
     let extraction = params.iter().enumerate().map(|(index, (ident, pat_type))| {
         let ty = &pat_type.ty;
         quote! {
             let #ident = (&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
-                .read_parameter(&mut #input_variant, #invocation_principal)
+                .read_parameter(&mut #input_variant, #invocation_context)
                 .map_err(|error| golem_rust::agentic::invalid_input_error(format!(
                     "Failed parsing arg {} for method {}: {}", #index, #method_name, error
                 )))?;
@@ -380,7 +380,7 @@ fn generate_method_param_extraction(
 
     quote! {
         use golem_rust::agentic::ReadAgentParameter as _;
-        let #invocation_principal = &principal;
+        let #invocation_context = &context;
         let mut #input_variant = golem_rust::agentic::DirectAgentInput::new(input)
             .map_err(|error| golem_rust::agentic::invalid_input_error(error.to_string()))?;
         #(#extraction)*
@@ -452,7 +452,7 @@ fn generate_base_agent_impl(
                 golem_rust::agentic::get_agent_id()
             }
 
-            async fn invoke(&mut self, method_name: String, input: golem_rust::schema::wit::wire::SchemaValueTree, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
+            async fn invoke(&mut self, method_name: String, input: golem_rust::schema::wit::wire::SchemaValueTree, context: golem_rust::agentic::InvocationContext)
                 -> Result<golem_rust::agentic::AgentInvocationResult, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 match method_name.as_str() {
                     #(#match_arms,)*
@@ -478,7 +478,7 @@ fn generate_constructor_extraction(
     call_back: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let input = fresh_method_local(ctor_params, "__golem_constructor_input");
-    let caller = fresh_method_local(ctor_params, "__golem_constructor_principal");
+    let invocation_context = fresh_method_local(ctor_params, "__golem_constructor_context");
     let extractions = ctor_params.iter().enumerate().map(|(index, (ident, pat_type))| {
         let ty = &pat_type.ty;
         if has_agent_config_attr(pat_type) {
@@ -488,7 +488,7 @@ fn generate_constructor_extraction(
         } else {
             quote! {
                 let #ident = (&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
-                    .read_parameter(&mut #input, #caller)
+                    .read_parameter(&mut #input, #invocation_context)
                     .map_err(|error| golem_rust::agentic::invalid_input_error(format!(
                         "Failed parsing constructor arg {} for agent {}: {}", #index, #agent_type_name, error
                     )))?;
@@ -498,7 +498,7 @@ fn generate_constructor_extraction(
 
     quote! {
         use golem_rust::agentic::ReadAgentParameter as _;
-        let #caller = &principal;
+        let #invocation_context = &context;
         let mut #input = golem_rust::agentic::DirectAgentInput::new(params)
             .map_err(|error| golem_rust::agentic::invalid_input_error(error.to_string()))?;
         #(#extractions)*
@@ -536,7 +536,7 @@ fn generate_initiator_impl(
 
         #[golem_rust::async_trait::async_trait(?Send)]
         impl golem_rust::agentic::AgentInitiator for #initiator_ident {
-            async fn initiate(&self, params: golem_rust::schema::wit::wire::SchemaValueTree, principal: golem_rust::golem_agentic::golem::agent::common::Principal)
+            async fn initiate(&self, params: golem_rust::schema::wit::wire::SchemaValueTree, context: golem_rust::agentic::InvocationContext)
                 -> Result<golem_rust::agentic::ResolvedAgent, golem_rust::golem_agentic::golem::agent::common::AgentError> {
                 #constructor_param_extraction
             }

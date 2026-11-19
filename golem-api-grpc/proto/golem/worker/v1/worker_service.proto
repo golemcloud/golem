@@ -62,7 +62,9 @@ message LaunchNewWorkerRequest {
   bool ignore_already_existing = 5;
   golem.auth.AuthCtx auth_ctx = 6;
   optional golem.worker.InvocationContext context = 7;
-  optional golem.component.Principal principal = 8;
+  reserved 8;
+  reserved "principal";
+  golem.component.Caller caller = 13;
   optional string method_name = 9;
   // Used only by PrepareWorker for the first creation attempt of an ephemeral RPC target: the
   // owner key of the demanding invocation, which a KnownFresh instance is checked against.
@@ -105,9 +107,10 @@ message ForkWorkerRequest {
   golem.worker.AgentId target_agent_id = 2;
   uint64 oplog_index_cutoff = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  // The principal of the fork target's create request. Absent means the account of auth_ctx.
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
   golem.common.EnvironmentId environment_id = 6;
+  golem.component.Caller caller = 7;
 }
 
 message ForkWorkerResponse {
@@ -177,7 +180,8 @@ message InvokeAgentRequest {
   optional golem.worker.IdempotencyKey idempotency_key = 6;
   optional golem.worker.InvocationContext context = 7;
   golem.auth.AuthCtx auth_ctx = 8;
-  golem.component.Principal principal = 9;
+  reserved 9;
+  reserved "principal";
   golem.common.EnvironmentId environment_id = 10;
   InvocationFreshnessDisposition freshness_disposition = 11;
   repeated golem.worker.AgentConfigEntryDto config = 12;
@@ -192,6 +196,7 @@ message InvokeAgentRequest {
   // The component that implements the agent type. Required when the request may create the
   // agent: a key target, or an ID target with `constructor`.
   optional golem.component.ComponentId component_id = 17;
+  golem.component.Caller caller = 18;
 }
 
 enum InvocationFreshnessDisposition {

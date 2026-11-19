@@ -19,6 +19,7 @@ export default {
   promises: "Promises",
   webhooks: "Webhooks",
   "tool-authoring": "Tool Authoring and Lifecycle",
+  "publishing-packages": "Publishing Packages",
   "tool-security": "Tool Security Model",
   cards: "Cards Reference",
   http: "HTTP client",

@@ -21,6 +21,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::storage::scheduler::{
     ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
 };
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_overrides,
@@ -508,7 +509,7 @@ async fn run_insert_race(
                 environment_id: Some(context.default_environment_id.into()),
                 force: Some(true),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: None,
+                caller: Some(callers::anonymous().into()),
                 expected_fingerprint: None,
             })
             .await?

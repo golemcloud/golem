@@ -8,7 +8,7 @@
     "agentId": "Artifact/audit-owner"
   },
   "principal": {
-    "kind": "oidc",
+    "kind": "user",
     "issuer": "https://issuer.audit.test",
     "subject": "subject-01"
   },

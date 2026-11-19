@@ -319,6 +319,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 error,
                 retry_from,
                 retry_policy_state,
+                retry_at,
+                retrying_start_index,
                 ..
             } => Ok(PublicOplogEntry::Error(ErrorParams {
                 timestamp,
@@ -327,6 +329,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 error: error.to_string(""),
                 retry_from,
                 retry_policy_state: retry_policy_state.map(Into::into),
+                retry_at,
+                retrying_start_index,
             })),
             OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
                 RecoverySucceededParams { timestamp },

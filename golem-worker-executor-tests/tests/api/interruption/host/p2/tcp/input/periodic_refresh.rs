@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 #[test]
@@ -116,7 +117,7 @@ async fn periodic_refresh_stops_overage_tcp(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,

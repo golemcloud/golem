@@ -98,7 +98,7 @@ private[macros] final class WireToolAssembler(val core: ToolMacroCore) {
                 indices: Expr[Vector[Int]]
               ): Expr[Vector[Any]] = {
                 val values = params.map { p =>
-                  if (core.isPrincipal(p.tpe)) '{ $input.principal }
+                  if (core.isInvocationContext(p.tpe)) '{ $input.context }
                   else if (core.isStdin(p.tpe)) '{
                     $input.stdin.getOrElse(throw SchemaDecodeError("missing tool stdin"))
                   }

@@ -974,7 +974,7 @@ func TestDecodingParametersReleasesTheCardsItDoesNotKeep(t *testing.T) {
 		f := newFakeCards(t)
 		first, extra := &types.PermissionCard{}, &types.PermissionCard{}
 		dst := reflect.New(reflect.TypeFor[oneParam]()).Elem()
-		err := decodeParams(types.SchemaValueTree{ValueNodes: tc.nodes(first, extra), Root: tc.root}, fields, dst, nil)
+		err := decodeParams(types.SchemaValueTree{ValueNodes: tc.nodes(first, extra), Root: tc.root}, fields, dst)
 		if (err == nil) != tc.decodes || len(f.released) != tc.want {
 			t.Errorf("%s: %v, released %v", name, err, f.released)
 			continue

@@ -61,7 +61,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem_common::model::IdempotencyKey::from_uuid(uuid::Uuid::from(key)).into()
                 }),
                 auth_ctx: resume.auth_ctx.clone(),
-                principal: resume.principal.clone(),
+                caller: resume.caller.clone(),
                 environment_id: resume.environment_id,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 ..Default::default()

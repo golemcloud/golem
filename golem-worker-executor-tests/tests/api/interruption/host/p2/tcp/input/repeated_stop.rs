@@ -1,5 +1,6 @@
 use super::*;
 use golem_common::model::Timestamp;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 macro_rules! repeated_stop_case {
@@ -135,7 +136,7 @@ async fn repeated_stop(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(
             &executor,

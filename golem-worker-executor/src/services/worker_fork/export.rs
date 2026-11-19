@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRejection, ForkStreamSlotRequest, ForkStreamSlotResponse, ForkStreamSlotSuccess,
     fork_stream_slot_rejection::Reason, fork_stream_slot_response,
 };
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamExportFork, StreamExportForkInitializedRecord,
     StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
@@ -124,11 +124,7 @@ async fn execute<Ctx: WorkerCtx>(
     let fork_request = CreateRequest::new(
         CreateRequestKind::Fork,
         None,
-        request
-            .principal
-            .clone()
-            .and_then(|principal| principal.try_into().ok())
-            .unwrap_or_else(Principal::anonymous),
+        crate::grpc::extract_caller(&request.caller)?,
         &InvocationContextStack::fresh(),
     );
     let source = OwnedAgentId::new(environment_id, &source_id);

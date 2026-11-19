@@ -16,7 +16,7 @@
 
 package golem.runtime.autowire
 
-import golem.Principal
+import golem.InvocationContext
 import golem.config.{ConfigHolder, ConfigLoader}
 import golem.host.js.schema.JsAgentError
 import golem.runtime.{
@@ -46,11 +46,11 @@ private[autowire] object AgentImplementationRuntime {
     mode: AgentMode,
     implType: WireAgentImplementationType[Trait, Ctor]
   ): AgentDefinition[Trait] = {
-    val effectiveBuild: (Ctor, Principal) => Trait = implType.configBuilder match {
+    val effectiveBuild: (Ctor, InvocationContext) => Trait = implType.configBuilder match {
       case Some(builder) if !implType.configInjectedViaConstructor =>
-        (ctor: Ctor, principal: Principal) => {
+        (ctor: Ctor, context: InvocationContext) => {
           ConfigHolder.set(ConfigLoader.loadConfig(builder))
-          implType.buildInstance(ctor, principal)
+          implType.buildInstance(ctor, context)
         }
       case _ => implType.buildInstance
     }
@@ -61,13 +61,13 @@ private[autowire] object AgentImplementationRuntime {
       bindings = implType.methods.map(MethodBinding.wire(implType.metadata, _)),
       mode = mode,
       snapshotHandlers = implType.snapshotHandlers,
-      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, constructorInput, principal) =>
+      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, constructorInput) =>
         FutureInterop.toPromise(SchemaPayload.withWireInput(constructorInput) { value =>
           val ctor =
             try implType.ctorCodec.decode(value)
             catch { case NonFatal(error) => throw WireAgentInputError(String.valueOf(error.getMessage)) }
           val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
-          val context     = SnapshotRestoreContext(identityFields(ctor), agentId, principal, freshConfig)
+          val context     = SnapshotRestoreContext(identityFields(ctor), agentId, freshConfig)
           handlers
             .load(bytes, context)
             .map(instance => RestoredInstance(instance, freshConfig))(
@@ -85,12 +85,12 @@ private[autowire] object AgentImplementationRuntime {
     mode: AgentMode,
     implType: AgentImplementationType[Trait, Ctor]
   ): AgentDefinition[Trait] = {
-    val effectiveBuild: (Ctor, Principal) => Trait = implType.configBuilder match {
+    val effectiveBuild: (Ctor, InvocationContext) => Trait = implType.configBuilder match {
       case Some(builder) if !implType.configInjectedViaConstructor =>
-        (ctor: Ctor, principal: Principal) => {
+        (ctor: Ctor, context: InvocationContext) => {
           val config = ConfigLoader.loadConfig(builder)
           ConfigHolder.set(config)
-          implType.buildInstance(ctor, principal)
+          implType.buildInstance(ctor, context)
         }
       case _ => implType.buildInstance
     }
@@ -112,13 +112,13 @@ private[autowire] object AgentImplementationRuntime {
       bindings = bindings,
       mode = mode,
       snapshotHandlers = implType.snapshotHandlers,
-      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, constructorInput, principal) =>
+      restoreInstance = implType.snapshotHandlers.map { handlers => (bytes, agentId, constructorInput) =>
         FutureInterop.toPromise(
           SchemaPayload.withDecodedInput[Ctor, RestoredInstance[Trait]](constructorInput) {
             case Left(err)   => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
             case Right(ctor) =>
               val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
-              val context     = SnapshotRestoreContext(identityFields(ctor), agentId, principal, freshConfig)
+              val context     = SnapshotRestoreContext(identityFields(ctor), agentId, freshConfig)
               handlers
                 .load(bytes, context)
                 .map(instance => RestoredInstance(instance, freshConfig))(

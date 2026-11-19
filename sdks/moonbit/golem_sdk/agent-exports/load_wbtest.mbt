@@ -51,7 +51,6 @@ fn register_load_test_agent(restored : Array[LoadTestAgent]) -> Unit raise {
             ),
           ),
         },
-        { name: "principal", source: AutoInjected(PRINCIPAL), },
         {
           name: "count",
           source: UserSupplied(

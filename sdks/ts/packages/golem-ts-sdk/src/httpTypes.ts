@@ -335,7 +335,6 @@ type NonBindableKind =
   | 'unstructured-binary'
   | 'rich'
   | 'result'
-  | 'principal'
   | 'stream';
 
 // A value is bindable unless it is a marker tagged with a non-bindable kind.
@@ -541,15 +540,6 @@ export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [Val
 // GET / HEAD / DELETE bind remaining inputs from the query string
 // ---------------------------------------------------------------------------
 
-/**
- * Keys of `Params` that are auto-injected `s.principal()` parameters. These carry
- * no wire value (the host injects the caller principal), so they are NOT supplied
- * by an HTTP/RPC caller or implicitly bound from the query string.
- */
-type AutoInjectedKeys<C> = {
-  [K in keyof C & string]: [MarkerKindOf<C[K]>] extends ['principal'] ? K : never;
-}[keyof C & string];
-
 // Inspect schema constructors, never their inferred value types. The latter
 // cannot distinguish an object-backed map from a record, or a tuple from a list.
 // Standard Schema alone, Effect's standardSchemaV1 conversion, and ArkType's
@@ -692,13 +682,13 @@ export type ValidateEndpointsTuple<Eps extends ReadonlyArray<HttpEndpointSpec<st
         ? [
             Exclude<
               UnsupportedImplicitQueryKeys<Params>,
-              V | AutoInjectedKeys<Params> | StreamResourceKeys<Params>
+              V | StreamResourceKeys<Params>
             >,
           ] extends [never]
           ? ValidateEndpointStructure<Eps[K], B, HN>
           : Invalid<`GET/HEAD/DELETE endpoint cannot bind implicit query input '${Exclude<
               UnsupportedImplicitQueryKeys<Params>,
-              V | AutoInjectedKeys<Params> | StreamResourceKeys<Params>
+              V | StreamResourceKeys<Params>
             > &
               string}' (use a body method for records and rich payloads)`>
         : ValidateEndpointStructure<Eps[K], B, HN>

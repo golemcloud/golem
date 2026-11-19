@@ -73,7 +73,7 @@ TsEphemeralPeer.implement({
 
 export const TsPrincipalPeer = defineAgent({
   name: "TsPrincipalPeer",
-  id: { tenant: z.string(), caller: s.principal() },
+  id: { tenant: z.string(), owner: s.principalRef() },
   methods: { value: method({ input: {}, returns: z.string() }) },
 })
 

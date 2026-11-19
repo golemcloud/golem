@@ -19,7 +19,7 @@ use crate::base_model::agent::{
 use crate::base_model::{AgentId, RESERVED_TYPE_TAG};
 use crate::model::agent::{
     AgentTypeSchemaResolver, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey,
-    ResolvedOwnerContext, typed_constructor_parameters,
+    ResolvedOwnerContext,
 };
 use golem_schema::Empty;
 
@@ -203,9 +203,9 @@ fn only_component_agents_have_a_type_tag() {
     }
 }
 use crate::schema::{
-    AgentConstructorSchema, AgentTypeSchema, AutoInjectedKind, BinaryRestrictions, InputSchema,
-    MetadataEnvelope, NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue,
-    TextRestrictions, TypedSchemaValue,
+    AgentConstructorSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, MetadataEnvelope,
+    NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TextRestrictions,
+    TypedSchemaValue,
 };
 use crate::{agent_key, data_value};
 use poem_openapi::types::ToJSON;
@@ -231,39 +231,6 @@ fn agent_id_structural_normalization() {
         .unwrap();
         assert_eq!(agent_id.to_string(), "agent-3(32,(12,32,f(0,1,2)))");
     }
-}
-
-#[test]
-fn agent_id_excludes_auto_injected_constructor_fields() {
-    let mut agent_type = make_agent_type("principal-scoped", vec![]);
-    agent_type.constructor.input_schema = InputSchema::Parameters(vec![
-        NamedField::auto_injected(
-            "principal",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        ),
-        NamedField::user_supplied("key", SchemaType::u32()),
-    ]);
-    let mut types = TestAgentTypes::new();
-    types
-        .types
-        .insert(agent_type.type_name.clone(), agent_type.clone());
-
-    let parsed = ParsedAgentKey::parse("principal-scoped(42)", types).unwrap();
-    assert_eq!(parsed.to_string(), "principal-scoped(42)");
-    assert_eq!(
-        parsed.parameters,
-        typed_constructor_parameters(
-            &agent_type,
-            SchemaValue::Record {
-                fields: vec![SchemaValue::U32(42)],
-            },
-        )
-    );
-    assert_eq!(
-        parsed.parameters.graph().root,
-        SchemaType::record(vec![record_field("key", SchemaType::u32())]),
-    );
 }
 
 #[test]
@@ -874,25 +841,18 @@ mod read_only_config_roundtrip {
     #[test]
     fn read_only_config_protobuf_roundtrip() {
         for cache_policy in all_cache_policies() {
-            for uses_principal in [false, true] {
-                let cfg = ReadOnlyConfig {
-                    cache_policy: cache_policy.clone(),
-                    uses_principal,
-                };
-                let proto: golem_api_grpc::proto::golem::component::ReadOnlyConfig =
-                    cfg.clone().into();
-                let back: ReadOnlyConfig = proto.try_into().expect("protobuf decode");
-                assert_eq!(cfg, back);
-            }
+            let cfg = ReadOnlyConfig {
+                cache_policy: cache_policy.clone(),
+            };
+            let proto: golem_api_grpc::proto::golem::component::ReadOnlyConfig = cfg.clone().into();
+            let back: ReadOnlyConfig = proto.try_into().expect("protobuf decode");
+            assert_eq!(cfg, back);
         }
     }
 
     #[test]
     fn read_only_config_protobuf_missing_cache_policy_errors() {
-        let proto = golem_api_grpc::proto::golem::component::ReadOnlyConfig {
-            cache_policy: None,
-            uses_principal: false,
-        };
+        let proto = golem_api_grpc::proto::golem::component::ReadOnlyConfig { cache_policy: None };
         let result: Result<ReadOnlyConfig, _> = proto.try_into();
         assert!(result.is_err());
     }
@@ -992,7 +952,8 @@ mod agent_error_tests {
 #[test]
 fn recorded_constructor_parameters_with_delimiters_round_trip() {
     use crate::model::account::{AccountEmail, AccountId};
-    use crate::model::agent::{AgentMetadata, AgentStatusRecord, Principal};
+    use crate::model::agent::{AgentMetadata, AgentStatusRecord};
+    use crate::model::caller::Caller;
     use crate::model::component::ComponentId;
     use crate::model::component_metadata::{ComponentMetadata, KnownExports};
     use crate::model::environment::EnvironmentId;
@@ -1032,7 +993,7 @@ fn recorded_constructor_parameters_with_delimiters_round_trip() {
         create_request: CreateRequest::new(
             CreateRequestKind::GetOrCreate,
             None,
-            Principal::anonymous(),
+            Caller::anonymous(),
             &InvocationContextStack::fresh_rounded(),
         ),
     };
@@ -1149,5 +1110,185 @@ fn storage_keys_round_trip_and_share_a_prefix_per_type() {
             None,
             "{not_a_key}"
         );
+    }
+}
+
+mod caller_protobuf_tests {
+    use crate::base_model::caller::test_support::{
+        every_principal, original_claims_json, sample_caller,
+    };
+    use crate::base_model::caller::{Caller, Pair, PrincipalRef, TokenProvenance};
+    use golem_api_grpc::proto::golem::component as proto;
+    use test_r::test;
+
+    #[test]
+    fn caller_protobuf_round_trips_every_kind() {
+        let mut callers = vec![sample_caller()];
+        for original in every_principal() {
+            for immediate in every_principal() {
+                callers.push(Caller {
+                    original: original.clone(),
+                    immediate,
+                    tokens: vec![
+                        TokenProvenance {
+                            id: uuid::Uuid::from_u128(1),
+                            maker: Some(PrincipalRef::new(Pair::new("https://i.example", "s"))),
+                        },
+                        TokenProvenance {
+                            id: uuid::Uuid::from_u128(2),
+                            maker: None,
+                        },
+                    ],
+                });
+            }
+        }
+        for caller in callers {
+            let wire: proto::Caller = caller.clone().into();
+            let bytes = prost::Message::encode_to_vec(&wire);
+            let wire: proto::Caller = prost::Message::decode(bytes.as_slice()).unwrap();
+            let back = Caller::try_from(wire).expect("decode");
+            assert_eq!(back, caller);
+        }
+    }
+
+    #[test]
+    fn caller_protobuf_keeps_the_claims_text_byte_for_byte() {
+        let caller = sample_caller();
+        let wire: proto::Caller = caller.clone().into();
+        let back = Caller::try_from(wire).unwrap();
+        assert_eq!(original_claims_json(&back), original_claims_json(&caller));
+    }
+
+    #[test]
+    fn caller_protobuf_writes_equal_roles_once() {
+        use crate::base_model::caller::test_support::{agent_principal, every_principal};
+
+        for principal in every_principal() {
+            let same: proto::Caller = Caller::entry(principal.clone()).into();
+            assert!(same.immediate.is_none(), "{principal:?}");
+            assert_eq!(Caller::try_from(same).unwrap(), Caller::entry(principal));
+        }
+
+        let different = Caller {
+            original: every_principal().remove(0),
+            immediate: agent_principal(),
+            tokens: vec![],
+        };
+        let wire: proto::Caller = different.clone().into();
+        assert!(wire.immediate.is_some());
+        assert_eq!(Caller::try_from(wire).unwrap(), different);
+
+        let spelled = proto::Caller {
+            original: Some(every_principal().remove(0).into()),
+            immediate: Some(every_principal().remove(0).into()),
+            tokens: vec![],
+        };
+        assert!(Caller::try_from(spelled).is_ok());
+    }
+
+    #[test]
+    fn caller_protobuf_refuses_a_token_without_an_id() {
+        let mut wire: proto::Caller = Caller {
+            tokens: vec![TokenProvenance {
+                id: uuid::Uuid::from_u128(1),
+                maker: None,
+            }],
+            ..sample_caller()
+        }
+        .into();
+        wire.tokens[0].id = None;
+        let error = Caller::try_from(wire).unwrap_err();
+        assert!(error.contains("id"), "{error}");
+    }
+
+    #[test]
+    fn caller_protobuf_refuses_malformed_callers() {
+        let valid: proto::Caller = sample_caller().into();
+
+        let mut without_original = valid.clone();
+        without_original.original = None;
+        assert!(Caller::try_from(without_original).is_err());
+
+        let mut without_immediate = valid.clone();
+        without_immediate.immediate = None;
+        let decoded = Caller::try_from(without_immediate).unwrap();
+        assert!(decoded.immediate.same_record(&decoded.original));
+
+        let mut bad_claims = valid.clone();
+        let Some(proto::principal::Value::User(user)) =
+            bad_claims.original.as_mut().and_then(|p| p.value.as_mut())
+        else {
+            panic!("the sample caller starts with a user");
+        };
+        user.claims = "[1,2]".to_string();
+        assert!(Caller::try_from(bad_claims).is_err());
+
+        let account = proto::Principal {
+            value: Some(proto::principal::Value::Account(proto::AccountPrincipal {
+                issuer: "https://golem.example".to_string(),
+                account_id: Some(golem_api_grpc::proto::golem::common::AccountId {
+                    value: Some(golem_schema::proto::golem::common::Uuid::from(
+                        uuid::Uuid::from_u128(5),
+                    )),
+                }),
+                authentication: proto::AccountAuthentication::Unspecified as i32,
+            })),
+        };
+        let unspecified = proto::Caller {
+            original: Some(account.clone()),
+            immediate: Some(account),
+            tokens: vec![],
+        };
+        assert!(Caller::try_from(unspecified).is_err());
+
+        let empty_principal = proto::Caller {
+            original: Some(proto::Principal { value: None }),
+            immediate: valid.immediate,
+            tokens: vec![],
+        };
+        assert!(Caller::try_from(empty_principal).is_err());
+    }
+}
+
+mod caller_authenticated_at_tests {
+    use crate::base_model::caller::Caller;
+    use crate::base_model::caller::test_support::sample_caller;
+    use golem_api_grpc::proto::golem::component as proto;
+    use test_r::test;
+
+    fn with_authenticated_at(seconds: i64, nanos: i32) -> proto::Caller {
+        let mut wire: proto::Caller = sample_caller().into();
+        let Some(proto::principal::Value::User(user)) = wire
+            .original
+            .as_mut()
+            .and_then(|principal| principal.value.as_mut())
+        else {
+            panic!("the sample caller starts with a user");
+        };
+        user.authenticated_at = Some(prost_types::Timestamp { seconds, nanos });
+        wire
+    }
+
+    #[test]
+    fn an_out_of_range_authenticated_at_is_refused_not_a_panic() {
+        for (seconds, nanos) in [
+            (-1, 0),
+            (0, -1),
+            (0, 1_000_000_000),
+            (i64::MAX, 0),
+            (253_402_300_800, 0),
+        ] {
+            let result = Caller::try_from(with_authenticated_at(seconds, nanos));
+            assert!(result.is_err(), "{seconds}/{nanos} decoded: {result:?}");
+        }
+        assert!(Caller::try_from(with_authenticated_at(253_402_300_799, 999_999_999)).is_ok());
+    }
+
+    #[test]
+    fn a_sub_millisecond_authenticated_at_survives_the_oplog_codec() {
+        let caller = Caller::try_from(with_authenticated_at(1_767_323_045, 678_123_456)).unwrap();
+        let bytes = desert_rust::serialize_to_byte_vec(&caller).unwrap();
+        let recorded: Caller = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(recorded, caller, "the recorded caller is another record");
     }
 }

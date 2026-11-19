@@ -25,6 +25,7 @@ use golem_common::model::AgentStatus;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_concurrent_agent_limit,
@@ -309,7 +310,6 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::agent::Principal;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::{OplogEntry, OplogIndex};
     use golem_service_base::error::worker_executor::InterruptKind;
@@ -354,7 +354,7 @@ async fn initial_wait_processes_interrupt_after_permit_grant(
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
             golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
             golem_worker_executor::worker::CreateIntent::Invocation {
                 owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),

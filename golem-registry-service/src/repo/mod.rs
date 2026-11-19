@@ -27,6 +27,7 @@ pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
 pub mod environment_tool_middleware_grant;
 pub mod http_api_deployment;
+pub mod installation;
 pub mod mcp_deployment;
 pub mod mcp_oauth;
 pub mod oauth2_token;

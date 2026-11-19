@@ -19,10 +19,10 @@ use super::{
 };
 use crate::worker::CreateIntent;
 use crate::worker::target::ResolvedTarget;
-use golem_common::base_model::agent::Principal;
 use golem_common::base_model::{AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
 use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
+use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -47,9 +47,8 @@ pub trait CanStartWorker {
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
     }
-    fn principal(&self) -> Principal {
-        Principal::anonymous()
-    }
+    /// The caller of the request. A request without one is refused.
+    fn caller(&self) -> Result<Caller, WorkerExecutorError>;
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         Ok(None)
     }
@@ -74,8 +73,10 @@ trait ProtobufInvocationDetails {
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
-    fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
-        &None
+    fn proto_caller(&self) -> &Option<golem_api_grpc::proto::golem::component::Caller>;
+    /// The decoded caller. A request without one is refused.
+    fn decoded_caller(&self) -> Result<Caller, WorkerExecutorError> {
+        super::extract_caller(self.proto_caller())
     }
     fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
         &[]
@@ -133,14 +134,8 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         })
     }
 
-    fn principal(&self) -> Principal {
-        self.proto_principal()
-            .as_ref()
-            .and_then(|p| {
-                let result: Result<Principal, String> = p.clone().try_into();
-                result.ok()
-            })
-            .unwrap_or_else(Principal::anonymous)
+    fn caller(&self) -> Result<Caller, WorkerExecutorError> {
+        self.decoded_caller()
     }
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
@@ -165,8 +160,8 @@ impl ProtobufInvocationDetails
         &None
     }
 
-    fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
-        &self.principal
+    fn proto_caller(&self) -> &Option<golem_api_grpc::proto::golem::component::Caller> {
+        &self.caller
     }
 }
 
@@ -187,8 +182,8 @@ impl ProtobufInvocationDetails
         &None
     }
 
-    fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
-        &self.principal
+    fn proto_caller(&self) -> &Option<golem_api_grpc::proto::golem::component::Caller> {
+        &self.caller
     }
 }
 
@@ -223,8 +218,8 @@ impl ProtobufInvocationDetails
         &None
     }
 
-    fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
-        &self.principal
+    fn proto_caller(&self) -> &Option<golem_api_grpc::proto::golem::component::Caller> {
+        &self.caller
     }
 }
 
@@ -264,8 +259,8 @@ impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::Invocat
         &self.context
     }
 
-    fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
-        &self.principal
+    fn proto_caller(&self) -> &Option<golem_api_grpc::proto::golem::component::Caller> {
+        &self.caller
     }
 
     fn proto_config(&self) -> &[golem_api_grpc::proto::golem::worker::AgentConfigEntryDto] {
@@ -302,6 +297,16 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &None
+    }
+
+    fn proto_caller(&self) -> &Option<golem_api_grpc::proto::golem::component::Caller> {
+        &None
+    }
+
+    /// A card transfer is delivered by the executor of the sending agent and carries no caller
+    /// field, so it is explicitly anonymous.
+    fn decoded_caller(&self) -> Result<Caller, WorkerExecutorError> {
+        Ok(Caller::anonymous())
     }
 }
 
@@ -381,10 +386,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn get_existing_for_management(
         &self,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
         operation: &str,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id, principal).await?;
+        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id, caller).await?;
         worker.ensure_component_agent_ingress(operation)?;
         if worker.answers_as_deleted().await {
             return Err(WorkerExecutorError::worker_not_found(
@@ -401,6 +406,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        // The caller is decoded first, so a missing caller always gives the same error.
+        request.caller()?;
         async {
             let resolved = self.resolve_request_target(request).await?;
             let owned_agent_id = resolved.owned_agent_id.clone();
@@ -436,7 +443,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
             let worker =
-                Worker::get_exact_existing_suspended(self, &owned_agent_id, request.principal())
+                Worker::get_exact_existing_suspended(self, &owned_agent_id, request.caller()?)
                     .await?;
             if !reserved {
                 Self::not_found_if_deleting(
@@ -476,7 +483,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let response = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
-                request.principal(),
+                request.caller()?,
                 expected_fingerprint,
             )
             .await?;
@@ -511,7 +518,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             request.parent(),
             &invocation_context,
-            request.principal(),
+            request.caller()?,
             InvocationFreshnessDisposition::MayExist,
             if creates {
                 resolved.invocation_intent(None)
@@ -547,7 +554,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
-                request.principal(),
+                request.caller()?,
                 Some(expected),
             )
             .await?;
@@ -618,7 +625,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             None,
             request.parent(),
             &invocation_context,
-            request.principal(),
+            request.caller()?,
             freshness_disposition,
             resolved.invocation_intent(request.idempotency_key()?),
         )

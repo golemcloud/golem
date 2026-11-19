@@ -545,6 +545,9 @@ async fn live_create<U: Send + 'static, Ctx: WorkerCtx>(
         )));
     }
     let interrupt = accessor.with(|mut access| access.get().create_interrupt_signal());
+    let rpc_caller = accessor.with(|mut access| {
+        golem_common::model::caller::Caller::entry(access.get().self_principal())
+    });
     let creation = rpc.create_and_initialize(
         target,
         true,
@@ -552,6 +555,7 @@ async fn live_create<U: Send + 'static, Ctx: WorkerCtx>(
         &caller,
         &env,
         stack,
+        &rpc_caller,
         config.clone(),
         &auth_ctx,
         call_key,

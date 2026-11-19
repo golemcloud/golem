@@ -595,8 +595,8 @@ async fn hostname_links_are_rebuilt_after_snapshot_recovery(
         .await?;
     crate::hot_update::wait_for_snapshot_after(&executor, &worker, before_close).await?;
 
-    // The recovery loads the snapshot, so it does not replay the lookup: only the rebuild from
-    // the history before the snapshot gives the connect its link.
+    // The recovery loads the snapshot, so it does not replay the lookup: only the links that
+    // the status record folded from the oplog give the connect its link.
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
     let mut events = executor.capture_output(&worker).await?;

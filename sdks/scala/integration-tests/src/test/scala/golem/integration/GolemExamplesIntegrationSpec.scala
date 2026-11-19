@@ -618,7 +618,7 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
       }
     ),
 
-    // --- Principal injection ---
+    // --- InvocationContext injection ---
     Sample(
       "principal",
       "samples/principal/principal.ts",

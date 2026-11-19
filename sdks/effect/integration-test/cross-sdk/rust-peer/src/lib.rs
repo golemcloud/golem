@@ -2,7 +2,7 @@ use effect_fixture_guest_client::{
     EffectFixture, Header, Items, TransformInRequest, TransformStreamInRequest,
     TransformStreamInRequestItems, new_transform_stream_in_request_items_stream,
 };
-use golem_rust::agentic::{DynamicToolClient, get_tool_type, spawn_local};
+use golem_rust::agentic::{DynamicToolClient, PrincipalRef, get_tool_type, spawn_local};
 use golem_rust::permissions;
 use golem_rust::schema::wit::GuestPermissionCardHandle;
 use golem_rust::{
@@ -16,6 +16,7 @@ use std::rc::Rc;
 #[derive(IntoSchema)]
 struct PrincipalPeerId {
     tenant: String,
+    owner: PrincipalRef,
 }
 
 #[derive(IntoSchema)]
@@ -92,6 +93,7 @@ impl RustPeer for RustPeerImpl {
     async fn principal_identity_round_trip(&self) -> String {
         let result: Result<String, GolemReflectError> = async {
             let tenant = format!("principal-rust-{}", self.name);
+            let owner = PrincipalRef::new("https://cross-sdk.example", "rust");
             let agent_type = get_agent_type("TsPrincipalPeer")?;
             let reflected = agent_type
                 .client()

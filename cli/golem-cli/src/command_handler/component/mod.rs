@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::{BuildContext, validated_to_anyhow};
+use crate::app::context::validated_to_anyhow;
 
-use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::Handlers;
@@ -28,7 +27,6 @@ use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::agent::{AgentActionError, AgentUpdateMode};
-use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
 use crate::model::cascade::property::Property;
@@ -1927,27 +1925,49 @@ impl ComponentCommandHandler {
     ) -> anyhow::Result<ComponentDeployProperties> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
+        let (metadata, agents) =
+            staging::extract_local_component(app_ctx, component_name, None).await?;
+        self.local_component_properties(app_ctx, component_name, metadata, &agents, true)
+    }
 
-        let extracted_metadata = extract_and_store_component_metadata(
-            &BuildContext::new(app_ctx, &BuildConfig::new()),
-            component_name,
-        )
-        .await?;
+    fn local_component_properties(
+        &self,
+        app_ctx: &crate::app::context::ApplicationContext,
+        component_name: &ComponentName,
+        extracted_metadata: golem_common::model::agent::extraction::ExtractedComponentMetadata,
+        resolved_agents: &crate::model::app::Agents,
+        deploy: bool,
+    ) -> anyhow::Result<ComponentDeployProperties> {
         let agent_types = extracted_metadata.agent_types;
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
         let wasm_path = component.wasm();
 
-        let mapping = agent_types
-            .iter()
-            .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
-            .collect::<BTreeMap<_, _>>();
-        let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
-
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
         let mut unused_config_by_agent = BTreeMap::<AgentTypeName, Vec<String>>::new();
+        let env = |values: &BTreeMap<String, String>| {
+            if deploy {
+                resolve_env_vars("component", component_name.as_str(), values)
+            } else {
+                Ok(values.clone())
+            }
+        };
+        let plugins = |values: &[app_raw::PluginInstallation]| {
+            if deploy {
+                resolve_plugin_parameters("component", component_name.as_str(), values)
+            } else {
+                Ok(values.to_vec())
+            }
+        };
+        let config = |agent: &AgentTypeName, entries| {
+            if deploy {
+                resolve_config_values(component_name, agent, entries)
+            } else {
+                Ok(entries)
+            }
+        };
 
         for agent_type in &agent_types {
             let Some(resolved_agent) = resolved_agents.agent(&agent_type.type_name) else {
@@ -1963,13 +1983,8 @@ impl ComponentCommandHandler {
             agent_type_configs.insert(
                 agent_type.type_name.clone(),
                 AgentTypeManifestProvisionConfig {
-                    env: resolve_env_vars(
-                        "component",
-                        component_name.as_str(),
-                        resolved_agent.env(),
-                    )?,
-                    config: resolve_config_values(
-                        component_name,
+                    env: env(resolved_agent.env())?,
+                    config: config(
                         &agent_type.type_name,
                         materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     )?,
@@ -1985,11 +2000,7 @@ impl ComponentCommandHandler {
                         })?,
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
-                    plugins: resolve_plugin_parameters(
-                        "component",
-                        component_name.as_str(),
-                        resolved_agent.plugins(),
-                    )?,
+                    plugins: plugins(resolved_agent.plugins())?,
                 },
             );
         }
@@ -2006,6 +2017,9 @@ impl ComponentCommandHandler {
                 );
             }
 
+            if !deploy {
+                bail!("Cannot pack with unused agent config keys");
+            }
             if !self
                 .ctx
                 .interactive_handler()
@@ -2018,8 +2032,7 @@ impl ComponentCommandHandler {
         Ok(ComponentDeployProperties {
             wasm_path,
             config_schema: component.config_schema().clone(),
-            component_config: resolve_config_values(
-                component_name,
+            component_config: config(
                 &AgentTypeName("component".to_string()),
                 materialize_config_entries(
                     &component.config_schema().declarations,
@@ -2034,11 +2047,9 @@ impl ComponentCommandHandler {
                 .with_context(|| {
                     format!("Invalid initialCard for component {}", component_name.0)
                 })?,
-            component_env: resolve_env_vars("component", component_name.as_str(), component.env())?,
+            component_env: env(component.env())?,
             component_files: component.files().clone(),
-            component_plugins: resolve_plugin_parameters(
-                "component",
-                component_name.as_str(),
+            component_plugins: plugins(
                 &component
                     .plugins()
                     .iter()

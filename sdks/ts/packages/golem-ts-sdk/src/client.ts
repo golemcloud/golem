@@ -44,7 +44,6 @@ import type {
   FullAgentClientShape,
   MethodOnlyAgentClientDefinition,
   FullAgentClientDefinition,
-  CallerInput,
   ConfigSpec,
   IdRecord,
   MethodsRecord,
@@ -78,7 +77,7 @@ type InferRecord<R extends Record<string, StandardSchemaV1>> = {
 /** The async remote signature for a durable method spec (no-arg when caller input is empty). */
 type DurableRemoteMethodFor<M> =
   M extends MethodSpec<infer Input, infer Output, boolean>
-    ? keyof CallerInput<Input> extends never
+    ? keyof Input extends never
       ? {
           (options?: RemoteCallOptions): Promise<Output>;
           /** Fire-and-forget; no result is awaited. */
@@ -87,10 +86,10 @@ type DurableRemoteMethodFor<M> =
           schedule(at: Datetime): CancellationToken;
         }
       : {
-          (input: InferRecord<CallerInput<Input>>, options?: RemoteCallOptions): Promise<Output>;
-          trigger(input: InferRecord<CallerInput<Input>>): void;
+          (input: InferRecord<Input>, options?: RemoteCallOptions): Promise<Output>;
+          trigger(input: InferRecord<Input>): void;
           /** Enqueue at `at`, returning a token to cancel it before it runs. */
-          schedule(at: Datetime, input: InferRecord<CallerInput<Input>>): CancellationToken;
+          schedule(at: Datetime, input: InferRecord<Input>): CancellationToken;
         }
     : never;
 
@@ -103,7 +102,7 @@ export interface EphemeralInvocationResult<T> {
 /** The async remote signature for an ephemeral method spec. */
 type EphemeralRemoteMethodFor<M> =
   M extends MethodSpec<infer Input, infer Output, boolean>
-    ? keyof CallerInput<Input> extends never
+    ? keyof Input extends never
       ? {
           (options?: RemoteCallOptions): Promise<EphemeralInvocationResult<Output>>;
           trigger(): InvocationMetadata;
@@ -111,14 +110,11 @@ type EphemeralRemoteMethodFor<M> =
         }
       : {
           (
-            input: InferRecord<CallerInput<Input>>,
+            input: InferRecord<Input>,
             options?: RemoteCallOptions,
           ): Promise<EphemeralInvocationResult<Output>>;
-          trigger(input: InferRecord<CallerInput<Input>>): InvocationMetadata;
-          schedule(
-            at: Datetime,
-            input: InferRecord<CallerInput<Input>>,
-          ): CancelableScheduledInvocationReceipt;
+          trigger(input: InferRecord<Input>): InvocationMetadata;
+          schedule(at: Datetime, input: InferRecord<Input>): CancelableScheduledInvocationReceipt;
         }
     : never;
 
@@ -225,14 +221,14 @@ export interface RemoteClientFactory<
    * Address the keyed agent of these constructor parameters, and create it when it is missing.
    * Host failures throw a {@link RemoteCallError}.
    */
-  upsert(id: InferRecord<CallerInput<Id>>, options?: RemoteClientOptions): RemoteClient<Methods>;
+  upsert(id: InferRecord<Id>, options?: RemoteClientOptions): RemoteClient<Methods>;
   /**
    * Create an agent, and resolve after its initialization. With `keyed`, it is the keyed agent of
    * these constructor parameters, and an existing one rejects with a `conflict`
    * {@link RemoteCallError}. Without `keyed`, each call creates a new agent with a new ID.
    */
   create(
-    id: InferRecord<CallerInput<Id>>,
+    id: InferRecord<Id>,
     options?: RemoteCreateOptions<Config>,
   ): Promise<RemoteClient<Methods>>;
   /**
@@ -249,7 +245,7 @@ export interface EphemeralRemoteClientFactory<Id extends IdRecord, Methods exten
    * invocation returns. Host failures throw a {@link RemoteCallError}.
    */
   upsert(
-    id: InferRecord<CallerInput<Id>>,
+    id: InferRecord<Id>,
     options?: RemoteClientOptions,
   ): RemoteClient<Methods, 'ephemeral'>;
 }
@@ -480,9 +476,10 @@ function encodeConfigOverrides(
 
 function compileRemoteMethods(methods: MethodsRecord): CompiledRemoteMethod[] {
   return Object.entries(methods).map(([name, spec]) => {
-    const inputCodecs: NamedCodec[] = Object.keys(spec.input)
-      .map((key) => ({ name: key, codec: compileSchema(spec.input[key]) }))
-      .filter((entry) => entry.codec.autoInjected !== 'principal');
+    const inputCodecs: NamedCodec[] = Object.keys(spec.input).map((key) => ({
+      name: key,
+      codec: compileSchema(spec.input[key]),
+    }));
     const returnCodec = compileSchema(spec.returns);
     return {
       name,
@@ -641,17 +638,18 @@ export function buildAgentClientSurface<
   client: FullAgentClientFactory<Id, Methods, Config, Mode>;
 } {
   // Compile the def's id + method codecs once (cached in this closure).
-  const idCodecs: NamedCodec[] = Object.keys(def.id)
-    .map((k) => ({ name: k, codec: compileSchema((def.id as Id)[k]) }))
-    .filter((nc) => nc.codec.autoInjected !== 'principal');
+  const idCodecs: NamedCodec[] = Object.keys(def.id).map((k) => ({
+    name: k,
+    codec: compileSchema((def.id as Id)[k]),
+  }));
   const methodCodecs = compileRemoteMethods(def.methods);
 
   const configDecls: ConfigDeclaration[] = compileConfig(def.config);
 
-  const encodeId = (id: InferRecord<CallerInput<Id>>) =>
+  const encodeId = (id: InferRecord<Id>) =>
     encodeRecord(idCodecs, id as Record<string, unknown>);
 
-  const upsert = (id: InferRecord<CallerInput<Id>>, options?: RemoteClientOptions) =>
+  const upsert = (id: InferRecord<Id>, options?: RemoteClientOptions) =>
     createRemoteClient<Methods, Mode>(
       methodCodecs,
       def.mode,

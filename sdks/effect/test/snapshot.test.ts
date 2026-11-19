@@ -27,9 +27,10 @@ import {
 } from "../src/internal/snapshotEnvelope.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
-import { Principal } from "../src/Principal.js"
+import { InvocationContext } from "../src/InvocationContext.js"
 import * as Ids from "../src/Ids.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
+import { userPrincipal } from "./callers.js"
 
 const anonymous = { tag: "anonymous" } as const
 const wire = (...fields: Array<SchemaValue>) => schemaValueToWit(v.record(fields))
@@ -40,10 +41,7 @@ const read = <A>(value: NonNullable<Awaited<ReturnType<typeof guest.invoke>>>): 
   }
   return decoded.value as A
 }
-const oidcBob = {
-  tag: "oidc",
-  val: { sub: "bob", issuer: "https://example.test", claims: "{}" },
-} as const
+const oidcBob = userPrincipal("bob")
 
 // ---------------------------------------------------------------------------
 // Auto-snapshot agent
@@ -219,8 +217,8 @@ const ConfigCustomAgent = defineAgent({
     restore: (bytes) =>
       Effect.gen(function* () {
         configCustomStore.loadCalls++
-        const principal = yield* Principal
-        expect(principal).toEqual(oidcBob)
+        const context = yield* InvocationContext
+        expect(context.caller.immediate.toString()).toBe(`user ("https://example.test","bob")`)
         // Read the config service from inside the load handler too.
         const cfg = yield* ConfigCustomCfg
         const prefix = yield* cfg.prefix
@@ -446,22 +444,8 @@ describe("snapshotting", () => {
       const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/json")
       const obj = JSON.parse(new TextDecoder().decode(snapshot.payload))
-      expect(obj.version).toBe(1)
-      expect(obj.principal).toEqual({
-        tag: "oidc",
-        val: {
-          sub: "bob",
-          issuer: "https://example.test",
-          email: null,
-          name: null,
-          emailVerified: null,
-          givenName: null,
-          familyName: null,
-          picture: null,
-          preferredUsername: null,
-          claims: "{}",
-        },
-      })
+      expect(obj.version).toBe(2)
+      expect(obj).not.toHaveProperty("principal")
       expect(obj.state).toEqual({
         count: 14,
         owner: "alice",
@@ -522,7 +506,7 @@ describe("snapshotting", () => {
 
     __setGetEnvironmentForTest([["GOLEM_AGENT_TYPE", "AutoSnapshotCounter"]])
 
-    const malformed = encodeJsonEnvelope(anonymous, {
+    const malformed = encodeJsonEnvelope({
       count: 1,
       owner: "alice",
       groups: { broken: { values: ["not-a-number"] } },

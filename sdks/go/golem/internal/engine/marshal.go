@@ -153,6 +153,17 @@ func (d *Decoder) ReleaseRest(release func(*types.PermissionCard)) {
 	ReleaseCardsIn(d.Nodes, release)
 }
 
+// HoldsStream reports whether an encoded value holds a stream, whose producer
+// runs after the call that returned it.
+func HoldsStream(nodes []types.SchemaValueNode) bool {
+	for _, n := range nodes {
+		if n.Tag() == types.SchemaValueNodeStreamValue {
+			return true
+		}
+	}
+	return false
+}
+
 // ReleaseCardsIn gives every permission card still in nodes back to the host
 // with release, and marks its node taken.
 func ReleaseCardsIn(nodes []types.SchemaValueNode, release func(*types.PermissionCard)) {

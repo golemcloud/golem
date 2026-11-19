@@ -6,16 +6,14 @@ pub async fn initialize(
   input : @types.SchemaValueTree,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[Unit, @common.AgentError] {
+  let context = @agents.InvocationContext::current()
+  defer context.end()
   if @agents.get_agent_instance() is Some(_) {
     @agents.panic_with_message(
       "initialize", "Agent instance is already initialized",
     )
   } else {
-    @agents.construct_and_set_instance(
-      agent_type,
-      input,
-      @invocationContext.caller().immediate,
-    )
+    @agents.construct_and_set_instance(agent_type, input, context)
   }
 }
 
@@ -26,16 +24,18 @@ pub async fn invoke(
   input : @types.SchemaValueTree,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@types.SchemaValueTree?, @common.AgentError] {
-  match @agents.get_agent_instance() {
+  let context = @agents.InvocationContext::current()
+  defer context.end()
+  let result = match @agents.get_agent_instance() {
     None =>
       @agents.panic_with_message("invoke", "Agent instance is not initialized")
-    Some(instance) =>
-      instance.interface.invoke(
-        method_name,
-        input,
-        @invocationContext.caller().immediate,
-      )
+    Some(instance) => instance.interface.invoke(method_name, input, context)
   }
+  // A result that holds a stream keeps the caller for its producer.
+  context.end(
+    returned_stream=result is Ok(Some(tree)) && @caller.holds_stream(tree),
+  )
+  result
 }
 
 ///|

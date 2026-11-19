@@ -16,7 +16,7 @@
 
 package golem.runtime.autowire
 
-import golem.{AgentId, Principal}
+import golem.{AgentId, InvocationContext}
 import golem.config.Config
 import golem.host.js.schema.{JsAgentError, JsAgentType, JsSchemaValueTree}
 import golem.runtime.{AgentMetadata, WireAgentMetadata}
@@ -65,7 +65,7 @@ final class AgentDefinition[Instance](
   val mode: AgentMode = AgentMode.Durable,
   val snapshotHandlers: Option[SnapshotHandlers[Instance]] = None,
   private[autowire] val restoreInstance: Option[
-    (SnapshotData, AgentId, JsSchemaValueTree, Principal) => js.Promise[RestoredInstance[Instance]]
+    (SnapshotData, AgentId, JsSchemaValueTree) => js.Promise[RestoredInstance[Instance]]
   ] = None
 ) {
 
@@ -85,14 +85,14 @@ final class AgentDefinition[Instance](
    * Initializes a new agent instance, returning as Any for type-erased
    * contexts.
    */
-  def initializeAny(input: JsSchemaValueTree, principal: Principal): js.Promise[Any] =
-    initialize(input, principal).asInstanceOf[js.Promise[Any]]
+  def initializeAny(input: JsSchemaValueTree, context: InvocationContext): js.Promise[Any] =
+    initialize(input, context).asInstanceOf[js.Promise[Any]]
 
   /**
    * Initializes a new agent instance from a constructor payload.
    */
-  def initialize(input: JsSchemaValueTree, principal: Principal): js.Promise[Instance] =
-    constructor.initialize(input, principal)
+  def initialize(input: JsSchemaValueTree, context: InvocationContext): js.Promise[Instance] =
+    constructor.initialize(input, context)
 
   /**
    * Restores a fresh instance in a type-erased runtime dispatch context.
@@ -102,12 +102,11 @@ final class AgentDefinition[Instance](
   def restoreAny(
     bytes: SnapshotData,
     agentId: AgentId,
-    constructorInput: JsSchemaValueTree,
-    principal: Principal
+    constructorInput: JsSchemaValueTree
   ): js.Promise[RestoredInstance[Any]] =
     restoreInstance match {
       case Some(restore) =>
-        restore(bytes, agentId, constructorInput, principal).asInstanceOf[js.Promise[RestoredInstance[Any]]]
+        restore(bytes, agentId, constructorInput).asInstanceOf[js.Promise[RestoredInstance[Any]]]
       case None => js.Promise.reject(new IllegalStateException(s"Agent '$typeName' has no snapshot handlers"))
     }
 
@@ -118,9 +117,9 @@ final class AgentDefinition[Instance](
     instance: Any,
     methodName: String,
     input: JsSchemaValueTree,
-    principal: Principal
+    context: InvocationContext
   ): js.Promise[Option[JsSchemaValueTree]] =
-    invoke(instance.asInstanceOf[Instance], methodName, input, principal)
+    invoke(instance.asInstanceOf[Instance], methodName, input, context)
 
   /**
    * Invokes a method on an agent instance.
@@ -129,11 +128,11 @@ final class AgentDefinition[Instance](
     instance: Instance,
     methodName: String,
     input: JsSchemaValueTree,
-    principal: Principal
+    context: InvocationContext
   ): js.Promise[Option[JsSchemaValueTree]] =
     methodsByName
       .get(methodName)
-      .map(_.invoke(instance, input, principal))
+      .map(_.invoke(instance, input, context))
       .getOrElse(js.Promise.reject(JsAgentError.invalidMethod(s"Unknown method: $methodName")))
 
   /**

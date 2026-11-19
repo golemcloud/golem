@@ -396,7 +396,7 @@ describe("capability-sensitive component exports", () => {
       v.binary(new Uint8Array([9, 255])),
       v.flags([true, false, true]),
       v.duration(1500000001n),
-      v.variant(2, v.record([v.record([v.uuid({ highBits: 17n, lowBits: 31n })])])),
+      v.record([v.string("https://example.test"), v.string("alice")]),
     ])
     expect(
       schemaValueFromWit(

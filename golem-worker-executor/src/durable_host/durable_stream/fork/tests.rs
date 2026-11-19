@@ -967,7 +967,9 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
     let pending = OplogEntry::pending_agent_invocation(
         None,
         identity.invocation.idempotency_key,
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        })),
         TraceId::generate(),
         vec![],
         vec![],

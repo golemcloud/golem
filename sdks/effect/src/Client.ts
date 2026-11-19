@@ -24,9 +24,8 @@ import {
 } from "./internal/rpc.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
 import {
-  compileCallerParamBindings,
+  compileParamBindings,
   compileMethodSpec,
-  type CallerInput,
   type CompiledInputCodec,
   type MethodCodec,
   type MethodParams,
@@ -79,7 +78,7 @@ export interface RemoteMethod<
   S extends MethodSuccess,
   E extends Schema.Top,
 > {
-  (input: CallerInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
+  (input: MethodInput<P>): Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
   /**
    * The awaited call with `card` attached as its scope card. The card is borrowed for the call
    * and stays usable; it replaces the client's default scope card. A released card fails the
@@ -87,11 +86,11 @@ export interface RemoteMethod<
    */
   readonly withScopeCard: (
     card: GuestScopeCard,
-  ) => (input: CallerInput<P>) => Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: CallerInput<P>) => Effect.Effect<void, RemoteCallError>
+  ) => (input: MethodInput<P>) => Effect.Effect<MethodSuccessType<S>, RemoteCallError | E["Type"]>
+  readonly trigger: (input: MethodInput<P>) => Effect.Effect<void, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ) => Effect.Effect<
     ScheduledInvocation,
     RemoteCallError | Datetime.DatetimeConversionError,
@@ -104,7 +103,7 @@ export interface EphemeralRemoteMethod<
   E extends Schema.Top,
 > {
   (
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ): Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
   /**
    * The awaited call with `card` attached as its scope card. The card is borrowed for the call
@@ -114,12 +113,12 @@ export interface EphemeralRemoteMethod<
   readonly withScopeCard: (
     card: GuestScopeCard,
   ) => (
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ) => Effect.Effect<EphemeralInvocationResult<MethodSuccessType<S>>, RemoteCallError | E["Type"]>
-  readonly trigger: (input: CallerInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
+  readonly trigger: (input: MethodInput<P>) => Effect.Effect<InvocationMetadata, RemoteCallError>
   readonly schedule: (
     at: Datetime.Input,
-    input: CallerInput<P>,
+    input: MethodInput<P>,
   ) => Effect.Effect<
     EphemeralScheduledInvocation,
     RemoteCallError | Datetime.DatetimeConversionError,
@@ -264,7 +263,7 @@ interface WireMethod {
 }
 
 interface CompiledClient<C extends MethodParams = MethodParams> {
-  readonly constructorCodec: CompiledInputCodec<C, CallerInput<C>>
+  readonly constructorCodec: CompiledInputCodec<C, MethodInput<C>>
   readonly methods: ReadonlyMap<string, WireMethod>
 }
 

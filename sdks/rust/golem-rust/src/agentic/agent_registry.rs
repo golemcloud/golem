@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agentic::EnrichedParameterSchema;
 use crate::agentic::extended_agent_type::ExtendedAgentType;
 use crate::agentic::identity::golem_env_var_not_readable;
-use crate::agentic::{EnrichedParameterSchema, Principal};
 use crate::{
     AgentId, Uuid,
     agentic::{ResolvedAgent, agent_initiator::AgentInitiator},
@@ -103,7 +103,6 @@ pub fn get_state() -> &'static State {
 #[derive(Default)]
 pub struct AgentInstance {
     pub resolved_agent: Option<Rc<ResolvedAgent>>,
-    pub principal: Option<Principal>,
 }
 
 #[derive(Default)]
@@ -149,12 +148,6 @@ pub fn has_registered_agent_type(agent_type_name: &AgentTypeName) -> bool {
         .contains_key(agent_type_name)
 }
 
-pub fn get_principal() -> Option<Principal> {
-    let state = get_state();
-
-    state.agent_instance.borrow().principal.clone()
-}
-
 pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {
     register_agent_type_descriptor(
         agent_type_name,
@@ -196,11 +189,10 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
         .insert(agent_type_name, initiator);
 }
 
-pub fn register_initialized_agent(principal: Principal, resolved_agent: ResolvedAgent) {
+pub fn register_initialized_agent(resolved_agent: ResolvedAgent) {
     let state = get_state();
     *state.agent_instance.borrow_mut() = AgentInstance {
         resolved_agent: Some(Rc::new(resolved_agent)),
-        principal: Some(principal),
     };
 }
 

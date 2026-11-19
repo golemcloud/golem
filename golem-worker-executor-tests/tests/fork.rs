@@ -20,8 +20,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
-    AgentInvocationMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
+    AgentInvocationMode, AgentTypeName, InvocationFreshnessDisposition,
 };
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
@@ -46,6 +47,7 @@ use golem_worker_executor::services::rpc::{
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::target::ResolvedTarget;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
     start_with_overrides,
@@ -129,7 +131,7 @@ pub(crate) async fn fork_worker_to(
             component_owner_account_id: Some(executor.context.account_id.into()),
             component_owner_account_email: "test@golem".to_string(),
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             expected_fingerprint: None,
         })
         .await?
@@ -268,6 +270,7 @@ impl Rpc for StreamingRemoteRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -281,6 +284,7 @@ impl Rpc for StreamingRemoteRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -330,6 +334,7 @@ impl Rpc for StreamingRemoteRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         key: Option<IdempotencyKey>,
@@ -337,7 +342,17 @@ impl Rpc for StreamingRemoteRpc {
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
             .create_demand(
-                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+                agent,
+                method,
+                created_by,
+                caller,
+                env,
+                stack,
+                callee_caller,
+                config,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
@@ -354,6 +369,7 @@ impl Rpc for StreamingRemoteRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
@@ -370,6 +386,7 @@ impl Rpc for StreamingRemoteRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 card,
@@ -392,6 +409,7 @@ impl Rpc for StreamingRemoteRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
@@ -411,6 +429,7 @@ impl Rpc for StreamingRemoteRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 card,
@@ -448,6 +467,7 @@ impl Rpc for StreamingRemoteRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -463,6 +483,7 @@ impl Rpc for StreamingRemoteRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
             )
@@ -513,7 +534,7 @@ impl WorkerProxy for LocalResumeProxy {
         env: HashMap<String, String>,
         stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        request_caller: golem_common::model::caller::Caller,
         auth: &AuthCtx,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
@@ -547,7 +568,7 @@ impl WorkerProxy for LocalResumeProxy {
                     environment_id: Some(agent.owned_agent_id.environment_id.into()),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth.clone().into()),
-                    principal: Some(principal.into()),
+                    caller: Some(request_caller.into()),
                     invocation_context: Some(
                         golem_api_grpc::proto::golem::worker::InvocationContext {
                             parent: Some((*caller).into()),
@@ -591,7 +612,16 @@ impl WorkerProxy for LocalResumeProxy {
         }
         self.inner
             .prepare(
-                agent, method, caller, env, stack, config, principal, auth, key, freshness,
+                agent,
+                method,
+                caller,
+                env,
+                stack,
+                config,
+                request_caller,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
@@ -614,7 +644,7 @@ impl WorkerProxy for LocalResumeProxy {
                 environment_id: Some(owned_agent_id.environment_id.into()),
                 force: Some(force),
                 auth_ctx: Some(auth_ctx.clone().into()),
-                principal: None,
+                caller: Some(callers::anonymous().into()),
                 expected_fingerprint: None,
             })
             .await?
@@ -653,7 +683,7 @@ impl WorkerProxy for LocalResumeProxy {
         env: HashMap<String, String>,
         stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        request_caller: golem_common::model::caller::Caller,
         auth: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
@@ -665,7 +695,7 @@ impl WorkerProxy for LocalResumeProxy {
                 env,
                 stack,
                 config,
-                principal,
+                request_caller,
                 auth,
                 idempotency_key,
             )
@@ -686,7 +716,7 @@ impl WorkerProxy for LocalResumeProxy {
         env: HashMap<String, String>,
         stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        request_caller: golem_common::model::caller::Caller,
         environment: EnvironmentId,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
@@ -705,7 +735,7 @@ impl WorkerProxy for LocalResumeProxy {
                 env,
                 stack,
                 config,
-                principal,
+                request_caller,
                 environment,
                 auth,
                 card,
@@ -837,11 +867,11 @@ impl WorkerProxy for LocalResumeProxy {
         source: &OwnedAgentId,
         target: &AgentId,
         cut: &OplogIndex,
-        principal: Principal,
+        caller: golem_common::model::caller::Caller,
         auth: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
-            .fork_worker(source, target, cut, principal, auth)
+            .fork_worker(source, target, cut, caller, auth)
             .await
     }
 
@@ -1003,6 +1033,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
             method_name: Some("echo".into()),
             input: Some(input),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         }),
     };
@@ -1210,6 +1241,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         max_forks_per_session: 1,
         max_forks_per_second: 100,
         max_copied_bytes: 64 * 1024 * 1024,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut too_large = request.clone();
@@ -1647,6 +1679,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -1681,6 +1714,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         max_forks_per_session: 1,
         max_forks_per_second: 100,
         max_copied_bytes: 64 * 1024 * 1024,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let new_target = || anyhow::Ok(fresh_fork_target(&source).agent_id);
@@ -1740,6 +1774,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             idempotency_key: Some(IdempotencyKey::new(expired_session.clone()).into()),
             method_name: Some("echo".into()),
             input: Some(input),
+            caller: Some(callers::anonymous().into()),
             ..Default::default()
         }),
     };
@@ -1858,6 +1893,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                 idempotency_key: Some(IdempotencyKey::new(restart_session).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -1972,6 +2008,7 @@ async fn stream_slot_reads_after_reload_with_archived_oplog_prefix(
                 idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2165,6 +2202,7 @@ async fn sliding_expiry_refreshes_are_coalesced(
                 idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2427,11 +2465,15 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
         golem_common::model::oplog::CreateRequestKind::Fork
     );
     assert_eq!(child_requests[0].idempotency_key, None);
+    let source_fingerprint = executor.get_worker_metadata(&source_id).await?.fingerprint;
     assert_eq!(
-        child_requests[0].principal,
-        Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: source_id.agent_id,
-        }),
+        child_requests[0].caller,
+        callers::agent_in(
+            source_id.agent_id,
+            source.agent_type.clone(),
+            source_fingerprint,
+            source_id.environment_id
+        ),
         "the child records the forking agent, not the request that created the source"
     );
     let result = executor
@@ -2587,6 +2629,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
                 idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
                 method_name: Some("echo".into()),
                 input: Some(input),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             }),
         })
@@ -2609,6 +2652,7 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         max_forks_per_session: 1,
         max_forks_per_second: 100,
         max_copied_bytes: 64 * 1024 * 1024,
+        caller: Some(callers::anonymous().into()),
         ..Default::default()
     };
     let mut too_large = request.clone();

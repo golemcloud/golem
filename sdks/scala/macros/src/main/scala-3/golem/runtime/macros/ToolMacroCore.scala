@@ -24,7 +24,7 @@ import scala.quoted.*
 /**
  * Compile-time parsing and classification shared by the tool macros: reads a
  * `@toolDefinition` trait into an IR, classifies every method parameter into
- * its command surface (global/option/flag/positional/tail/stream/principal),
+ * its command surface (global/option/flag/positional/tail/stream/context),
  * infers the tail positional and its re-projection plan, and validates the
  * authoring surface with the same rules as the Rust SDK's `#[tool_definition]`
  * macro.
@@ -47,7 +47,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   private val ValueIsFQN                 = "golem.runtime.annotations.ValueIs"
   private val ImpliesFQN                 = "golem.runtime.annotations.Implies"
   private val ForbidsFQN                 = "golem.runtime.annotations.Forbids"
-  private val PrincipalFQN               = "golem.Principal"
+  private val InvocationContextFQN       = "golem.InvocationContext"
   private val StdinFQN                   = "golem.tool.ToolInputStream"
   private val StdoutFQN                  = "golem.tool.ToolOutputStream"
 
@@ -669,8 +669,8 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   // Type helpers
   // -------------------------------------------------------------------------
 
-  def isPrincipal(tpe: TypeRepr): Boolean =
-    tpe.dealias.typeSymbol.fullName == PrincipalFQN
+  def isInvocationContext(tpe: TypeRepr): Boolean =
+    tpe.dealias.typeSymbol.fullName == InvocationContextFQN
 
   def isStdin(tpe: TypeRepr): Boolean =
     tpe.dealias.typeSymbol.fullName == StdinFQN
@@ -990,6 +990,9 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     val paramsWithArgs = params.map(p => p.copy(arg = bound.get(p.name)))
 
     val shape = returnShape(defdef.returnTpt.tpe)
+    // Rule 8: a Principal, a Caller and a TokenProvenance are live values, never data.
+    paramsWithArgs.foreach(p => LiveValueCheck.reject(s"Parameter '${p.name}' of tool method '${sym.name}'", p.tpe))
+    LiveValueCheck.reject(s"Result of tool method '${sym.name}'", defdef.returnTpt.tpe)
 
     val subtreeTrait =
       if (isToolDefinitionTrait(shape.raw)) Some(shape.raw.dealias) else None
@@ -1079,7 +1082,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
   sealed trait ParamBindingIR
   object ParamBindingIR {
     final case class Field(canonicalName: String, tpe: TypeRepr, countFlag: Boolean = false) extends ParamBindingIR
-    case object PrincipalB                                                                   extends ParamBindingIR
+    case object InvocationContextB                                                           extends ParamBindingIR
     case object StdinB                                                                       extends ParamBindingIR
     case object StdoutB                                                                      extends ParamBindingIR
     case object StderrB                                                                      extends ParamBindingIR
@@ -1153,7 +1156,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
 
     // ---- tail inference indices ------------------------------------------
     def positionalEligible(p: ParamIR): Boolean =
-      if (isPrincipal(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe)) false
+      if (isInvocationContext(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe)) false
       else {
         val a     = p.arg
         val scope = a.flatMap(_.scope)
@@ -1269,14 +1272,14 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     m.params.zipWithIndex.foreach { case (p, idx) =>
       val a = p.arg
 
-      if (isPrincipal(p.tpe)) {
+      if (isInvocationContext(p.tpe)) {
         if (a.isDefined)
           perr(
-            "auto-injected Principal parameters cannot have @arg annotations because they are not " +
+            "auto-injected InvocationContext parameters cannot have @arg annotations because they are not " +
               "part of the tool input schema",
             p
           )
-        bindings :+= ParamBindingIR.PrincipalB
+        bindings :+= ParamBindingIR.InvocationContextB
       } else if (isStdin(p.tpe) || isStdout(p.tpe)) {
         a.foreach { arg =>
           if (arg.scope.isDefined)
@@ -1728,7 +1731,7 @@ private[macros] class ToolMacroCore(using val q: Quotes) {
     // Classify as an isolated global-only command; anything that does not
     // project to a global option/flag is rejected.
     val globalized = m.copy(params = m.params.map { p =>
-      if (isPrincipal(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe))
+      if (isInvocationContext(p.tpe) || isStdin(p.tpe) || isStdout(p.tpe))
         report.errorAndAbort(
           "a subtree method parameter must project to a global option or flag",
           p.sym.pos.getOrElse(pos)

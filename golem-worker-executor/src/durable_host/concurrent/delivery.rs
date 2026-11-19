@@ -747,7 +747,7 @@ impl CompletionDelivery {
         T: 'static,
         D: HasData + ?Sized,
     {
-        self.deliver_at_accessor_terminal_with_delivered(store, Box::new(|| {}))
+        self.deliver_at_accessor_terminal_with_delivered(store, Box::new(|_| {}))
             .await
     }
 
@@ -791,8 +791,9 @@ impl CompletionDelivery {
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
         );
         if !self.is_live_armed() && !replay_barrier {
+            let recorded = matches!(self.state, CompletionDeliveryState::Unarmed);
             self.delivered();
-            on_delivered();
+            on_delivered(Delivery { recorded });
             return Ok(());
         }
         let guard = AccessorDeliveryGuard {
@@ -1034,7 +1035,16 @@ pub(super) struct AccessorDeliveryGuard {
 
 /// A hook that runs when the guest receives a completion; see
 /// [`CompletionDelivery::deliver_at_accessor_terminal_with_delivered`].
-pub(crate) type OnDelivered = Box<dyn FnOnce() + Send>;
+pub(crate) type OnDelivered = Box<dyn FnOnce(Delivery) + Send>;
+
+/// How a completion that an [`OnDelivered`] hook observes reached the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Delivery {
+    /// The delivery is live: the token recorded its `CompletionDelivered` marker now, or the
+    /// call is live and unpersisted. It is unset for a delivery that replay reproduces at a
+    /// recorded marker or for a recorded partial result.
+    pub(crate) recorded: bool,
+}
 
 impl AccessorDeliveryGuard {
     pub(super) fn consume(mut self, consumption: TerminalConsumption) {
@@ -1046,9 +1056,10 @@ impl AccessorDeliveryGuard {
             // Queue the successful delivery marker immediately before Wasmtime enters the guest
             // callback (or after wait/poll/sync lowering handed the result to the guest).
             TerminalConsumption::Delivered => {
+                let recorded = delivery.is_live_armed();
                 delivery.delivered();
                 if let Some(callback) = self.on_delivered.take() {
-                    callback();
+                    callback(Delivery { recorded });
                 }
             }
             // The guest consumed the pending terminal without observing the persisted

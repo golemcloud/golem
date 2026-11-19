@@ -16,6 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::routing::post;
 use golem_common::model::AgentStatus;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -29,6 +30,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tracing::Instrument;
 
 use super::manifest_http_5xx_retry_policy;
@@ -101,8 +103,8 @@ struct ChaosState {
     email: EndpointChaos,
 }
 
-/// Per-endpoint count of *successful* (chaos-passed, body-consumed,
-/// 200-responded) calls, mirroring the original node.js chaos-backend's
+/// Per-endpoint count of applied effects (chaos-passed, body-consumed
+/// calls), mirroring the original node.js chaos-backend's
 /// `log[name]` length used by the tests' assertions.
 #[derive(Default)]
 struct LogState {
@@ -120,6 +122,12 @@ struct ChaosInner {
     attempts: Arc<AttemptCounts>,
     chaos: Arc<Mutex<ChaosState>>,
     log: Arc<Mutex<LogState>>,
+    email_response_gate: Arc<Mutex<Option<EmailResponseGate>>>,
+}
+
+struct EmailResponseGate {
+    arrived: oneshot::Sender<()>,
+    release: oneshot::Receiver<()>,
 }
 
 impl ChaosInner {
@@ -180,6 +188,18 @@ impl Drop for ServerShutdown {
 }
 
 impl ChaosBackend {
+    /// Withhold the next email response after applying its effect. Later
+    /// requests remain ungated, including recovery of the ambiguous HTTP call.
+    fn hold_email_response(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (arrived_tx, arrived_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *self.inner.email_response_gate.lock().unwrap() = Some(EmailResponseGate {
+            arrived: arrived_tx,
+            release: release_rx,
+        });
+        (arrived_rx, release_tx)
+    }
+
     fn attempts_snapshot(&self) -> (usize, usize, usize, usize) {
         let a = &self.inner.attempts;
         (
@@ -221,9 +241,9 @@ impl ChaosBackend {
         *self.inner.chaos.lock().unwrap() = ChaosState::default();
     }
 
-    /// Returns `(inventory, payment, shipment, email)` *successful* call
+    /// Returns `(inventory, payment, shipment, email)` applied-effect
     /// counts as observed by the chaos-backend (chaos-passed, body
-    /// consumed, 200 responded). For total wire-level attempt counts
+    /// consumed, response possibly withheld). For total wire-level attempt counts
     /// (including hung/failed requests) use `attempts_snapshot`.
     async fn snapshot(&self) -> (usize, usize, usize, usize) {
         let g = self.inner.log.lock().unwrap();
@@ -329,6 +349,14 @@ async fn business_handler(
         }
     };
 
+    if matches!(ep, Endpoint::Email) {
+        let gate = state.email_response_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            let _ = gate.arrived.send(());
+            let _ = gate.release.await;
+        }
+    }
+
     axum::response::Response::builder()
         .status(200)
         .header("content-type", "application/json")
@@ -360,6 +388,7 @@ async fn start_chaos_backend() -> (u16, ChaosBackend) {
         attempts: Arc::new(AttemptCounts::default()),
         chaos: Arc::new(Mutex::new(ChaosState::default())),
         log: Arc::new(Mutex::new(LogState::default())),
+        email_response_gate: Arc::new(Mutex::new(None)),
     };
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -693,18 +722,12 @@ async fn ts_v2_s2_shipment_hangs_then_reset(
 /// ---------------------------------------------------------------------------
 /// Scenario 3 — process crash mid-workflow.
 ///
-/// Mirrors `~/projects/craft/golem/scripts/s3-process-crash.sh`:
-///   1. Set `/email/send` `latencyMs = 15000` so the agent is still in the
-///      middle of the email POST when we crash it.
-///   2. Trigger `CheckoutAgentV2.checkout`.
-///   3. Wait 5 seconds (so inventory/payment/shipment have completed).
-///   4. `simulated_crash` to abruptly kill the worker.
-///   5. Reset chaos so the email step does not re-wait 15 seconds on replay.
-///   6. Wait for the agent to reach `Idle`.
-///   7. Assert each endpoint was called live exactly once — Golem replays
-///      the oplog, so /inventory, /payment, /shipment must NOT be re-issued,
-///      and the user's observed "thousands of /email calls" replay loop
-///      must not occur.
+/// Hold the email response after the peer applies the effect. Arrival of
+/// this sequential request proves inventory/payment/shipment completed.
+/// Crash with the response still withheld, then release it and verify
+/// recovery without repeating the completed prefix. Recovery sends the
+/// interrupted email request once more, and this peer applies it again
+/// because it does not deduplicate requests.
 /// ---------------------------------------------------------------------------
 #[test]
 #[tracing::instrument]
@@ -730,37 +753,47 @@ async fn ts_v2_s3_process_crash_mid_workflow(
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
 
-    // 15s artificial latency on /email/send so the agent is still in the
-    // middle of the email POST when we crash.
-    backend
-        .set_email(EndpointChaos {
-            latency_ms: 15_000,
-            ..Default::default()
-        })
-        .await;
+    let (email_arrived, release_email) = backend.hold_email_response();
+    let invocation_key = golem_common::model::IdempotencyKey::fresh();
 
     // Fire-and-forget: invoke the checkout, then crash the worker mid-flight.
     executor
-        .invoke_agent(
+        .invoke_agent_with_key(
             &component,
             &agent_id,
+            &invocation_key,
             "checkout",
             checkout_args("127.0.0.1", port),
         )
         .await?;
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let (inv_pre, pay_pre, ship_pre, mail_pre) = backend.snapshot().await;
-    eprintln!(
-        "S3 pre-crash counts: inventory={inv_pre} payment={pay_pre} shipment={ship_pre} email={mail_pre}"
+    tokio::time::timeout(Duration::from_secs(30), email_arrived).await??;
+    assert_eq!(
+        backend.snapshot().await,
+        (1, 1, 1, 1),
+        "S3: the peer applied all effects, but the email response is still withheld"
+    );
+    assert_eq!(
+        backend.attempts_snapshot(),
+        (1, 1, 1, 1),
+        "S3: crash only after the three completed steps and the first pending email request"
+    );
+    let pending_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !pending_oplog.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::AgentInvocationFinished(params)
+                if params.method_name.as_deref() == Some("checkout")
+        )),
+        "S3: checkout must still be pending while the email response is held"
     );
 
     tracing::info!("S3: simulating crash mid-workflow");
-    executor.simulated_crash(&worker_id).await?;
-
-    // Reset chaos so the email step does not re-wait 15 seconds on replay.
-    backend.reset().await;
+    let crash_result = executor.simulated_crash(&worker_id).await;
+    // Release even on a failed crash, and tolerate the old connection being
+    // gone. Recovery requests are not held by this one-shot peer gate.
+    let _ = release_email.send(());
+    crash_result?;
 
     // Wait for the agent to settle.
     let metadata = executor
@@ -798,18 +831,68 @@ async fn ts_v2_s3_process_crash_mid_workflow(
         "S3: /shipment must NOT be re-executed after crash, observed {ship}"
     );
     assert_eq!(
-        mail, 1,
-        "S3: /email must succeed exactly once after replay (no tight retry loop), observed {mail}"
+        (inv_a, pay_a, ship_a),
+        (1, 1, 1),
+        "S3: completed prefix must not even be requested again"
+    );
+    // The crash drops the held email request, and recovery repairs it with
+    // exactly one new request. A single attempt means the crash interrupted
+    // nothing; more attempts mean recovery repeats the in-flight request.
+    assert_eq!(
+        (mail, mail_a),
+        (2, 2),
+        "S3: recovery must re-issue the interrupted email exactly once"
     );
 
-    // Hard upper bound on /email attempts: the user observed thousands
-    // of in-flight POSTs to /email after a mid-call crash because every
-    // replay re-issued the in-flight request. With the bug fixed, the
-    // total /email attempt count must stay bounded.
+    let recovered = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &invocation_key,
+            "checkout",
+            checkout_args("127.0.0.1", port),
+        )
+        .await?
+        .into_typed::<bool>()?;
     assert!(
-        mail_a <= 32,
-        "S3: /email attempt count must be bounded (tight retry loop bug), observed {mail_a}"
+        recovered,
+        "S3: the interrupted checkout must return success"
     );
+    assert_eq!(backend.snapshot().await, (inv, pay, ship, mail));
+    let recovered_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        recovered_oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(params)
+                    if params.method_name.as_deref() == Some("checkout")
+            ))
+            .count(),
+        1,
+        "S3: recovery must finish the interrupted checkout exactly once"
+    );
+    assert!(
+        recovered_oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Jump(_)))
+    );
+
+    let next = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "checkout",
+            checkout_args("127.0.0.1", port),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        next,
+        "S3: a fresh checkout must make progress after recovery"
+    );
+    assert_eq!(backend.snapshot().await, (2, 2, 2, mail + 1));
+    assert_eq!(backend.attempts_snapshot(), (2, 2, 2, mail_a + 1));
 
     Ok(())
 }

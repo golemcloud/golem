@@ -1,6 +1,6 @@
 package toolstreaming
 
-import golem.{HostApi, Principal, UInt}
+import golem.{HostApi, InvocationContext, UInt}
 import golem.runtime.annotations.*
 import zio.blocks.schema.Schema
 
@@ -47,7 +47,7 @@ trait MatrixArtifactTool {
   def inspect(
     request: MatrixRequest,
     multiplier: Long,
-    principal: Principal
+    context: InvocationContext
   ): Either[MatrixError, MatrixResult]
 }
 
@@ -60,7 +60,7 @@ final class MatrixArtifactToolImpl extends MatrixArtifactTool {
   override def inspect(
     request: MatrixRequest,
     multiplier: Long,
-    principal: Principal
+    context: InvocationContext
   ): Either[MatrixError, MatrixResult] =
     if (request.source == "reject.me")
       Left(

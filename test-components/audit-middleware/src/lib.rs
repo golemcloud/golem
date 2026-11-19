@@ -7,8 +7,8 @@ use futures_concurrency::prelude::*;
 use golem_rust::agentic::get_agent_id;
 use golem_rust::schema::{FromSchema, IntoSchema};
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
-    ToolInvokeError, UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, PrincipalKind,
+    RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{TypedSchemaValue, universal_tool_middleware};
 use model::{
@@ -38,13 +38,13 @@ async fn audit(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    principal: Principal,
+    context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let policy_invocation_key = golem_rust::generate_idempotency_key().to_string();
     let input_summary = summarize_value(input.value());
     let owner = owner_summary();
-    let principal = principal_summary(principal);
+    let principal = principal_summary(context.caller().immediate());
     let (result, stdout, stderr) = invoke_and_summarize(
         underlying,
         command_path.clone(),

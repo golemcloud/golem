@@ -34,6 +34,7 @@ import * as http from '../src/http';
 import { webRequest, webResponse, withRawHeaders } from '../src/httpRouterWeb';
 import { createServer, Server, ServerResponse, nodeHttpHandler } from '../src/nodeHttp';
 import { selectSelfAgent } from './selfAgentTestSupport';
+import { anonymousContext } from './callerTestSupport';
 
 const corpus = JSON.parse(
   readFileSync(
@@ -214,7 +215,7 @@ it('rejects ephemeral, duplicate-capture, and principal-dependent file identitie
   for (const [name, mode, id, path] of [
     ['FilesEphemeral', 'ephemeral', {}, '/files'],
     ['FilesDuplicate', 'durable', { id: z.string() }, '/{id}/{id}'],
-    ['FilesPrincipal', 'durable', { who: s.principal() }, '/{who}'],
+    ['FilesPrincipal', 'durable', { who: s.principalRef() }, '/{who}'],
     ['FilesObject', 'durable', { id: z.object({ key: z.string() }) }, '/{id}'],
     ['FilesList', 'durable', { id: z.array(z.string()) }, '/{id}'],
     ['FilesOptional', 'durable', { id: z.string().optional() }, '/{id}'],
@@ -417,7 +418,7 @@ it.each([
     const input = await schemaValueToWitAsync(
       v.record([compileSchema(httpRequestSchema).toValue(raw(AgentStream.from([]), method))]),
     );
-    const result = await initiated.val.invoke('handle', input, { tag: 'anonymous' });
+    const result = await initiated.val.invoke('handle', input, anonymousContext);
     expect(result.tag).toBe('ok');
     expect(pull).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
@@ -505,7 +506,7 @@ it.each(['header', 'status'] as const)(
     const input = await schemaValueToWitAsync(
       v.record([compileSchema(httpRequestSchema).toValue(raw(AgentStream.from([])))]),
     );
-    const result = await initiated.val.invoke('handle', input, { tag: 'anonymous' });
+    const result = await initiated.val.invoke('handle', input, anonymousContext);
     expect(result.tag).toBe('err');
     expect(JSON.stringify(result)).toContain(`invalid-${invalid}`);
     expect(JSON.stringify(result)).not.toContain('secondary cleanup error');
@@ -543,7 +544,7 @@ it('invalid Web headers dispose the unpolled output and input, preserving the he
   const input = await schemaValueToWitAsync(
     v.record([compileSchema(httpRequestSchema).toValue(raw(inputBody))]),
   );
-  const result = await initiated.val.invoke('handle', input, { tag: 'anonymous' });
+  const result = await initiated.val.invoke('handle', input, anonymousContext);
   expect(result.tag).toBe('err');
   expect(JSON.stringify(result)).toContain('invalid-header');
   expect(JSON.stringify(result)).not.toContain('secondary cancellation');
@@ -1235,7 +1236,7 @@ it('invalid raw header override disposes the Web response body', async () => {
   const input = await schemaValueToWitAsync(
     v.record([compileSchema(httpRequestSchema).toValue(raw(inputBody))]),
   );
-  const result = await initiated.val.invoke('handle', input, { tag: 'anonymous' });
+  const result = await initiated.val.invoke('handle', input, anonymousContext);
   expect(result.tag).toBe('err');
   expect(JSON.stringify(result)).toContain('invalid-header');
   expect(pull).not.toHaveBeenCalled();

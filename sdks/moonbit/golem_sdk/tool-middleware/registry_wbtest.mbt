@@ -209,7 +209,10 @@ test "guest boundary preserves raw values and buffered output across final trans
       "runtime-metadata",
     )
     assert_eq(invocation.command_path(), ["nested", "run"])
-    assert_true(invocation.principal() is @agentCommon.Principal::Anonymous)
+    assert_true(
+      invocation.invocation_context().caller().original.kind() ==
+      @caller.PrincipalKind::Anonymous,
+    )
     match
       underlying.start_raw(
         invocation.command_path(),
@@ -249,7 +252,7 @@ test "guest boundary preserves raw values and buffered output across final trans
           ["nested", "run"],
           registry_raw_secret(701),
           Some(registry_counted_stream(stdin_drops)),
-          @agentCommon.Principal::Anonymous,
+          @caller.InvocationContext::anonymous(),
           underlying,
         ) {
         Ok(result) => final_result.val = Some(result)
@@ -310,7 +313,7 @@ test "universal middleware short-circuits without invoking and cleans raw input"
         [],
         registry_raw_secret(705),
         Some(registry_counted_stream(stdin_drops)),
-        @agentCommon.Principal::Anonymous,
+        @caller.InvocationContext::anonymous(),
         underlying,
       )
       assert_true(result is Ok({ result: None, stdout: None, stderr: None, }))
@@ -371,7 +374,7 @@ test "universal middleware can retry the underlying capability sequentially" {
           @schema.try_into_typed_schema_value(()),
         ),
         None,
-        @agentCommon.Principal::Anonymous,
+        @caller.InvocationContext::anonymous(),
         underlying,
       )
       assert_true(result is Ok({ result: None, stdout: None, stderr: None, }))
@@ -407,7 +410,7 @@ test "guest boundary cleans uninvoked input stdin and underlying on lookup failu
         [],
         registry_raw_secret(702),
         Some(registry_counted_stream(stdin_drops)),
-        @agentCommon.Principal::Anonymous,
+        @caller.InvocationContext::anonymous(),
         underlying,
       )
       assert_true(result is Err(@types.ToolError::InvalidToolName("missing")))
@@ -456,7 +459,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
           @schema.try_into_typed_schema_value(()),
         ),
         None,
-        @agentCommon.Principal::Anonymous,
+        @caller.InvocationContext::anonymous(),
         protocol_underlying,
       )
       assert_true(
@@ -476,7 +479,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
           [],
           registry_raw_secret(704),
           None,
-          @agentCommon.Principal::Anonymous,
+          @caller.InvocationContext::anonymous(),
           custom_underlying,
         ) {
         Err(@types.ToolError::CustomError(payload)) =>
@@ -528,7 +531,7 @@ test "guest boundary group teardown runs when a registered invoker raises" {
             [],
             registry_raw_secret(703),
             Some(registry_counted_stream(stdin_drops)),
-            @agentCommon.Principal::Anonymous,
+            @caller.InvocationContext::anonymous(),
             underlying,
           ),
         )

@@ -29,7 +29,7 @@ fn audit_1_record_contract_is_versioned_attributed_summary_only_and_exact_json()
         owner: OwnerSummary {
             agent_id: "Artifact/audit-owner".to_string(),
         },
-        principal: PrincipalSummary::Oidc {
+        principal: PrincipalSummary::User {
             issuer: "https://issuer.audit.test".to_string(),
             subject: "subject-01".to_string(),
         },

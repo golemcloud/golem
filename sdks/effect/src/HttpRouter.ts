@@ -17,7 +17,7 @@ import type { MountDef } from "./Http.js"
 import { registerAgent, type ConfigDef, type CfgTagOf, type Handlers } from "./internal/agent.js"
 import { method } from "./internal/method.js"
 import type { HostServices } from "./host/HostLive.js"
-import type { Principal } from "./Principal.js"
+import type { InvocationContext } from "./InvocationContext.js"
 import { AgentStream, Uint16, Uint8ArraySchema } from "./WitTypes.js"
 import {
   CanonicalRequest,
@@ -61,7 +61,7 @@ const Response = Schema.Struct({
   body: AgentStream(Uint8ArraySchema),
 })
 
-type Services<F extends ConfigFields> = HostServices | Principal | CfgTagOf<F>
+type Services<F extends ConfigFields> = HostServices | InvocationContext | CfgTagOf<F>
 type Application<F extends ConfigFields> = Effect.Effect<
   HttpServerResponse.HttpServerResponse,
   unknown,

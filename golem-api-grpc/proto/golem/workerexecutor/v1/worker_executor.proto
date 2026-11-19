@@ -88,7 +88,9 @@ message ForkWorkerRequest {
   uint64 oplog_index_cutoff = 4;
   golem.common.EnvironmentId environment_id = 5;
   golem.auth.AuthCtx auth_ctx = 6;
-  optional golem.component.Principal principal = 7;
+  reserved 7;
+  reserved "principal";
+  golem.component.Caller caller = 10;
   string component_owner_account_email = 8;
   optional golem.common.UUID expected_fingerprint = 9;
 }
@@ -104,7 +106,9 @@ message DeleteWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   golem.common.EnvironmentId environment_id = 2;
   golem.auth.AuthCtx auth_ctx = 3;
-  optional golem.component.Principal principal = 4;
+  reserved 4;
+  reserved "principal";
+  golem.component.Caller caller = 6;
   golem.common.UUID expected_fingerprint = 5;
 }
 
@@ -156,7 +160,9 @@ message CreateWorkerRequest {
   golem.common.EnvironmentId environment_id = 5;
   bool ignore_already_existing = 6;
   golem.auth.AuthCtx auth_ctx = 7;
-  optional golem.component.Principal principal = 8;
+  reserved 8;
+  reserved "principal";
+  golem.component.Caller caller = 14;
   optional golem.worker.InvocationContext invocation_context = 9;
   // Owner key of the invocation that demands the agent; a KnownFresh ephemeral instance is
   // checked against it.
@@ -184,7 +190,9 @@ message ConnectWorkerRequest {
   // Component's owner project
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 6;
 }
 
 message InterruptWorkerRequest {
@@ -192,7 +200,9 @@ message InterruptWorkerRequest {
   bool recover_immediately = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 7;
   golem.common.UUID expected_fingerprint = 6;
 }
 
@@ -280,7 +290,9 @@ message ResumeWorkerRequest {
   optional bool force = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 7;
   golem.common.UUID expected_fingerprint = 6;
 }
 
@@ -341,7 +353,9 @@ message UpdateWorkerRequest {
   golem.common.EnvironmentId environment_id = 4;
   golem.auth.AuthCtx auth_ctx = 5;
   bool disable_wakeup = 6;
-  optional golem.component.Principal principal = 7;
+  reserved 7;
+  reserved "principal";
+  golem.component.Caller caller = 9;
   golem.common.UUID expected_fingerprint = 8;
 }
 
@@ -425,7 +439,9 @@ message GetFileSystemNodeRequest {
   golem.common.EnvironmentId environment_id = 3;
   string path = 4;
   golem.auth.AuthCtx auth_ctx = 5;
-  optional golem.component.Principal principal = 6;
+  reserved 6;
+  reserved "principal";
+  golem.component.Caller caller = 7;
 }
 
 message GetFileSystemNodeResponse {
@@ -452,7 +468,9 @@ message GetAgentWalletRequest {
   // Component's owner project
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 6;
 }
 
 message GetAgentWalletResponse {
@@ -474,7 +492,9 @@ message GetFileContentsRequest {
   golem.common.EnvironmentId environment_id = 3;
   string file_path = 4;
   golem.auth.AuthCtx auth_ctx = 5;
-  optional golem.component.Principal principal = 6;
+  reserved 6;
+  reserved "principal";
+  golem.component.Caller caller = 9;
   golem.worker.FileByteSelection selection = 7;
   optional golem.component.ComponentId component_id = 8;
 }
@@ -494,7 +514,9 @@ message ActivatePluginRequest {
   int32 plugin_priority = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 7;
   golem.common.UUID expected_fingerprint = 6;
 }
 
@@ -510,7 +532,9 @@ message DeactivatePluginRequest {
   int32 plugin_priority = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 7;
   golem.common.UUID expected_fingerprint = 6;
 }
 
@@ -526,7 +550,9 @@ message RevertWorkerRequest {
   golem.common.RevertWorkerTarget target = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 8;
   optional golem.common.ResolvedRevert resolved_revert = 6;
   golem.common.UUID expected_fingerprint = 7;
 }
@@ -557,7 +583,9 @@ message CancelInvocationRequest {
   golem.common.UUID idempotency_key = 2;
   golem.common.EnvironmentId environment_id = 3;
   golem.auth.AuthCtx auth_ctx = 4;
-  optional golem.component.Principal principal = 5;
+  reserved 5;
+  reserved "principal";
+  golem.component.Caller caller = 8;
   optional golem.worker.ScheduledInvocationCancellation scheduled = 6;
   golem.common.UUID expected_fingerprint = 7;
 }
@@ -753,8 +781,10 @@ message ForkStreamSlotRequest {
   bytes initial_content = 15;
   bool closed = 16;
   StreamSessionExpiryPolicy expiry_policy = 17;
-  // The caller that forks the slot: the principal of the fork target's create request.
-  optional golem.component.Principal principal = 18;
+  // The caller that forks the slot: the caller of the fork target's create request.
+  reserved 18;
+  reserved "principal";
+  golem.component.Caller caller = 20;
   string route_scope = 19;
 }
 

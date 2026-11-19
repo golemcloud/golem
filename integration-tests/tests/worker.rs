@@ -444,21 +444,12 @@ async fn remote_rpc_create_waits_for_constructor_and_reports_rejection(
     Ok(())
 }
 
-/// REST/JSON invocation of a method whose only declared input is the
-/// auto-injected `principal` field. The caller supplies no parameters (the
-/// host injects the principal out of band), so the invocation must succeed —
-/// the same way the gRPC executor path and the HTTP gateway path already do.
-///
-/// `ReadonlyAgent::get_count_for(&self, _principal: Principal) -> u64` declares
-/// a single auto-injected principal field and no user-supplied parameters, so
-/// the caller sends an empty parameter record. This guards against the
-/// worker-service REST path validating method parameters against the *full*
-/// input schema (including auto-injected fields) instead of only the
-/// user-supplied ones.
+/// A REST invocation authenticated with an account token reaches the agent as that account, in
+/// both roles and without tokens: the caller's pair is the Golem issuer and `account:<id>`.
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-async fn rest_invoke_of_principal_only_method_succeeds(
+async fn rest_invoke_gives_the_account_pair(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
@@ -473,12 +464,20 @@ async fn rest_invoke_of_principal_only_method_succeeds(
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
-        .invoke_and_await_agent(&component, &agent_id, "get_count_for", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "caller_summary", data_value!())
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, SchemaValue::U64(0));
+    let account = format!(
+        "account (\"{}\",\"account:{}\")",
+        golem_test_framework::components::TEST_GOLEM_ISSUER,
+        user.account_id.0.hyphenated()
+    );
+    assert_eq!(
+        result,
+        SchemaValue::String(format!("original={account} immediate={account} tokens=0"))
+    );
     Ok(())
 }
 

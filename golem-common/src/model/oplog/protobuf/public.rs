@@ -254,6 +254,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .retry_policy_state
                     .map(TryInto::try_into)
                     .transpose()?,
+                retry_at: error.retry_at.map(Into::into),
+                retrying_start_index: error.retrying_start_index.map(OplogIndex::from_u64),
             })),
             oplog_entry::Entry::RecoverySucceeded(recovery_succeeded) => Ok(
                 PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams {
@@ -943,6 +945,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         error: error.error,
                         retry_from: error.retry_from.0,
                         retry_policy_state: error.retry_policy_state.map(Into::into),
+                        retry_at: error.retry_at.map(Into::into),
+                        retrying_start_index: error.retrying_start_index.map(|index| index.0),
                     },
                 )),
             },
@@ -2026,6 +2030,8 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                 error: AgentError::Unknown(error.error),
                 retry_from: error.retry_from,
                 retry_policy_state: error.retry_policy_state.map(Into::into),
+                retry_at: error.retry_at,
+                retrying_start_index: error.retrying_start_index,
             }),
             PublicOplogEntry::RecoverySucceeded(p) => Ok(OplogEntry::RecoverySucceeded {
                 timestamp: p.timestamp,

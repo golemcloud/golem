@@ -12,7 +12,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
 };
 use golem_common::model::AgentId;
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
     PermissionTarget,
@@ -153,7 +153,7 @@ pub async fn invoke(
             },
             Box::pin(ReceiverStream::new(receiver)),
             auth,
-            Principal::anonymous(),
+            Caller::anonymous(),
             request_key,
             |_| Ok(()),
         )

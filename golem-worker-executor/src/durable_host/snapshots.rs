@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
@@ -138,9 +139,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
+        // Nothing records this caller: the call is lowered and run directly, with no invocation
+        // entry. It is the value that the guest's caller() returns through its fallback.
+        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
+            caller,
         };
         let lowered = lower_invocation(
             load_snapshot_invocation,
@@ -392,22 +397,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         };
 
-        if let Err(error) = store
-            .as_context_mut()
-            .data_mut()
-            .durable_ctx_mut()
-            .rebuild_resolved_names(snapshot_index)
-            .await
-        {
-            Self::emit_snapshot_recovery_event(
-                store,
-                snapshot_index,
-                false,
-                Some(error.to_string()),
-            );
-            return SnapshotRecoveryResult::Unavailable(error);
-        }
-
         if let Err(error) = load_load_snapshot_guest(&mut store.as_context_mut(), instance) {
             Self::emit_snapshot_recovery_event(
                 store,
@@ -433,9 +422,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
+        // Nothing records this caller: the call is lowered and run directly, with no invocation
+        // entry. It is the value that the guest's caller() returns through its fallback.
+        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
+            caller,
         };
         let lowered = match lower_invocation(
             load_snapshot_invocation,
@@ -720,44 +713,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 bootstrap,
             )
             .await?;
-        Ok(())
-    }
-}
-
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    /// Rebuilds the links of the Store's address lookups from the history up to `through`, which a
-    /// start from the snapshot at `through` skips, merged with the links of the core initializer
-    /// as [`sockets::resolved_names::ResolvedNames::after_rebuild`] describes. Without agent sockets no
-    /// connect reads the links, so the history is not scanned.
-    pub(in crate::durable_host) async fn rebuild_resolved_names(
-        &mut self,
-        through: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        if !self.state.config.agent_sockets.enabled {
-            return Ok(());
-        }
-        let deleted_regions = self
-            .public_state
-            .worker()
-            .get_last_known_status()
-            .await
-            .deleted_regions
-            .clone();
-        let rebuilt = sockets::resolved_names::ResolvedNames::rebuild(
-            self.state.oplog.as_ref(),
-            through,
-            &deleted_regions,
-        )
-        .await?;
-        let bootstrap_range = self.state.bootstrap_range.clone();
-        self.state.resolved_names.with(|names| {
-            *names = sockets::resolved_names::ResolvedNames::after_rebuild(
-                rebuilt,
-                std::mem::take(names),
-                bootstrap_range.as_ref(),
-                through,
-            )
-        });
         Ok(())
     }
 }

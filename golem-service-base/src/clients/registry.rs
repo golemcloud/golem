@@ -52,7 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_api_grpc::proto::golem::registry::v1::{
-    ResolveAgentTypeNameRequest, resolve_agent_type_name_response,
+    GetGolemIssuerRequest, ResolveAgentTypeNameRequest, get_golem_issuer_response,
+    resolve_agent_type_name_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -71,6 +72,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::ToolDeploymentState;
@@ -188,6 +190,15 @@ pub trait RegistryService: Send + Sync {
         &self,
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError>;
+
+    // installation api
+
+    /// The Golem issuer of the installation, which the registry keeps in its database.
+    async fn get_golem_issuer(&self) -> Result<GolemIssuer, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "get_golem_issuer is not supported by this registry service",
+        ))
+    }
 
     // limits api
     async fn get_resource_limits(
@@ -685,6 +696,30 @@ impl RegistryService for GrpcRegistryService {
                 Ok(auth_ctx)
             }
             Some(authenticate_token_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn get_golem_issuer(&self) -> Result<GolemIssuer, RegistryServiceError> {
+        let response = self
+            .client
+            .call("get_golem_issuer", move |client| {
+                Box::pin(client.get_golem_issuer(GetGolemIssuerRequest {}))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(get_golem_issuer_response::Result::Success(payload)) => {
+                payload.golem_issuer.parse().map_err(
+                    |error: golem_common::model::golem_issuer::GolemIssuerError| {
+                        RegistryServiceError::internal_client_error(format!(
+                            "the registry returned an invalid Golem issuer: {error}"
+                        ))
+                    },
+                )
+            }
+            Some(get_golem_issuer_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

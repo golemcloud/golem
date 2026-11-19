@@ -20,20 +20,24 @@
 //!
 //! Conversely, for `If-None-Match` revalidation requests, the worker-service
 //! can produce a `304 Not Modified` response without invoking the executor
-//! when the supplied `ETag` matches the agent's current oplog index.
+//! when the supplied `ETag` matches the agent's current oplog index and the
+//! caller of the request. The `ETag` holds a digest of the caller, so one
+//! caller's validator never revalidates another caller's request, even when a
+//! private response tells the browser to revalidate every time.
 //!
 //! See [#3392](https://github.com/golemcloud/golem/issues/3392) and
 //! [`read-only-agent-methods.md`](../../../../read-only-agent-methods.md) for
 //! the full design.
 
 use golem_common::model::agent::{CachePolicy, ReadOnlyConfig};
+use golem_common::model::caller::Caller;
 use golem_common::model::{AgentFingerprint, OplogIndex, OwnedAgentId};
 
 /// Build the value for the `ETag` response header for a read-only invocation.
 ///
-/// The format is `"<environment-id>/<agent-id>/<fingerprint>:<oplog-index>"`, with
-/// surrounding quotes so the value is syntactically a strong validator. Every part is a
-/// UUID, so it never contains commas, quotes, or other characters that would confuse HTTP
+/// The format is `"<environment-id>/<agent-id>/<fingerprint>/<caller>:<oplog-index>"`, with
+/// surrounding quotes so the value is syntactically a strong validator. Its parts contain
+/// no commas, quotes, or other characters that would confuse HTTP
 /// parsers or the `If-None-Match` splitter.
 ///
 /// Including the per-instance agent fingerprint guards against the (rare)
@@ -41,25 +45,51 @@ use golem_common::model::{AgentFingerprint, OplogIndex, OwnedAgentId};
 /// `AgentId` that happens to reach the same oplog index: without the
 /// fingerprint, a previously-cached client-side ETag would incorrectly match
 /// the new instance.
+///
+/// `<caller>` is [`caller_etag_tag`]: every caller gets its own representation
+/// of a read-only result (the executor caches it per caller), and RFC 9110
+/// 8.8.3 requires a strong validator to differ between representations. A
+/// cache may send the validator of a stored response that `Vary` does not
+/// select for the request, so without it a `304` to one caller would let the
+/// cache reuse another caller's body.
 pub fn build_etag_value(
     agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
+    caller: &Caller,
     oplog_index: OplogIndex,
 ) -> String {
     format!(
         "\"{}:{}\"",
-        agent_id_etag_token(agent_id, fingerprint),
+        agent_id_etag_token(agent_id, fingerprint, caller),
         u64::from(oplog_index)
     )
 }
 
 /// Same format as [`build_etag_value`] but without the surrounding quotes,
 /// used for parsing/comparison.
-pub fn agent_id_etag_token(agent_id: &OwnedAgentId, fingerprint: AgentFingerprint) -> String {
+pub fn agent_id_etag_token(
+    agent_id: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+    caller: &Caller,
+) -> String {
     format!(
-        "{}/{}/{}",
-        agent_id.environment_id, agent_id.agent_id, fingerprint,
+        "{}/{}/{}/{}",
+        agent_id.environment_id,
+        agent_id.agent_id,
+        fingerprint,
+        caller_etag_tag(caller),
     )
+}
+
+/// The caller part of an `ETag`: the first 16 bytes of [`Caller::digest`] in
+/// lowercase hex. It is the digest that the executor's read-only cache keys
+/// results on, so a validator and a cached result always belong to the same
+/// caller.
+pub fn caller_etag_tag(caller: &Caller) -> String {
+    caller.digest()[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Returns true when the read-only method's cache policy allows HTTP
@@ -102,17 +132,18 @@ pub fn parse_if_none_match_entries(header_value: &str) -> Vec<(String, u64)> {
 }
 
 /// Returns true if any entry from `parse_if_none_match_entries` matches the
-/// given agent id, agent fingerprint, and oplog index. Both halves of the
+/// given agent id, agent fingerprint, caller and oplog index. Every part of the
 /// validator must match: a client-side ETag that was minted for a previous
-/// instance of the same `AgentId` (different fingerprint) will not match the
-/// current instance, even if the oplog index happens to coincide.
+/// instance of the same `AgentId` (different fingerprint), or for another
+/// caller, does not match, even if the oplog index happens to coincide.
 pub fn if_none_match_hits(
     entries: &[(String, u64)],
     agent_id: &OwnedAgentId,
     fingerprint: AgentFingerprint,
+    caller: &Caller,
     current_oplog: OplogIndex,
 ) -> bool {
-    let expected_token = agent_id_etag_token(agent_id, fingerprint);
+    let expected_token = agent_id_etag_token(agent_id, fingerprint, caller);
     let expected_idx = u64::from(current_oplog);
     entries
         .iter()
@@ -151,7 +182,6 @@ mod tests {
     fn public_no_cache() -> ReadOnlyConfig {
         ReadOnlyConfig {
             cache_policy: CachePolicy::UntilWrite(Empty {}),
-            uses_principal: false,
         }
     }
 
@@ -160,14 +190,12 @@ mod tests {
             cache_policy: CachePolicy::Ttl(CachePolicyTtl {
                 duration_nanos: nanos,
             }),
-            uses_principal: false,
         }
     }
 
     fn no_store_public() -> ReadOnlyConfig {
         ReadOnlyConfig {
             cache_policy: CachePolicy::NoCache(Empty {}),
-            uses_principal: false,
         }
     }
 
@@ -175,14 +203,54 @@ mod tests {
     fn etag_value_contains_environment_agent_id_and_fingerprint() {
         let agent_id = agent_id_for_test();
         let fingerprint = fingerprint_for_test();
-        let etag = build_etag_value(&agent_id, fingerprint, OplogIndex::from_u64(42));
+        let etag = build_etag_value(
+            &agent_id,
+            fingerprint,
+            &Caller::anonymous(),
+            OplogIndex::from_u64(42),
+        );
         assert_eq!(
             etag,
             format!(
-                "\"00000000-0000-0000-0000-000000000001/{}/{fingerprint}:42\"",
-                agent_id.agent_id
+                "\"00000000-0000-0000-0000-000000000001/{}/{fingerprint}/{}:42\"",
+                agent_id.agent_id,
+                caller_etag_tag(&Caller::anonymous()),
             )
         );
+    }
+
+    #[test]
+    fn if_none_match_misses_when_caller_differs() {
+        let agent_id = agent_id_for_test();
+        let fingerprint = fingerprint_for_test();
+        let oplog = OplogIndex::from_u64(10);
+        let account = Caller::entry(golem_common::model::caller::Principal::Account(
+            golem_common::model::caller::AccountPrincipal {
+                issuer: "https://golem.example".to_string(),
+                account_id: golem_common::model::account::AccountId::new(),
+                authentication: golem_common::model::caller::AccountAuthentication::ApiToken,
+            },
+        ));
+        let entries = parse_if_none_match_entries(&build_etag_value(
+            &agent_id,
+            fingerprint,
+            &Caller::anonymous(),
+            oplog,
+        ));
+        assert!(!if_none_match_hits(
+            &entries,
+            &agent_id,
+            fingerprint,
+            &account,
+            oplog
+        ));
+        assert!(if_none_match_hits(
+            &entries,
+            &agent_id,
+            fingerprint,
+            &Caller::anonymous(),
+            oplog
+        ));
     }
 
     #[test]
@@ -237,12 +305,14 @@ mod tests {
         let entries = parse_if_none_match_entries(&build_etag_value(
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(10),
         ));
         assert!(if_none_match_hits(
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(10)
         ));
     }
@@ -254,12 +324,14 @@ mod tests {
         let entries = parse_if_none_match_entries(&build_etag_value(
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(10),
         ));
         assert!(!if_none_match_hits(
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             OplogIndex::from_u64(11)
         ));
     }
@@ -275,13 +347,14 @@ mod tests {
         let new_fingerprint = AgentFingerprint(uuid!("00000000-0000-0000-0000-000000000bbb"));
         let oplog = OplogIndex::from_u64(10);
 
-        let stale_etag = build_etag_value(&agent_id, old_fingerprint, oplog);
+        let stale_etag = build_etag_value(&agent_id, old_fingerprint, &Caller::anonymous(), oplog);
         let entries = parse_if_none_match_entries(&stale_etag);
 
         assert!(!if_none_match_hits(
             &entries,
             &agent_id,
             new_fingerprint,
+            &Caller::anonymous(),
             oplog
         ));
     }
@@ -320,7 +393,7 @@ mod tests {
         let agent_id = agent_id_for_test();
         let fingerprint = fingerprint_for_test();
         let current = OplogIndex::from_u64(99);
-        let etag = build_etag_value(&agent_id, fingerprint, current);
+        let etag = build_etag_value(&agent_id, fingerprint, &Caller::anonymous(), current);
 
         let entries = parse_if_none_match_entries(&etag);
 
@@ -328,6 +401,7 @@ mod tests {
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             current
         ));
     }
@@ -344,7 +418,8 @@ mod tests {
         let before_write = OplogIndex::from_u64(10);
         let after_write = OplogIndex::from_u64(11);
 
-        let stale_etag = build_etag_value(&agent_id, fingerprint, before_write);
+        let stale_etag =
+            build_etag_value(&agent_id, fingerprint, &Caller::anonymous(), before_write);
         let entries = parse_if_none_match_entries(&stale_etag);
 
         // Old ETag must not match the post-write oplog index.
@@ -352,6 +427,7 @@ mod tests {
             &entries,
             &agent_id,
             fingerprint,
+            &Caller::anonymous(),
             after_write
         ));
     }

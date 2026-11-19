@@ -304,7 +304,7 @@ let current : Result[String, @tool.ToolError[WeatherError]] =
 client.drop()
 ```
 
-Parameters typed as `@tool.Principal` or `@tool.ProviderOutput` are provided by the runtime and
+Parameters typed as `@tool.InvocationContext` or `@tool.ProviderOutput` are provided by the runtime and
 omitted from typed client inputs; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
 An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared output selects the
 started-invocation result shape, with independent optional stdout/stderr streams, structured result,
@@ -428,7 +428,7 @@ pub async fn audit(
 ] {
   ignore(invocation.tool_name())
   ignore(invocation.tool_metadata())
-  ignore(invocation.principal())
+  ignore(invocation.invocation_context())
   underlying.invoke_raw(
     invocation.command_path(),
     invocation.input(),

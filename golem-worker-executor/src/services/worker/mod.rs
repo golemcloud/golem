@@ -127,6 +127,7 @@ struct SplitStatusParts {
     received_card_transfers: ReceivedCardTransferIndex,
     source_card_transfers: SourceCardTransferIndex,
     entity_replay_progress: golem_common::model::EntityReplayProgress,
+    resolved_names: golem_common::model::agent::ResolvedNameIndex,
     failed_updates: Vec<FailedUpdateRecord>,
     successful_updates: Vec<SuccessfulUpdateRecord>,
     skipped_regions: DeletedRegions,

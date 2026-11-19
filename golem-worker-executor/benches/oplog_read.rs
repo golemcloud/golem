@@ -104,7 +104,7 @@ fn metadata(
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
             None,
-            golem_common::model::agent::Principal::anonymous(),
+            golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
     }
@@ -132,6 +132,8 @@ fn entry(value: u64) -> OplogEntry {
         error: AgentError::Unknown(value.to_string()),
         retry_from: OplogIndex::NONE,
         retry_policy_state: None,
+        retry_at: None,
+        retrying_start_index: None,
     }
 }
 

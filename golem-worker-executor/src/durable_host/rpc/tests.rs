@@ -25,6 +25,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -234,6 +235,7 @@ fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
                 is_live: false,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: Duration::ZERO,
+                durable_wait: false,
             },
             GolemRpcWasmRpcUpsert::FQFN,
         );
@@ -331,6 +333,7 @@ impl Rpc for ActivatingRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: IdempotencyKey,
@@ -376,6 +379,7 @@ impl Rpc for ActivatingRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
@@ -399,6 +403,7 @@ impl Rpc for ActivatingRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<ScopeCard>,
@@ -420,6 +425,7 @@ impl Rpc for ActivatingRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -437,6 +443,7 @@ impl Rpc for RecordingScopeCardRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: IdempotencyKey,
@@ -481,6 +488,7 @@ impl Rpc for RecordingScopeCardRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _idempotency_key: Option<IdempotencyKey>,
@@ -503,6 +511,7 @@ impl Rpc for RecordingScopeCardRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -523,6 +532,7 @@ impl Rpc for RecordingScopeCardRpc {
         _self_agent_id: &AgentId,
         _self_env: &[(String, String)],
         _self_stack: InvocationContextStack,
+        _caller: &Caller,
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
     ) -> Result<(), ServiceRpcError> {
@@ -587,6 +597,7 @@ async fn replay_pending_activation_makes_no_create_request() {
         SchemaValue::Tuple { elements: vec![] },
         AccountId::new(),
         agent_id(5),
+        crate::test_callers::agent_caller(agent_id(5)),
         vec![],
         vec![],
         InvocationContextStack::fresh(),
@@ -641,6 +652,7 @@ async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
         SchemaValue::Tuple { elements: vec![] },
         AccountId::new(),
         agent_id(5),
+        crate::test_callers::agent_caller(agent_id(5)),
         vec![],
         vec![],
         InvocationContextStack::fresh(),

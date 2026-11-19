@@ -50,13 +50,14 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::agent::{
-    AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
-    InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
+    AgentConfigSource, AgentMode, AgentTypeName, InvocationFreshnessDisposition, OwnerKind,
+    ParsedAgentKey,
 };
 use golem_common::model::agent::{
     AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
+use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
@@ -71,6 +72,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
 };
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::invocation_session_public::{
     InvocationSelector, PublicConfigEntry, PublicErrorCode, PublicNativeToolTarget,
     PublicTypedValue,
@@ -659,6 +661,7 @@ pub struct WorkerService {
     worker_client: Arc<dyn WorkerClient>,
     agent_resolution_cache: Arc<AgentResolutionCache>,
     agent_types: Arc<AgentTypeResolver>,
+    golem_issuer: GolemIssuer,
 }
 
 pub struct PublicAgentSessionStart {
@@ -734,6 +737,7 @@ impl WorkerService {
         worker_client: Arc<dyn WorkerClient>,
         agent_resolution_cache: Arc<AgentResolutionCache>,
         agent_types: Arc<AgentTypeResolver>,
+        golem_issuer: GolemIssuer,
     ) -> Self {
         Self {
             component_service,
@@ -742,7 +746,17 @@ impl WorkerService {
             worker_client,
             agent_resolution_cache,
             agent_types,
+            golem_issuer,
         }
+    }
+
+    /// The caller of a request that an account token authenticated: the account in both roles.
+    pub fn rest_caller(&self, auth: &AuthCtx) -> Caller {
+        Caller::entry(Principal::Account(AccountPrincipal {
+            issuer: self.golem_issuer.to_string(),
+            account_id: auth.account_id(),
+            authentication: AccountAuthentication::ApiToken,
+        }))
     }
 
     /// Reads the agent that a request names by its ID; this never creates the agent. When it
@@ -940,7 +954,7 @@ impl WorkerService {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         expected: Option<golem_schema::proto::golem::common::Uuid>,
     ) -> WorkerResult<AgentFingerprint> {
         if expected.is_some() || !target.creates() {
@@ -973,7 +987,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 None,
             )
             .await
@@ -993,7 +1007,7 @@ impl WorkerService {
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         resource: AgentResourcePattern,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
@@ -1010,7 +1024,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
             )
             .await?;
@@ -1034,7 +1048,7 @@ impl WorkerService {
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
@@ -1083,7 +1097,7 @@ impl WorkerService {
                 ignore_already_existing,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
                 freshness_disposition,
             )
@@ -1097,7 +1111,7 @@ impl WorkerService {
                 ignore_already_existing,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
                 resource,
             )
@@ -1117,7 +1131,7 @@ impl WorkerService {
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
@@ -1140,7 +1154,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
                 invocation_context,
-                principal,
+                caller,
                 idempotency_key,
                 freshness_disposition,
             )
@@ -1780,14 +1794,14 @@ impl WorkerService {
     }
 
     /// Forks the source agent into `target_agent_id`, or, without one, into a new ID that
-    /// Golem issues with the source's type tag. Returns the fork's ID. `principal` is the
+    /// Golem issues with the source's type tag. Returns the fork's ID. `caller` is the
     /// forking caller the target records; `None` records the account of `auth_ctx`.
     pub async fn fork_worker(
         &self,
         source_agent_id: &OwnedAgentId,
         target_agent_id: Option<AgentId>,
         oplog_index_cut_off: OplogIndex,
-        principal: Option<Principal>,
+        caller: Option<Caller>,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<AgentId> {
@@ -1814,11 +1828,7 @@ impl WorkerService {
                 AgentId::random(type_id)
             }
         };
-        let principal = principal.unwrap_or_else(|| {
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth_ctx.account_id(),
-            })
-        });
+        let caller = caller.unwrap_or_else(|| self.rest_caller(&auth_ctx));
         self.worker_client
             .fork_worker(
                 &source_agent_id.agent_id,
@@ -1827,7 +1837,7 @@ impl WorkerService {
                 source_agent_id.environment_id,
                 agent.component.account_id,
                 agent.component.account_email.clone(),
-                principal,
+                caller,
                 agent.metadata.fingerprint,
                 auth_ctx,
             )
@@ -1967,7 +1977,7 @@ impl WorkerService {
             .await
     }
 
-    /// Internal token control uses the recorded scheduling principal, not operator permission.
+    /// Internal token control uses the recorded scheduling caller, not operator permission.
     pub async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
@@ -2407,7 +2417,7 @@ impl WorkerService {
         freshness_disposition: InvocationFreshnessDisposition,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -2446,7 +2456,7 @@ impl WorkerService {
             environment_id,
             component.account_id,
             auth_ctx,
-            principal,
+            caller,
             scope_card,
             expected_fingerprint,
         )
@@ -2625,7 +2635,9 @@ impl WorkerService {
                         config,
                         auth_ctx.clone(),
                         start.context.clone(),
-                        start.principal.clone(),
+                        start.caller.clone().ok_or_else(|| {
+                            WorkerServiceError::TypeChecker("caller is missing".to_string())
+                        })?,
                         start.expected_callee_fingerprint,
                     )
                     .await?;
@@ -2871,11 +2883,8 @@ impl WorkerService {
                 stream.take_host_endpoint::<u64>()
             })
             .map_err(WorkerServiceError::TypeChecker)?;
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let method_uses_streams = invocation_component
             .metadata
             .agent_method_stream_metadata(&invocation_agent_type.type_name, &method.name)
@@ -2894,7 +2903,7 @@ impl WorkerService {
                     config.clone(),
                     auth.clone(),
                     None,
-                    Some(principal.clone()),
+                    caller.clone(),
                     None,
                 )
                 .await?;
@@ -2922,7 +2931,7 @@ impl WorkerService {
             idempotency_key: Some(idempotency_key.into()),
             context: None,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
             environment_id: Some(environment_id.into()),
             config: config.into_iter().map(Into::into).collect(),
             component_owner_account_id: Some(component_owner_account_id.into()),
@@ -2969,12 +2978,9 @@ impl WorkerService {
         tail: InvocationRequestStream,
         auth: AuthCtx,
     ) -> WorkerResult<InvocationResponseStream> {
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
-        resume.principal = Some(principal);
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
+        resume.caller = Some(caller);
         self.resume_agent_session(resume, tail, auth).await
     }
 
@@ -3063,11 +3069,8 @@ impl WorkerService {
             &method.input_schema,
             output_schema.as_ref(),
         );
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let trusted_resume = ResumeAttach {
             idempotency_key: Some(
                 parse_final_invocation_id(&resume.session.idempotency_key)
@@ -3083,7 +3086,7 @@ impl WorkerService {
             operation: resume.operation as i32,
             cursors: resume.cursors,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
         };
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
@@ -3116,9 +3119,7 @@ impl WorkerService {
         auth: AuthCtx,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
-        let principal = Principal::GolemUser(GolemUserPrincipal {
-            account_id: auth.account_id(),
-        });
+        let caller = self.rest_caller(&auth);
         let request_key = InvocationRequestKey::external(
             auth.idempotency_scope(),
             Some(&IdempotencyKey::new(start.idempotency_key.clone())),
@@ -3127,7 +3128,7 @@ impl WorkerService {
             start,
             tail,
             auth,
-            principal,
+            caller,
             request_key,
             validate_identity,
         )
@@ -3139,7 +3140,7 @@ impl WorkerService {
         start: PublicToolSessionStart,
         tail: InvocationRequestStream,
         auth: AuthCtx,
-        principal: Principal,
+        caller: Caller,
         request_key: InvocationRequestKey,
         validate_identity: impl FnOnce(&SessionAgentIdentity) -> Result<(), PublicSchemaValueError>,
     ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
@@ -3201,7 +3202,7 @@ impl WorkerService {
             target: target.clone(),
         };
         validate_identity(&identity)?;
-        let principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+        let caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
         let mut trusted_start = InvocationStart {
             target: None,
             constructor: None,
@@ -3212,7 +3213,7 @@ impl WorkerService {
             idempotency_key: Some(idempotency_key.into()),
             context: None,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
             environment_id: Some(component.environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: Some(component.account_id.into()),
@@ -3313,11 +3314,8 @@ impl WorkerService {
             )],
         )
         .await?;
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let trusted_resume = ResumeAttach {
             idempotency_key: Some(
                 parse_final_invocation_id(&resume.session.idempotency_key)
@@ -3333,7 +3331,7 @@ impl WorkerService {
             operation: resume.operation as i32,
             cursors: resume.cursors,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
         };
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
@@ -3419,7 +3417,7 @@ impl WorkerService {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -3484,7 +3482,7 @@ impl WorkerService {
                 environment_id,
                 account_id,
                 auth_ctx,
-                principal,
+                caller,
                 scope_card,
                 expected_fingerprint,
             )
@@ -3608,6 +3606,7 @@ impl WorkerService {
             RoutedTarget::unkeyed(agent_id, &component, &constructor)?
         };
 
+        let caller = self.rest_caller(&auth).into();
         let (agent_id, _, agent_fingerprint) = self
             .create(
                 &target,
@@ -3617,7 +3616,7 @@ impl WorkerService {
                 false,
                 auth,
                 None,
-                None,
+                caller,
                 Some(request_key.owner_key("create")),
                 AgentResourcePattern::Any,
             )
@@ -3649,6 +3648,7 @@ impl WorkerService {
         let target =
             RoutedTarget::keyed(environment_id, registered.type_id, &component, &constructor)?;
 
+        let caller = self.rest_caller(&auth).into();
         let (agent_id, _, agent_fingerprint) = self
             .create(
                 &target,
@@ -3658,7 +3658,7 @@ impl WorkerService {
                 true,
                 auth,
                 None,
-                None,
+                caller,
                 None,
                 AgentResourcePattern::Any,
             )
@@ -3871,11 +3871,8 @@ impl WorkerService {
                     "external tool input cannot cross the worker boundary: {error}"
                 ))
             })?;
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
         let mut start = InvocationStart {
             target: None,
             constructor: None,
@@ -3886,7 +3883,7 @@ impl WorkerService {
             idempotency_key: idempotency_key.map(Into::into),
             context: None,
             auth_ctx: Some(auth.into()),
-            principal: Some(principal),
+            caller: Some(caller),
             environment_id: Some(environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: Some(component.account_id.into()),
@@ -4212,11 +4209,8 @@ impl WorkerService {
             nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
-        let principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let caller: golem_api_grpc::proto::golem::component::Caller =
+            self.rest_caller(&auth).into();
 
         let mut output = self
             .worker_client
@@ -4233,7 +4227,7 @@ impl WorkerService {
                 environment_id,
                 component.account_id,
                 auth.clone(),
-                principal,
+                caller,
                 None,
                 expected_fingerprint,
             )
@@ -4303,6 +4297,10 @@ impl WorkerService {
 
 #[cfg(test)]
 mod tests {
+    fn test_golem_issuer() -> GolemIssuer {
+        "https://golem.test".parse().unwrap()
+    }
+
     use super::{
         AgentBinding, PublicAgentSessionStart, PublicAgentSessionStartError, WorkerService,
         agent_verb_for_invocation_mode, decode_public_agent_config, decode_public_schema_value,
@@ -4337,11 +4335,12 @@ mod tests {
         RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
     };
     use golem_common::model::agent::{
-        AgentConfigSource, AgentKey, AgentMode, AgentTypeName, GolemUserPrincipal,
-        HttpEndpointDetails, InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, Principal,
-        RegisteredAgentType, RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
+        AgentConfigSource, AgentKey, AgentMode, AgentTypeName, HttpEndpointDetails,
+        InvocationFreshnessDisposition, OwnerKind, ParsedAgentKey, RegisteredAgentType,
+        RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
     };
     use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::caller::{Caller, Principal};
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
     use golem_common::model::card::{
         AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern,
@@ -4358,6 +4357,7 @@ mod tests {
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
     use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
+    use golem_common::model::golem_issuer::GolemIssuer;
     use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
@@ -4848,6 +4848,8 @@ mod tests {
         created_targets: Mutex<Vec<RoutedTarget>>,
         invoked_targets: Mutex<Vec<RoutedTarget>>,
         created_agent_ids: Mutex<Vec<AgentId>>,
+        created_callers: Mutex<Vec<Caller>>,
+        forked_callers: Mutex<Vec<Caller>>,
         creating_idempotency_keys: Mutex<Vec<Option<IdempotencyKey>>>,
         creating_ignore_already_existing: Mutex<Vec<bool>>,
         metadata_environment_id: Mutex<Option<EnvironmentId>>,
@@ -4880,6 +4882,8 @@ mod tests {
                 created_targets: Mutex::new(Vec::new()),
                 invoked_targets: Mutex::new(Vec::new()),
                 created_agent_ids: Mutex::new(Vec::new()),
+                created_callers: Mutex::new(Vec::new()),
+                forked_callers: Mutex::new(Vec::new()),
                 creating_idempotency_keys: Mutex::new(Vec::new()),
                 creating_ignore_already_existing: Mutex::new(Vec::new()),
                 metadata_environment_id: Mutex::new(None),
@@ -4992,7 +4996,7 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<InvocationContext>,
-            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+            _: golem_api_grpc::proto::golem::component::Caller,
             _: Option<IdempotencyKey>,
             _: InvocationFreshnessDisposition,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
@@ -5013,9 +5017,13 @@ mod tests {
             _: EnvironmentId,
             _: AuthCtx,
             _: Option<InvocationContext>,
-            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+            caller: golem_api_grpc::proto::golem::component::Caller,
             idempotency_key: Option<IdempotencyKey>,
         ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            self.created_callers
+                .lock()
+                .unwrap()
+                .push(Caller::try_from(caller).unwrap());
             self.creating_ignore_already_existing
                 .lock()
                 .unwrap()
@@ -5315,10 +5323,11 @@ mod tests {
             _: EnvironmentId,
             _: AccountId,
             _: AccountEmail,
-            _: Principal,
+            caller: Caller,
             expected_fingerprint: AgentFingerprint,
             _: AuthCtx,
         ) -> WorkerResult<()> {
+            self.forked_callers.lock().unwrap().push(caller);
             assert_eq!(expected_fingerprint, self.fingerprint);
             self.effects.lock().unwrap().push("fork");
             Ok(())
@@ -5382,7 +5391,7 @@ mod tests {
             environment_id: EnvironmentId,
             _: AccountId,
             _: AuthCtx,
-            _: golem_api_grpc::proto::golem::component::Principal,
+            _: golem_api_grpc::proto::golem::component::Caller,
             _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
             expected_fingerprint: Option<AgentFingerprint>,
         ) -> WorkerResult<AgentInvocationOutput> {
@@ -5637,6 +5646,7 @@ mod tests {
                     worker_client.clone(),
                     agent_resolution_cache,
                     agent_types,
+                    test_golem_issuer(),
                 ),
                 worker_client,
                 agent_type_name,
@@ -5731,6 +5741,7 @@ mod tests {
                     worker_client.clone(),
                     agent_resolution_cache,
                     agent_types,
+                    test_golem_issuer(),
                 ),
                 worker_client,
                 agent_type_name,
@@ -5858,7 +5869,7 @@ mod tests {
                 operation: ResumeOperation::Resume as i32,
                 cursors: Vec::new(),
                 auth_ctx: Some(AuthCtx::system().into()),
-                principal: Some(Default::default()),
+                caller: Some(Default::default()),
             }
         }
     }
@@ -6296,7 +6307,7 @@ mod tests {
                         resource,
                     )]),
                     None,
-                    None,
+                    Caller::anonymous().into(),
                     Some(key.clone()),
                     InvocationFreshnessDisposition::MayExist,
                 )
@@ -6346,7 +6357,7 @@ mod tests {
                 true,
                 auth_ctx_with_permissions(vec![permission]),
                 None,
-                None,
+                Caller::anonymous().into(),
                 key,
                 InvocationFreshnessDisposition::MayExist,
             )
@@ -6927,6 +6938,83 @@ mod tests {
     }
 
     #[test]
+    async fn rest_fork_defaults_to_the_account_caller() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let auth = AuthCtx::system();
+        let source = harness.owned(&harness.keyed_agent_id());
+        let target = AgentId::random(harness.type_id);
+
+        harness
+            .worker_service
+            .fork_worker(
+                &source,
+                Some(target),
+                OplogIndex::from_u64(4),
+                None,
+                None,
+                auth.clone(),
+            )
+            .await
+            .unwrap();
+        let explicit = Caller::anonymous();
+        harness
+            .worker_service
+            .fork_worker(
+                &source,
+                Some(target),
+                OplogIndex::from_u64(4),
+                Some(explicit.clone()),
+                None,
+                auth.clone(),
+            )
+            .await
+            .unwrap();
+
+        let callers = harness.worker_client.forked_callers.lock().unwrap().clone();
+        assert_eq!(
+            callers,
+            vec![harness.worker_service.rest_caller(&auth), explicit]
+        );
+        assert!(matches!(callers[0].original, Principal::Account(_)));
+    }
+
+    #[test]
+    async fn rest_create_records_the_account_caller() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        let auth = AuthCtx::system();
+        harness
+            .worker_service
+            .create_agent_rest(
+                harness.environment_id,
+                &harness.agent_type_name,
+                harness.create_request(true),
+                None,
+                auth.clone(),
+            )
+            .await
+            .unwrap();
+
+        let callers = harness
+            .worker_client
+            .created_callers
+            .lock()
+            .unwrap()
+            .clone();
+        assert_eq!(callers, vec![harness.worker_service.rest_caller(&auth)]);
+        assert_eq!(
+            callers[0].original.pair().unwrap().to_string(),
+            format!(
+                "(\"{}\",\"account:{}\")",
+                test_golem_issuer(),
+                auth.account_id().0.hyphenated()
+            )
+        );
+    }
+
+    #[test]
     async fn create_agent_rest_keyed_create_is_exclusive_at_the_keyed_id() {
         let harness = RestHarness::new(AgentMode::Durable);
 
@@ -7224,7 +7312,23 @@ mod tests {
         assert_eq!(start.method_name.as_deref(), Some("run"));
         assert!(start.input.is_some());
         assert!(start.auth_ctx.is_some());
-        assert!(start.principal.is_some());
+        let expected_caller = harness.worker_service.rest_caller(&AuthCtx::system());
+        let caller = Caller::try_from(start.caller.clone().unwrap()).unwrap();
+        assert_eq!(caller, expected_caller);
+        assert!(caller.original.equals(&caller.immediate));
+        assert!(caller.tokens.is_empty());
+        let Principal::Account(account) = &caller.original else {
+            panic!("expected an account caller, got {:?}", caller.original);
+        };
+        assert_eq!(account.account_id, AuthCtx::system().account_id());
+        assert_eq!(
+            caller.original.pair().unwrap().to_string(),
+            format!(
+                "(\"{}\",\"account:{}\")",
+                test_golem_issuer(),
+                AuthCtx::system().account_id().0.hyphenated()
+            )
+        );
         assert_eq!(
             EnvironmentId::try_from(start.environment_id.unwrap()).unwrap(),
             harness.environment_id
@@ -7438,15 +7542,12 @@ mod tests {
         let requested = resume.clone();
         let auth = AuthCtx::system();
         let expected_auth = auth.clone().into();
-        let expected_principal: golem_api_grpc::proto::golem::component::Principal =
-            Principal::GolemUser(GolemUserPrincipal {
-                account_id: auth.account_id(),
-            })
-            .into();
+        let expected_caller: golem_api_grpc::proto::golem::component::Caller =
+            harness.worker_service.rest_caller(&auth).into();
 
         resume.auth_ctx = None;
-        resume.principal = Some(Default::default());
-        let stale_principal = resume.principal.clone();
+        resume.caller = Some(Default::default());
+        let stale_caller = resume.caller.clone();
         let _responses = harness
             .worker_service
             .resume_public_agent_session(resume, Box::pin(stream::empty()), auth)
@@ -7471,8 +7572,8 @@ mod tests {
         assert_eq!(routed.operation, requested.operation);
         assert_eq!(routed.cursors, requested.cursors);
         assert_eq!(routed.auth_ctx, Some(expected_auth));
-        assert_eq!(routed.principal, Some(expected_principal));
-        assert_ne!(routed.principal, stale_principal);
+        assert_eq!(routed.caller, Some(expected_caller));
+        assert_ne!(routed.caller, stale_caller);
     }
 
     #[test]
@@ -7502,14 +7603,14 @@ mod tests {
     }
 
     #[test]
-    async fn trusted_resume_preserves_the_pinned_principal() {
+    async fn trusted_resume_preserves_the_pinned_caller() {
         let harness = RestHarness::new(AgentMode::Durable);
         harness
             .worker_client
             .set_metadata_component_revision(harness.component_revision);
         let mut resume = harness.public_resume();
-        let pinned_principal = Some(Default::default());
-        resume.principal = pinned_principal.clone();
+        let pinned_caller = Some(Default::default());
+        resume.caller = pinned_caller.clone();
 
         let _responses = harness
             .worker_service
@@ -7518,7 +7619,7 @@ mod tests {
             .unwrap();
 
         let (_, routed) = harness.worker_client.invocation_session_resume();
-        assert_eq!(routed.principal, pinned_principal);
+        assert_eq!(routed.caller, pinned_caller);
     }
 
     #[test]
@@ -7725,7 +7826,7 @@ mod tests {
                         InvocationFreshnessDisposition::KnownFresh,
                         Vec::new(),
                         AuthCtx::system(),
-                        Principal::anonymous().into(),
+                        Caller::anonymous().into(),
                         None,
                         fingerprint,
                     )
@@ -7787,7 +7888,7 @@ mod tests {
                 InvocationFreshnessDisposition::MayExist,
                 Vec::new(),
                 AuthCtx::system(),
-                Principal::anonymous().into(),
+                Caller::anonymous().into(),
                 None,
                 fingerprint,
             )
@@ -7940,7 +8041,7 @@ mod tests {
                     InvocationFreshnessDisposition::MayExist,
                     Vec::new(),
                     AuthCtx::system(),
-                    Principal::anonymous().into(),
+                    Caller::anonymous().into(),
                     None,
                     None,
                 )
@@ -8112,6 +8213,7 @@ mod tests {
                 harness.worker_client.clone(),
                 harness.worker_service.agent_resolution_cache.clone(),
                 agent_types,
+                test_golem_issuer(),
             ));
             let handler = CallAgentHandler::new(worker_service.clone());
             let mut request = RichRequest::new(
@@ -8157,7 +8259,7 @@ mod tests {
                     InvocationFreshnessDisposition::MayExist,
                     vec![],
                     AuthCtx::system(),
-                    Principal::anonymous().into(),
+                    Caller::anonymous().into(),
                     None,
                     None,
                 )
@@ -8413,7 +8515,7 @@ mod tests {
             method_name: Some("run".to_string()),
             request_key: Some(request_key.into()),
             idempotency_key: Some(idempotency_key.clone().into()),
-            principal: Some(Default::default()),
+            caller: Some(Default::default()),
             environment_id: Some(harness.environment_id.into()),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
             freshness_disposition:

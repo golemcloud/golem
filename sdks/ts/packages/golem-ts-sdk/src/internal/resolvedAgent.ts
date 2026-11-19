@@ -13,12 +13,13 @@
 // limitations under the License.
 
 import { Result } from 'golem:agent/host@2.0.0';
-import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
+import { AgentError, AgentType } from 'golem:agent/common@2.0.0';
+import type { InvocationContext } from '../caller';
 import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import type { AgentId } from '../agentId';
 import type { MultipartPart } from './multipart';
 
-/** Unenveloped transport: principal metadata is added once by the guest. */
+/** Unenveloped transport: the version envelope is added once by the guest. */
 export type SnapshotTransport =
   | { kind: 'binary'; data: Uint8Array; mimeType: 'application/octet-stream' }
   | {
@@ -47,7 +48,7 @@ export interface ResolvedAgent {
   invoke(
     methodName: string,
     methodArgs: SchemaValueTree,
-    principal: Principal,
+    ctx: InvocationContext,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>>;
   saveSnapshot(): Promise<SnapshotTransport>;
 }

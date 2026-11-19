@@ -7,10 +7,10 @@ import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
-import type { Principal } from '../src/principal';
 import type { ResolvedAgent, SnapshotTransport } from '../src/internal/resolvedAgent';
 import type { SnapshotDatabases } from '../src/internal/databaseSnapshot';
 import { selectSelfAgent, SELF_AGENT_ID } from './selfAgentTestSupport';
+import { anonymousContext } from './callerTestSupport';
 
 type Resolved = ResolvedAgent;
 
@@ -23,7 +23,7 @@ async function initiate(name: string): Promise<Resolved> {
   selectSelfAgent(name);
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
-  const res = await initiator.initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
+  const res = await initiator.initiate(schemaValueToWit(idValue), anonymousContext);
   if (res.tag !== 'ok') throw new Error(`initiate failed: ${JSON.stringify(res.val)}`);
   return res.val;
 }
@@ -35,7 +35,7 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.loadSnapshot(
     schemaValueToWit(idValue),
-    { tag: 'anonymous' },
+    anonymousContext,
     data,
     'application/json',
     { inMemory: [], fileDatabases: {} },
@@ -43,6 +43,18 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
   if (res.tag !== 'ok') throw new Error(`restore failed: ${JSON.stringify(res.val)}`);
   return res.val;
 }
+
+/** What 2.0 saves after loading a 1.6 envelope: the same state with no principal. */
+const upgraded = ({
+  principal: _principal,
+  ...rest
+}: {
+  principal?: unknown;
+  version: number;
+}) => ({
+  ...rest,
+  version: 2,
+});
 
 const jsonOf = (data: Uint8Array) => JSON.parse(new TextDecoder().decode(data));
 const simpleSnapshot = (snapshot: SnapshotTransport) => {
@@ -56,7 +68,7 @@ const multipartSnapshot = (snapshot: SnapshotTransport) => {
 
 let separationInitCount = 0;
 let separationRestoreCount = 0;
-let restoredPrincipal: Principal | undefined;
+let restoredCallerKind: string | undefined;
 let restoredId: unknown;
 let restoredAgentId: unknown;
 let restoredConfig: unknown;
@@ -175,14 +187,13 @@ defineAgent({
       return new TextEncoder().encode(
         JSON.stringify({
           count: this.count,
-          principal: this.getPrincipal().tag,
           agentId: this.getId().toString(),
         }),
       );
     },
     load(bytes, ctx) {
       separationRestoreCount += 1;
-      restoredPrincipal = ctx.principal;
+      restoredCallerKind = ctx.caller.original.kind;
       restoredId = ctx.id;
       restoredAgentId = ctx.agentId;
       restoredConfig = ctx.config;
@@ -266,7 +277,7 @@ defineAgent({
 });
 
 describe('snapshot — typed state', () => {
-  it.each(['config', 'getId', 'getPrincipal'])(
+  it.each(['config', 'getId'])(
     'rejects the reserved top-level state field %s during initialization and restoration',
     async (key) => {
       const message = JSON.stringify(`State field "${key}" is reserved by the SDK`).slice(1, -1);
@@ -412,7 +423,7 @@ describe('snapshot — custom save/load', () => {
     });
   });
 
-  it('uses restoration as an alternative factory and supplies identity and principal', async () => {
+  it('uses restoration as an alternative factory and supplies identity and the caller', async () => {
     separationInitCount = 0;
     separationRestoreCount = 0;
     const restored = await restore(
@@ -422,12 +433,12 @@ describe('snapshot — custom save/load', () => {
 
     expect(separationInitCount).toBe(0);
     expect(separationRestoreCount).toBe(1);
-    expect(restoredPrincipal).toEqual({ tag: 'anonymous' });
+    expect(restoredCallerKind).toBe('anonymous');
     expect(restoredId).toEqual({ name: 'c1' });
     expect(String(restoredAgentId)).toBe(SELF_AGENT_ID);
     expect(Object.getOwnPropertyDescriptor(restoredConfig, 'greeting')?.get).toBeTypeOf('function');
     const saved = jsonOf(simpleSnapshot(await restored.saveSnapshot()).data);
-    expect(saved).toMatchObject({ count: 12, principal: 'anonymous' });
+    expect(saved).toMatchObject({ count: 12 });
     expect(saved.agentId).toBe(SELF_AGENT_ID);
 
     await initiate('SnapSeparatedFactories');
@@ -529,7 +540,7 @@ async function isolate() {
     select(name);
     const result = await isolatedInitiators
       .lookup(name)!
-      .initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
+      .initiate(schemaValueToWit(idValue), anonymousContext);
     if (result.tag === 'err') throw result.val;
     return result.val as unknown as {
       saveSnapshot(): Promise<SnapshotTransport>;
@@ -1062,7 +1073,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
               .body,
           )
         : new TextDecoder().decode(resaved.payload);
-    expect(resavedEnvelope).toBe(envelope);
+    expect(resavedEnvelope).toBe(JSON.stringify(upgraded(JSON.parse(envelope))));
   });
 
   it('fails the save of an in-memory database whose field name a part name cannot hold', async () => {
@@ -1212,7 +1223,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
 
     const saved = await env.isolatedGuest.saveSnapshot.save();
     expect(saved.mimeType).toBe('application/json');
-    expect(jsonOf(saved.payload)).toEqual(envelope);
+    expect(jsonOf(saved.payload)).toEqual(upgraded(envelope));
   });
 
   it('fails the load when no file exists at a recorded location', async () => {
@@ -1307,7 +1318,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const saved = await env.isolatedGuest.saveSnapshot.save();
     const parts = env.multipart.decodeMultipart(saved.payload, env.boundaryOf(saved.mimeType));
     expect(parts.map((part) => part.name)).toEqual(['state', 'db:memDb']);
-    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toEqual(envelope);
+    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).toEqual(upgraded(envelope));
     expect(parts[1].body).toEqual(memoryBytes);
   });
 

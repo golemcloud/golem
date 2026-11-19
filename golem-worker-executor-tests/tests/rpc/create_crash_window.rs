@@ -39,6 +39,7 @@ impl Rpc for CreateThenHangRpc {
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
         self_stack: InvocationContextStack,
+        self_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         idempotency_key: IdempotencyKey,
@@ -54,6 +55,7 @@ impl Rpc for CreateThenHangRpc {
                 self_agent_id,
                 self_env,
                 self_stack,
+                self_caller,
                 config,
                 auth_ctx,
                 idempotency_key,
@@ -109,6 +111,7 @@ impl Rpc for CreateThenHangRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         key: Option<IdempotencyKey>,
@@ -116,7 +119,17 @@ impl Rpc for CreateThenHangRpc {
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         self.inner
             .create_demand(
-                agent, method, created_by, caller, env, stack, config, auth, key, freshness,
+                agent,
+                method,
+                created_by,
+                caller,
+                env,
+                stack,
+                callee_caller,
+                config,
+                auth,
+                key,
+                freshness,
             )
             .await
     }
@@ -133,6 +146,7 @@ impl Rpc for CreateThenHangRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
@@ -149,6 +163,7 @@ impl Rpc for CreateThenHangRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
                 card,
@@ -168,6 +183,7 @@ impl Rpc for CreateThenHangRpc {
         caller: &AgentId,
         env: &[(String, String)],
         stack: InvocationContextStack,
+        callee_caller: &Caller,
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
     ) -> Result<(), RpcError> {
@@ -183,6 +199,7 @@ impl Rpc for CreateThenHangRpc {
                 caller,
                 env,
                 stack,
+                callee_caller,
                 config,
                 auth,
             )
@@ -307,10 +324,13 @@ async fn guest_create_without_a_key_reaches_the_same_agent_after_a_crash_before_
     assert_eq!(creates.len(), 1);
     assert_eq!(creates[0].kind, CreateRequestKind::Unkeyed);
     assert_eq!(
-        creates[0].principal,
-        Principal::Agent(AgentPrincipal {
-            agent_id: caller.agent_id,
-        })
+        creates[0].caller,
+        callers::agent_in(
+            caller.agent_id,
+            caller_key.agent_type.clone(),
+            executor.get_worker_metadata(&caller).await?.fingerprint,
+            caller.environment_id
+        )
     );
 
     let fresh = executor

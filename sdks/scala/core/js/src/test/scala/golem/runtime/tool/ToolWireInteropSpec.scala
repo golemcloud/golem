@@ -81,20 +81,42 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
     test("HTTP declarations roundtrip with neutral wire shapes and every endpoint option") {
       import golem.tool.{CommandHttp, ToolHttpMount}
       import golem.runtime.http.*
-      val endpoint = CommandHttp.Endpoint(Some("custom-id"), HttpMethod.Custom("REPORT"),
+      val endpoint = CommandHttp.Endpoint(
+        Some("custom-id"),
+        HttpMethod.Custom("REPORT"),
         List(PathSegment.Literal("run"), PathSegment.PathVariable("id"), PathSegment.RemainingPathVariable("tail")),
-        List(QueryVariable("q", "query")), List(HeaderVariable("X-Test", "header")),
-        List(FileResponseHeader("X-Result", "ready")), Some(HttpRouteMode.WebSocket),
-        Some(DurableStreamRouteOptions(List(
-          DurableStreamSlotOptions(DurableStreamSlotSource.Input("input"), Some("messages"), None),
-          DurableStreamSlotOptions(DurableStreamSlotSource.Output("$result"), Some("results"), Some("application/json"))
-        ), Some(DurableStreamRouteLoadOptions(Some(7), Some(13))))))
-      val tool = richWit.copy(httpMount = Some(ToolHttpMount(List(PathSegment.Literal("reports")))) ,
-        commands = richWit.commands.copy(nodes = richWit.commands.nodes.updated(0, richWit.commands.nodes(0).copy(http = Some(endpoint)))))
+        List(QueryVariable("q", "query")),
+        List(HeaderVariable("X-Test", "header")),
+        List(FileResponseHeader("X-Result", "ready")),
+        Some(HttpRouteMode.WebSocket),
+        Some(
+          DurableStreamRouteOptions(
+            List(
+              DurableStreamSlotOptions(DurableStreamSlotSource.Input("input"), Some("messages"), None),
+              DurableStreamSlotOptions(
+                DurableStreamSlotSource.Output("$result"),
+                Some("results"),
+                Some("application/json")
+              )
+            ),
+            Some(DurableStreamRouteLoadOptions(Some(7), Some(13)))
+          )
+        )
+      )
+      val tool = richWit.copy(
+        httpMount = Some(ToolHttpMount(List(PathSegment.Literal("reports")))),
+        commands = richWit.commands.copy(nodes =
+          richWit.commands.nodes.updated(0, richWit.commands.nodes(0).copy(http = Some(endpoint)))
+        )
+      )
       val encoded = ToolWireInterop.toolToJs(tool)
-      val http = dyn(encoded.commands.nodes(0).http.get)
-      val ep = http.selectDynamic("val")
-      val prefix = tool.copy(commands = tool.commands.copy(nodes = tool.commands.nodes.updated(0, tool.commands.nodes(0).copy(http = Some(CommandHttp.Prefix(Nil))))))
+      val http    = dyn(encoded.commands.nodes(0).http.get)
+      val ep      = http.selectDynamic("val")
+      val prefix  = tool.copy(commands =
+        tool.commands.copy(nodes =
+          tool.commands.nodes.updated(0, tool.commands.nodes(0).copy(http = Some(CommandHttp.Prefix(Nil))))
+        )
+      )
       val prefixJs = ToolWireInterop.toolToJs(prefix)
       assertTrue(
         ToolWireInterop.toolFromJs(encoded) == tool,

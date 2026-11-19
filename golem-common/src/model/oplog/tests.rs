@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::caller::Caller;
+use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::model::agent::Principal;
 use crate::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
     InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
@@ -924,7 +925,7 @@ fn create_serialization_poem_serde_equivalence() {
 #[test]
 fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
     use super::{CreateParameters, CreateRequest, CreateRequestKind, OplogEnrichmentEntry};
-    use crate::model::agent::{AgentMode, AgentPrincipal, AgentTypeName, OwnerKind};
+    use crate::model::agent::{AgentMode, AgentTypeName, OwnerKind};
     use crate::model::environment::EnvironmentId;
     use crate::model::invocation_context::{
         AttributeValue, InvocationContextSpan, InvocationContextStack,
@@ -945,9 +946,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             )]))
             .build(),
     );
-    let creator = Principal::Agent(AgentPrincipal {
-        agent_id: AgentId::from_parts(7, 3),
-    });
+    let creator = crate::base_model::caller::test_support::sample_caller();
     let mut requests = [
         CreateRequestKind::GetOrCreate,
         CreateRequestKind::Exclusive,
@@ -1049,6 +1048,29 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                 &mut proto.entry
             else {
                 panic!("expected Create");
+            };
+            let mut without_caller = create.clone();
+            without_caller
+                .create_request
+                .as_mut()
+                .expect("create request")
+                .caller = None;
+            let mut proto_without_caller = proto.clone();
+            let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(
+                create_without_caller,
+            )) = &mut proto_without_caller.entry
+            else {
+                unreachable!()
+            };
+            *create_without_caller = without_caller;
+            assert_eq!(
+                OplogEntry::try_from(proto_without_caller).unwrap_err(),
+                "Missing create request caller"
+            );
+            let Some(golem_api_grpc::proto::golem::worker::raw_oplog_entry::Entry::Create(create)) =
+                &mut proto.entry
+            else {
+                unreachable!()
             };
             create.component_id = None;
             assert_eq!(
@@ -1583,7 +1605,15 @@ fn error_serialization_poem_serde_equivalence() {
             },
         ))
     })) {
-        for kind in [OplogErrorKind::Invocation, OplogErrorKind::Recovery] {
+        for (kind, retry_at, retrying_start_index) in [
+            (OplogErrorKind::Invocation, None, None),
+            (
+                OplogErrorKind::Invocation,
+                Some(Timestamp::from(1_700)),
+                Some(OplogIndex::from_u64(19)),
+            ),
+            (OplogErrorKind::Recovery, None, None),
+        ] {
             let entry = PublicOplogEntry::Error(ErrorParams {
                 timestamp: Timestamp::now_utc().rounded(),
                 kind,
@@ -1591,6 +1621,8 @@ fn error_serialization_poem_serde_equivalence() {
                 error: "test".to_string(),
                 retry_from: OplogIndex::from_u64(17),
                 retry_policy_state: retry_policy_state.clone(),
+                retry_at,
+                retrying_start_index,
             });
             let serialized = entry.to_json_string();
             let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1624,6 +1656,8 @@ fn agent_invocation_failed_contract_roundtrips() {
             Some(invocation_id),
             AgentError::InternalError("fatal".into()),
             OplogIndex::INITIAL,
+            None,
+            None,
             None
         )
         .is_hint()
@@ -2006,7 +2040,9 @@ fn pending_invocation_deadline_raw_and_public_roundtrips() {
             invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543213).into(),
             payload: OplogPayload::SerializedInline {
                 bytes: crate::serialization::serialize(
-                    &crate::model::AgentInvocationPayload::SaveSnapshot,
+                    &crate::model::AgentInvocationPayload::SaveSnapshot {
+                        caller: Caller::anonymous(),
+                    },
                 )
                 .unwrap(),
                 cached: None,
@@ -2072,6 +2108,8 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         error: AgentError::TransientError("failed".to_string()),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
+        retry_at: Some(Timestamp::from(2_500)),
+        retrying_start_index: Some(OplogIndex::from_u64(4)),
     };
     let recovery_error = OplogEntry::Error {
         timestamp: Timestamp::from(3_000),
@@ -2081,6 +2119,8 @@ fn invocation_terminals_carry_their_invocation_id_through_raw_roundtrips() {
         error: AgentError::TransientError("recovery".to_string()),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
+        retry_at: None,
+        retrying_start_index: None,
     };
 
     for entry in [finished, invocation_error, recovery_error] {
@@ -2106,6 +2146,8 @@ fn raw_recovery_error_naming_an_invocation_is_rejected() {
         error: AgentError::TransientError("recovery".to_string()),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
+        retry_at: None,
+        retrying_start_index: None,
     };
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry = malformed.try_into().unwrap();
     assert!(OplogEntry::try_from(proto).is_err());
@@ -2143,6 +2185,8 @@ fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
         error: "failed".to_string(),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
+        retry_at: Some(Timestamp::from(2_500)),
+        retrying_start_index: Some(OplogIndex::from_u64(4)),
     });
     let recovery_error = PublicOplogEntry::Error(ErrorParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -2151,6 +2195,8 @@ fn invocation_terminals_carry_their_invocation_id_through_public_roundtrips() {
         error: "recovery".to_string(),
         retry_from: OplogIndex::from_u64(3),
         retry_policy_state: None,
+        retry_at: None,
+        retrying_start_index: None,
     });
 
     for entry in [finished, invocation_error, recovery_error] {
@@ -2783,13 +2829,14 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
         wallet_id_hash: [0x42; 32],
         generation: 73,
     };
+    let caller = sample_caller();
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: Uuid::from_u128(0x0123456789abcdef_fedcba9876543216).into(),
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: caller.clone(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -2805,7 +2852,29 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     let mut raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
         raw_entry.clone().try_into().unwrap();
     match OplogEntry::try_from(raw_proto.clone()).unwrap() {
-        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
+        OplogEntry::AgentInvocationStarted {
+            wallet_pin,
+            payload,
+            ..
+        } => {
+            let payload = match payload {
+                OplogPayload::Inline(payload) => *payload,
+                OplogPayload::SerializedInline { bytes, .. } => {
+                    crate::serialization::deserialize::<AgentInvocationPayload>(&bytes).unwrap()
+                }
+                other => panic!("expected an inline payload, got {other:?}"),
+            };
+            let AgentInvocationPayload::AgentMethod {
+                caller: decoded, ..
+            } = payload
+            else {
+                panic!("expected a method payload");
+            };
+            assert_eq!(decoded, caller);
+            assert_eq!(
+                original_claims_json(&decoded),
+                original_claims_json(&caller)
+            );
             assert_eq!(
                 wallet_pin.as_ref(),
                 &InvocationWalletPin {
@@ -3285,6 +3354,8 @@ mod scope_projection {
                     AgentError::TransientError("entity-owned".to_string()),
                     idx(99),
                     None,
+                    None,
+                    None,
                 ),
             ),
             (
@@ -3295,6 +3366,8 @@ mod scope_projection {
                     Some(Uuid::from_u128(0x0123456789abcdef_fedcba9876543210).into()),
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
+                    None,
+                    None,
                     None,
                 ),
             ),

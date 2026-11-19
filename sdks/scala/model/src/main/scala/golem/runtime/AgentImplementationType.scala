@@ -16,7 +16,7 @@
 
 package golem.runtime
 
-import golem.Principal
+import golem.InvocationContext
 import golem.config.ConfigBuilder
 
 import scala.concurrent.Future
@@ -30,11 +30,10 @@ import scala.concurrent.Future
 final case class AgentImplementationType[Instance, Ctor](
   metadata: AgentMetadata,
   ctorCodec: InputRecordCodec[Ctor],
-  buildInstance: (Ctor, Principal) => Instance,
+  buildInstance: (Ctor, InvocationContext) => Instance,
   methods: List[ImplementationMethod[Instance]],
   configBuilder: Option[ConfigBuilder[_]] = None,
   configInjectedViaConstructor: Boolean = false,
-  principalInjectedViaConstructor: Boolean = false,
   snapshotHandlers: Option[SnapshotHandlers[Instance]] = None
 )
 
@@ -46,12 +45,12 @@ final case class SyncImplementationMethod[Instance, In, Out](
   metadata: MethodMetadata,
   inputCodec: InputRecordCodec[In],
   outputCodec: OutputCodec[Out],
-  handler: (Instance, In, Principal) => Out
+  handler: (Instance, In, InvocationContext) => Out
 ) extends ImplementationMethod[Instance]
 
 final case class AsyncImplementationMethod[Instance, In, Out](
   metadata: MethodMetadata,
   inputCodec: InputRecordCodec[In],
   outputCodec: OutputCodec[Out],
-  handler: (Instance, In, Principal) => Future[Out]
+  handler: (Instance, In, InvocationContext) => Future[Out]
 ) extends ImplementationMethod[Instance]

@@ -42,7 +42,7 @@ object ToolProjectionRendering {
   }
 
   def paramType(param: Param, policy: Policy): String =
-    if (param.isPrincipal) "_root_.golem.Principal"
+    if (param.isInvocationContext) "_root_.golem.InvocationContext"
     else if (param.isStdin && policy == InvocationUnderlying)
       "_root_.golem.tool.ToolMiddlewareInputHandle"
     else if (param.isStdin) "_root_.golem.tool.ToolInputStream"
@@ -56,7 +56,7 @@ object ToolProjectionRendering {
     val metadata =
       if (
         policy == InvocationUnderlying &&
-        !projected.param.isPrincipal &&
+        !projected.param.isInvocationContext &&
         !projected.param.isStdin &&
         !projected.param.isStdout &&
         !projected.param.isStderr

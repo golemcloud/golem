@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use golem_common::base_model::oplog::{
     QueuedCardEvent, QueuedCardEventTransfer, QueuedCardEventTransferReceived,
 };
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
     PublicInvocationWalletPin, WalletVersionToken,
@@ -66,7 +66,9 @@ fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
             invocation_id: uuid::Uuid::from_u128(1).into(),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
-                    &AgentInvocationPayload::SaveSnapshot,
+                    &AgentInvocationPayload::SaveSnapshot {
+                        caller: golem_common::model::caller::Caller::anonymous(),
+                    },
                 )
                 .unwrap(),
                 cached: None,
@@ -460,7 +462,7 @@ fn wit_projection_preserves_invocation_wallet_pins() {
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "test".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -772,7 +774,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                 create_request: golem_common::model::oplog::CreateRequest::new(
                     golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                     None,
-                    golem_common::model::agent::Principal::anonymous(),
+                    golem_common::model::caller::Caller::anonymous(),
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),

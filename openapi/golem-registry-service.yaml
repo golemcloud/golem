@@ -13627,10 +13627,6 @@ components:
           type: array
           items:
             type: string
-    AutoInjectedKind:
-      type: string
-      enum:
-      - principal
     BinaryRestrictions:
       type: object
       properties:
@@ -16619,17 +16615,6 @@ components:
             type: string
             enum:
             - user-supplied
-      - type: object
-        required:
-        - tag
-        - value
-        properties:
-          tag:
-            type: string
-            enum:
-            - auto-injected
-          value:
-            $ref: '#/components/schemas/AutoInjectedKind'
     FileMapping:
       type: object
       oneOf:
@@ -19258,12 +19243,9 @@ components:
       title: ReadOnlyConfig
       required:
       - cachePolicy
-      - usesPrincipal
       properties:
         cachePolicy:
           $ref: '#/components/schemas/CachePolicy'
-        usesPrincipal:
-          type: boolean
     Ref:
       type: object
       oneOf:

@@ -1,4 +1,3 @@
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { Effect, Schema, Stream } from "effect"
 import { AgentId, Quota, Secrets, SelfAgentId, Tool, WitTypes } from "@golemcloud/effect-golem"
 
@@ -65,23 +64,13 @@ const ChunkMRejected = Schema.Struct({ reason: Schema.String })
 
 const selfAgentIdText = Effect.map(SelfAgentId.SelfAgentId, AgentId.format) as Effect.Effect<string>
 
-const principalLabel = (principal: unknown): string => {
-  const value = principal as AgentCommon.Principal
-  switch (value.tag) {
-    case "oidc":
-      return `oidc:${value.val.sub}`
-    case "agent":
-      return "agent"
-    case "golem-user":
-      return "golem-user"
-    case "anonymous":
-      return "anonymous"
-  }
-}
+/** The immediate caller as "<kind> <ref text>", or "anonymous". */
+const callerLabel = (context: { readonly caller: InvocationContext.Caller }): string =>
+  context.caller.immediate.toString()
 
-const evidence = (principal: unknown, ownerAgentId: string) => ({
+const evidence = (principal: string, ownerAgentId: string) => ({
   provider: "effect",
-  principal: principalLabel(principal),
+  principal,
   ownerAgentId,
 })
 

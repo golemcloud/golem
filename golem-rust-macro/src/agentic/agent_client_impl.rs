@@ -187,13 +187,13 @@ fn expand(
             };
             let ident = pattern.ident.clone();
             let ty = input.ty.as_ref();
-            let is_principal = matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "Principal"));
+            let is_invocation_context = matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "InvocationContext"));
             if has_agent_config_attr(input) {
                 config_types.push(quote! {
                     <<#ty as ::golem_rust::agentic::InnerTypeHelper>::Type as ::golem_rust::agentic::ConfigSchema>::RpcType
                 });
                 config_idents.push(ident);
-            } else if !is_principal {
+            } else if !is_invocation_context {
                 data_defs.push(quote! { #ident: #ty });
                 data_idents.push(ident);
             }

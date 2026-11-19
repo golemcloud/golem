@@ -31,7 +31,7 @@ fn middleware_handler(
 }
 
 ///|
-test "monomorphic authoring projects direct parameters, streams, principal, and errors" {
+test "monomorphic authoring projects direct parameters, streams, invocation context, and errors" {
   let source =
     #|#derive.tool("presented")
     #|struct Presented {}
@@ -39,7 +39,7 @@ test "monomorphic authoring projects direct parameters, streams, principal, and 
     #|pub fn Presented::value(value : String) -> Int { value.length() }
     #|pub fn Presented::stdout(output : @asyncCore.Sink[Byte]) -> Unit { ignore(output) }
     #|pub fn Presented::value_stdout(value : String, output : @asyncCore.Sink[Byte]) -> Int { ignore(output); value.length() }
-    #|pub fn Presented::io(input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte], principal : @common.Principal) -> Result[String, RunError] { ... }
+    #|pub fn Presented::io(input : @asyncCore.Stream[Byte], output : @asyncCore.Sink[Byte], context : @tool.InvocationContext) -> Result[String, RunError] { ... }
     #|
     #|#derive.golem_schema
     #|enum RunError {
@@ -54,7 +54,7 @@ test "monomorphic authoring projects direct parameters, streams, principal, and 
     #|pub async fn Policy::value(underlying : PresentedUnderlying, value : String) -> Result[Int, @toolMiddleware.ToolInvokeError[@tool.NoToolError]] { ... }
     #|pub async fn Policy::stdout(underlying : PresentedUnderlying) -> Result[@asyncCore.Stream[Byte], @toolMiddleware.ToolInvokeError[@tool.NoToolError]] { ... }
     #|pub async fn Policy::value_stdout(underlying : PresentedUnderlying, value : String) -> Result[(Int, @asyncCore.Stream[Byte]), @toolMiddleware.ToolInvokeError[@tool.NoToolError]] { ... }
-    #|pub async fn Policy::io(underlying : PresentedUnderlying, input : @toolMiddleware.MiddlewareStdin, principal : @tool.Principal) -> Result[(String, @asyncCore.Stream[Byte]), @toolMiddleware.ToolInvokeError[RunError]] { ... }
+    #|pub async fn Policy::io(underlying : PresentedUnderlying, input : @toolMiddleware.MiddlewareStdin, context : @tool.InvocationContext) -> Result[(String, @asyncCore.Stream[Byte]), @toolMiddleware.ToolInvokeError[RunError]] { ... }
   let middlewares = @lib.parse_tool_middlewares([("middleware.mbt", source)])
   guard middlewares is [middleware] else { fail("expected one middleware") }
   assert_eq(middleware.name, "policy")
@@ -79,13 +79,13 @@ test "monomorphic authoring projects direct parameters, streams, principal, and 
     content=(
       #|[
       #|  ("input", Simple("@toolMiddleware.MiddlewareStdin")),
-      #|  ("principal", Simple("@tool.Principal")),
+      #|  ("context", Simple("@tool.InvocationContext")),
       #|]
     ),
   )
   debug_inspect(
     middleware_handler(scope.handlers, "io").param_sources,
-    content="[Stdin, Principal]",
+    content="[Stdin, InvocationContext]",
   )
   assert_true(
     middleware_handler(scope.handlers, "io").error_type ==
@@ -374,7 +374,7 @@ test "checked-in authoring sources parse to the locked middleware contract" {
     content=(
       #|[
       #|  ("input", Simple("@toolMiddleware.MiddlewareStdin")),
-      #|  ("principal", Simple("@tool.Principal")),
+      #|  ("context", Simple("@tool.InvocationContext")),
       #|]
     ),
   )

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::caller::{InvocationContext, LiveValue, Rule8};
 use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType};
-use crate::golem_agentic::golem::agent::common::Principal;
 use crate::schema::wit::{direct, wire};
 
 pub struct AgentInvocationResult {
@@ -59,11 +59,13 @@ pub struct AgentParameterProbe<T>(pub std::marker::PhantomData<T>);
 
 #[doc(hidden)]
 pub trait AgentParameterSchema {
+    /// The input field of a user-supplied parameter, or `None` for a parameter that the SDK
+    /// injects and callers never supply.
     fn parameter_schema(
         self,
         name: &str,
         builder: &mut direct::WireSchemaBuilder,
-    ) -> crate::golem_agentic::golem::agent::common::NamedField;
+    ) -> Option<crate::golem_agentic::golem::agent::common::NamedField>;
 }
 
 impl<T: direct::WireSchema> AgentParameterSchema for &&AgentParameterProbe<T> {
@@ -71,33 +73,34 @@ impl<T: direct::WireSchema> AgentParameterSchema for &&AgentParameterProbe<T> {
         self,
         name: &str,
         builder: &mut direct::WireSchemaBuilder,
-    ) -> crate::golem_agentic::golem::agent::common::NamedField {
-        crate::golem_agentic::golem::agent::common::NamedField {
+    ) -> Option<crate::golem_agentic::golem::agent::common::NamedField> {
+        Some(crate::golem_agentic::golem::agent::common::NamedField {
             name: name.to_string(),
             source: crate::golem_agentic::golem::agent::common::FieldSource::UserSupplied,
             schema: T::append_schema(builder),
             metadata: direct::empty_metadata(),
-        }
+        })
     }
 }
 
-impl AgentParameterSchema for &AgentParameterProbe<Principal> {
+impl AgentParameterSchema for &AgentParameterProbe<InvocationContext> {
     fn parameter_schema(
         self,
-        name: &str,
-        builder: &mut direct::WireSchemaBuilder,
-    ) -> crate::golem_agentic::golem::agent::common::NamedField {
-        use crate::golem_agentic::golem::agent::common::{
-            AutoInjectedKind, FieldSource, NamedField,
-        };
-        NamedField {
-            name: name.to_string(),
-            source: FieldSource::AutoInjected(AutoInjectedKind::Principal),
-            schema: builder.push(crate::schema::wit::wire::SchemaTypeBody::RecordType(
-                Vec::new(),
-            )),
-            metadata: direct::empty_metadata(),
-        }
+        _name: &str,
+        _builder: &mut direct::WireSchemaBuilder,
+    ) -> Option<crate::golem_agentic::golem::agent::common::NamedField> {
+        None
+    }
+}
+
+impl<T: LiveValue> AgentParameterSchema for &AgentParameterProbe<T> {
+    fn parameter_schema(
+        self,
+        _name: &str,
+        _builder: &mut direct::WireSchemaBuilder,
+    ) -> Option<crate::golem_agentic::golem::agent::common::NamedField> {
+        let () = Rule8::<T>::REJECTED;
+        None
     }
 }
 
@@ -112,8 +115,15 @@ impl<T: direct::WireSchema> AgentParameterStreams for &&AgentParameterProbe<T> {
     }
 }
 
-impl AgentParameterStreams for &AgentParameterProbe<Principal> {
+impl AgentParameterStreams for &AgentParameterProbe<InvocationContext> {
     fn parameter_contains_stream(self) -> bool {
+        false
+    }
+}
+
+impl<T: LiveValue> AgentParameterStreams for &AgentParameterProbe<T> {
+    fn parameter_contains_stream(self) -> bool {
+        let () = Rule8::<T>::REJECTED;
         false
     }
 }
@@ -124,7 +134,7 @@ pub trait ReadAgentParameter {
     fn read_parameter(
         self,
         input: &mut DirectAgentInput,
-        principal: &Principal,
+        context: &InvocationContext,
     ) -> Result<Self::Value, direct::WireError>;
 }
 
@@ -134,21 +144,34 @@ impl<T: direct::FromWire> ReadAgentParameter for &&AgentParameterProbe<T> {
     fn read_parameter(
         self,
         input: &mut DirectAgentInput,
-        _: &Principal,
+        _: &InvocationContext,
     ) -> Result<T, direct::WireError> {
         input.take()
     }
 }
 
-impl ReadAgentParameter for &AgentParameterProbe<Principal> {
-    type Value = Principal;
+impl ReadAgentParameter for &AgentParameterProbe<InvocationContext> {
+    type Value = InvocationContext;
 
     fn read_parameter(
         self,
         _: &mut DirectAgentInput,
-        principal: &Principal,
-    ) -> Result<Principal, direct::WireError> {
-        Ok(principal.clone())
+        context: &InvocationContext,
+    ) -> Result<InvocationContext, direct::WireError> {
+        Ok(context.clone())
+    }
+}
+
+impl<T: LiveValue> ReadAgentParameter for &AgentParameterProbe<T> {
+    type Value = T;
+
+    fn read_parameter(
+        self,
+        _: &mut DirectAgentInput,
+        _: &InvocationContext,
+    ) -> Result<T, direct::WireError> {
+        let () = Rule8::<T>::REJECTED;
+        Err(direct::WireError::Shape("live value"))
     }
 }
 
@@ -187,7 +210,7 @@ impl<T: direct::IntoWire> WriteAgentParameter for &&AgentArgument<'_, T> {
     }
 }
 
-impl WriteAgentParameter for &AgentArgument<'_, Principal> {
+impl WriteAgentParameter for &AgentArgument<'_, InvocationContext> {
     fn preflight_parameter(self, _: &mut direct::WirePreflight) -> Result<(), direct::WireError> {
         Ok(())
     }
@@ -198,6 +221,24 @@ impl WriteAgentParameter for &AgentArgument<'_, Principal> {
         self,
         _: &mut direct::WireWriter,
     ) -> Result<Option<wire::ValueNodeIndex>, direct::WireError> {
+        Ok(None)
+    }
+}
+
+impl<T: LiveValue> WriteAgentParameter for &AgentArgument<'_, T> {
+    fn preflight_parameter(self, _: &mut direct::WirePreflight) -> Result<(), direct::WireError> {
+        let () = Rule8::<T>::REJECTED;
+        Ok(())
+    }
+    async fn prepare_parameter(self) -> Result<(), direct::WireError> {
+        let () = Rule8::<T>::REJECTED;
+        Ok(())
+    }
+    fn write_parameter(
+        self,
+        _: &mut direct::WireWriter,
+    ) -> Result<Option<wire::ValueNodeIndex>, direct::WireError> {
+        let () = Rule8::<T>::REJECTED;
         Ok(None)
     }
 }
@@ -214,7 +255,6 @@ pub enum SnapshotData {
 
 #[derive(Debug)]
 pub struct SnapshotRestoreContext {
-    pub principal: Principal,
     pub agent_type: String,
     /// The agent's constructor parameters, in the form `initialize` received them when the
     /// agent was created.
@@ -232,7 +272,7 @@ pub trait BaseAgent {
         &mut self,
         method_name: String,
         input: wire::SchemaValueTree,
-        principal: Principal,
+        context: InvocationContext,
     ) -> Result<AgentInvocationResult, AgentError>;
 
     /// Gets the agent type metadata of this agent

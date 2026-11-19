@@ -13,6 +13,7 @@ use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasActiveAgents, HasOplog, HasPromiseService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{RecordingRpc, start_with_resource_limits_and_overrides};
 use test_r::test;
 
@@ -292,7 +293,7 @@ async fn pending_rpc_scenario(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
         invocation_create_intent(&executor, component.id, &name, durable, &key, METHOD),
     )

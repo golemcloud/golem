@@ -19,9 +19,9 @@ use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_
 use crate::mcp::schema::field_name_mapping;
 use crate::service::worker::{AgentBinding, WorkerService};
 use base64::Engine;
-use golem_common::base_model::agent::Principal;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::schema::FALLBACK_OUTPUT_FIELD_NAME;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
@@ -94,8 +94,8 @@ pub async fn invoke_tool(
             ErrorData::internal_error(format!("Failed to encode method parameters: {error}"), None)
         })?;
 
-    let principal = Principal::anonymous();
-    let proto_principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+    let caller = Caller::anonymous();
+    let proto_caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
 
     let auth_ctx = golem_service_base::model::auth::AuthCtx::System;
     let request_key =
@@ -127,7 +127,7 @@ pub async fn invoke_tool(
                 component.environment_id,
                 component.account_id,
                 auth_ctx,
-                proto_principal,
+                proto_caller,
                 None,
                 None,
             )

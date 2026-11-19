@@ -16,7 +16,7 @@
 
 package golem.runtime
 
-import golem.{BaseAgent, Principal}
+import golem.{BaseAgent, InvocationContext}
 import golem.runtime.annotations.{agentDefinition, agentImplementation, readOnly}
 import golem.runtime.autowire.{AgentDefinition, AgentImplementation}
 import zio._
@@ -43,19 +43,19 @@ object ReadOnlySpec extends ZIOSpecDefault {
     def ttl(name: String): Future[String]
 
     @readOnly()
-    def withPrincipal(p: Principal, name: String): Future[String]
+    def withContext(context: InvocationContext, name: String): Future[String]
 
     def notReadOnly(name: String): Future[String]
   }
 
   @agentImplementation()
   final class ReadOnlyTestAgentImpl() extends ReadOnlyTestAgent {
-    override def defaultCache(name: String): Future[String]                = Future.successful(name)
-    override def noCache(name: String): Future[String]                     = Future.successful(name)
-    override def untilWrite(name: String): Future[String]                  = Future.successful(name)
-    override def ttl(name: String): Future[String]                         = Future.successful(name)
-    override def withPrincipal(p: Principal, name: String): Future[String] = Future.successful(name)
-    override def notReadOnly(name: String): Future[String]                 = Future.successful(name)
+    override def defaultCache(name: String): Future[String]                            = Future.successful(name)
+    override def noCache(name: String): Future[String]                                 = Future.successful(name)
+    override def untilWrite(name: String): Future[String]                              = Future.successful(name)
+    override def ttl(name: String): Future[String]                                     = Future.successful(name)
+    override def withContext(context: InvocationContext, name: String): Future[String] = Future.successful(name)
+    override def notReadOnly(name: String): Future[String]                             = Future.successful(name)
   }
 
   private lazy val defn: AgentDefinition[ReadOnlyTestAgent] =
@@ -69,25 +69,22 @@ object ReadOnlySpec extends ZIOSpecDefault {
   }
 
   def spec = suite("ReadOnlySpec")(
-    test("@readOnly() with default cache policy → until-write, usesPrincipal=false") {
+    test("@readOnly() with default cache policy → until-write") {
       val ro = readOnlyDynOf("defaultCache")
       assertTrue(
-        ro.cachePolicy.tag.asInstanceOf[String] == "until-write",
-        ro.usesPrincipal.asInstanceOf[Boolean] == false
+        ro.cachePolicy.tag.asInstanceOf[String] == "until-write"
       )
     },
     test("@readOnly(cache = \"no-cache\") → no-cache") {
       val ro = readOnlyDynOf("noCache")
       assertTrue(
-        ro.cachePolicy.tag.asInstanceOf[String] == "no-cache",
-        ro.usesPrincipal.asInstanceOf[Boolean] == false
+        ro.cachePolicy.tag.asInstanceOf[String] == "no-cache"
       )
     },
     test("@readOnly(cache = \"until-write\") → until-write") {
       val ro = readOnlyDynOf("untilWrite")
       assertTrue(
-        ro.cachePolicy.tag.asInstanceOf[String] == "until-write",
-        ro.usesPrincipal.asInstanceOf[Boolean] == false
+        ro.cachePolicy.tag.asInstanceOf[String] == "until-write"
       )
     },
     test("@readOnly(cache = \"ttl(30 seconds)\") → ttl with 30s in nanoseconds") {
@@ -97,11 +94,11 @@ object ReadOnlySpec extends ZIOSpecDefault {
         ro.cachePolicy.selectDynamic("val").toString == "30000000000"
       )
     },
-    test("usesPrincipal=true when the method has a Principal parameter") {
-      val ro = readOnlyDynOf("withPrincipal")
+    test("a read-only method with an InvocationContext parameter keeps only its cache policy") {
+      val ro = readOnlyDynOf("withContext")
       assertTrue(
         ro.cachePolicy.tag.asInstanceOf[String] == "until-write",
-        ro.usesPrincipal.asInstanceOf[Boolean] == true
+        js.isUndefined(ro.selectDynamic("usesPrincipal"))
       )
     },
     test("methods without @readOnly have no readOnly metadata") {
