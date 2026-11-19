@@ -1466,6 +1466,116 @@ async fn capacity_change_keeps_consumed_amount() {
     assert_eq!(acquire_after(50).await, 0);
 }
 
+#[test]
+async fn capacity_shrink_below_consumed_then_growth_keeps_the_debt() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_definition(env, "tokens");
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+    // 60 consumed, 40 remaining.
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 40)
+        .await
+        .unwrap();
+
+    // The limit drops below the consumed amount and comes back: 60 stays consumed.
+    let capacity = |value| ResourceLimit::Capacity(ResourceCapacityLimit { value });
+    update_limit(&svc, &fetcher, &mut def, capacity(50)).await;
+    update_limit(&svc, &fetcher, &mut def, capacity(100)).await;
+
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 40);
+}
+
+#[test]
+async fn concurrency_shrink_below_an_outstanding_lease_caps_its_return() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_concurrency_definition(env, "slots", 10);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 10);
+
+    // The limit shrinks to 5 while the lease holds all 10 slots, and the lease is released: the
+    // pool is the new limit, not the old one.
+    update_limit(
+        &svc,
+        &fetcher,
+        &mut def,
+        ResourceLimit::Concurrency(ResourceConcurrencyLimit { value: 5 }),
+    )
+    .await;
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 5);
+}
+
+#[test]
+async fn capacity_shrink_below_an_outstanding_lease_caps_its_return() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_definition(env, "tokens");
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+
+    // The limit shrinks to 50 while the lease holds all 100, and the lease returns all of it
+    // unused: nothing is consumed, so the pool is the new limit, not the old one.
+    update_limit(
+        &svc,
+        &fetcher,
+        &mut def,
+        ResourceLimit::Capacity(ResourceCapacityLimit { value: 50 }),
+    )
+    .await;
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 100)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 50);
+}
+
 /// `count` one-slot leases on a 200-slot concurrency resource, all expired, the `i`-th expiring
 /// `i` milliseconds after the first.
 fn state_with_expired_leases(count: usize) -> QuotaState {
@@ -1489,6 +1599,7 @@ fn state_with_expired_leases(count: usize) -> QuotaState {
     QuotaState::from_persisted(
         make_concurrency_definition(env_id(), "slots", 200),
         200 - count as u64,
+        0,
         Utc::now(),
         Utc::now(),
         leases,
