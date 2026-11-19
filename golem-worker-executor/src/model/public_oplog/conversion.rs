@@ -145,6 +145,17 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .into_typed_schema_value()
                             .map_err(|error| error.to_string())?
                         }
+                        // The enrich request of an oplog processor holds the raw entries of its
+                        // batch, with the claims of their callers. The public form keeps only the
+                        // entry indexes, so no reader of the processor's oplog gets the claims.
+                        HostRequest::GolemApiOplogEnrich(mut inner) => {
+                            for (_, entry) in &mut inner.entries {
+                                entry.clear();
+                            }
+                            HostRequest::GolemApiOplogEnrich(inner)
+                                .into_typed_schema_value()
+                                .map_err(|error| error.to_string())?
+                        }
                         other => other
                             .into_typed_schema_value()
                             .map_err(|error| error.to_string())?,
