@@ -9979,6 +9979,82 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
 
 #[test]
 #[timeout("4m")]
+async fn scheduled_cancellation_by_another_agent_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_worker_executor::model::LookupResult;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_id!("ScheduledInvocationServer", "wrong-canceller");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "wrong-canceller-owner"),
+        )
+        .await?;
+    let other = executor
+        .start_agent(
+            &component.id,
+            agent_id!("ScheduledInvocationClient", "wrong-canceller-other"),
+        )
+        .await?;
+    let owned = OwnedAgentId::new(component.environment_id, &target);
+    let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
+    let due = Utc::now() + chrono::Duration::seconds(5);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let receipt = worker
+        .schedule_invocation(
+            AgentInvocation::AgentMethod {
+                idempotency_key: key,
+                method_name: "inc_global_by".to_string(),
+                input: data_value!(37u64).into_parts().1,
+                invocation_context: InvocationContextStack::fresh(),
+                caller: callers::agent(owner.clone()),
+                scope_card: None,
+            },
+            due,
+        )
+        .await?;
+
+    // Another agent holds the right receipt, but it is not the recorded immediate caller.
+    assert!(
+        !worker
+            .cancel_scheduled_invocation(key, receipt, &callers::agent_principal(other.clone()))
+            .await?
+    );
+
+    // The call completes with a successful result: it was not cancelled.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if let LookupResult::Complete(result) = worker.lookup_invocation_result(&key).await {
+                break result;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        37
+    );
+    drop(worker);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
 async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
