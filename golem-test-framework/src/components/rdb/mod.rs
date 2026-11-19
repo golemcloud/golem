@@ -100,22 +100,10 @@ impl DbInfo {
             DbInfo::Postgres(pg) => pg.env(service_namespace, private_connection),
             DbInfo::Mysql(m) => m.env(service_namespace, private_connection),
             DbInfo::Sqlite(db_path) => [
-                ("GOLEM__DB__TYPE".to_string(), "Sqlite".to_string()),
+                ("GOLEM__STATE_STORE".to_string(), "sqlite".to_string()),
                 (
-                    "GOLEM__DB__CONFIG__DATABASE".to_string(),
-                    db_path
-                        .join(format!("{service_namespace}.db"))
-                        .to_str()
-                        .expect("Invalid Sqlite database path")
-                        .to_string(),
-                ),
-                (
-                    "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
-                    "10".to_string(),
-                ),
-                (
-                    "GOLEM__DB__CONFIG__FOREIGN_KEYS".to_string(),
-                    "true".to_string(),
+                    "GOLEM__DATA_DIR".to_string(),
+                    db_path.to_string_lossy().into_owned(),
                 ),
             ]
             .into(),
@@ -149,17 +137,17 @@ pub struct PostgresInfo {
 impl PostgresInfo {
     pub fn env(
         &self,
-        service_namespace: &str,
+        _service_namespace: &str,
         private_connection: bool,
     ) -> HashMap<String, String> {
         HashMap::from([
-            ("GOLEM__DB__TYPE".to_string(), "Postgres".to_string()),
+            ("GOLEM__STATE_STORE".to_string(), "postgres".to_string()),
             (
-                "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
+                "GOLEM__POSTGRES__MAX_CONNECTIONS".to_string(),
                 "20".to_string(),
             ),
             (
-                "GOLEM__DB__CONFIG__HOST".to_string(),
+                "GOLEM__POSTGRES__HOST".to_string(),
                 if private_connection {
                     self.private_host.clone()
                 } else {
@@ -167,7 +155,7 @@ impl PostgresInfo {
                 },
             ),
             (
-                "GOLEM__DB__CONFIG__PORT".to_string(),
+                "GOLEM__POSTGRES__PORT".to_string(),
                 if private_connection {
                     self.private_port.to_string()
                 } else {
@@ -175,19 +163,15 @@ impl PostgresInfo {
                 },
             ),
             (
-                "GOLEM__DB__CONFIG__SCHEMA".to_string(),
-                service_namespace.to_string(),
-            ),
-            (
-                "GOLEM__DB__CONFIG__DATABASE".to_string(),
+                "GOLEM__POSTGRES__DATABASE".to_string(),
                 self.database_name.clone(),
             ),
             (
-                "GOLEM__DB__CONFIG__USERNAME".to_string(),
+                "GOLEM__POSTGRES__USERNAME".to_string(),
                 self.username.clone(),
             ),
             (
-                "GOLEM__DB__CONFIG__PASSWORD".to_string(),
+                "GOLEM__POSTGRES__PASSWORD".to_string(),
                 self.password.clone(),
             ),
         ])

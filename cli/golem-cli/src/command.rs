@@ -3203,11 +3203,10 @@ pub mod server {
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
-        /// TOML configuration file for the server. It has a `router` section and one section per
-        /// service (`registry_service`, `shard_manager`, `worker_service`, `worker_executor`,
-        /// `component_compilation_service`) with the same shape as that service's own config.
-        /// `GOLEM__<SECTION>__<FIELD>` environment variables override the file, and the flags
-        /// below override both.
+        /// TOML configuration file with the common self-host settings. Unsupported settings go
+        /// under `advanced.<service>`, with their service paths unchanged.
+        /// `GOLEM__<SETTING>` and `GOLEM_ADVANCED__<SERVICE>__<PATH>` environment variables
+        /// override the file. The flags below override both.
         #[clap(long, value_name = "FILE")]
         pub config: Option<PathBuf>,
 

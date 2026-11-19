@@ -40,7 +40,7 @@ GOLEM_S3_ENDPOINT=https://fly.storage.tigris.dev \
 fly secrets import --app my-golem --stage < golem.env
 ```
 
-`golem.env` contains the admin token, `GOLEM__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the app runs.
+`golem.env` contains the admin token, `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN`. Keep it, and delete the file when the app runs.
 
 ### Write `fly.toml`
 
@@ -55,7 +55,7 @@ primary_region = "fra"
   strategy = "rolling"
 
 [env]
-  GOLEM__ROUTER__MANAGEMENT_HOST = "golem.example.com"
+  GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST = "golem.example.com"
   GOLEM_LITESTREAM = "true"
   GOLEM_LITESTREAM_REPLICA_URL = "s3://<bucket name>/litestream?endpoint=https://fly.storage.tigris.dev&region=auto"
 
@@ -83,7 +83,7 @@ primary_region = "fra"
   memory = "4gb"
 ```
 
-Set the probe's `Host` header to `GOLEM__ROUTER__MANAGEMENT_HOST`. Without it, the probe reaches application routing and returns 404. Fly caps the health check grace period at one minute. A first start downloads and inspects the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) and can take several minutes, so allow a longer deployment wait. The volume keeps the artifacts, so only the first start on a new volume downloads them.
+Set the probe's `Host` header to `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`. Without it, the probe reaches application routing and returns 404. Fly caps the health check grace period at one minute. A first start downloads and inspects the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) and can take several minutes, so allow a longer deployment wait. The volume keeps the artifacts, so only the first start on a new volume downloads them.
 
 ### Deploy and add the domains
 
@@ -96,7 +96,7 @@ fly certs add mcp.example.com --app my-golem
 
 Add a certificate for the management host and for each domain of an HTTP API or MCP deployment, and create the DNS records that `fly certs` shows. For a subdomain, `fly certs setup <domain> --app my-golem` also shows a CNAME target.
 
-To use the management API before configuring custom domains, set `GOLEM__ROUTER__MANAGEMENT_HOST` and the probe's `Host` header to the app's generated `<app>.fly.dev` host. This host already has HTTPS. HTTP API and MCP deployments need separate hosts.
+To use the management API before configuring custom domains, set `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST` and the probe's `Host` header to the app's generated `<app>.fly.dev` host. This host already has HTTPS. HTTP API and MCP deployments need separate hosts.
 
 Set `scheme: https` in the HTTP API deployment so its OpenAPI document advertises the public HTTPS URL. This does not require trusting forwarded headers.
 
@@ -129,5 +129,5 @@ Leave out the `[mounts]` section and the Litestream variables: the state is in P
 ## Fixed cluster
 
 <Callout type="warning">
-  A [fixed cluster](/next/deploy/cluster) on Fly.io is not supported yet. The private network is IPv6-only, so every service needs `GOLEM__BIND_ADDRESS=::`, and each executor needs `GOLEM__GRPC__ADVERTISED_IP` set to its `FLY_PRIVATE_IP`.
+  A [fixed cluster](/next/deploy/cluster) on Fly.io is not supported yet. The private network is IPv6-only, so every service needs `GOLEM_ADVANCED__SERVER__BIND_ADDRESS=::`, and each executor needs `GOLEM_ADVANCED__SERVER__GRPC__ADVERTISED_IP` set to its `FLY_PRIVATE_IP`.
 </Callout>

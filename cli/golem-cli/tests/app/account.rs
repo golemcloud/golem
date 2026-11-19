@@ -531,11 +531,11 @@ async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
 
     let mut ctx = TestContext::new();
     ctx.add_env_var(
-        "GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
+        "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
         "true",
     );
     ctx.add_env_var(
-        "GOLEM__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+        "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
         "1000",
     );
     ctx.start_server().await;

@@ -1,0 +1,12 @@
+# Supply credentials through the environment. This file contains no secret values.
+state_store = "sqlite"
+blob_store = "data_disk"
+data_dir = "/var/lib/golem"
+retained_update_snapshots = 2
+outbound_sockets = false
+
+[cache]
+type = "Disabled"
+
+[filesystem_snapshots]
+type = "Disabled"

@@ -38,7 +38,7 @@ On macOS, the local server defaults to `Apfs` storage at `<data_dir>/agents` and
 
 On other platforms, the default storage is `Temporary` and filesystem snapshots are disabled. Supplying `--agent-filesystem-root` selects `Directory` storage there, with filesystem snapshots still disabled.
 
-The filesystem settings are part of the server configuration: `[worker_executor.filesystem_storage]` and `[worker_executor.filesystem_snapshots]` in the `--config` file, or the `GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__*` environment variables; see [Configuration File](#configuration-file). They override the platform defaults and `localServer.agentFilesystemRoot`, and `--agent-filesystem-root` overrides them. A storage mode that another layer selects does not keep the root of the replaced mode, so give `root` together with `type`. To use `Directory` or `Temporary` on macOS, also set `filesystem_snapshots.type = "Disabled"`.
+The filesystem settings are part of the server configuration: `[worker_executor.filesystem_storage]` and `[worker_executor.filesystem_snapshots]` in the `--config` file, or the `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__FILESYSTEM_SNAPSHOTS__*` environment variables; see [Configuration File](#configuration-file). They override the platform defaults and `localServer.agentFilesystemRoot`, and `--agent-filesystem-root` overrides them. A storage mode that another layer selects does not keep the root of the replaced mode, so give `root` together with `type`. To use `Directory` or `Temporary` on macOS, also set `filesystem_snapshots.type = "Disabled"`.
 
 #### Examples
 
@@ -102,7 +102,7 @@ Override detected system memory to leave room for other applications and control
 
 ```shell
 golem server run --system-memory-override 2GiB
-GOLEM__WORKER_EXECUTOR__MEMORY__SYSTEM_MEMORY_OVERRIDE=2147483648 golem server run
+GOLEM_ADVANCED__WORKER_EXECUTOR__MEMORY__SYSTEM_MEMORY_OVERRIDE=2147483648 golem server run
 ```
 
 The flag and the manifest field use the same positive byte-size format. Units are case-insensitive: `1mb` and `1MB` mean 1,000,000 bytes; `1MiB` means 1,048,576 bytes. Whole-number quantities and ASCII spaces are accepted; use `1536 MiB` instead of `1.5 GiB`. A value without a unit means bytes. Quote unitless values in YAML. The environment variable and the config file field `worker_executor.memory.system_memory_override` take a number of bytes. Precedence is the `--system-memory-override` flag, then the environment variable, then the config file, then `localServer.systemMemoryOverride` in the manifest, then automatic detection. All of them set the executor's `memory.system_memory_override`. The executor uses 80% for agent admission and eviction, leaving 20% for host overhead. This is not an OS-enforced process RSS limit; compilation and other host allocations can exceed it. Check the startup log's measured memory limit and monitor RSS under load.
@@ -147,17 +147,18 @@ localServer:
 
 `golem server run --config <FILE>` reads a TOML file that configures every service of the server. Without it, the server uses the local development setup: SQLite databases and blobs in the data directory, login disabled, an unlimited plan, and the well-known local admin token that other `golem` commands use for the built-in local preset.
 
-The file has the top-level fields `data_dir` and `ports_file`, a `[router]` section with the `address`, `port` and optional `management_host` of the main API, and one section per service. Each service section has the same shape as that service's own configuration file:
+The file uses the same self-host settings as the standalone binaries. Set `state_store` to `"sqlite"` or `"postgres"`, and `blob_store` to `"data_disk"` or `"s3"`. The top-level `data_dir` locates local state. Unsupported settings keep their service paths below `advanced.<service>`:
 
 | Section | Service |
 |---------|---------|
-| `[registry_service]` | Registry service: database, login, initial accounts and plans, blob storage |
-| `[shard_manager]` | Shard manager: persistence |
-| `[worker_service]` | Worker service: custom request and MCP ports, session storage, blob storage |
-| `[worker_executor]` | Worker executor: key-value, indexed and scheduler storage, blob storage, memory, agent filesystems, resource usage metering |
-| `[component_compilation_service]` | Component compilation service: blob storage |
+| `[advanced.registry_service]` | Registry service |
+| `[advanced.shard_manager]` | Shard manager |
+| `[advanced.worker_service]` | Worker service |
+| `[advanced.worker_executor]` | Worker executor |
+| `[advanced.component_compilation_service]` | Component compilation service |
+| `[advanced.server.router]` | The main API listener |
 
-`GOLEM__<SECTION>__<FIELD>` environment variables override the file; for example, `GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__COMPUTE=true`. The `server run` flags override both, and the file overrides the manifest's `localServer` section. Every field has a default, so a file only needs the fields it changes. An enum-valued field selects its variant with `type` and its settings with `config`; selecting another `type` than the default drops the default variant's settings.
+`GOLEM__<SETTING>` environment variables override supported settings, for example `GOLEM__POSTGRES__HOST`. Unsupported settings use `GOLEM_ADVANCED__<SERVICE>__<PATH>`, for example `GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__COMPUTE=true`. The `server run` flags override both, and the file overrides the manifest's `localServer` section. An advanced enum selects its variant with `type` and its settings with `config`; selecting another `type` than the default drops the default variant's settings.
 
 `golem --dump-config-default-toml` prints the default configuration, followed by a commented example that keeps all state in Postgres and the blobs in S3. It leaves out the settings that the server sets itself and the paths that follow `data_dir`, so it is a valid config file in which changing `data_dir` moves all local state. `golem --dump-config-default-env-var` prints the same as environment variables.
 
@@ -168,22 +169,22 @@ Map entries and fields that have a default value cannot be removed, only changed
 The default configuration uses secrets that are public: the well-known local admin token, which other `golem` commands use for the built-in local preset, and the compiled-in keys that sign webhook URLs and invocation session tokens. To serve the main API, the HTTP APIs or MCP to other machines, replace all of them. A token has at least 16 characters, each an ASCII letter, a digit, `-` or `_`. Every key is base64, and the two webhook keys must be equal:
 
 ```toml
-[router]
+[advanced.server.router]
 address = "0.0.0.0"
 
-[worker_service]
+[advanced.worker_service]
 bind_address = "0.0.0.0"
 
-[registry_service.initial_accounts.root]
+[advanced.registry_service.initial_accounts.root]
 token = "<a long random secret>"
 
-[worker_service.webhook_callback_handler]
+[advanced.worker_service.webhook_callback_handler]
 hmac_key = "<32 random bytes, base64>"
 
-[worker_executor.agent_webhooks_service]
+[advanced.worker_executor.agent_webhooks_service]
 hmac_key = "<the same 32 random bytes, base64>"
 
-[worker_service.invocation_session_tokens.active_key]
+[advanced.worker_service.invocation_session_tokens.active_key]
 id = "<a key id>"
 key = "<32 random bytes, base64>"
 ```
@@ -192,17 +193,17 @@ The server refuses to bind any listener to an address that is not loopback while
 
 Replace the secrets also when the main API binds a loopback address but a reverse proxy on the same host serves it to other machines; the check cannot detect a proxy.
 
-To serve the management API, the HTTP APIs and MCP on one port, set `router.management_host` (`GOLEM__ROUTER__MANAGEMENT_HOST`) to the host name of the management API. Requests for that host reach the management API; requests for every other host reach the HTTP API and MCP deployments, like on the custom request port. Point every name at the same address in DNS. The server adds the management host to `registry_service.domain_registration.reserved_domains`, so no environment can register it as a domain. Hosts are compared without case, port and a trailing dot. Behind a reverse proxy, add the address range of the proxy (`/32` for one address) to `worker_service.route_resolver.trusted_ingress_addresses`, so the router takes the host from `X-Forwarded-Host`. Other `golem` commands must then reach the server through the management host, so do not set it for local development, where they connect to `127.0.0.1`:
+To serve the management API, the HTTP APIs and MCP on one port, set `router.management_host` (`GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`) to the host name of the management API. Requests for that host reach the management API; requests for every other host reach the HTTP API and MCP deployments, like on the custom request port. Point every name at the same address in DNS. The server adds the management host to `registry_service.domain_registration.reserved_domains`, so no environment can register it as a domain. Hosts are compared without case, port and a trailing dot. Behind a reverse proxy, add the address range of the proxy (`/32` for one address) to `worker_service.route_resolver.trusted_ingress_addresses`, so the router takes the host from `X-Forwarded-Host`. Other `golem` commands must then reach the server through the management host, so do not set it for local development, where they connect to `127.0.0.1`:
 
 ```toml
-[router]
+[advanced.server.router]
 address = "::"
 management_host = "api.golem.example.com"
 ```
 
 Every service binds all its listeners to its `bind_address`, which is `127.0.0.1` by default. `0.0.0.0` accepts IPv4 only, and `::` accepts both IPv6 and IPv4. The custom request and MCP listeners belong to the worker service, so serving HTTP APIs or MCP to other machines needs `worker_service.bind_address`. That address also binds the gRPC listener of the worker service, on a port that the operating system selects, and the gRPC listeners do not authenticate their callers. Keep the `bind_address` of the other services at `127.0.0.1`, and use a firewall so that other machines reach only the main API, the custom request port and the MCP port.
 
-To move the state to Postgres, set the database of each service. Each of them needs its own schema, and the server rejects two that share one. Use the schemas of the per-service deployment, so the same database also works with the per-service images later:
+To move the state to PostgreSQL, set `state_store = "postgres"` at the top level and give one connection in `[postgres]`. The settings module assigns separate schemas:
 
 | Field | Schema |
 |-------|--------|
@@ -213,20 +214,15 @@ To move the state to Postgres, set the database of each service. Each of them ne
 | `worker_executor.scheduler_storage` | `golem_worker_executor_scheduler` |
 
 ```toml
-[registry_service.db]
-type = "Postgres"
-
-[registry_service.db.config]
+[postgres]
 host = "db.internal"
 port = 5432
 database = "golem"
 username = "golem"
-password = "<password>"
 max_connections = 10
-schema = "golem_registry_service"
 ```
 
-Set `blob_storage` in the `registry_service`, `worker_service`, `worker_executor` and `component_compilation_service` sections to the same value, for example `type = "S3"`. The S3 settings have no defaults once `type = "S3"` replaces the default storage, so start from the commented example that `golem --dump-config-default-toml` prints. It sets `namespace_prefixes = true` and names the same bucket, `golem`, in every bucket setting, so all blobs are in one bucket. Without `namespace_prefixes`, each bucket setting must name a bucket of its own. Plan quotas are in `[registry_service.initial_plans.default]`, and OAuth2 login is `[registry_service.login]`.
+Supply the password through `GOLEM__POSTGRES__PASSWORD`. For S3, set `blob_store = "s3"` at the top level and the `components_bucket`, `artifacts_bucket` and `data_bucket` fields in `[object_storage]`. Namespace prefixes keep blob kinds separate, so the buckets can be the same. The same settings reach every service. Plan quotas are in `[advanced.registry_service.initial_plans.default]`, and OAuth2 login is `[advanced.registry_service.login]`.
 
 In the default SQLite setup, all state is in the data directory: `registry.db`, `shard_manager.db`, `scheduler.db` and `gateway-sessions.db`, one database per agent in `kv-store/*.db`, and the blobs in `blobs/`.
 

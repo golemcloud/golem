@@ -15,7 +15,8 @@
 //! Configuration of `golem server run`.
 //!
 //! [`GolemServerConfig`] composes the configuration types of the services that the single
-//! executable runs, so each section has exactly the shape of that service's own config file. The
+//! executable runs. The self-host module maps supported settings and each advanced section onto
+//! these service types. The
 //! defaults are the local development setup, derived from the data directory. The layers on top
 //! of them are, from lowest to highest precedence: the manifest's `localServer` section, the
 //! `--config` TOML file, `GOLEM__` environment variables and the `server run` flags.
@@ -33,7 +34,9 @@ use golem_cli::config::{
 };
 use golem_cli::fs;
 use golem_cli::model::app::ResolvedLocalServer;
-use golem_common::config::{DbConfig, DbPostgresConfig, DbSqliteConfig, env_config_provider};
+use golem_common::config::{
+    DbConfig, DbPostgresConfig, DbSqliteConfig, env_config_provider, self_host,
+};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::MonthlyPlanAmounts;
 use golem_common::model::auth::{AccountRole, TokenSecret};
@@ -145,6 +148,7 @@ const LAUNCHER_OWNED_KEYS: &[&str] = &[
 #[serde(deny_unknown_fields)]
 pub struct GolemServerConfig {
     pub data_dir: PathBuf,
+    pub logging: golem_common::tracing::TracingConfig,
     /// File to write the bound ports to as JSON once the server has started.
     pub ports_file: Option<PathBuf>,
     /// The installation's Golem issuer, for the worker service and the executor: an https URL on
@@ -198,6 +202,7 @@ impl GolemServerConfig {
 
         Ok(Self {
             data_dir: data_dir.to_path_buf(),
+            logging: golem_common::tracing::TracingConfig::local_dev("golem"),
             ports_file: None,
             golem_issuer: None,
             router: RouterConfig {
@@ -836,6 +841,7 @@ fn load_server_config_on(
             LocalServerSettings::from_local_server(local_server).into_figment(platform),
         )?);
     }
+    let settings_start = layers.len();
     if let Some(config_file) = &args.config {
         if !config_file.is_file() {
             bail!(
@@ -847,7 +853,11 @@ fn load_server_config_on(
         layers.push(Layer::read(provider.metadata(), provider)?);
     }
     let env = env_config_provider();
-    layers.push(Layer::read(env.metadata(), env)?);
+    layers.push(Layer::read(
+        Metadata::named("the environment variables"),
+        env,
+    )?);
+    let settings_end = layers.len();
     layers.push(Layer::read(
         Metadata::named("the `server run` flags"),
         LocalServerSettings::from_run_args(args).into_figment(platform),
@@ -858,6 +868,33 @@ fn load_server_config_on(
         Err(err) if err.missing() => default_data_dir()?,
         Err(err) => return Err(err).context("Failed to load the server configuration"),
     };
+    let common = layers[settings_start..settings_end]
+        .iter()
+        .fold(Figment::new(), |common, layer| {
+            let mut layer = layer.clone();
+            layer.dict.remove("advanced");
+            common.merge(layer)
+        })
+        .merge(Serialized::default("data_dir", &data_dir));
+    let common = Layer::read(
+        Metadata::named("the self-host settings"),
+        self_host::server(&common)?,
+    )?;
+    let advanced = layers[settings_start..settings_end]
+        .iter()
+        .map(|layer| {
+            let mut advanced = layer.clone();
+            advanced.dict.retain(|key, _| key == "advanced");
+            Layer::read(
+                layer.metadata.clone(),
+                self_host::server(&Figment::from(advanced))?,
+            )
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    layers.splice(
+        settings_start..settings_end,
+        std::iter::once(common).chain(advanced),
+    );
     layers.insert(
         0,
         Layer::read(
@@ -1053,14 +1090,13 @@ fn extract(
 }
 
 fn reject_launcher_owned_keys(layers: &[Layer]) -> anyhow::Result<()> {
-    let env_name = env_config_provider().metadata().name;
     for key in LAUNCHER_OWNED_KEYS {
         let path: Vec<String> = key.split('.').map(str::to_string).collect();
         for layer in layers {
             if get_path(&layer.dict, &path).is_some() {
-                let source = if layer.metadata.name == env_name {
+                let source = if layer.metadata.name == "the environment variables" {
                     format!(
-                        "set by the environment variable GOLEM__{}",
+                        "set by the environment variable GOLEM_ADVANCED__{}",
                         key.replace('.', "__").to_uppercase()
                     )
                 } else {
@@ -1318,7 +1354,7 @@ fn configurable_value(
             remove_path(dict, &path);
         }
     }
-    Ok(value)
+    Ok(self_host::reference("server", &Figment::from(Serialized::defaults(value))).extract()?)
 }
 
 fn remove_differing_leaves(value: &mut Value, other: &Value) {
@@ -1415,6 +1451,314 @@ mod tests {
     }
 
     #[test]
+    fn self_host_settings_reach_embedded_and_standalone_services() {
+        Jail::expect_with(|jail| {
+            jail.create_dir("config")?;
+            let settings = r#"
+                state_store = "postgres"
+                blob_store = "s3"
+                recovery_location = "s3://recovery/installation"
+                recovery_horizon = "17days"
+                package_mirror_url = "https://packages.example.com/golem/"
+                outgoing_proxy = "http://proxy.internal:3128"
+                outbound_sockets = true
+                retained_update_snapshots = 7
+                [postgres]
+                host = "db.internal"
+                port = 25432
+                [object_storage]
+                endpoint_url = "https://s3.internal"
+                public_endpoint_url = "https://downloads.example.com"
+                components_bucket = "components"
+                artifacts_bucket = "artifacts"
+                [logging.stdout]
+                json = true
+                [otlp]
+                host = "collector.internal"
+                port = 14318
+                [cache]
+                type = "Redis"
+                [cache.config]
+                host = "cache.internal"
+                port = 16379
+                [internal_grpc_tls]
+                enabled = true
+                cert_file = "/certs/service.pem"
+                key_file = "/certs/service.key"
+                ca_cert_file = "/certs/ca.pem"
+                [filesystem_snapshots]
+                type = "Enabled"
+            "#;
+            jail.set_env(
+                "GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY",
+                "2a".repeat(64),
+            );
+            [
+                "registry-service",
+                "shard-manager",
+                "worker-service",
+                "worker-executor",
+                "component-compilation-service",
+            ]
+            .into_iter()
+            .try_for_each(|service| {
+                jail.create_file(format!("config/{service}.toml"), settings)
+                    .map(|_| ())
+            })?;
+            jail.create_file("settings.toml", settings)?;
+            let embedded = load(
+                None,
+                &RunArgs {
+                    config: Some("settings.toml".into()),
+                    ..run_args_with_data_dir("/data")
+                },
+            )
+            .unwrap();
+            let registry = golem_registry_service::config::make_config_loader().load()?;
+            let shard = golem_shard_manager::config::make_config_loader().load()?;
+            let worker =
+                golem_worker_service::config::make_worker_service_config_loader().load()?;
+            let executor =
+                golem_worker_executor::services::golem_config::make_config_loader().load()?;
+            let compilation =
+                golem_component_compilation_service::config::make_config_loader().load()?;
+            [
+                serde_json::to_value(&embedded.registry_service).unwrap(),
+                serde_json::to_value(&registry).unwrap(),
+                serde_json::to_value(&embedded.shard_manager).unwrap(),
+                serde_json::to_value(&shard).unwrap(),
+                serde_json::to_value(&embedded.worker_service).unwrap(),
+                serde_json::to_value(&worker).unwrap(),
+                serde_json::to_value(&embedded.worker_executor).unwrap(),
+                serde_json::to_value(&executor).unwrap(),
+                serde_json::to_value(&embedded.component_compilation_service).unwrap(),
+                serde_json::to_value(&compilation).unwrap(),
+            ]
+            .into_iter()
+            .for_each(|service| {
+                assert_eq!(service["grpc"]["tls"]["type"], "Enabled");
+                assert_eq!(
+                    service["grpc"]["tls"]["config"]["server_cert_file"],
+                    "/certs/service.pem"
+                );
+            });
+            [
+                serde_json::to_value(&embedded.registry_service.db).unwrap(),
+                serde_json::to_value(&registry.db).unwrap(),
+                serde_json::to_value(&embedded.shard_manager.persistence).unwrap(),
+                serde_json::to_value(&shard.persistence).unwrap(),
+                serde_json::to_value(&embedded.worker_executor.indexed_storage).unwrap(),
+                serde_json::to_value(&executor.indexed_storage).unwrap(),
+                serde_json::to_value(&embedded.worker_executor.scheduler_storage).unwrap(),
+                serde_json::to_value(&executor.scheduler_storage).unwrap(),
+            ]
+            .into_iter()
+            .for_each(|store| {
+                assert_eq!(store["type"], "Postgres");
+                assert_eq!(store["config"]["host"], "db.internal");
+                assert_eq!(store["config"]["port"], 25432);
+            });
+            [&embedded.worker_executor, &executor]
+                .into_iter()
+                .for_each(|executor| {
+                    let store = serde_json::to_value(&executor.key_value_storage).unwrap();
+                    assert_eq!(store["type"], "NamespaceRouted");
+                    assert_eq!(store["config"]["persistent"]["type"], "Postgres");
+                    assert_eq!(
+                        store["config"]["persistent"]["config"]["host"],
+                        "db.internal"
+                    );
+                    assert_eq!(store["config"]["cache"]["config"]["host"], "cache.internal");
+                    let FilesystemSnapshotsConfig::Enabled(snapshots) =
+                        &executor.filesystem_snapshots
+                    else {
+                        panic!("expected enabled snapshots")
+                    };
+                    assert_eq!(snapshots.uploads().retained_update_snapshots().get(), 7);
+                });
+            [&embedded.worker_service, &worker]
+                .into_iter()
+                .for_each(|worker| {
+                    let store = serde_json::to_value(&worker.gateway_session_storage).unwrap();
+                    assert_eq!(store["type"], "Redis");
+                    assert_eq!(store["config"]["host"], "cache.internal");
+                    assert_eq!(store["config"]["port"], 16379);
+                });
+            [
+                &embedded.registry_service.blob_storage,
+                &registry.blob_storage,
+                &embedded.worker_service.blob_storage,
+                &worker.blob_storage,
+                &embedded.worker_executor.blob_storage,
+                &executor.blob_storage,
+                &embedded.component_compilation_service.blob_storage,
+                &compilation.blob_storage,
+            ]
+            .into_iter()
+            .for_each(|storage| {
+                let BlobStorageConfig::S3(config) = storage else {
+                    panic!("expected S3")
+                };
+                assert_eq!(
+                    config.public_endpoint_url.as_deref(),
+                    Some("https://downloads.example.com")
+                );
+                assert_eq!(config.components_bucket, "components");
+                assert_eq!(&*config.artifacts_bucket, "artifacts");
+            });
+            [
+                &embedded.registry_service.installation,
+                &registry.installation,
+                &embedded.shard_manager.installation,
+                &shard.installation,
+                &embedded.worker_service.installation,
+                &worker.installation,
+                &embedded.worker_executor.installation,
+                &executor.installation,
+                &embedded.component_compilation_service.installation,
+                &compilation.installation,
+            ]
+            .into_iter()
+            .for_each(|config| {
+                assert_eq!(
+                    config.recovery_location.as_deref(),
+                    Some("s3://recovery/installation")
+                );
+                assert_eq!(
+                    config.recovery_horizon,
+                    Some(Duration::from_secs(17 * 86400))
+                );
+                assert_eq!(
+                    config.package_mirror_url.as_ref().unwrap().as_str(),
+                    "https://packages.example.com/golem/"
+                );
+                assert_eq!(
+                    config.outgoing_proxy.as_ref().unwrap().as_str(),
+                    "http://proxy.internal:3128/"
+                );
+            });
+            assert!(executor.agent_sockets.enabled);
+            assert!(embedded.worker_executor.agent_sockets.enabled);
+            [
+                &embedded.logging,
+                &registry.tracing,
+                &shard.tracing,
+                &worker.tracing,
+                &executor.tracing,
+                &compilation.tracing,
+            ]
+            .into_iter()
+            .for_each(|config| {
+                assert!(config.stdout.json);
+                assert_eq!(config.otlp.host, "collector.internal");
+                assert_eq!(config.otlp.port, 14318);
+            });
+            jail.set_env("GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE", "Etcd");
+            jail.set_env(
+                "GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS",
+                r#"["https://etcd.internal:2379"]"#,
+            );
+            jail.set_env("GOLEM__ETCD__TLS__CA_CERT_FILE", "/certs/etcd-ca.pem");
+            jail.set_env("GOLEM__ETCD__TLS__CLIENT_CERT_FILE", "/certs/etcd.pem");
+            jail.set_env("GOLEM__ETCD__TLS__CLIENT_KEY_FILE", "/certs/etcd.key");
+            let shard = golem_shard_manager::config::make_config_loader().load()?;
+            let PersistenceConfig::Etcd(etcd) = shard.persistence else {
+                panic!("expected etcd persistence")
+            };
+            let tls = etcd.tls.unwrap();
+            assert_eq!(
+                tls.ca_cert_file.as_deref(),
+                Some(Path::new("/certs/etcd-ca.pem"))
+            );
+            assert_eq!(
+                tls.client_cert_file.as_deref(),
+                Some(Path::new("/certs/etcd.pem"))
+            );
+            assert_eq!(
+                tls.client_key_file.as_deref(),
+                Some(Path::new("/certs/etcd.key"))
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn self_host_examples_load_in_every_binary() {
+        [
+            include_str!("../config/self-host-single-node.toml"),
+            include_str!("../config/self-host-multi-node.toml"),
+        ]
+        .into_iter()
+        .for_each(|settings| {
+            Jail::expect_with(|jail| {
+                jail.create_dir("config")?;
+                [
+                    "registry-service",
+                    "shard-manager",
+                    "worker-service",
+                    "worker-executor",
+                    "component-compilation-service",
+                ]
+                .into_iter()
+                .try_for_each(|service| {
+                    jail.create_file(format!("config/{service}.toml"), settings)
+                        .map(|_| ())
+                })?;
+                jail.create_file("settings.toml", settings)?;
+                load(
+                    None,
+                    &RunArgs {
+                        config: Some("settings.toml".into()),
+                        ..RunArgs::default()
+                    },
+                )
+                .unwrap();
+                golem_registry_service::config::make_config_loader().load()?;
+                golem_shard_manager::config::make_config_loader().load()?;
+                golem_worker_service::config::make_worker_service_config_loader().load()?;
+                golem_worker_executor::services::golem_config::make_config_loader().load()?;
+                golem_component_compilation_service::config::make_config_loader().load()?;
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn removed_self_host_settings_are_rejected_by_both_loaders() {
+        [
+            "number_of_shards = 17",
+            "retained_periodic_snapshots = 3",
+            "[filesystem_snapshots.config]\nretained_periodic_snapshots = 3",
+        ]
+        .into_iter()
+        .for_each(|settings| {
+            Jail::expect_with(|jail| {
+                jail.create_dir("config")?;
+                jail.create_file("config/worker-executor.toml", settings)?;
+                jail.create_file("settings.toml", settings)?;
+                assert!(
+                    golem_worker_executor::services::golem_config::make_config_loader()
+                        .load()
+                        .is_err(),
+                    "standalone loader accepted {settings}"
+                );
+                assert!(
+                    load(
+                        None,
+                        &RunArgs {
+                            config: Some("settings.toml".into()),
+                            ..run_args_with_data_dir("/data")
+                        },
+                    )
+                    .is_err(),
+                    "embedded loader accepted {settings}"
+                );
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
     fn filesystem_settings_follow_the_platform_and_the_layers() {
         for platform in [LocalPlatform::MacOs, LocalPlatform::Other] {
             Jail::expect_with(|jail| {
@@ -1487,10 +1831,10 @@ mod tests {
                 jail.create_file(
                     "golem.toml",
                     r#"
-                        [worker_executor.filesystem_storage.mode]
+                        [advanced.worker_executor.filesystem_storage.mode]
                         type = "Directory"
 
-                        [worker_executor.filesystem_storage.mode.config]
+                        [advanced.worker_executor.filesystem_storage.mode.config]
                         root = "file-agents"
                     "#,
                 )?;
@@ -1507,7 +1851,7 @@ mod tests {
                 );
 
                 jail.set_env(
-                    "GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
                     "env-agents",
                 );
                 assert_eq!(
@@ -1539,13 +1883,10 @@ mod tests {
         Jail::expect_with(|jail| {
             let data_dir = jail.directory().join("data");
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE",
                 "Temporary",
             );
-            jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__TYPE",
-                "Disabled",
-            );
+            jail.set_env("GOLEM__FILESYSTEM_SNAPSHOTS__TYPE", "Disabled");
             let args = RunArgs {
                 data_dir: Some(data_dir.clone()),
                 ..RunArgs::default()
@@ -1576,11 +1917,11 @@ mod tests {
     fn temporary_storage_rejects_a_root() {
         Jail::expect_with(|jail| {
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE",
                 "Temporary",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
                 "agents",
             );
             assert!(load(None, &run_args_with_data_dir("/data")).is_err());
@@ -1595,7 +1936,7 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [worker_executor.filesystem_snapshots]
+                    [filesystem_snapshots]
                     type = "Enabled"
                 "#,
             )?;
@@ -1661,10 +2002,10 @@ mod tests {
                 "golem.toml",
                 &format!(
                     r#"
-                        [worker_executor.filesystem_snapshots]
+                        [filesystem_snapshots]
                         type = "Enabled"
 
-                        [worker_executor.filesystem_snapshots.config]
+                        [filesystem_snapshots.config]
                         repository_key = "{}"
                         save_threads = 2
                     "#,
@@ -1693,13 +2034,10 @@ mod tests {
             );
 
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY",
+                "GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY",
                 "3b".repeat(64),
             );
-            jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__FILESYSTEM_SNAPSHOTS__CONFIG__SAVE_THREADS",
-                "3",
-            );
+            jail.set_env("GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__SAVE_THREADS", "3");
             let from_env = load_with_key();
             let store = snapshot_store(&from_env);
             assert_eq!(store.repository_key().bytes(), &[0x3b; 64]);
@@ -1714,17 +2052,17 @@ mod tests {
     fn invalid_settings_do_not_create_the_retained_key() {
         for settings in [
             r#"
-                [worker_executor.filesystem_snapshots]
+                [filesystem_snapshots]
                 type = "Enabled"
 
-                [worker_executor.filesystem_snapshots.config]
+                [filesystem_snapshots.config]
                 save_threads = 0
             "#,
             r#"
-                [worker_executor.filesystem_snapshots]
+                [filesystem_snapshots]
                 type = "Enabled"
 
-                [worker_executor.filesystem_storage.mode]
+                [advanced.worker_executor.filesystem_storage.mode]
                 type = "Directory"
             "#,
         ] {
@@ -1932,17 +2270,17 @@ mod tests {
                 r#"
                     data_dir = "/file-data"
 
-                    [router]
+                    [advanced.server.router]
                     address = "127.0.0.3"
                     port = 7000
 
-                    [worker_service]
+                    [advanced.worker_service]
                     custom_request_port = 7001
                     mcp_port = 7002
                 "#,
             )?;
-            jail.set_env("GOLEM__ROUTER__PORT", "8000");
-            jail.set_env("GOLEM__WORKER_SERVICE__MCP_PORT", "8002");
+            jail.set_env("GOLEM_ADVANCED__SERVER__ROUTER__PORT", "8000");
+            jail.set_env("GOLEM_ADVANCED__WORKER_SERVICE__MCP_PORT", "8002");
             let manifest = local_server(LocalServer {
                 router_addr: Some("127.0.0.2".to_string()),
                 router_port: Some(6000),
@@ -1994,19 +2332,19 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [registry_service.initial_plans.default]
+                    [advanced.registry_service.initial_plans.default]
                     component_limit = 25
                     monthly_compute_gcu = 2
 
-                    [registry_service.initial_accounts.root]
+                    [advanced.registry_service.initial_accounts.root]
                     token = "a-secret-admin-token-of-sufficient-length"
 
-                    [worker_executor.memory]
+                    [advanced.worker_executor.memory]
                     system_memory_override = 4294967296
                 "#,
             )?;
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__COMPUTE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__COMPUTE",
                 "true",
             );
             let run_args = RunArgs {
@@ -2106,7 +2444,7 @@ mod tests {
         Jail::expect_with(|jail| {
             jail.clear_env();
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__MEMORY",
                 "true",
             );
             let args = run_args_with_data_dir("/data");
@@ -2116,7 +2454,7 @@ mod tests {
                 "{error}"
             );
             jail.set_env(
-                "GOLEM__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MONTHLY_MEMORY_GB_SECONDS",
                 "0",
             );
             let config = load(None, &args).unwrap();
@@ -2135,10 +2473,10 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [worker_executor.key_value_storage]
+                    [advanced.worker_executor.key_value_storage]
                     type = "Postgres"
 
-                    [worker_executor.key_value_storage.config]
+                    [advanced.worker_executor.key_value_storage.config]
                     host = "db"
                     port = 5432
                     database = "golem"
@@ -2149,27 +2487,27 @@ mod tests {
                 "#,
             )?;
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__TYPE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__TYPE",
                 "Postgres",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__HOST",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__HOST",
                 "db",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__PORT",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__PORT",
                 "5432",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__USERNAME",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__USERNAME",
                 "golem",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__PASSWORD",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__PASSWORD",
                 "golem",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__MAX_CONNECTIONS",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__MAX_CONNECTIONS",
                 "5",
             );
             let run_args = RunArgs {
@@ -2183,7 +2521,7 @@ mod tests {
             assert!(error.contains("database"), "{error}");
 
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__DATABASE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__DATABASE",
                 "golem",
             );
             let config = load(None, &run_args).unwrap();
@@ -2209,11 +2547,11 @@ mod tests {
     #[test]
     fn launcher_owned_keys_are_rejected() {
         Jail::expect_with(|jail| {
-            jail.set_env("GOLEM__WORKER_EXECUTOR__GRPC__PORT", "9000");
+            jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT", "9000");
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
             assert!(error.contains("worker_executor.grpc.port"), "{error}");
             assert!(
-                error.contains("GOLEM__WORKER_EXECUTOR__GRPC__PORT"),
+                error.contains("GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT"),
                 "{error}"
             );
             Ok(())
@@ -2222,7 +2560,7 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [registry_service.tracing.stdout]
+                    [advanced.registry_service.tracing.stdout]
                     enabled = false
                 "#,
             )?;
@@ -2240,12 +2578,18 @@ mod tests {
     #[test]
     fn the_golem_issuer_is_set_once_for_the_whole_server() {
         Jail::expect_with(|jail| {
-            jail.set_env("GOLEM__GOLEM_ISSUER", "https://id.acme.example");
+            jail.set_env(
+                "GOLEM_ADVANCED__SERVER__GOLEM_ISSUER",
+                "https://id.acme.example",
+            );
             let config = load(None, &run_args_with_data_dir("/data")).unwrap();
             let issuer: GolemIssuer = "https://id.acme.example".parse().unwrap();
             assert_eq!(config.golem_issuer, Some(issuer));
 
-            jail.set_env("GOLEM__GOLEM_ISSUER", "http://id.acme.example");
+            jail.set_env(
+                "GOLEM_ADVANCED__SERVER__GOLEM_ISSUER",
+                "http://id.acme.example",
+            );
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
             assert!(error.contains("http://id.acme.example"), "{error}");
             Ok(())
@@ -2256,7 +2600,7 @@ mod tests {
     fn an_empty_or_blank_golem_issuer_counts_as_not_set() {
         for value in ["", "   "] {
             Jail::expect_with(|jail| {
-                jail.set_env("GOLEM__GOLEM_ISSUER", value);
+                jail.set_env("GOLEM_ADVANCED__SERVER__GOLEM_ISSUER", value);
                 let config = load(None, &run_args_with_data_dir("/data")).unwrap();
                 assert_eq!(config.golem_issuer, None);
                 assert!(GolemIssuer::configured_or_generated(config.golem_issuer).is_generated());
@@ -2269,7 +2613,7 @@ mod tests {
     fn the_golem_issuer_of_one_service_is_rejected() {
         for service in ["worker_service", "worker_executor"] {
             Jail::expect_with(|jail| {
-                let variable = format!("GOLEM__{}__GOLEM_ISSUER", service.to_uppercase());
+                let variable = format!("GOLEM_ADVANCED__{}__GOLEM_ISSUER", service.to_uppercase());
                 jail.set_env(&variable, "https://id.acme.example");
                 let error = jail_error(load(None, &run_args_with_data_dir("/data")));
                 assert!(
@@ -2285,10 +2629,30 @@ mod tests {
     #[test]
     fn unknown_top_level_keys_are_rejected() {
         Jail::expect_with(|jail| {
-            jail.set_env("GOLEM__RESOURCE_USAGE_METERING__COMPUTE", "true");
+            jail.set_env(
+                "GOLEM_ADVANCED__SERVER__RESOURCE_USAGE_METERING__COMPUTE",
+                "true",
+            );
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
             assert!(error.contains("resource_usage_metering"), "{error}");
             Ok(())
+        });
+        [
+            ("GOLEM__ROUTER__PORT", "18444"),
+            (
+                "GOLEM__GOLEM_ISSUER",
+                "urn:golem:issuer:12345678-1234-4234-8234-123456789012",
+            ),
+            ("GOLEM__PORTS_FILE", "ports.json"),
+        ]
+        .into_iter()
+        .for_each(|(key, value)| {
+            Jail::expect_with(|jail| {
+                jail.set_env(key, value);
+                let error = jail_error(load(None, &run_args_with_data_dir("/data")));
+                assert!(error.contains("advanced channel"), "{key}: {error}");
+                Ok(())
+            });
         });
     }
 
@@ -2317,15 +2681,24 @@ mod tests {
         };
 
         for (variable, postgres) in [
-            ("GOLEM__DB__CONFIG__SCHEMA", registry),
-            ("GOLEM__PERSISTENCE__CONFIG__SCHEMA", shard_manager),
             (
-                "GOLEM__KEY_VALUE_STORAGE__CONFIG__SCHEMA",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__DB__CONFIG__SCHEMA",
+                registry,
+            ),
+            (
+                "GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__SCHEMA",
+                shard_manager,
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__SCHEMA",
                 &key_value.postgres,
             ),
-            ("GOLEM__INDEXED_STORAGE__CONFIG__SCHEMA", &indexed.postgres),
             (
-                "GOLEM__SCHEDULER_STORAGE__CONFIG__SCHEMA",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__SCHEMA",
+                &indexed.postgres,
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SCHEDULER_STORAGE__CONFIG__SCHEMA",
                 &scheduler.postgres,
             ),
         ] {
@@ -2395,10 +2768,13 @@ mod tests {
     fn selecting_a_variant_without_fields_needs_no_config() {
         Jail::expect_with(|jail| {
             jail.set_env(
-                "GOLEM__REGISTRY_SERVICE__COMPONENT_COMPILATION__TYPE",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__COMPONENT_COMPILATION__TYPE",
                 "Disabled",
             );
-            jail.set_env("GOLEM__REGISTRY_SERVICE__BUILTIN_PLUGINS__TYPE", "Disabled");
+            jail.set_env(
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__BUILTIN_PLUGINS__TYPE",
+                "Disabled",
+            );
             let config = load(None, &run_args_with_data_dir("/data")).unwrap();
             assert!(matches!(
                 config.registry_service.component_compilation,
@@ -2418,7 +2794,7 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [worker_executor.filesystem_storage.mode]
+                    [advanced.worker_executor.filesystem_storage.mode]
                     type = "Temporary"
                 "#,
             )?;
@@ -2447,10 +2823,10 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [worker_executor.key_value_storage]
+                    [advanced.worker_executor.key_value_storage]
                     type = "Postgres"
 
-                    [worker_executor.key_value_storage.config]
+                    [advanced.worker_executor.key_value_storage.config]
                     host = "db"
                     port = 5432
                     database = "golem"
@@ -2460,13 +2836,16 @@ mod tests {
                     schema = "golem_worker_executor"
                 "#,
             )?;
-            jail.set_env("GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE", "Sqlite");
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__DATABASE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE",
+                "Sqlite",
+            );
+            jail.set_env(
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__DATABASE",
                 "/data/kv.db",
             );
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__FOREIGN_KEYS",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__FOREIGN_KEYS",
                 "false",
             );
             let run_args = RunArgs {
@@ -2478,7 +2857,7 @@ mod tests {
             assert!(error.contains("max_connections"), "{error}");
 
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS",
                 "3",
             );
             let config = load(None, &run_args).unwrap();
@@ -2559,8 +2938,8 @@ mod tests {
                 "golem.toml",
                 &format!(
                     "{}{}",
-                    postgres("registry_service.db"),
-                    postgres("shard_manager.persistence")
+                    postgres("advanced.registry_service.db"),
+                    postgres("advanced.shard_manager.persistence")
                 ),
             )?;
             let run_args = RunArgs {
@@ -2581,7 +2960,7 @@ mod tests {
     fn webhook_keys_must_match() {
         Jail::expect_with(|jail| {
             jail.set_env(
-                "GOLEM__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY",
+                "GOLEM_ADVANCED__WORKER_SERVICE__WEBHOOK_CALLBACK_HANDLER__HMAC_KEY",
                 "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
             );
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
@@ -2597,10 +2976,13 @@ mod tests {
     fn the_management_host_is_reserved() {
         Jail::expect_with(|jail| {
             jail.set_env(
-                "GOLEM__REGISTRY_SERVICE__DOMAIN_REGISTRATION__RESERVED_DOMAINS",
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__DOMAIN_REGISTRATION__RESERVED_DOMAINS",
                 r#"["status.golem.example.com"]"#,
             );
-            jail.set_env("GOLEM__ROUTER__MANAGEMENT_HOST", "api.golem.example.com");
+            jail.set_env(
+                "GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST",
+                "api.golem.example.com",
+            );
             let config = load(None, &run_args_with_data_dir("/data")).unwrap();
             assert_eq!(
                 config.router.management_host.as_deref(),
@@ -2621,7 +3003,7 @@ mod tests {
     fn invalid_management_host_is_rejected() {
         Jail::expect_with(|jail| {
             jail.set_env(
-                "GOLEM__ROUTER__MANAGEMENT_HOST",
+                "GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST",
                 "https://api.golem.example.com",
             );
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
@@ -2633,7 +3015,7 @@ mod tests {
     #[test]
     fn unknown_router_fields_are_rejected() {
         Jail::expect_with(|jail| {
-            jail.set_env("GOLEM__ROUTER__ADRESS", "0.0.0.0");
+            jail.set_env("GOLEM_ADVANCED__SERVER__ROUTER__ADRESS", "0.0.0.0");
             let error = jail_error(load(None, &run_args_with_data_dir("/data")));
             assert!(error.contains("adress"), "{error}");
             Ok(())
@@ -2646,10 +3028,10 @@ mod tests {
             jail.create_file(
                 "golem.toml",
                 r#"
-                    [worker_executor.key_value_storage]
+                    [advanced.worker_executor.key_value_storage]
                     type = "Postgres"
 
-                    [worker_executor.key_value_storage.config]
+                    [advanced.worker_executor.key_value_storage.config]
                     host = "db"
                     port = 5432
                     database = "golem"
@@ -2660,7 +3042,7 @@ mod tests {
                 "#,
             )?;
             jail.set_env(
-                "GOLEM__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE",
                 "MultiSqlite",
             );
             let run_args = RunArgs {

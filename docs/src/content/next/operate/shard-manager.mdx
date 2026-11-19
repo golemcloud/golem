@@ -20,10 +20,10 @@ Keep the persistence store across restarts. Changing from SQL to etcd does not t
 Set the following in the shard manager's configuration. Replace the endpoint with a private load-balanced address for your etcd cluster, such as a Kubernetes Service:
 
 ```toml
-[persistence]
+[advanced.shard_manager.persistence]
 type = "Etcd"
 
-[persistence.config]
+[advanced.shard_manager.persistence.config]
 endpoints = ["http://etcd.internal:2379"]
 connect_timeout = "10s"
 request_timeout = "5s"
@@ -52,14 +52,14 @@ For all settings and their environment variable equivalents, see the [configurat
 
 ### Advertise each replica's address
 
-Each replica must set `grpc.advertised_host` (`GOLEM__GRPC__ADVERTISED_HOST`): the host at which other processes reach its gRPC port. On Kubernetes this is the pod IP, taken from the downward API. In Docker Compose it is the replica's own service name. A standby uses it to name the leader, and clients connect to the leader at its advertised host and port, so executors and worker services must be able to reach every replica directly, not only through a Service.
+Each replica must set `grpc.advertised_host` (`GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST`): the host at which other processes reach its gRPC port. On Kubernetes this is the pod IP, taken from the downward API. In Docker Compose it is the replica's own service name. A standby uses it to name the leader, and clients connect to the leader at its advertised host and port, so executors and worker services must be able to reach every replica directly, not only through a Service.
 
 The shard manager takes a host, which can be a DNS name or an IP address, because in Docker Compose the service name is the natural address. The worker executor setting `grpc.advertised_ip` is always an IP address.
 
-- `grpc.advertised_port` (`GOLEM__GRPC__ADVERTISED_PORT`) is optional and defaults to the bound `grpc.port`. Set it when a port mapping or NAT puts the replica behind a different port. The value `0` is refused.
+- `grpc.advertised_port` (`GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_PORT`) is optional and defaults to the bound `grpc.port`. Set it when a port mapping or NAT puts the replica behind a different port. The value `0` is refused.
 - A replica in distributed mode refuses to start without `grpc.advertised_host`, or with `0.0.0.0` or `::`. It warns about a loopback address, which works only when every process runs on one host.
 - A host that does not form a valid address with the port is refused at startup: for example one with a space, a `#`, a zone suffix such as `fe80::1%eth0`, or a second colon outside an IPv6 literal.
-- An advertised IPv6 address needs an IPv6 bind address. Set `GOLEM__BIND_ADDRESS: "::"`; startup refuses an IPv6 host when `bind_address` is IPv4.
+- An advertised IPv6 address needs an IPv6 bind address. Set `GOLEM_ADVANCED__SHARD_MANAGER__BIND_ADDRESS: "::"`; startup refuses an IPv6 host when `bind_address` is IPv4.
 
 Each replica needs its **own** advertised address. Never use the Service name. A replica that finds another election key with its address watches that key's lease. A live replica keeps renewing its lease, which moves the end of the lease later. When the new replica has seen the end move later twice, without a change of etcd's raft leader in between, it stops with an error. A key left by an earlier process of the same pod is never renewed: its lease only runs down and the key disappears, so the replica waits it out and then leads. This holds even if the lease TTL changed before the restart, or an etcd leader change extended the lease once.
 
@@ -67,7 +67,7 @@ The replica identity, which is diagnostic only, comes from the `POD_NAME` enviro
 
 ### Use TLS with the leader address
 
-With gRPC TLS enabled, a client without `shard_manager.tls.config.server_domain_name` (`GOLEM__SHARD_MANAGER__TLS__CONFIG__SERVER_DOMAIN_NAME`) checks the leader's certificate against its configured `shard_manager.host`, when that host is a DNS name. The certificate of the shard managers must then name that host, for example the Service name. A configured `server_domain_name` takes precedence.
+With gRPC TLS enabled, a client without `shard_manager.tls.config.server_domain_name` (`GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__TLS__CONFIG__SERVER_DOMAIN_NAME`) checks the leader's certificate against its configured `shard_manager.host`, when that host is a DNS name. The certificate of the shard managers must then name that host, for example the Service name. A configured `server_domain_name` takes precedence.
 
 The gRPC TLS settings, including the `*_file` settings that follow renewed certificates, are described in [TLS between the services](/next/deploy/cluster#tls-between-the-services).
 
@@ -94,15 +94,15 @@ Between two checks, a connection that breaks connects again with the certificate
 containers:
   - name: golem-shard-manager
     env:
-      - name: GOLEM__PERSISTENCE__CONFIG__ENDPOINTS
+      - name: GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS
         value: '["https://etcd-client.etcd.svc:2379"]'
-      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CA_CERT_FILE
+      - name: GOLEM__ETCD__TLS__CA_CERT_FILE
         value: /etc/etcd-tls/ca.crt
-      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_CERT_FILE
+      - name: GOLEM__ETCD__TLS__CLIENT_CERT_FILE
         value: /etc/etcd-tls/tls.crt
-      - name: GOLEM__PERSISTENCE__CONFIG__TLS__CLIENT_KEY_FILE
+      - name: GOLEM__ETCD__TLS__CLIENT_KEY_FILE
         value: /etc/etcd-tls/tls.key
-      - name: GOLEM__PERSISTENCE__CONFIG__TLS__SERVER_NAME
+      - name: GOLEM__ETCD__TLS__SERVER_NAME
         value: etcd-client.etcd.svc
     volumeMounts:
       - name: etcd-tls
@@ -116,7 +116,7 @@ volumes:
 
 ### Authenticate as an etcd user
 
-With etcd authentication enabled, set `persistence.config.username` and the password, either as `persistence.config.password_file` - a file that holds it, such as a key of a Secret mounted as files; only one trailing line ending is removed - or as `persistence.config.password`, usually from a Secret through `GOLEM__PERSISTENCE__CONFIG__PASSWORD`. Neither the logs, the configuration display nor a refused configuration shows the password. The configuration loader reads an environment value made only of digits, or `true` or `false`, as a number or a boolean, and a replica refuses it without printing it; the loader also removes spaces around a value and double quotes around a whole value, without a warning. Use `password_file` for any password with such characters (or, in an environment variable that you write yourself, put double quotes around the value). A user needs TLS as well: a replica refuses a user name and password over `http://`, because the password, and then the auth token on every request, would cross the network in plain text, so switch TLS and the user on together. The user's role needs `readwrite` permission on the key prefix `/golem/`. With client certificates, etcd can also take the user from the certificate's common name (CN) instead of a password: leave `username` and the password unset. etcd drops an auth token that goes unused for its `--auth-token-ttl` (300s by default), a JWT token at the end of its lifetime, and its simple tokens when a member restarts. When etcd answers that a token is not valid, the shard manager logs in again and sends the request once more, so no token setting is needed. With JWT tokens (`--auth-token=jwt`), etcd also refuses every token that was issued before a change to its users or roles, such as a new user or a changed password: the campaign, each replica's watch of the election, the leader's ready mark and the step-down then log in again and send the request once more, a new leader logs in again before its first read, and a leader whose state write is refused stops, so that its restart logs in.
+With etcd authentication enabled, set `persistence.config.username` and the password, either as `persistence.config.password_file` - a file that holds it, such as a key of a Secret mounted as files; only one trailing line ending is removed - or as `persistence.config.password`, usually from a Secret through `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__PASSWORD`. Neither the logs, the configuration display nor a refused configuration shows the password. The configuration loader reads an environment value made only of digits, or `true` or `false`, as a number or a boolean, and a replica refuses it without printing it; the loader also removes spaces around a value and double quotes around a whole value, without a warning. Use `password_file` for any password with such characters (or, in an environment variable that you write yourself, put double quotes around the value). A user needs TLS as well: a replica refuses a user name and password over `http://`, because the password, and then the auth token on every request, would cross the network in plain text, so switch TLS and the user on together. The user's role needs `readwrite` permission on the key prefix `/golem/`. With client certificates, etcd can also take the user from the certificate's common name (CN) instead of a password: leave `username` and the password unset. etcd drops an auth token that goes unused for its `--auth-token-ttl` (300s by default), a JWT token at the end of its lifetime, and its simple tokens when a member restarts. When etcd answers that a token is not valid, the shard manager logs in again and sends the request once more, so no token setting is needed. With JWT tokens (`--auth-token=jwt`), etcd also refuses every token that was issued before a change to its users or roles, such as a new user or a changed password: the campaign, each replica's watch of the election, the leader's ready mark and the step-down then log in again and send the request once more, a new leader logs in again before its first read, and a leader whose state write is refused stops, so that its restart logs in.
 
 ## Executor leases
 
@@ -254,15 +254,15 @@ spec:
         - name: shard-manager
           image: golemservices/golem-shard-manager:<version>
           env:
-            - name: GOLEM__GRPC__ADVERTISED_HOST
+            - name: GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST
               valueFrom: { fieldRef: { fieldPath: status.podIP } }
-            - name: GOLEM__GRPC__PORT
+            - name: GOLEM_ADVANCED__SHARD_MANAGER__GRPC__PORT
               value: "9092"
-            - name: GOLEM__HTTP_PORT
+            - name: GOLEM_ADVANCED__SHARD_MANAGER__HTTP_PORT
               value: "8081"
-            - name: GOLEM__PERSISTENCE__TYPE
+            - name: GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE
               value: Etcd
-            - name: GOLEM__PERSISTENCE__CONFIG__ENDPOINTS
+            - name: GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS
               value: '["http://etcd-client.etcd.svc:2379"]'
           ports:
             - { name: grpc, containerPort: 9092 }
@@ -292,9 +292,9 @@ spec:
     matchLabels: { app: golem-shard-manager }
 ```
 
-This example connects to etcd over `http://`. For an etcd with TLS, give the container the `GOLEM__PERSISTENCE__CONFIG__TLS__*` variables, an `https://` endpoint and the Secret mounted as a directory, as in the pod template under [Renew certificates](#renew-certificates), and add the Secret volume to the pod. With an etcd user, add `GOLEM__PERSISTENCE__CONFIG__USERNAME` and the password as described in [Authenticate as an etcd user](#authenticate-as-an-etcd-user).
+This example connects to etcd over `http://`. For an etcd with TLS, give the container the `GOLEM__ETCD__TLS__*` variables, an `https://` endpoint and the Secret mounted as a directory, as in the pod template under [Renew certificates](#renew-certificates), and add the Secret volume to the pod. With an etcd user, add `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__USERNAME` and the password as described in [Authenticate as an etcd user](#authenticate-as-an-etcd-user).
 
-Point the executors' and worker services' `shard_manager.host` (`GOLEM__SHARD_MANAGER__HOST`) at the Service name, and set their `shard_manager.port` (`GOLEM__SHARD_MANAGER__PORT`) to the Service's gRPC port, `9092` in this example. The host alone is not enough: the client's default port is `9002`, which the Service does not expose. A rolling update that replaces the leader's pod sends it `SIGTERM`, so a standby takes over within milliseconds and serves once its startup completes.
+Point the executors' and worker services' `shard_manager.host` (`GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST`) at the Service name, and set their `shard_manager.port` (`GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT`) to the Service's gRPC port, `9092` in this example. The host alone is not enough: the client's default port is `9002`, which the Service does not expose. A rolling update that replaces the leader's pod sends it `SIGTERM`, so a standby takes over within milliseconds and serves once its startup completes.
 
 `minReadySeconds: 20` matters for rollouts. A new pod is Ready at once, because a standby is ready while etcd answers it. Without a pause, Kubernetes then stops the next old pod while a just-elected leader is still running its startup, and several startups can follow in a row. A rollout to a newer version hands the leadership over once, whatever order Kubernetes stops the old pods in. A rollout that keeps the version, such as a configuration change, and a rollback keep the queue's order, so `minReadySeconds` is what keeps a just-elected leader from being stopped in the middle of its startup.
 
@@ -309,11 +309,11 @@ services:
   golem-shard-manager-1: &shard-manager
     image: golemservices/golem-shard-manager:<version>
     environment: &shard-manager-env
-      GOLEM__GRPC__PORT: 9002
-      GOLEM__HTTP_PORT: 8081
-      GOLEM__PERSISTENCE__TYPE: Etcd
-      GOLEM__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
-      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-1
+      GOLEM_ADVANCED__SHARD_MANAGER__GRPC__PORT: 9002
+      GOLEM_ADVANCED__SHARD_MANAGER__HTTP_PORT: 8081
+      GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE: Etcd
+      GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__ENDPOINTS: '["http://etcd:2379"]'
+      GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST: golem-shard-manager-1
     networks:
       default:
         aliases: [golem-shard-manager]
@@ -321,15 +321,15 @@ services:
     <<: *shard-manager
     environment:
       <<: *shard-manager-env
-      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-2
+      GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST: golem-shard-manager-2
   golem-shard-manager-3:
     <<: *shard-manager
     environment:
       <<: *shard-manager-env
-      GOLEM__GRPC__ADVERTISED_HOST: golem-shard-manager-3
+      GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST: golem-shard-manager-3
 ```
 
-The worker executors and worker services set `GOLEM__SHARD_MANAGER__HOST: golem-shard-manager` and `GOLEM__SHARD_MANAGER__PORT: 9002`. The complete example, with etcd and the other services, is in [docker-examples/distributed-etcd](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd).
+The worker executors and worker services set `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST: golem-shard-manager` and `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT: 9002`. The complete example, with etcd and the other services, is in [docker-examples/distributed-etcd](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd).
 
 ### Upgrade from earlier replicas
 

@@ -56,8 +56,8 @@ RUN --mount=type=bind,source=docker/prepare-service-image.sh,target=/tmp/prepare
 
 ENV HOME=/home/golem
 ENV GOLEM__DATA_DIR=/var/lib/golem
-ENV GOLEM__ROUTER__ADDRESS="::"
-ENV GOLEM__ROUTER__PORT=9881
+ENV GOLEM_ADVANCED__SERVER__ROUTER__ADDRESS="::"
+ENV GOLEM_ADVANCED__SERVER__ROUTER__PORT=9881
 
 USER 65534:65534
 VOLUME /var/lib/golem

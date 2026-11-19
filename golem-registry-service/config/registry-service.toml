@@ -1,4 +1,11 @@
 ## Generated from default config
+blob_store = "data_disk"
+data_dir = "/var/lib/golem"
+outbound_sockets = false
+retained_update_snapshots = 2
+state_store = "sqlite"
+
+[advanced.registry_service]
 bind_address = "0.0.0.0"
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
@@ -6,27 +13,21 @@ http_port = 8081
 runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
-[blob_storage]
-type = "LocalFileSystem"
-
-[blob_storage.config]
-root = "../data/blob_storage"
-
-[body_limits]
+[advanced.registry_service.body_limits]
 api = 33554432
 upload = 2147483648
 
-[builtin_artifacts.source_overrides]
+[advanced.registry_service.builtin_artifacts.source_overrides]
 
-[builtin_plugins]
+[advanced.registry_service.builtin_plugins]
 type = "Disabled"
 
-[builtin_plugins.config]
+[advanced.registry_service.builtin_plugins.config]
 
-[component_compilation]
+[advanced.registry_service.component_compilation]
 type = "Enabled"
 
-[component_compilation.config]
+[advanced.registry_service.component_compilation.config]
 connect_timeout = "10s"
 connection_pool_size = 4
 enqueue_timeout = "1s"
@@ -38,58 +39,40 @@ max_connection_age = "1m"
 max_message_size = 33554432
 port = 9091
 
-[component_compilation.config.retries_on_unavailable]
+[advanced.registry_service.component_compilation.config.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[component_compilation.config.tls]
-type = "Disabled"
-
-[component_compilation.config.tls.config]
-
-[component_file_upload]
+[advanced.registry_service.component_file_upload]
 max_concurrent_files = 16
 max_uncompressed_archive_size = 1073741824
 max_uncompressed_file_size = 536870912
 
-[db]
-type = "Sqlite"
-
-[db.config]
-database = "../data/golem_registry_service.db"
-foreign_keys = true
-max_connections = 10
-
-[deployment_events]
+[advanced.registry_service.deployment_events]
 cleanup_interval = "1h"
 retention = "1day"
 
-[domain_registration]
+[advanced.registry_service.domain_registration]
 reserved_domains = []
 
-[domain_registration.available_domains]
+[advanced.registry_service.domain_registration.available_domains]
 type = "Unrestricted"
 
-[domain_registration.available_domains.config]
+[advanced.registry_service.domain_registration.available_domains.config]
 
-[durable_stream_routes]
+[advanced.registry_service.durable_stream_routes]
 default_append_requests_per_second_per_stream = 100
 default_concurrent_readers_per_stream = 16
 max_append_requests_per_second_per_stream = 1000
 max_concurrent_readers_per_stream = 16
 
-[grpc]
+[advanced.registry_service.grpc]
 port = 9090
 
-[grpc.tls]
-type = "Disabled"
-
-[grpc.tls.config]
-
-[http_server]
+[advanced.registry_service.http_server]
 http2_adaptive_window = false
 http2_initial_connection_window_size = 1048576
 http2_initial_stream_window_size = 1048576
@@ -97,21 +80,21 @@ http2_max_header_list_size = 65536
 http2_max_local_error_reset_streams = 1024
 http2_max_pending_accept_reset_streams = 20
 
-[initial_accounts.builtin_plugin_owner]
+[advanced.registry_service.initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
 id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
 name = "Builtin Plugin Owner"
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 role = "builtin-plugin-owner"
 
-[initial_accounts.builtin_tool_owner]
+[advanced.registry_service.initial_accounts.builtin_tool_owner]
 email = "builtin-tool-owner@golem.cloud"
 id = "58bda34c-10d4-4bfb-8abd-d5e67f09ba3c"
 name = "Builtin Tool Owner"
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 role = "builtin-plugin-owner"
 
-[initial_accounts.marketing]
+[advanced.registry_service.initial_accounts.marketing]
 email = "marketing@user"
 id = "0e8a0431-94b9-4644-89ca-fbf403edb6e7"
 name = "Marketing User"
@@ -119,7 +102,7 @@ plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 role = "marketing-admin"
 token = "2dwnjEdx8a_bw8TTN7r6yqcvLY2jAQuoD1N6U3uRy9I"
 
-[initial_accounts.root]
+[advanced.registry_service.initial_accounts.root]
 email = "initial@user"
 id = "e71a6160-4144-4720-9e34-e5943458d129"
 name = "Initial User"
@@ -127,7 +110,7 @@ plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 role = "admin"
 token = "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 
-[initial_plans.default]
+[advanced.registry_service.initial_plans.default]
 app_limit = 10
 blob_storage_limit = 1000000000000000000
 component_limit = 100
@@ -156,20 +139,20 @@ plan_name = "default"
 storage_limit = 500000000
 worker_connection_limit = 100
 
-[login]
+[advanced.registry_service.login]
 type = "OAuth2"
 
-[login.config.github]
+[advanced.registry_service.login.config.github]
 client_id = "GITHUB_CLIENT_ID"
 client_secret = "GITHUB_CLIENT_SECRET"
 redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback"
 
-[login.config.oauth2]
+[advanced.registry_service.login.config.oauth2]
 allowed_redirect_domains = ["localhost", "golem.cloud"]
 cli_redirect = "https://golem.cloud/"
 webflow_state_expiry = "5m"
 
-[mcp_import]
+[advanced.registry_service.mcp_import]
 cache_entries = 128
 cache_ttl = "5m"
 failure_ttl = "1s"
@@ -177,24 +160,24 @@ fetch_concurrency = 16
 operation_timeout = "25s"
 refresh_interval = "1m"
 
-[mcp_import.projection]
+[advanced.registry_service.mcp_import.projection]
 max_listing_bytes = 8388608
 max_tools = 1024
 
-[mcp_import.projection.content]
+[advanced.registry_service.mcp_import.projection.content]
 max_blocks = 256
 max_decoded_bytes = 4194304
 max_json_depth = 32
 max_total_bytes = 8388608
 
-[mcp_import.projection.schema]
+[advanced.registry_service.mcp_import.projection.schema]
 instanceBytes = 4194304
 instanceDepth = 256
 schemaBytes = 1048576
 schemaDepth = 128
 schemaNodes = 16384
 
-[mcp_import.transport]
+[advanced.registry_service.mcp_import.transport]
 concurrency = 16
 json_depth = 512
 listing_bytes = 16777216
@@ -205,25 +188,33 @@ response_bytes = 16777216
 timeout = "20s"
 tools = 1024
 
-[mcp_oauth]
+[advanced.registry_service.mcp_oauth]
 challenge_bytes = 16384
 document_bytes = 1048576
 request_bytes = 65536
 timeout = "20s"
 
-[resource_grants]
+[advanced.registry_service.resource_grants]
 cleanup_interval = "1m"
 
-[security_scheme]
+[advanced.registry_service.security_scheme]
 strict_issuer_url_validation = true
 
-[tracing]
+[cache]
+type = "Disabled"
+
+[cache.config]
+
+[internal_grpc_tls]
+enabled = false
+
+[logging]
 console = false
 dtor_friendly = false
 file_name = "registry-service.log"
 file_truncate = true
 
-[tracing.file]
+[logging.file]
 ansi = false
 compact = false
 enabled = false
@@ -236,13 +227,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.otlp]
-enabled = false
-host = "localhost"
-port = 4318
-service_name = "golem"
-
-[tracing.stderr]
+[logging.stderr]
 ansi = false
 compact = false
 enabled = false
@@ -255,7 +240,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.stdout]
+[logging.stdout]
 ansi = true
 compact = false
 enabled = true
@@ -267,3 +252,24 @@ pretty = false
 span_events_active = false
 span_events_full = false
 without_time = false
+
+[object_storage]
+artifacts_bucket = "golem-artifacts"
+components_bucket = "golem-components"
+data_bucket = "golem-data"
+object_prefix = ""
+region = "us-east-1"
+
+[otlp]
+enabled = false
+host = "localhost"
+port = 4318
+service_name = "golem"
+
+[postgres]
+database = "golem"
+host = "localhost"
+max_connections = 10
+password = ""
+port = 5432
+username = "golem"

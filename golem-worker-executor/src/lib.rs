@@ -877,7 +877,9 @@ async fn create_worker_executor_impl<
     };
 
     let blob_storage: Arc<dyn BlobStorage> = match &golem_config.blob_storage {
-        BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+        BlobStorageConfig::S3(config) => {
+            Arc::new(S3BlobStorage::new(config.clone(), &config.oplog_payload_bucket).await?)
+        }
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
             golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                 .await

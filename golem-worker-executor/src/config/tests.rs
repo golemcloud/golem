@@ -15,7 +15,6 @@
 use figment::providers::{Format, Toml};
 use figment::{Figment, Jail};
 use golem_common::SafeDisplay;
-use golem_common::config::env_config_provider;
 use std::time::Duration;
 use test_r::test;
 
@@ -303,14 +302,10 @@ fn a_removed_storage_key_in_the_environment_fails_to_load_with_its_name() {
     Jail::expect_with(|jail| {
         jail.clear_env();
         jail.set_env(
-            "GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR",
             "/var/lib/golem/agents",
         );
-        let error = make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()
-            .unwrap_err();
+        let error = make_config_loader().load().unwrap_err();
         assert!(
             error.to_string().contains("managed_xfs_root_dir"),
             "{error}"
@@ -345,16 +340,15 @@ fn apfs_storage_mode_loads_and_roundtrips_with_its_root() {
 fn the_storage_mode_loads_from_the_environment() {
     Jail::expect_with(|jail| {
         jail.clear_env();
-        jail.set_env("GOLEM__FILESYSTEM_STORAGE__MODE__TYPE", "ReflinkXfs");
         jail.set_env(
-            "GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__TYPE",
+            "ReflinkXfs",
+        );
+        jail.set_env(
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
             "/var/lib/golem/agents",
         );
-        let config = make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()
-            .unwrap();
+        let config = make_config_loader().load().unwrap();
         assert_eq!(
             config.filesystem_storage.mode,
             crate::services::golem_config::FilesystemStorageMode::ReflinkXfs {
@@ -370,32 +364,24 @@ fn environment_config_rejects_invalid_filesystem_policies_before_use() {
     Jail::expect_with(|jail| {
         jail.clear_env();
         jail.set_env(
-            "GOLEM__FILESYSTEM_STORAGE__FILESYSTEM_OBJECT_LIMIT_POLICY__OBJECTS_PER_GIB",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__FILESYSTEM_OBJECT_LIMIT_POLICY__OBJECTS_PER_GIB",
             "0",
         );
-        let object_error = make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()
-            .unwrap_err();
+        let object_error = make_config_loader().load().unwrap_err();
         assert!(
             object_error.to_string().contains("objects_per_gib"),
             "{object_error}"
         );
 
         jail.set_env(
-            "GOLEM__FILESYSTEM_STORAGE__FILESYSTEM_OBJECT_LIMIT_POLICY__OBJECTS_PER_GIB",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__FILESYSTEM_OBJECT_LIMIT_POLICY__OBJECTS_PER_GIB",
             "32768",
         );
         jail.set_env(
-            "GOLEM__FILESYSTEM_STORAGE__PRESSURE__RECLAMATION_OBSERVATION_ATTEMPTS",
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__PRESSURE__RECLAMATION_OBSERVATION_ATTEMPTS",
             "0",
         );
-        let pressure_error = make_config_loader()
-            .default_figment()
-            .merge(env_config_provider())
-            .extract::<GolemConfig>()
-            .unwrap_err();
+        let pressure_error = make_config_loader().load().unwrap_err();
         assert!(
             pressure_error
                 .to_string()

@@ -311,17 +311,14 @@ impl TracingConfig {
     }
 
     pub fn with_env_overrides(self) -> Self {
-        #[derive(Serialize, Deserialize)]
-        struct Config {
-            tracing: TracingConfig,
-        }
-
         Figment::new()
-            .merge(Serialized::defaults(Config { tracing: self }))
-            .merge(env_config_provider())
-            .extract::<Config>()
+            .merge(Serialized::default("tracing", self))
+            .merge(crate::config::self_host::project(
+                "server",
+                &env_config_provider(),
+            ))
+            .extract_inner("tracing")
             .expect("Failed to load tracing config env overrides")
-            .tracing
     }
 
     pub fn with_otlp(mut self, enabled: bool, host: &str, port: u16, service_name: &str) -> Self {
@@ -490,7 +487,7 @@ pub mod directive {
     /// the deployment, not here.
     ///
     /// Unset means `off`. Exporting needs an endpoint configured
-    /// (`GOLEM__TRACING__OTLP__ENABLED`, `__HOST`, `__PORT`), and this is the
+    /// (`GOLEM__OTLP__ENABLED`, `__HOST`, `__PORT`), and this is the
     /// remaining switch. `off` rather than `error` because this feeds a span sink:
     /// the spans bounding an operation are `info` and the detail inside them
     /// `debug`, so anything less verbose than `info` exports nothing at all while

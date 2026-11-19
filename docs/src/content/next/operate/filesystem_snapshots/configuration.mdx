@@ -23,11 +23,11 @@ Keep the key secret. Supply the same `repository_key` to every executor that can
 With S3, create the bucket before starting the executor and set:
 
 ```toml
-[blob_storage.config]
+[advanced.worker_executor.blob_storage.config]
 filesystem_snapshots_bucket = "filesystem-snapshots"
 ```
 
-The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`. S3 configurations require this setting even when filesystem snapshots are disabled. An S3-compatible service must support conditional `PutObject` writes with `If-None-Match: *` and `CopyObject`.
+The environment variable is `GOLEM_ADVANCED__WORKER_EXECUTOR__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`. S3 configurations require this setting even when filesystem snapshots are disabled. An S3-compatible service must support conditional `PutObject` writes with `If-None-Match: *` and `CopyObject`.
 
 <Callout type="warning">
   Without `namespace_prefixes`, every blob-storage bucket setting must name a different bucket. Sharing with custom agent blobs would let agents overwrite snapshots and would count snapshots against their blob quota. Services reject duplicate buckets even when snapshots are disabled. With `namespace_prefixes = true`, namespaces have separate key prefixes and can share a bucket. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
@@ -106,7 +106,7 @@ See [Recovery and storage](/next/operate/filesystem_snapshots/recovery) for conf
 
 Uploads and restore reader threads allocate memory outside agent memory. `[memory] worker_memory_ratio` defaults to `0.8`; the remaining share must hold the executor, uploads, and restores. Size concurrency and reader-thread counts for the available CPU and memory, then monitor executor memory use.
 
-Capture admission checks `[filesystem_storage.pressure] target_available_bytes` and `target_available_filesystem_objects`. If either target is unmet, or free capacity cannot be read, automatic snapshots are skipped and manual updates fail. Targets must fit within the volume's capacity. See [Monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring).
+Capture admission checks `[advanced.worker_executor.filesystem_storage.pressure] target_available_bytes` and `target_available_filesystem_objects`. If either target is unmet, or free capacity cannot be read, automatic snapshots are skipped and manual updates fail. Targets must fit within the volume's capacity. See [Monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring).
 
 ## Configure storage retries
 

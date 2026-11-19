@@ -1366,11 +1366,11 @@ async fn oplog_processor_crash_stress(
     cluster_control
         .restart_all_with_env_vars(vec![
             (
-                "GOLEM__OPLOG__PLUGIN_MAX_COMMIT_COUNT".to_string(),
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__PLUGIN_MAX_COMMIT_COUNT".to_string(),
                 "100000".to_string(),
             ),
             (
-                "GOLEM__OPLOG__PLUGIN_MAX_ELAPSED_TIME".to_string(),
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__OPLOG__PLUGIN_MAX_ELAPSED_TIME".to_string(),
                 "3600s".to_string(),
             ),
         ])
