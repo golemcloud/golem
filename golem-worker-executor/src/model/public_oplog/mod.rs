@@ -23,6 +23,7 @@ mod snapshots;
 use attribution::PublicOplogAttributionResolver;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
+pub(crate) use conversion::with_expected_request;
 use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
     check_oplog_cursor_query, find_component_revision_at, get_public_oplog_chunk,
@@ -87,7 +88,8 @@ use golem_common::model::oplog::{
     SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::oplog::{
-    SpanAttributes, SpanFinished, SpanKind, SpanOutcome, SpanStarted,
+    OplogPayload, ReplayDivergence, ReplayStep, SpanAttributes, SpanFinished, SpanKind,
+    SpanOutcome, SpanStarted,
 };
 use golem_common::model::{
     AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,

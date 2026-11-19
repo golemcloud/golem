@@ -5567,6 +5567,7 @@ components:
       - timestamp
       - targetRevision
       - mode
+      - failureClass
       properties:
         timestamp:
           type: string
@@ -5583,6 +5584,20 @@ components:
           $ref: '#/components/schemas/AgentUpdateMode'
         snapshotAssistedDetails:
           $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
+        failureClass:
+          description: Why the update failed.
+          allOf:
+          - $ref: '#/components/schemas/UpdateFailureClass'
+          - description: Why the update failed.
+        divergence:
+          description: |-
+            The first divergence from the recorded history, when the replay of the target
+            diverged at a recorded entry.
+          allOf:
+          - $ref: '#/components/schemas/ReplayDivergence'
+          - description: |-
+              The first divergence from the recorded history, when the replay of the target
+              diverged at a recorded entry.
     FallibleResultParameters:
       type: object
       title: FallibleResultParameters
@@ -8813,6 +8828,143 @@ components:
             - either
           value:
             type: char
+    ReplayDivergence:
+      type: object
+      title: ReplayDivergence
+      description: |-
+        Where a replay left the recorded history: the first entry at which the replay did not
+        reproduce the recorded execution, what the oplog holds there and what the replay did instead.
+      required:
+      - oplogIndex
+      - expected
+      - actual
+      - mismatched
+      properties:
+        oplogIndex:
+          type: integer
+          format: uint64
+          description: The oplog index of the first divergence.
+        expected:
+          description: What the oplog holds at the index.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStep'
+          - description: What the oplog holds at the index.
+        actual:
+          description: What the replay did at the index.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStep'
+          - description: What the replay did at the index.
+        mismatched:
+          type: array
+          description: |-
+            The identity fields on which `expected` and `actual` differ; empty when the steps differ
+            in kind.
+          items:
+            $ref: '#/components/schemas/StartIdentityField'
+    ReplayHostCall:
+      type: object
+      title: ReplayHostCall
+      description: |-
+        A host call of a replay: the identity of a recorded `Start`, or of the call that the replay
+        made in its place.
+      required:
+      - functionName
+      - durableFunctionType
+      - carriesRequest
+      properties:
+        functionName:
+          type: string
+        durableFunctionType:
+          $ref: '#/components/schemas/PublicDurableFunctionType'
+        parentStartIndex:
+          type: integer
+          format: uint64
+        invocationId:
+          $ref: '#/components/schemas/DurableInvocationId'
+        observationalOwner:
+          type: integer
+          format: uint64
+        carriesRequest:
+          type: boolean
+          description: |-
+            Whether the call carries a request: `true` for a durable call, `false` for a durable
+            scope.
+        request:
+          description: The request of the call, when it is known.
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - description: The request of the call, when it is known.
+    ReplayStep:
+      type: object
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStep_ReplayHostCall'
+      - $ref: '#/components/schemas/ReplayStep_Empty'
+      - $ref: '#/components/schemas/ReplayStep_Empty'
+      - $ref: '#/components/schemas/ReplayStep_ReplayStepDescription'
+      discriminator:
+        propertyName: type
+        mapping:
+          HostCall: '#/components/schemas/ReplayStep_ReplayHostCall'
+          InvocationEnd: '#/components/schemas/ReplayStep_Empty'
+          EndOfHistory: '#/components/schemas/ReplayStep_Empty'
+          Other: '#/components/schemas/ReplayStep_ReplayStepDescription'
+    ReplayStepDescription:
+      type: object
+      title: ReplayStepDescription
+      description: A step of a replay that a text describes.
+      required:
+      - description
+      properties:
+        description:
+          type: string
+    ReplayStep_Empty:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - EndOfHistory
+            example: EndOfHistory
+      - $ref: '#/components/schemas/Empty'
+    ReplayStep_ReplayHostCall:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - HostCall
+            example: HostCall
+      - $ref: '#/components/schemas/ReplayHostCall'
+    ReplayStep_ReplayStepDescription:
+      description: |-
+        One step of a replay: a host call, the end of an invocation, the end of the recorded
+        history, or another step that a text describes.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Other
+            example: Other
+      - $ref: '#/components/schemas/ReplayStepDescription'
     ResultSpec:
       type: object
       properties:
@@ -10393,6 +10545,16 @@ components:
           type: string
         filesystemSnapshot:
           type: string
+    StartIdentityField:
+      type: string
+      description: An identity field of a recorded `Start`, which a replayed host call must match.
+      enum:
+      - function-name
+      - function-type
+      - invocation-id
+      - observational-owner
+      - request-presence
+      - parent
     StoredCard:
       type: object
       oneOf:
@@ -10694,6 +10856,17 @@ components:
           type: string
         body:
           $ref: '#/components/schemas/SchemaValue'
+    UpdateFailureClass:
+      type: string
+      description: Why an update failed.
+      enum:
+      - divergence
+      - target-trap
+      - not-replayable
+      - target-rejected
+      - interrupted
+      - operational
+      - other
     UpdateRecord:
       type: object
       oneOf:
@@ -11429,6 +11602,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - failureClass
       properties:
         timestamp:
           type: string
@@ -11443,6 +11617,10 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        failureClass:
+          $ref: '#/components/schemas/UpdateFailureClass'
+        divergence:
+          $ref: '#/components/schemas/ReplayDivergence'
     r#GrowMemoryParams:
       type: object
       title: r#GrowMemoryParams

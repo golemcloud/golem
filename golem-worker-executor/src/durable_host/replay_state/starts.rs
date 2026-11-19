@@ -346,10 +346,6 @@ impl ReplayStarts {
         self.retained_indices.iter()
     }
 
-    pub(super) fn retained_values(&self) -> impl DoubleEndedIterator<Item = &RetainedStart> {
-        self.retained_iter().map(|(_, retained)| retained)
-    }
-
     pub(super) fn retained_len(&self) -> usize {
         self.retained_indices.len()
     }

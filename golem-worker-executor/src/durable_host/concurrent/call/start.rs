@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::oplog::ReplayStep;
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     /// Begins a durable call.
     ///
@@ -127,7 +128,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         requires_agent_authority: bool,
     ) -> wasmtime::Result<Self> {
         let begun = Self::begin_inner(ctx, function_type, requires_agent_authority).await?;
-        match begun.resolve(ctx).await? {
+        let resolved = match begun.resolve(ctx).await {
+            Ok(resolved) => resolved,
+            Err(error) => return Err(with_actual_request(error, request.into()).into()),
+        };
+        match resolved {
             ResolvedCall::Live(begun) => Ok(begun.start_live(ctx, request).await?),
             ResolvedCall::Replay(handle) => Ok(handle),
         }
@@ -245,6 +250,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             && (durable_execution_state.is_live || durable_execution_state.snapshotting_mode)
         {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                ctx.state.replay_state.last_replayed_index().next(),
                 format!("recorded {} Start", Pair::HOST_FUNCTION_NAME),
                 "historical call has no recorded Start",
             ));
@@ -1285,5 +1291,23 @@ fn start_write_error(err: crate::services::oplog::OplogError) -> WorkerExecutorE
         err => WorkerExecutorError::runtime(format!(
             "failed to serialize and store durable call request: {err}"
         )),
+    }
+}
+
+/// `error` with `request` as the request of the call that the replay made, when `error` is a
+/// replay divergence whose actual step is a host call without a request. The direct path builds
+/// its request before it claims the recorded `Start`.
+fn with_actual_request(error: WorkerExecutorError, request: HostRequest) -> WorkerExecutorError {
+    match error {
+        WorkerExecutorError::UnexpectedOplogEntry { mut divergence } => {
+            if let ReplayStep::HostCall(call) = &mut divergence.actual
+                && call.request.is_none()
+                && call.carries_request
+            {
+                call.request = request.into_typed_schema_value().ok().map(Box::new);
+            }
+            WorkerExecutorError::UnexpectedOplogEntry { divergence }
+        }
+        error => error,
     }
 }

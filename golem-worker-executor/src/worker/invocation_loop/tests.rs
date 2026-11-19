@@ -2442,6 +2442,7 @@ fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
         error: AgentError::InternalError("boom".to_string()),
         retry_from: OplogIndex::INITIAL,
         semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
     });
 
     assert_eq!(

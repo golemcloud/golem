@@ -70,7 +70,7 @@ use crate::model::oplog::{
     PublicOplogEntryWithIndex, PublicOplogPageEntry, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicTypedAgentConfigEntry,
     PublicUpdateDescription, RawSnapshotData, SnapshotAssistedAutomaticUpdateParameters,
-    SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters,
+    SnapshotAssistedUpdateDetails, SnapshotBasedUpdateParameters, UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
@@ -371,6 +371,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                                 ),
                                 snapshot_index: OplogIndex::from_u64(details.snapshot_index),
                             })
+                        })
+                        .transpose()?,
+                    failure_class: UpdateFailureClass::from_proto_number(
+                        failed_update.failure_class,
+                    )?,
+                    divergence: failed_update
+                        .divergence
+                        .map(|divergence| {
+                            crate::model::oplog::ReplayDivergence::try_from(divergence)
+                                .map(Box::new)
                         })
                         .transpose()?,
                 }))
@@ -1054,6 +1064,11 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                                         snapshot_index: details.snapshot_index.into(),
                                     }
                                 }),
+                            failure_class: failed_update.failure_class.proto_number(),
+                            divergence: failed_update
+                                .divergence
+                                .map(|divergence| (*divergence).try_into())
+                                .transpose()?,
                         },
                     )),
                 }
@@ -2090,6 +2105,8 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                     }
                 }),
                 snapshot_fault: None,
+                failure_class: p.failure_class,
+                divergence: p.divergence,
             }),
             PublicOplogEntry::GrowMemory(p) => Ok(OplogEntry::GrowMemory {
                 timestamp: p.timestamp,

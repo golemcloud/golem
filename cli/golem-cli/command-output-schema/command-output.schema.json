@@ -6604,7 +6604,7 @@
         },
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails", "failureClass", "divergence"],
           "properties": {
             "type": { "const": "FailedUpdate" },
             "timestamp": { "type": "string" },
@@ -6612,7 +6612,9 @@
             "details": { "type": ["string", "null"] },
             "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
             "mode": { "$ref": "#/definitions/AgentUpdateMode" },
-            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] },
+            "failureClass": { "$ref": "#/definitions/UpdateFailureClass" },
+            "divergence": { "anyOf": [{ "$ref": "#/definitions/ReplayDivergence" }, { "type": "null" }] }
           },
           "additionalProperties": false
         }
@@ -6973,9 +6975,50 @@
     },
     "PublicOplogEntryFailedUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex"],
-      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 } },
+      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex", "failureClass", "divergence"],
+      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 }, "failureClass": { "$ref": "#/definitions/UpdateFailureClass" }, "divergence": { "anyOf": [{ "$ref": "#/definitions/ReplayDivergence" }, { "type": "null" }] } },
       "additionalProperties": false
+    },
+    "UpdateFailureClass": {
+      "type": "string",
+      "enum": ["divergence", "target-trap", "not-replayable", "target-rejected", "interrupted", "operational", "other"]
+    },
+    "ReplayDivergence": {
+      "type": "object",
+      "required": ["oplogIndex", "expected", "actual", "mismatched"],
+      "properties": {
+        "oplogIndex": { "type": "integer", "minimum": 0 },
+        "expected": { "$ref": "#/definitions/ReplayStep" },
+        "actual": { "$ref": "#/definitions/ReplayStep" },
+        "mismatched": { "type": "array", "items": { "$ref": "#/definitions/StartIdentityField" } }
+      },
+      "additionalProperties": false
+    },
+    "ReplayStep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "functionName", "durableFunctionType", "parentStartIndex", "invocationId", "observationalOwner", "carriesRequest", "request"],
+          "properties": {
+            "type": { "const": "HostCall" },
+            "functionName": { "type": "string" },
+            "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
+            "parentStartIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "invocationId": { "anyOf": [{ "$ref": "#/definitions/DurableInvocationId" }, { "type": "null" }] },
+            "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
+            "carriesRequest": { "type": "boolean" },
+            "request": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "InvocationEnd" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "EndOfHistory" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "description"], "properties": { "type": { "const": "Other" }, "description": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "StartIdentityField": {
+      "type": "string",
+      "enum": ["function-name", "function-type", "invocation-id", "observational-owner", "request-presence", "parent"]
     },
     "PublicOplogEntryGrowMemory": {
       "type": "object",

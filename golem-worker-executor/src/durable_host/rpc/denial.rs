@@ -44,6 +44,7 @@ use golem_common::model::oplog::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::HostRequestGolemRpcScheduledInvocation;
 use golem_common::model::oplog::HostResponseGolemRpcInvokeAndAwait;
 use golem_common::model::oplog::OplogEntry;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::SpanFinished;
 use golem_common::model::oplog::SpanOutcome;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcAsyncInvokeRejection;
@@ -93,8 +94,9 @@ where
     match ctx.state.oplog.read(handle.start_index()).await? {
         OplogEntry::Start { denial, .. } => Ok(denial),
         entry => Err(WorkerExecutorError::unexpected_oplog_entry(
-            format!("Start at {}", handle.start_index()),
+            handle.start_index(),
             format!("{entry:?}"),
+            format!("Start at {}", handle.start_index()),
         )),
     }
 }
@@ -120,11 +122,12 @@ where
         CallReplayOutcome::Incomplete(mut handle) => {
             let start_index = handle.start_index();
             return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                start_index,
+                format!("incomplete denied Start at {start_index}"),
                 format!(
                     "denied {} Start completed with its denied response",
                     Pair::FQFN
                 ),
-                format!("incomplete denied Start at {start_index}"),
             )));
         }
     };
@@ -135,13 +138,15 @@ where
 }
 
 pub(super) fn denied_rpc_failure<T: Debug>(
+    start_index: OplogIndex,
     result: Result<T, SerializableRpcError>,
 ) -> Result<InternalRpcError, WorkerExecutorError> {
     match result {
         Err(error) => Ok(InternalRpcError::from(error)),
         Ok(value) => Err(WorkerExecutorError::unexpected_oplog_entry(
-            "denied RPC response",
+            start_index,
             format!("{value:?}"),
+            "denied RPC response",
         )),
     }
 }
@@ -160,12 +165,14 @@ where
 {
     let span_id = span_finished.span_id.clone();
     if !handle.is_live() {
+        let start_index = handle.start_index();
         match handle.replay(ctx).await? {
             CallReplayOutcome::Replayed(recorded) => {
                 if recorded != response {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("RPC preparation failure {response:?}"),
+                        start_index,
                         format!("{recorded:?}"),
+                        format!("RPC preparation failure {response:?}"),
                     )
                     .into());
                 }
@@ -186,8 +193,12 @@ pub(super) async fn replay_async_rpc_denial<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     handle: DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>,
 ) -> anyhow::Result<AsyncInvocationWithMetadata> {
+    let start_index = handle.start_index();
     let response = replay_rpc_denial(ctx, handle).await?;
-    bake_closed_async_error(ctx.table(), denied_rpc_failure(response.result)?)
+    bake_closed_async_error(
+        ctx.table(),
+        denied_rpc_failure(start_index, response.result)?,
+    )
 }
 
 pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
@@ -199,7 +210,7 @@ pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
     let key_position = begun.idempotency_key_position(ctx);
     let details = rpc_denied_details(error);
-    let (_, response, _) = begun
+    let (start_index, response, _) = begun
         .start_live_denied_at_index(ctx, details, move |start_index| {
             let idempotency_key = key_position.derive(start_index);
             Ok((
@@ -208,7 +219,7 @@ pub(super) async fn persist_invoke_and_await_denial_from_begun<Ctx: WorkerCtx>(
             ))
         })
         .await?;
-    Ok(Err(denied_rpc_failure(response.result)?.into()))
+    Ok(Err(denied_rpc_failure(start_index, response.result)?.into()))
 }
 
 pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
@@ -220,7 +231,7 @@ pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
 ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
     let key_position = begun.idempotency_key_position(ctx);
     let details = rpc_denied_details(error);
-    let (_, response, _) = begun
+    let (start_index, response, _) = begun
         .start_live_denied_at_index(ctx, details, move |start_index| {
             let idempotency_key = key_position.derive(start_index);
             Ok((
@@ -229,7 +240,7 @@ pub(super) async fn persist_invoke_denial_from_begun<Ctx: WorkerCtx>(
             ))
         })
         .await?;
-    Ok(Err(denied_rpc_failure(response.result)?.into()))
+    Ok(Err(denied_rpc_failure(start_index, response.result)?.into()))
 }
 
 pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
@@ -281,6 +292,7 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
     };
     let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
         WorkerExecutorError::unexpected_oplog_entry(
+            handle.start_index(),
             "async RPC validation rejection Start carrying span_started",
             format!(
                 "rejection Start at {} without span metadata",
@@ -299,12 +311,14 @@ pub(super) async fn persist_async_validation_rejection<Ctx: WorkerCtx>(
             .complete_with_span(ctx, expected, span_finished)
             .await?;
     } else {
+        let start_index = handle.start_index();
         match handle.replay(ctx).await? {
             CallReplayOutcome::Replayed(response) if response == expected => {}
             CallReplayOutcome::Replayed(response) => {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("async RPC validation rejection {expected:?}"),
+                    start_index,
                     format!("{response:?}"),
+                    format!("async RPC validation rejection {expected:?}"),
                 )
                 .into());
             }
@@ -362,7 +376,7 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
         &method_name,
     );
     let span_started = embedded_invocation_span_builder(ctx, &connection_span_id, &method_name)?;
-    let (_, response, started) = {
+    let (start_index, response, started) = {
         let call_target = call_target.clone();
         begun
             .start_live_denied_at_index(ctx, details, move |start_index| {
@@ -378,7 +392,10 @@ pub(super) async fn persist_async_invoke_denial_from_begun<Ctx: WorkerCtx>(
     let started = started.expect("the denied asynchronous RPC records its span");
     let span = restore_embedded_span(ctx, &started)?;
     finish_span_in_memory(ctx, span.span_id())?;
-    bake_closed_async_error(ctx.table(), denied_rpc_failure(response.result)?)
+    bake_closed_async_error(
+        ctx.table(),
+        denied_rpc_failure(start_index, response.result)?,
+    )
 }
 
 pub(super) async fn persist_schedule_denial<Ctx: WorkerCtx>(
@@ -406,8 +423,9 @@ pub(super) async fn persist_schedule_denial<Ctx: WorkerCtx>(
             .await
         }
         ResolvedCall::Replay(handle) => {
+            let start_index = handle.start_index();
             let response = replay_rpc_denial(ctx, handle).await?;
-            Ok(Err(denied_rpc_failure(response.result)?.into()))
+            Ok(Err(denied_rpc_failure(start_index, response.result)?.into()))
         }
     }
 }
@@ -423,7 +441,7 @@ pub(super) async fn persist_schedule_denial_from_begun<Ctx: WorkerCtx>(
     let key_position = begun.idempotency_key_position(ctx);
     let details = rpc_denied_details(error);
     let datetime: golem_common::model::oplog::types::SerializableDateTime = datetime.into();
-    let (_, response, _) = begun
+    let (start_index, response, _) = begun
         .start_live_denied_at_index(ctx, details, move |start_index| {
             Ok((
                 HostRequestGolemRpcScheduledInvocation {
@@ -439,5 +457,5 @@ pub(super) async fn persist_schedule_denial_from_begun<Ctx: WorkerCtx>(
             ))
         })
         .await?;
-    Ok(Err(denied_rpc_failure(response.result)?.into()))
+    Ok(Err(denied_rpc_failure(start_index, response.result)?.into()))
 }

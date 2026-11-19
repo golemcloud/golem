@@ -647,8 +647,9 @@ where
         start_rpc_binding_call::<_, F>(ctx, request, &expected, with_agent_authority).await?;
     if recorded.remote_agent_id != expected {
         return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
-            format!("RPC connection to {expected}"),
+            handle.start_index(),
             format!("RPC connection to {}", recorded.remote_agent_id),
+            format!("RPC connection to {expected}"),
         )));
     }
     Ok((handle, span))
@@ -731,6 +732,7 @@ where
             };
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "RPC connection Start carrying span_started",
                     format!(
                         "RPC connection Start at {} without span metadata",

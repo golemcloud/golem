@@ -459,8 +459,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             true,
         )
         .await?;
+        let start_index = handle.start_index();
         if recorded != request {
             return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
+                start_index,
                 format!("get-by-id {request:?}"),
                 format!("get-by-id {recorded:?}"),
             )));
@@ -591,6 +593,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
         let (Some(schema), Some(type_id)) = (response.agent_type, response.type_id) else {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                start_index,
                 "get-by-id End with the recorded agent type",
                 "get-by-id End without the recorded agent type",
             )
@@ -819,11 +822,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     InvocationFreshnessDisposition::MayExist
                 };
             if !handle.is_live() && recorded_rpc_denial(self, &handle).await?.is_some() {
+                let start_index = handle.start_index();
                 let response = replay_rpc_denial(self, handle).await?;
-                return Ok(Err(denied_rpc_failure(response.result)?.into()));
+                return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "streaming RPC Start carrying span_started",
                     format!(
                         "streaming RPC Start at {} without span metadata",
@@ -833,10 +838,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })?;
             let span = restore_embedded_span(self, &started)?;
             if self.is_live() && !handle.is_live() {
+                let start_index = handle.start_index();
                 handle = match handle.replay(self).await? {
                     CallReplayOutcome::Incomplete(handle) => handle,
                     CallReplayOutcome::Replayed(_) => {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            start_index,
                             "incomplete RPC before a newly authored invocation span",
                             "completed RPC",
                         )
@@ -850,6 +857,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .logical_streaming_origin
                 .ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        handle.start_index(),
                         "streaming RPC Start with logical origin",
                         format!(
                             "streaming RPC Start at {} without logical origin",
@@ -1101,8 +1109,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             ResolvedCall::Replay(handle) => {
                 if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    let start_index = handle.start_index();
                     let response = replay_rpc_denial(self, handle).await?;
-                    return Ok(Err(denied_rpc_failure(response.result)?.into()));
+                    return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
                 }
                 handle
             }
@@ -1128,6 +1137,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let dispatched_scope_card = scope_card.clone();
         let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                handle.start_index(),
                 "dispatched RPC Start carrying span_started",
                 format!(
                     "RPC Start at {} without span metadata",
@@ -1253,8 +1263,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             ResolvedCall::Replay(handle) => {
                 if recorded_rpc_denial(self, &handle).await?.is_some() {
+                    let start_index = handle.start_index();
                     let response = replay_rpc_denial(self, handle).await?;
-                    return Ok(Err(denied_rpc_failure(response.result)?.into()));
+                    return Ok(Err(denied_rpc_failure(start_index, response.result)?.into()));
                 }
                 handle
             }
@@ -1279,6 +1290,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|error| handle.trap(error))?;
         let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                handle.start_index(),
                 "fire-and-forget RPC Start carrying span_started",
                 format!(
                     "RPC Start at {} without span metadata",
@@ -1479,6 +1491,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             }
             let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "streaming RPC Start carrying span_started",
                     format!(
                         "streaming RPC Start at {} without span metadata",
@@ -1488,10 +1501,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             })?;
             let span = restore_embedded_span(self, &started)?;
             if self.is_live() && !handle.is_live() {
+                let start_index = handle.start_index();
                 handle = match handle.replay(self).await? {
                     CallReplayOutcome::Incomplete(handle) => handle,
                     CallReplayOutcome::Replayed(_) => {
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            start_index,
                             "incomplete RPC before a newly authored invocation span",
                             "completed RPC",
                         )
@@ -1505,6 +1520,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .logical_streaming_origin
                 .ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        handle.start_index(),
                         "streaming RPC Start with logical origin",
                         format!(
                             "streaming RPC Start at {} without logical origin",
@@ -1766,6 +1782,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .map_err(|error| handle.trap(error))?;
         let started = handle.recorded_span_started(self).await?.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                handle.start_index(),
                 "RPC Start carrying span_started",
                 format!(
                     "RPC Start at {} without span metadata",

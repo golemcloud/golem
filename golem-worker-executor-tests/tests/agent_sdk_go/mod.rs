@@ -20,6 +20,7 @@ pub mod blobstore;
 pub mod config;
 pub mod custom_durability_concurrency;
 pub mod durability;
+pub mod failed_update;
 pub mod http;
 pub mod invocation;
 pub mod keyvalue;

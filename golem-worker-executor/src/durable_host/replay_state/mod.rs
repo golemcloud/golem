@@ -21,7 +21,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, LogLevel,
-    OplogEntry, OplogIndex, OplogScopeProjection,
+    OplogEntry, OplogIndex, OplogScopeProjection, ReplayDivergence, ReplayHostCall, ReplayStep,
+    StartIdentityField,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{AgentInvocationPayload, AgentInvocationResult, OwnedAgentId, Timestamp};

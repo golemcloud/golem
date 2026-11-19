@@ -53,7 +53,7 @@ use crate::model::oplog::{
     PublicSnapshotData, PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind,
     PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
+    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription, UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -1936,6 +1936,11 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
             source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: OplogIndex::from_u64(3),
         }),
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: crate::model::oplog::protobuf::tests::replay_divergence_tests::divergences()
+            .into_iter()
+            .next()
+            .map(Box::new),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1952,10 +1957,36 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         details: None,
         update_attempt_index: None,
         snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Other,
+        divergence: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn failed_update_redacts_the_capabilities_in_the_divergence_requests() {
+    use crate::base_model::oplog::replay_divergence_test_values::{
+        assert_requests_redacted, divergence_with_nested_capabilities,
+    };
+
+    let mut entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision::new(1).unwrap(),
+        details: None,
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: Some(Box::new(divergence_with_nested_capabilities())),
+    });
+
+    entry.redact_host_managed_values_for_external();
+
+    let PublicOplogEntry::FailedUpdate(params) = entry else {
+        unreachable!()
+    };
+    assert_requests_redacted(params.divergence.as_ref().unwrap());
 }
 
 #[test]

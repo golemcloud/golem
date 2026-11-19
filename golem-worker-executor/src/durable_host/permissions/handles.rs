@@ -422,11 +422,12 @@ pub(super) async fn resolve_permission_card<Ctx: WorkerCtx>(
             };
             if recorded.card_id != snapshot.card_id {
                 return Err(call.trap(WorkerExecutorError::unexpected_oplog_entry(
-                    format!("card-liveness request for permission card {card_id}"),
+                    call.start_index(),
                     format!(
                         "card-liveness request for permission card {}",
                         recorded.card_id
                     ),
+                    format!("card-liveness request for permission card {card_id}"),
                 )));
             }
             match call.replay(ctx).await? {

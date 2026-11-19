@@ -82,6 +82,8 @@ message PendingUpdate {
 
 message FailedUpdate {
   optional string details = 3;
+  UpdateFailureClass failure_class = 4;
+  optional ReplayDivergence divergence = 5;
 }
 
 message SuccessfulUpdate {

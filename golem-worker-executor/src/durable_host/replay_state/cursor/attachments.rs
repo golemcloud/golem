@@ -116,6 +116,7 @@ impl ReplayState {
             })?;
             if !request.matches_input(bytes.as_deref().expect("validated typed payload")) {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    source,
                     "attachment body matching the accepted write digest",
                     format!("attachment observation at {source} differs from its accepted write"),
                 ));
@@ -143,12 +144,14 @@ impl ReplayState {
         };
         let start = start.ok_or_else(|| {
             WorkerExecutorError::unexpected_oplog_entry(
+                self.cursor.last_replayed_index().next(),
                 "one retained acceptance for an attachment operation",
                 "multiple accepted writes share an attachment operation ordinal",
             )
         })?;
         if index.requests.get(&start) != Some(request) {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                start,
                 "regenerated attachment argument matching its retained request",
                 format!("attachment write differs from Start at {start}"),
             ));
@@ -330,6 +333,7 @@ impl ReplayState {
         })?;
         if !write.retained || !request.matches_input(bytes) {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                source.0,
                 "regenerated attachment bytes matching the retained accepted write",
                 format!(
                     "regenerated attachment differs from accepted write at {}",
@@ -397,6 +401,7 @@ impl ReplayState {
                     .is_none_or(|bytes| blake3::hash(bytes).as_bytes() != &validation.digest)
             {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    validation.index,
                     "recorded attachment bytes equal regenerated source range",
                     format!(
                         "attachment observation at {} differs from regenerated source",

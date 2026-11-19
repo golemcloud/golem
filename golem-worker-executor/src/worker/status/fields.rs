@@ -449,6 +449,8 @@ impl UpdateFields {
                     details,
                     snapshot_assisted_details,
                     snapshot_fault,
+                    failure_class,
+                    divergence,
                     ..
                 },
                 step,
@@ -473,6 +475,8 @@ impl UpdateFields {
                     pending_update,
                     snapshot_assisted_details: snapshot_assisted_details.clone(),
                     snapshot_fault: *snapshot_fault,
+                    failure_class: *failure_class,
+                    divergence: divergence.clone(),
                 });
             }
             (

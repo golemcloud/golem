@@ -265,6 +265,11 @@ before (value) {}
             .transpose()?,
         // The WIT record of a failed update has no snapshot fault.
         snapshot_fault: None,
+        failure_class: update_failure_class_from_wit(params.failure_class),
+        divergence: params
+            .divergence
+            .map(|divergence| replay_divergence_from_wit(divergence).map(Box::new))
+            .transpose()?,
     } }
     GrowMemory { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -706,6 +711,10 @@ before (value) {}
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        failure_class: update_failure_class_to_wit(failure_class),
+        divergence: divergence
+            .map(|divergence| replay_divergence_to_wit(*divergence))
+            .transpose()?,
     } }
     GrowMemory { record () => GrowMemoryParameters {
         timestamp: timestamp.into(),

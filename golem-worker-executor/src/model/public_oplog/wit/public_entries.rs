@@ -210,6 +210,10 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
                 snapshot_index: details.snapshot_index.into(),
             }
         }),
+        failure_class: update_failure_class_to_wit(failure_class),
+        divergence: divergence
+            .map(|divergence| replay_divergence_to_wit(*divergence))
+            .transpose()?,
     } }
     GrowMemory { record GrowMemoryParams => GrowMemoryParameters {
         timestamp: timestamp.into(),

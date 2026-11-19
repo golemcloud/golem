@@ -217,7 +217,7 @@ impl CursorTx<'_> {
             // `Runtime`/`Unknown` failure (retrying replay against the same
             // truncated oplog would just fail again).
             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "next oplog entry to replay",
+                read_idx,
                 format!(
                     "missing oplog entry for {} at index {}; replay target = {}, last replayed non-hint index = {}",
                     self.cursor.owned_agent_id,
@@ -225,6 +225,7 @@ impl CursorTx<'_> {
                     self.cursor.replay_target(),
                     self.cursor.last_replayed_non_hint_index()
                 ),
+                "next oplog entry to replay",
             ));
         };
 

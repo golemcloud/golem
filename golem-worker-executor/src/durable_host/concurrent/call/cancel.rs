@@ -380,11 +380,12 @@ impl<T: 'static, Ctx: WorkerCtx> ReplayCancelWaiter<T, Ctx> {
                         // completed entity can dispose its Store earlier, cancelling this
                         // parked waiter; it is not a fence that keeps that Store alive.
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "Cancelled for a dropped future",
+                            call.start_idx(),
                             format!(
                                 "no recorded cancellation for Start {} during completed entity replay",
                                 call.start_idx()
                             ),
+                            "Cancelled for a dropped future",
                         ));
                     }
                     continue_live_at_natural_tail_end_access(
