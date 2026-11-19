@@ -2119,6 +2119,22 @@ impl TestWorkerExecutor {
             .await
     }
 
+    /// Holds the explicit commit after a matching entry has been buffered, before storage.
+    /// Unlike an append gate, this lets the writer receive its append index and reach the
+    /// actual acceptance or completion commit barrier. Threshold auto-commits must be disabled.
+    pub async fn gate_before_next_oplog_commit(
+        &self,
+        agent_id: &AgentId,
+        matches: fn(&OplogEntry) -> bool,
+    ) -> AgentInitializationEnqueueGateHandle {
+        let handle = self
+            .additional_test_deps
+            .gate_next_append(agent_id.clone(), matches)
+            .await;
+        handle.gate.before_commit.store(true, Ordering::SeqCst);
+        handle
+    }
+
     /// Holds a selected invocation writer at its real terminal append, before storage changes.
     pub async fn gate_next_invocation_outcome_append(
         &self,
@@ -5966,6 +5982,12 @@ impl TestOplog {
         else {
             return Ok(());
         };
+        if gate.before_commit.load(Ordering::SeqCst) {
+            if after_append && gate.armed.load(Ordering::SeqCst) && (gate.matches)(entry) {
+                *gate.entry.lock().unwrap() = Some(entry.clone());
+            }
+            return Ok(());
+        }
         if after_append && matches!(entry, OplogEntry::AgentInvocationStarted { .. }) {
             gate.wait_for_invocation_start
                 .store(false, Ordering::SeqCst);
@@ -6512,6 +6534,20 @@ impl Oplog for TestOplog {
     {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
+        if level != CommitLevel::ReportOnly
+            && let Some(gate) = self
+                .additional_test_deps
+                .agent_initialization_enqueue_gate(&self.owned_agent_id.agent_id)
+                .await
+            && gate.before_commit.load(Ordering::SeqCst)
+        {
+            let entry = gate.entry.lock().unwrap().clone();
+            if let Some(entry) = entry
+                && gate.armed.swap(false, Ordering::SeqCst)
+            {
+                self.pause_at_claimed_test_append(&entry, gate).await?;
+            }
+        }
         let committed = self.oplog.commit(level).await;
         if committed.as_ref().is_ok_and(|entries| {
             entries
@@ -7631,6 +7667,7 @@ impl AdditionalTestDeps {
             armed: AtomicBool::new(true),
             matches,
             after_append: AtomicBool::new(false),
+            before_commit: AtomicBool::new(false),
             commit_prefix: AtomicBool::new(false),
             abort_append: AtomicBool::new(false),
             wait_for_invocation_start: AtomicBool::new(false),
@@ -8054,6 +8091,7 @@ struct AgentInitializationEnqueueGate {
     /// The entry the gate fires on; the initialization enqueue unless a test arms it otherwise.
     matches: fn(&OplogEntry) -> bool,
     after_append: AtomicBool,
+    before_commit: AtomicBool,
     commit_prefix: AtomicBool,
     abort_append: AtomicBool,
     wait_for_invocation_start: AtomicBool,
@@ -8083,6 +8121,11 @@ impl AgentInitializationEnqueueGateHandle {
             .unwrap()
             .clone()
             .expect("the append gate has not intercepted an entry")
+    }
+
+    /// Releases the paused append or commit. Drop also releases it as failure cleanup.
+    pub fn release(self) {
+        drop(self);
     }
 
     /// Refuses the intercepted receipt only after executor shutdown fences its oplog generation.

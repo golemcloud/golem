@@ -66,6 +66,9 @@ const CACHE_TTL: Duration = Duration::from_millis(50);
 #[path = "create_config_admission.rs"]
 mod create_config_admission;
 
+#[path = "invocation_receipts.rs"]
+mod invocation_receipts;
+
 #[test]
 #[timeout("2 minutes")]
 async fn warm_get_or_create_does_not_wait_for_oplog_maintenance(
