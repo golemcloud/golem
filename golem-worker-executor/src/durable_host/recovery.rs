@@ -149,7 +149,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             let lowered = lower_invocation(
                                 agent_invocation,
                                 &component_metadata,
-                                agent_id.as_ref(),
+                                store.as_context().data().durable_ctx().owner_context(),
                             )?;
                             Ok::<_, WorkerExecutorError>((worker, uses_streams, lowered))
                         }

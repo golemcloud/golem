@@ -32,7 +32,7 @@ use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
-use golem_common::model::agent::{AgentMode, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
 use golem_common::model::tool::{ToolActivationSnapshot, ToolName};
@@ -2225,8 +2225,9 @@ fn materialize_call<Ctx: WorkerCtx>(
 pub fn lower_invocation(
     invocation: AgentInvocation,
     component_metadata: &ComponentMetadata,
-    agent_id: Option<&ParsedAgentKey>,
+    owner_context: &ResolvedOwnerContext,
 ) -> Result<LoweredInvocation, WorkerExecutorError> {
+    let agent_id = owner_context.agent();
     match invocation {
         AgentInvocation::AgentInitialization {
             input, principal, ..
@@ -2330,17 +2331,21 @@ pub fn lower_invocation(
             call: LoweredCall::SaveSnapshot,
         }),
         AgentInvocation::LoadSnapshot { snapshot, .. } => {
-            let agent_id = agent_id.ok_or_else(|| {
-                WorkerExecutorError::invalid_request(
-                    "load-snapshot needs an agent with constructor parameters".to_string(),
-                )
-            })?;
+            let input = match owner_context {
+                ResolvedOwnerContext::Agent(agent) => agent.parameters.value().clone(),
+                ResolvedOwnerContext::OplogProcessor => SchemaValue::Record { fields: Vec::new() },
+                ResolvedOwnerContext::ComponentBaseline => {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "load-snapshot needs an agent with constructor parameters".to_string(),
+                    ));
+                }
+            };
             Ok(LoweredInvocation {
                 display_name: "load-snapshot".to_string(),
                 read_only_method: Some("load-snapshot".to_string()),
                 call: LoweredCall::LoadSnapshot {
                     snapshot: snapshot.into(),
-                    input: agent_id.parameters.value().clone(),
+                    input,
                 },
             })
         }
@@ -2961,8 +2966,12 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::String("hi".to_string())],
         };
-        let lowered = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-            .expect("valid input should lower");
+        let lowered = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        )
+        .expect("valid input should lower");
         assert_eq!(lowered.display_name, METHOD_NAME);
         assert!(lowered.read_only_method.is_none());
     }
@@ -2989,8 +2998,12 @@ mod tests {
                 constructor_input.clone(),
             ),
         );
-        let lowered = lower_invocation(load_snapshot_invocation(), &metadata(), Some(&agent_id))
-            .expect("snapshot load should lower");
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata(),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        )
+        .expect("snapshot load should lower");
 
         assert_eq!(lowered.display_name, "load-snapshot");
         assert_eq!(lowered.read_only_method.as_deref(), Some("load-snapshot"));
@@ -3002,7 +3015,11 @@ mod tests {
 
     #[test]
     fn load_snapshot_without_an_agent_key_is_rejected() {
-        let Err(err) = lower_invocation(load_snapshot_invocation(), &metadata(), None) else {
+        let Err(err) = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata(),
+            &ResolvedOwnerContext::ComponentBaseline,
+        ) else {
             panic!("an owner without constructor parameters cannot load a snapshot");
         };
         assert!(
@@ -3012,13 +3029,55 @@ mod tests {
     }
 
     #[test]
+    fn load_snapshot_for_a_processor_passes_an_empty_constructor_record() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports {
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".into()),
+                save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".into()),
+                load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".into()),
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+            Default::default(),
+        );
+        assert!(
+            metadata.has_oplog_processor()
+                && metadata.has_save_snapshot()
+                && metadata.has_load_snapshot()
+        );
+        let lowered = lower_invocation(
+            load_snapshot_invocation(),
+            &metadata,
+            &ResolvedOwnerContext::OplogProcessor,
+        )
+        .expect("a snapshot-capable processor must be able to restore its snapshot");
+        let LoweredCall::LoadSnapshot { input, .. } = lowered.call else {
+            panic!("expected load-snapshot");
+        };
+        assert_eq!(input, SchemaValue::Record { fields: Vec::new() });
+    }
+
+    #[test]
+    fn component_agent_without_recorded_parameters_cannot_resolve_an_owner() {
+        let error = ResolvedOwnerContext::from_authoritative_kind(
+            golem_common::model::agent::OwnerKind::ComponentAgent,
+            &AgentId::from_parts(42, 1),
+            None,
+            &metadata(),
+        )
+        .unwrap_err();
+        assert!(error.contains("no agent type"), "{error}");
+    }
+
+    #[test]
     fn save_snapshot_does_not_use_read_only_strictness() {
         let lowered = lower_invocation(
             AgentInvocation::SaveSnapshot {
                 idempotency_key: InvocationId(Uuid::from_u128(3)),
             },
             &metadata(),
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
         )
         .expect("snapshot save should lower");
 
@@ -3033,7 +3092,7 @@ mod tests {
         let Err(err) = lower_invocation(
             method_invocation(SchemaValue::U32(1)),
             &metadata,
-            Some(&agent_id),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
         ) else {
             panic!("non-record input must be rejected");
         };
@@ -3051,8 +3110,11 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        ) else {
             panic!("arity mismatch must be rejected");
         };
         assert!(
@@ -3069,8 +3131,11 @@ mod tests {
         let input = SchemaValue::Record {
             fields: vec![SchemaValue::U32(7), SchemaValue::Bool(true)],
         };
-        let Err(err) = lower_invocation(method_invocation(input), &metadata, Some(&agent_id))
-        else {
+        let Err(err) = lower_invocation(
+            method_invocation(input),
+            &metadata,
+            &ResolvedOwnerContext::Agent(Box::new(agent_id)),
+        ) else {
             panic!("field type mismatch must be rejected");
         };
         assert!(
@@ -3095,7 +3160,7 @@ mod tests {
         let result = lower_invocation(
             method_invocation(SchemaValue::Record { fields: Vec::new() }),
             &metadata,
-            Some(&agent_id()),
+            &ResolvedOwnerContext::Agent(Box::new(agent_id())),
         );
         if let Err(error) = result {
             panic!("unexpected error: {error}");
@@ -3234,7 +3299,12 @@ mod tests {
                 invocation_uses_streams(&invocation, &metadata, Some(&agent_id())),
                 expected
             );
-            let lowered = lower_invocation(invocation, &metadata, Some(&agent_id())).unwrap();
+            let lowered = lower_invocation(
+                invocation,
+                &metadata,
+                &ResolvedOwnerContext::Agent(Box::new(agent_id())),
+            )
+            .unwrap();
             let LoweredCall::Invoke {
                 expected_output, ..
             } = lowered.call

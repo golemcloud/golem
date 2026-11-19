@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
@@ -1198,7 +1198,11 @@ async fn initialize_entity(
         invocation_context: InvocationContextStack::fresh(),
         principal,
     };
-    let lowered = lower_invocation(init.clone(), &metadata, Some(parsed_agent_id))?;
+    let lowered = lower_invocation(
+        init.clone(),
+        &metadata,
+        &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+    )?;
     let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     match result {
         InvokeResult::Succeeded { result, .. }
@@ -1235,7 +1239,11 @@ async fn invoke_sleep_p3(
         principal,
         scope_card: None,
     };
-    let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
+    let lowered = lower_invocation(
+        method.clone(),
+        &metadata,
+        &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+    )?;
     let result = invoke_observed_and_traced(lowered, store, instance, None).await?;
     assert!(matches!(
         result,
@@ -1268,7 +1276,11 @@ async fn invoke_entity_method(
         principal,
         scope_card: None,
     };
-    let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
+    let lowered = lower_invocation(
+        method.clone(),
+        &metadata,
+        &ResolvedOwnerContext::Agent(Box::new(parsed_agent_id.clone())),
+    )?;
     match invoke_observed_and_traced(lowered, store, instance, None).await? {
         InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(

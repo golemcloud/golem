@@ -3860,7 +3860,11 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+otherwise they use `default_snapshotting`. Snapshot lowering branches on the resolved owner:
+a processor passes an empty constructor record to load-snapshot, while an agent passes its
+recorded constructor parameters. A component agent missing those parameters fails owner
+resolution; an ephemeral external-tool owner cannot load a snapshot and has snapshotting disabled.
+Before sending a batch, the source commits its target,
 range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
 installed plugin and source metadata, including the guest-visible status, revision, environment
 and configuration. Its status contains only the guest-visible status, revision and latest retry

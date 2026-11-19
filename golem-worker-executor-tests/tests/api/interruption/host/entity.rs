@@ -7,7 +7,7 @@ use super::*;
 use anyhow::Context as _;
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::AgentPrincipal;
+use golem_common::model::agent::{AgentPrincipal, ResolvedOwnerContext};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
@@ -225,7 +225,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             };
             // Entity execution bypasses primary pending admission. The entity scope remains Live.
             let result = invoke_observed_and_traced(
-                lower_invocation(init, &metadata, Some(&parsed))?,
+                lower_invocation(
+                    init,
+                    &metadata,
+                    &ResolvedOwnerContext::Agent(Box::new(parsed.clone())),
+                )?,
                 store,
                 instance,
                 None,
@@ -252,7 +256,11 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 scope_card: None,
             };
             invoke_observed_and_traced(
-                lower_invocation(method, &metadata, Some(&parsed))?,
+                lower_invocation(
+                    method,
+                    &metadata,
+                    &ResolvedOwnerContext::Agent(Box::new(parsed.clone())),
+                )?,
                 store,
                 instance,
                 None,
