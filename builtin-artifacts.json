@@ -41,6 +41,13 @@
     "task": "build-typescript-tools",
     "inputs": ["builtin-tools/js-ts-tools", "sdks/ts", "sdks/javascript", "sdks/rust", "golem-schema", "golem-schema-derive", "golem-tool-metadata", "golem-rust-macro"]
   },
+  "yq": {
+    "component": "yq",
+    "path": "builtin-tools/yq.wasm",
+    "task": "build-yq-tool",
+    "optional": true,
+    "inputs": ["builtin-tools/yq", "sdks/go/golem", "sdks/go/core", "golem-schema", "golem-tool-metadata"]
+  },
   "web_fetch": {
     "component": "web-fetch",
     "path": "builtin-tools/web-fetch.wasm",

@@ -177,6 +177,13 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         release_version: "0.1.15",
         kind: BuiltinExportKind::Tool,
     },
+    BuiltinExportDescriptor {
+        component_name: "yq",
+        artifact_id: "yq",
+        export_name: "yq",
+        release_version: "0.1.0",
+        kind: BuiltinExportKind::Tool,
+    },
 ];
 
 #[allow(clippy::too_many_arguments)]
