@@ -6,6 +6,13 @@ use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
+#[ctor::ctor]
+fn print_discovery_output() {
+    if std::env::var_os("GOLEM_AGENT_ID").is_none() {
+        println!("agent-counters discovery stdout");
+    }
+}
+
 #[derive(golem_rust::ConfigSchema)]
 #[allow(dead_code)] // The CLI exercises these declarations without invoking the agent.
 struct PackageFileConfig {

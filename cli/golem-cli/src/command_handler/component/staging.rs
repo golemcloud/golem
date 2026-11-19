@@ -67,10 +67,8 @@ pub(super) async fn extract_local_component(
     let metadata = match package_bytes {
         Some(bytes) => {
             let metadata =
-                golem_common::model::agent::extraction::extract_component_metadata_from_bytes(
-                    bytes, true, false,
-                )
-                .await?;
+                crate::model::agent::extraction::extract_component_metadata_from_bytes(bytes)
+                    .await?;
             app.component_metadata()
                 .add_cached_component_metadata(name, metadata)
                 .await?

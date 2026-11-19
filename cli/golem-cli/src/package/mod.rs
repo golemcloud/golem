@@ -240,7 +240,11 @@ pub(crate) fn reject_secret_defaults(
         if let Some(value) = crate::model::config::value_at_path(config, &declaration.path) {
             ensure!(
                 declaration.source != AgentConfigSource::Secret
-                    && !contains_secret_default(graph, &declaration.value_type, value, 0)?,
+                    && !contains_secret_default(graph, &declaration.value_type, value, 0)
+                        .with_context(|| format!(
+                            "Invalid default at {}",
+                            declaration.path.join(".")
+                        ))?,
                 "Package default supplies a secret at {}",
                 declaration.path.join(".")
             );
@@ -521,12 +525,9 @@ fn contains_secret_default(
             }
         }
         SchemaType::Union { spec, .. } => {
-            // The union branches describe record fields in the same JSON object.
-            for branch in &spec.branches {
-                if child(&branch.body, value)? {
-                    return Ok(true);
-                }
-            }
+            let branch =
+                golem_schema::schema::render::json_value::select_union_branch(spec, value)?;
+            return child(&branch.body, value);
         }
         _ => {}
     }

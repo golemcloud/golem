@@ -238,6 +238,59 @@ fn only_the_matching_union_branch_contributes_file_defaults() {
 }
 
 #[test]
+fn rejects_secret_defaults_only_in_the_selected_union_branch() {
+    use golem_common::schema::schema_type::{
+        DiscriminatorRule, FieldDiscriminator, SecretSpec, UnionBranch, UnionSpec,
+    };
+
+    let (mut config, layers) = sample();
+    let component = config.components.values_mut().next().unwrap();
+    component
+        .config_schema
+        .declarations
+        .push(AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Local,
+            path: vec!["input".into()],
+            value_type: SchemaType::union(UnionSpec {
+                branches: [
+                    ("public", SchemaType::string()),
+                    ("private", SchemaType::secret(SecretSpec::default())),
+                ]
+                .into_iter()
+                .map(|(tag, ty)| UnionBranch {
+                    tag: tag.into(),
+                    body: SchemaType::record_from_fields([
+                        ("kind", SchemaType::string()),
+                        ("value", ty),
+                    ]),
+                    discriminator: DiscriminatorRule::FieldEquals(FieldDiscriminator {
+                        field_name: "kind".into(),
+                        literal: Some(tag.into()),
+                    }),
+                    metadata: Default::default(),
+                })
+                .collect(),
+            }),
+        });
+    for (kind, accepted) in [("private", false), ("public", true)] {
+        config
+            .components
+            .values_mut()
+            .next()
+            .unwrap()
+            .provision
+            .config = json!({"input": {"kind": kind, "value": "ordinary text"}});
+        match pack(&config, &layers) {
+            Ok(_) => assert!(accepted, "accepted a secret default"),
+            Err(err) => {
+                assert!(!accepted, "public default rejected: {err:#}");
+                assert!(format!("{err:#}").contains("supplies a secret at input"));
+            }
+        }
+    }
+}
+
+#[test]
 fn refuses_secret_and_config_defaults_at_every_depth() {
     for key in ["$secret", "$config"] {
         let reference = json!({ (key): "private-key" });
