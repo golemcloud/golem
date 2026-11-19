@@ -146,6 +146,8 @@ For broad CLI integration test reruns, use `cargo make cli-integration-tests`. F
 
 Load the `testing` skill for detailed guidance on test filtering, debugging failures, test components, and timeouts.
 
+- For process-free TypeScript and Effect guest smoke tests, run `cargo make js-guest-tests` after building the SDK templates. It bundles fresh SDK sources before the Rust tests; do not commit generated bundles or maps. See `golem-js-guest-tests/README.md` for prerequisites, Rust-only iteration, coverage limits and Main validation ownership.
+
 ## Running Locally
 
 ```shell

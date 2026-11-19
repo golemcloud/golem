@@ -431,10 +431,11 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         progress = json.loads((self.report / "progress.json").read_text())
         self.assertEqual(progress["mode"], "parallel" if parallel else "serial")
         tasks = {task["id"]: task for task in progress["tasks"]}
-        self.assertEqual(len(tasks), 58)
+        self.assertEqual(len(tasks), 59)
         self.assertEqual(tasks["worker--tool-streaming"]["status"], "passed")
         self.assertEqual(tasks["exclusive--main-validation-docker"]["status"], "passed")
         self.assertEqual(tasks["prepare--unit-tests-and-checks"]["status"], "passed")
+        self.assertEqual(tasks["prepare--main-validation-js-guests"]["status"], "passed")
         producer_ok = failed_task != "main-validation-service-native"
         self.assertEqual(tasks["service-build--main-validation-service-native"]["status"], "passed" if producer_ok else "failed")
         self.assertEqual(tasks["cli--agents"]["status"], "passed" if producer_ok else "blocked")
@@ -560,6 +561,20 @@ fn main() {
                 self.assertEqual(result.returncode == 0, not fail, result.stdout + result.stderr)
                 self.assertNotEqual(report.read_text(), "stale report")
                 self.assertGreater(report.stat().st_size, 0)
+
+    def test_js_guest_failure_fails_preparation_and_blocks_consumers(self):
+        self.prepare_cargo_fixture()
+        self.env["FAIL_TASK"] = "main-validation-js-guests"
+        result = self.execute(["observe", "--", "cargo", "make", "--disable-check-for-updates", "--no-workspace",
+                               "--profile", "ci", "main-validation"])
+        self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+        tasks = {task["id"]: task for task in json.loads((self.report / "progress.json").read_text())["tasks"]}
+        self.assertEqual(tasks["prepare--validate-sdk-ts"]["status"], "passed")
+        self.assertEqual(tasks["prepare--validate-sdk-effect"]["status"], "passed")
+        self.assertEqual(tasks["prepare--main-validation-js-guests"]["status"], "failed")
+        self.assertNotEqual(tasks["prepare--main-validation-js-guests"]["exit_code"], 0)
+        for task in ("prepare--main-validation-fixtures", "worker--group1", "cli--core"):
+            self.assertEqual(tasks[task]["status"], "blocked")
 
     def test_apfs_wrapper_requires_executed_tests_with_console_or_ctrf_output(self):
         binaries = self.directory / "bin"

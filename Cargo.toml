@@ -15,6 +15,7 @@ members = [
     "golem-component-compilation-service",
     "golem-registry-service",
     "golem-test-framework",
+    "golem-js-guest-tests",
     "golem-shard-manager",
     "golem-worker-executor",
     "golem-worker-executor-test-utils",
@@ -397,6 +398,10 @@ cranelift-native = { opt-level = 3 }
 cranelift-assembler-x64 = { opt-level = 3 }
 regalloc2 = { opt-level = 3 }
 gimli = { opt-level = 3 }
+wasmtime = { opt-level = 3 }
+wasmtime-wizer = { opt-level = 3 }
+wasmparser = { opt-level = 3 }
+wasm-rquickjs = { opt-level = 3 }
 
 [profile.dev-ci]
 inherits = "dev"
