@@ -146,6 +146,8 @@ For broad CLI integration test reruns, use `cargo make cli-integration-tests`. F
 
 Load the `testing` skill for detailed guidance on test filtering, debugging failures, test components, and timeouts.
 
+- For process-free TypeScript and Effect guest smoke tests, run `cargo make js-guest-tests` after building the SDK templates. It bundles fresh SDK sources before the Rust tests; do not commit generated bundles or maps. See `golem-js-guest-tests/README.md` for prerequisites, Rust-only iteration, coverage limits and Main validation ownership.
+
 ## Running Locally
 
 ```shell
@@ -197,7 +199,7 @@ Load these skills for guided workflows on complex tasks:
 
 Validate the smallest dependency and behavior scope that fully covers the change. Use package-scoped, non-mutating format, lint, build, and test commands by default. Broaden checks when shared contracts, workspace configuration, generated artifacts, or multiple subsystems are affected.
 
-When changing SDK code generation, guest bridge generation, canonical ABI wrappers, runtime retention, or release profiles, run `cargo make component-size-report`. It builds representative fixtures and writes `tmp/component-size-report/report.md` plus machine-readable details. Compare reports only when the toolchain, lockfile, Cargo configuration, and environment are identical. This is a local analysis capability, not a CI size gate.
+When changing SDK code generation, guest bridge generation, canonical ABI wrappers, runtime retention, or release profiles, run `cargo make component-size-report` (add `--optimize` for the per-core `wasm-opt` comparison, which needs Binaryen). It runs the `report` subcommand of `golem-size-analysis`, which builds representative fixtures, checks the export and reflection retention contracts, and writes `tmp/component-size-report/report.md` plus machine-readable details. Compare reports only when the toolchain, lockfile, Cargo configuration, and environment are identical. This is a local analysis capability, not a CI size gate. To measure one component and its Rule 2 breakdown, use `cargo run -p golem-size-analysis -- collect`; see `test-components/size-analysis/README.md`.
 
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 

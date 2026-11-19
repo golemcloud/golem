@@ -119,6 +119,15 @@ the local metadata. Service compilation can then overlap workers without replaci
 live worker executables. Test consumers use local nextest binaries metadata, not
 cross-job archives.
 
+Preparation runs `main-validation-js-guests` after TypeScript and Effect SDK
+validation. It uses their fresh local guest templates and the general native
+producer's metadata to run the in-process `golem-js-guest-tests` crate, which
+does not depend on the CLI.
+The task first runs `prepare-js-guest-tests` to bundle current SDK fixture sources
+into the Cargo target directory. Bundles and maps are build outputs, not committed
+snapshots or byte-exact drift gates. Missing guests, failed bundling or failed smoke
+tests fail preparation; see `golem-js-guest-tests/README.md`.
+
 Executor snapshots use ordinary copies, not links. Dependency checks reject
 unresolved libraries and libraries from the mutable Cargo target, and require
 library resolution to remain unchanged after copying. The snapshot remains below
@@ -129,22 +138,21 @@ runner to reclaim. The retained manifest and task logs record dependency and has
 evidence; sharing a cache is not a claim of measured speedup.
 
 Parallel execution is the default. Worker tests overlap service compilation,
-then service and CLI tests. Once both service compilation and worker tests finish,
-the same executor also runs lint and Bash checks in a background branch,
-sequentially with each other. Ordinary worker failures still admit these independent
-checks. The completion wait is bounded by the 300-minute validation timeout.
-They retain their existing progress identities and run once per cycle.
-The background branch limits Cargo, native test harnesses and Bash conformance
-to four workers; the Bash compatibility container also has a four-CPU quota.
+then service and CLI tests. Lint and Bash checks run in the exclusive tail,
+after all stateful lanes finish, including recovery. This keeps their compilation
+and filesystem traffic out of the database-backed test window. Ordinary lane
+failures still admit these independent checks. They run once per cycle and retain
+their existing progress identities. Lint and Bash limit Cargo, native test
+harnesses and Bash conformance to four workers; the Bash compatibility container
+also has a four-CPU quota.
 Bash uses a separate persistent Cargo target, including its conformance examples.
 It cannot overwrite native service or executor outputs. Lint skips the WIT sync
 already completed during preparation. Neither check overlaps a native producer.
-The four-worker cap applies only to parallel mode; serial diagnosis retains the
-normal tool concurrency. The background branch joins before privileged checks.
+The four-worker cap applies in both parallel and serial modes.
 
 Groups within each stateful subflow remain serial. The ceiling is three stateful
-subflows and one bounded checks branch, not another executor or a dynamic
-scheduler. Once workers finish, their slot runs service group 4 with its own
+subflows, not another executor or a dynamic scheduler. Once workers finish,
+their slot runs service group 4 with its own
 listener block and temporary root. That group retains its SQLite API, streaming
 recovery and fault-matrix invocations, their single-thread settings and their
 service-producer binaries. It runs once and keeps its existing progress identity.
@@ -155,6 +163,14 @@ checks follow the join. Set `MAIN_VALIDATION_PARALLEL=false` locally or the manu
 acceptance `parallel` input to false for a serial diagnostic run. Production
 sampling always uses parallel execution. Real overlap acceptance remains required;
 local contract tests alone do not establish isolation or resource headroom.
+
+Each worker, service and CLI test task has a 60-minute deadline that includes
+dependency startup and teardown. Expiry sends SIGTERM to the task's process
+group, then SIGKILL after at most 15 seconds. Remaining descendants in that group
+are also killed if the parent exits first. The task retains its log, records
+failure with exit code 124, and lets the lane run its next group. The deadline
+does not extend the workflow's 300-minute budget. Compilation and exclusive
+checks retain the workflow deadline rather than the shorter test-task limit.
 
 General workers retain test-r's hardware-derived concurrency. Keep the dedicated
 storage-quota single-thread and tool-streaming eight-thread limits. Service
@@ -243,8 +259,9 @@ its separate job-level reporting.
 
 The Linux progress helper also retains `resources.jsonl` in the report artifact. It
 samples host CPU counters, available memory and swap, load averages, worktree
-and target filesystem capacity, and available Linux pressure metrics every five
-seconds and at completion. UTC timestamps join samples to task intervals;
+and target filesystem capacity, raw `/proc/diskstats` device counters, and
+available Linux pressure metrics every five seconds and at completion.
+UTC timestamps join samples to task intervals;
 monotonic timestamps support elapsed-time calculations. CPU counters exclude
 guest counters, which are already included in user and nice time. These are
 host-wide observations, not per-task attribution or cgroup quotas. Samples can

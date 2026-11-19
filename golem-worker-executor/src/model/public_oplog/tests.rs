@@ -1420,6 +1420,8 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             golem_common::model::oplog::AgentError::TransientError("entity retry".to_string()),
             agent_entry,
             None,
+            None,
+            None,
         ))
         .await
         .unwrap();
@@ -2162,7 +2164,6 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
         (
             HostFunctionName::P3SocketsTypesUdpSocketSend,
             HostRequestP3SocketsUdpSend {
-                data: vec![1, 2, 3],
                 remote_address: Some(SerializableP3IpSocketAddress {
                     address: SerializableIpAddress::IPv4 {
                         address: [127, 0, 0, 1],
@@ -2173,7 +2174,11 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                 }),
             }
             .into(),
-            HostResponseP3SocketsUdpSend { result: Ok(()) }.into(),
+            HostResponseP3SocketsUdpSend {
+                result: Ok(()),
+                endpoint: None,
+            }
+            .into(),
         ),
         (
             HostFunctionName::P3SocketsTypesUdpSocketReceive,
@@ -2190,6 +2195,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
                         scope_id: Some(2),
                     },
                 }),
+                endpoint: None,
             }
             .into(),
         ),

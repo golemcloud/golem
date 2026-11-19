@@ -13661,6 +13661,15 @@ async fn deterministic_stream_crash_checkpoint_matrix(
         },
     ];
     let checkpoint_filter = std::env::var("GOLEM_TEST_CRASH_CHECKPOINT").ok();
+    if let Some(filter) = &checkpoint_filter {
+        anyhow::ensure!(
+            checkpoints
+                .iter()
+                .any(|checkpoint| checkpoint.name() == filter),
+            "unknown GOLEM_TEST_CRASH_CHECKPOINT {filter:?}; expected one of: {:?}",
+            checkpoints.map(Checkpoint::name)
+        );
+    }
 
     for checkpoint in checkpoints {
         if checkpoint_filter

@@ -10,6 +10,7 @@ from pathlib import Path
 import runpy
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -148,6 +149,189 @@ else:
         self.assertTrue(all(task["status"] in ("blocked", "interrupted") for task in tasks))
         self.assertTrue(all(task["completed_at"] for task in tasks))
 
+    def test_observer_cancellation_releases_stubborn_workload_port(self):
+        ready = self.directory / "ready.json"
+        workload = f'''import json, os, signal, socket, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+listener = socket.socket()
+listener.bind(('127.0.0.1', 0))
+listener.listen()
+Path({str(ready)!r}).write_text(json.dumps([os.getpid(), listener.getsockname()[1]]))
+time.sleep(120)
+'''
+        task = [sys.executable, str(HELPER), "run", "worker", "misc", "--",
+                sys.executable, "-c", workload]
+        controller = f'''import signal, subprocess
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+subprocess.Popen({task!r}).wait()
+'''
+        process = subprocess.Popen([sys.executable, str(HELPER), "observe", "--",
+                                    sys.executable, "-c", controller], cwd=self.directory,
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pid = None
+        try:
+            deadline = time.monotonic() + 10
+            while not ready.exists():
+                self.assertLess(time.monotonic(), deadline, "workload did not start")
+                time.sleep(.05)
+            pid, port = json.loads(ready.read_text())
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=25)
+            self.assertEqual(process.returncode, 143, (stdout, stderr))
+            with socket.socket() as probe:
+                self.assertNotEqual(probe.connect_ex(("127.0.0.1", port)), 0,
+                                    "observer cancellation left a task holding its port")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_cancellation_before_pid_publication_does_not_start_workload(self):
+        publishing = self.directory / "publishing"
+        started = self.directory / "started"
+        workload = f"from pathlib import Path; Path({str(started)!r}).touch()"
+        wrapper = f'''import runpy, time
+from pathlib import Path
+module = runpy.run_path({str(HELPER)!r})
+original = module['run_task'].__globals__['save']
+def delayed_save(path, value):
+    if value['status'] == 'running':
+        Path({str(publishing)!r}).touch()
+        time.sleep(120)
+    original(path, value)
+module['run_task'].__globals__['save'] = delayed_save
+module['run_task'](Path({str(self.report)!r}), 'worker', 'misc',
+                   [{sys.executable!r}, '-c', {workload!r}])
+'''
+        process = subprocess.Popen([sys.executable, str(HELPER), "observe", "--",
+                                    sys.executable, "-c", wrapper], cwd=self.directory,
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 10
+            while not publishing.exists():
+                self.assertLess(time.monotonic(), deadline, "publication did not start")
+                time.sleep(.05)
+            # Give an incorrectly ungated workload time to start before cancelling.
+            time.sleep(.5)
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=25)
+            self.assertEqual(process.returncode, 143, (stdout, stderr))
+            self.assertFalse(started.exists(), "unregistered workload escaped cancellation")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
+    def test_cancellation_during_publication_with_ignored_term_does_not_escape(self):
+        publishing = self.directory / "publishing"
+        release = self.directory / "release"
+        started = self.directory / "started"
+        workload = f"from pathlib import Path; Path({str(started)!r}).touch()"
+        wrapper = f'''import os, runpy, signal, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+module = runpy.run_path({str(HELPER)!r})
+original = module['run_task'].__globals__['save']
+def delayed_save(path, value):
+    if value['status'] == 'running':
+        Path({str(publishing)!r}).write_text(str(value['pid']))
+        deadline = time.monotonic() + 10
+        while not Path({str(release)!r}).exists():
+            if time.monotonic() > deadline:
+                raise RuntimeError('test did not release publication')
+            time.sleep(.02)
+    original(path, value)
+module['run_task'].__globals__['save'] = delayed_save
+module['run_task'](Path({str(self.report)!r}), 'worker', 'misc',
+                   [{sys.executable!r}, '-c', {workload!r}])
+'''
+        controller = f'''import subprocess, sys
+subprocess.Popen([sys.executable, '-c', {wrapper!r}]).wait()
+'''
+        process = subprocess.Popen([sys.executable, str(HELPER), "observe", "--",
+                                    sys.executable, "-c", controller], cwd=self.directory,
+                                   env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        group = None
+        try:
+            deadline = time.monotonic() + 10
+            while not publishing.exists():
+                self.assertLess(time.monotonic(), deadline, "publication did not start")
+                time.sleep(.05)
+            group = int(publishing.read_text())
+            process.send_signal(signal.SIGTERM)
+            stdout, stderr = process.communicate(timeout=25)
+            self.assertEqual(process.returncode, 143, (stdout, stderr))
+            release.touch()
+            deadline = time.monotonic() + 3
+            while not started.exists() and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertFalse(started.exists(), "unregistered workload started after observer cancellation completed")
+        finally:
+            release.touch()
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+            if group:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_task_timeout_kills_descendants_and_preserves_failure_before_next_task(self):
+        module = runpy.run_path(str(HELPER))
+        port_file = self.directory / "port"
+        child = f'''import signal, socket, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+listener = socket.socket()
+listener.bind(('127.0.0.1', 0))
+listener.listen()
+Path({str(port_file)!r}).write_text(str(listener.getsockname()[1]))
+print('descendant ready', flush=True)
+time.sleep(120)
+'''
+        for ignore_term in (False, True):
+            with self.subTest(ignore_term=ignore_term):
+                port_file.unlink(missing_ok=True)
+                parent = f'''import signal, subprocess, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN if {ignore_term!r} else signal.SIG_DFL)
+subprocess.Popen([sys.executable, '-c', {child!r}])
+time.sleep(120)
+'''
+                sibling = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+                try:
+                    code = module["run_task"](self.report, "service", "1",
+                                              [sys.executable, "-c", parent], timeout_seconds=2)
+                    self.assertEqual(code, 124)
+                    self.assertIsNone(sibling.poll(), "timeout killed an unrelated process")
+                    state = json.loads((self.report / "progress/service--1.json").read_text())
+                    self.assertEqual(state["status"], "failed")
+                    self.assertEqual(state["exit_code"], 124)
+                    retained = gzip.decompress((self.report / state["log"]).read_bytes())
+                    self.assertIn(b"descendant ready", retained)
+                    self.assertIn(b"Task exceeded 2s", retained)
+                    port = int(port_file.read_text())
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            with socket.socket() as listener:
+                                listener.bind(("127.0.0.1", port))
+                            break
+                        except OSError:
+                            self.assertLess(time.monotonic(), deadline, "descendant retained its port")
+                            time.sleep(.05)
+                    self.assertEqual(module["run_task"](self.report, "service", "2",
+                                     [sys.executable, "-c", "print('next task')"], timeout_seconds=2), 0)
+                finally:
+                    sibling.terminate()
+                    sibling.wait(timeout=5)
+
     def prepare_cargo_fixture(self):
         helper_dir = self.directory / ".github/main-validation"
         helper_dir.mkdir(parents=True)
@@ -220,13 +404,6 @@ if os.environ.get('MAIN_VALIDATION_PARALLEL') == 'true' and name in ('worker-exe
     while not Path(other + '.started').exists():
         assert time.monotonic() < deadline, 'expected cargo-make overlap did not start'
         time.sleep(.05)
-if os.environ.get('MAIN_VALIDATION_PARALLEL') == 'true' and name in ('cli-integration-tests-agents', 'main-validation-bash'):
-    Path(name + '.started').touch()
-    other = 'main-validation-bash' if name == 'cli-integration-tests-agents' else 'cli-integration-tests-agents'
-    deadline = time.monotonic() + 15
-    while not Path(other + '.started').exists():
-        assert time.monotonic() < deadline, 'Bash checks did not overlap CLI tests'
-        time.sleep(.05)
 if os.environ.get('MAIN_VALIDATION_PARALLEL') == 'true' and name in ('integration-tests-group1', 'integration-tests-group4'):
     Path(name + '.started').touch()
     other = 'integration-tests-group4' if name == 'integration-tests-group1' else 'integration-tests-group1'
@@ -254,10 +431,11 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         progress = json.loads((self.report / "progress.json").read_text())
         self.assertEqual(progress["mode"], "parallel" if parallel else "serial")
         tasks = {task["id"]: task for task in progress["tasks"]}
-        self.assertEqual(len(tasks), 58)
+        self.assertEqual(len(tasks), 59)
         self.assertEqual(tasks["worker--tool-streaming"]["status"], "passed")
         self.assertEqual(tasks["exclusive--main-validation-docker"]["status"], "passed")
         self.assertEqual(tasks["prepare--unit-tests-and-checks"]["status"], "passed")
+        self.assertEqual(tasks["prepare--main-validation-js-guests"]["status"], "passed")
         producer_ok = failed_task != "main-validation-service-native"
         self.assertEqual(tasks["service-build--main-validation-service-native"]["status"], "passed" if producer_ok else "failed")
         self.assertEqual(tasks["cli--agents"]["status"], "passed" if producer_ok else "blocked")
@@ -276,8 +454,11 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         service = tasks["service-build--main-validation-service-native"]
         self.assertEqual(worker["started_at"] < service["completed_at"] and service["started_at"] < worker["completed_at"], parallel)
         worker_end = max(task["completed_at"] for task in tasks.values() if task["lane"] == "worker")
+        stateful_end = max(task["completed_at"] for task in tasks.values()
+                           if task["lane"] in ("worker", "service-build", "service", "cli")
+                           and task["started_at"])
         for name in ("check", "main-validation-bash"):
-            self.assertGreaterEqual(tasks[f"exclusive--{name}"]["started_at"], worker_end)
+            self.assertGreaterEqual(tasks[f"exclusive--{name}"]["started_at"], stateful_end)
         if parallel:
             self.assertGreaterEqual(tasks["service--4"]["started_at"], worker_end)
             self.assertLess(tasks["service--4"]["started_at"], tasks["service--1"]["completed_at"])
@@ -299,6 +480,11 @@ sys.exit(9 if name == os.environ.get('FAIL_TASK') else 0)
         self.assertGreater(sum(samples[-1]["cpu_ticks"].values()), sum(samples[0]["cpu_ticks"].values()))
         self.assertGreater(samples[0]["memory_bytes"]["MemTotal"], 0)
         self.assertGreater(samples[0]["disks"]["worktree"]["total_bytes"], 0)
+        self.assertTrue(samples[0]["diskstats"].strip())
+        for line in samples[0]["diskstats"].splitlines():
+            fields = line.split()
+            self.assertGreaterEqual(len(fields), 14)
+            self.assertTrue(all(value.isdigit() for value in fields[:2] + fields[3:]))
         # Feed a real helper snapshot through the public API's schema, not a hand-made copy.
         public = runpy.run_path(str(ROOT / ".github/main-validation/observer/dashboard/server.py"))["public_progress"]
         created = min(task["started_at"] for task in tasks.values() if task["started_at"])
@@ -375,6 +561,20 @@ fn main() {
                 self.assertEqual(result.returncode == 0, not fail, result.stdout + result.stderr)
                 self.assertNotEqual(report.read_text(), "stale report")
                 self.assertGreater(report.stat().st_size, 0)
+
+    def test_js_guest_failure_fails_preparation_and_blocks_consumers(self):
+        self.prepare_cargo_fixture()
+        self.env["FAIL_TASK"] = "main-validation-js-guests"
+        result = self.execute(["observe", "--", "cargo", "make", "--disable-check-for-updates", "--no-workspace",
+                               "--profile", "ci", "main-validation"])
+        self.assertNotEqual(result.returncode, 0, result.stdout.decode())
+        tasks = {task["id"]: task for task in json.loads((self.report / "progress.json").read_text())["tasks"]}
+        self.assertEqual(tasks["prepare--validate-sdk-ts"]["status"], "passed")
+        self.assertEqual(tasks["prepare--validate-sdk-effect"]["status"], "passed")
+        self.assertEqual(tasks["prepare--main-validation-js-guests"]["status"], "failed")
+        self.assertNotEqual(tasks["prepare--main-validation-js-guests"]["exit_code"], 0)
+        for task in ("prepare--main-validation-fixtures", "worker--group1", "cli--core"):
+            self.assertEqual(tasks[task]["status"], "blocked")
 
     def test_apfs_wrapper_requires_executed_tests_with_console_or_ctrf_output(self):
         binaries = self.directory / "bin"

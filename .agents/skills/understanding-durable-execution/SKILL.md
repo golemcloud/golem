@@ -1066,8 +1066,58 @@ A receive Start does not prove that a socket was created, bound or polled Pendin
 Port reuse requires an independently known endpoint; UDP has no EOF. Completion-first
 controls verify End and delivery, then preserve the selected invocation result through
 commit and notification. These tests do not establish exactly-once datagram consumption
-across the receive-before-End crash window. Connected UDP reconstruction and incomplete
-batched sends remain separate, unresolved contracts.
+across the receive-before-End crash window.
+
+P3 UDP keeps its endpoint in the socket's `SocketEntries` entry. Bind records the selected local
+address (`P3SocketsBind`, also for port 0) and keeps the bind request in the entry; connect, send
+and receive record every local-address change, such as an implicit bind or a wildcard bind that
+connect narrows to an interface address, or a loss as `SerializableP3UdpEndpoint` in their
+response. On Linux a connect that fails with `EINVAL` dissolves the old association before it tries
+again, so the connect response also records when a failed connect left the socket disconnected, and
+the entry then loses its remote address. Replay updates the entry and touches no native socket; the
+address getters are not recorded and use only the entry. `disconnect` (`WriteLocal`,
+`P3SocketsUdpDisconnect`) resets the local address to the bind request, or to the unspecified
+address with port 0 after an implicit bind, because the native socket releases an implicitly bound
+port, and records the native local address when it differs: the endpoint rebuild binds a fixed port
+that Linux then keeps on the disconnect. Recording it at the disconnect, not at the call that
+rebuilt the endpoint, keeps it when the guest dropped that call. At the first live operation,
+`ensure_native_endpoint` binds the native socket on the address that
+`SocketEntry::udp_rebuild_bind_address` selects and connects it again when the entry is connected,
+without sending a packet. A local address that names an interface, such as the one a connect
+selected, is bound as it is; an unspecified one is bound on the bind request's address with the
+recorded port. A local address with port 0, which only a disconnect leaves, is restored by
+`UdpSocket::restore_released_bind`: it binds the new native socket on that address and dissolves
+the association at once, so the socket keeps the IP address without a port, as the disconnect left
+the old one. A connect then keeps the same source address, receive waits and the next send selects
+a port. The socket address policy
+allows a fixed port only on a loopback address, so an unconnected wildcard or implicit endpoint
+with a fixed port cannot be rebuilt and is lost. When the rebuild fails, the entry becomes `Lost`
+and every later operation returns `connection-broken`; the rebuild is not checked against grants
+again, each datagram still is. Send records only the target and the result, never the datagram. An
+incomplete send completes with `connection-broken` and is not sent again; an incomplete receive
+re-executes after the rebuild.
+
+P2 UDP (`durable_host/sockets/udp.rs`) uses the same entry and the same lazy rebuild.
+`start-bind` (`WriteLocal`) records the selected local address, `stream` (`WriteRemote`) the
+result, `receive` (`ReadRemote`) the datagrams and their sources, `check-send` (`ReadLocal`) the
+permit, and `send` (`WriteRemote`) the destinations, the result and the count, never the bytes.
+The local address follows the P3 rules through the shared `SocketEntry` helpers: the entry keeps
+the bind request, `stream(none)` on a connected socket resets the local address to it as P3
+`disconnect` does, and `stream`, `send`, `receive` and `check-send` record every other change of
+the native local address (`udp_local_address_change`), such as the port that a rebuild on port 0
+selects. Its disconnect is a live `stream(none)` that records the native local address it leaves, as
+P3 `disconnect` does, so a rebuilt fixed port is recorded where it stays. A failed `stream` records `disconnected`, as P3 connect does, when
+it left the socket disconnected (Linux dissolves the old association on `EINVAL` before it tries
+again); the entry then loses its remote address, live and on replay.
+The guest's datagram streams are `DurableIncomingDatagramStream` and
+`DurableOutgoingDatagramStream`; a replayed `stream` pushes them without native streams, in the
+native order, so later resource reps do not change. At the first live operation the host binds the
+native socket on the bind request's address with the recorded port (`udp_rebuild_bind_address`,
+as P3) and calls native `stream` again with the recorded remote
+address when the guest holds streams. A loss is recorded as `lost: true` and reported as
+`connection-reset`, the code P2 TCP also uses for a lost connection (P2 has no
+`connection-broken`). An incomplete send completes with `connection-reset` and is never sent
+again.
 
 WebSocket initial `connect` in `durable_host/websocket/client.rs` opens its `WriteRemote`
 Start before acquiring the executor-wide connection-pool permit. The live pool acquisition
@@ -3438,13 +3488,27 @@ linked one. Only lookups that replay returns again link: lookups in snapshotting
 physical calls of a custom durable invocation do not. A P2 lookup links when its call returns, a
 P3 lookup when its completion reaches the guest (its `CompletionDelivered` marker): the DNS call
 sets a deferred link that the delivery observer's `Delivered` branch adds, so a P3 completion that
-the guest discards, also after the host call returned it, links nothing. Replay fills the index again from the recorded lookups. A snapshot
-recovery skips the history before the snapshot, so `rebuild_resolved_names` scans it twice: once
-for the regions that no replay runs (deleted, jumped and failed update attempts), then for the
-completed lookups of the primary Store, which go into the bounded index at their link point. It
-leaves out entity bodies and observational calls, and keeps only open lookups and scopes. The
-links of a core initializer whose bootstrap range lies in the scanned history are already in the
-result; only an initializer after the snapshot, such as an update target's, adds newer links. The lookup itself is
+the guest discards, also after the host call returned it, links nothing. The oplog is never
+scanned for the links: the status fold keeps them in `AgentStatusRecord::resolved_names`
+(`worker/status/resolved_names.rs`), with the same bound and LRU order. It folds a lookup's
+`Start`, its `End` and its delivery marker by `Start` index, opens a `golem:network/dns` query only
+for A and AAAA records (an answer holds only the queried type), loads external lookup payloads
+before the fold as it does for `StreamSession` records (the revert fold too), and leaves out
+entity bodies, observational calls
+and history that no replay runs (`RegionFold::unreplayed`: deleted, jumped and failed update
+attempts; a `Jump`, `Revert` or `FailedUpdate` over folded history refolds the status from the
+start). The index uses `im` collections, so a status clone shares it. The status cache keeps the
+links in their own `resolved-names` field and the lookups and entity scopes that the fold still
+follows in `followed-lookups`; each is written only when it changes, so a call that links nothing
+does not rewrite the links. The primary Store starts with the folded links at construction and links only the lookups
+whose link point it records itself (a live `End`, or a `CompletionDelivered` marker that it
+appends): every replayed lookup, also one that a bootstrap cursor replays, is in the folded links
+already, and linking it again would refresh its LRU position. So every path that continues live,
+also an accessor or incomplete call that resolves against history, reads the links of the whole
+history, and replayed connects return the decision recorded in their `Start`. A snapshot-based
+update keeps the links of the history before its `PendingUpdate`, which the agent ran, and its
+target initializer's lookups link after them. A tool entity Store keeps its own index, starts
+empty, and links on replay too. The lookup itself is
 checked against `dns_target(name)`, which a grant with a port does not match, so a grant that names
 a port needs a portless grant for the lookup too.
 
@@ -3459,7 +3523,7 @@ and has no cache, so every live guest query is one upstream query. With agent so
 lookup fails with `permanent-resolver-failure`. The A and AAAA records of an answer link to the
 queried name in `ResolvedNames` as a P3 address lookup does: when the answer reaches the guest. Live
 and on replay the lookup builds a hook from the answer that the delivery observer runs only as
-`Delivered`, and `rebuild_resolved_names` links the records at the call's `CompletionDelivered` marker, and a discarded or
+`Delivered`, the status fold links the records at the call's `CompletionDelivered` marker, and a discarded or
 undelivered answer links nothing. Tests: `tests/scope_cards/dns_records.rs`.
 
 Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
@@ -3982,8 +4046,13 @@ A failed durable call has two recovery paths (`durable_host/durability.rs`):
 - **In-function retry** re-runs the effect inside the same host call under the same `Start`.
   `InFunctionRetryState::decide_retry_with_properties` allows it only when the function type is
   `is_eligible_for_internal_retry` (`ReadLocal`/`ReadRemote`/`WriteLocal`/`WriteRemote`), the resolved
-  `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`.
-  Each attempt appends and commits an `OplogEntry::Error { retry_from, .. }` hint.
+  `NamedRetryPolicy` still permits an attempt, and the delay is ≤ `max_in_function_retry_delay`
+  or the call waits durably (an accessor call with a runtime activity on a durable agent outside
+  snapshotting mode, which waits on a runtime timer that the suspension coordinator treats as
+  passive). Each attempt appends and commits an
+  `OplogEntry::Error { retry_from, retry_at, retrying_start_index, .. }` hint; repair of a
+  `Start` left incomplete during the wait first waits the rest of the backoff until the
+  `retry_at` that names it, which its `End` or `Cancelled` ends.
   RDBMS transaction statements bypass this loop: transaction membership and statement retry
   refusal belong to the RDBMS protocol, independently of incomplete-repair authorization.
 - **Trap-based retry** is the fallback (`FallBackToTrap`/`Exhausted` →

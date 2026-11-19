@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::durability::find_durable_call_trap_context;
+use crate::durable_host::durability::{
+    find_durable_call_trap_context, wait_recorded_retry_backoff, wait_retry_backoff,
+};
 
 fn body_span_outcome(
     cancelled: bool,
@@ -487,6 +489,15 @@ where
                             // must continue them (`resume_recorded_response`) or the stream
                             // ends with an explicit incomplete-response error.
                             pending_reissue = false;
+                            // A resume that waited out a backoff when the scope stopped
+                            // waits the rest of it first.
+                            wait_recorded_retry_backoff(
+                                accessor,
+                                durable_worker_ctx::<Ctx, U>,
+                                parent_begin,
+                            )
+                            .await
+                            .map_err(|kind| WorkerExecutorError::Interrupted { kind })?;
                             match resend
                                 .as_ref()
                                 .filter(|_| !unreconstructable.load(Ordering::Acquire))
@@ -664,6 +675,7 @@ where
                                 make_p3_http_retry_task_context::<Ctx, U>(
                                     accessor,
                                     parent_begin,
+                                    parent_begin,
                                     properties.clone(),
                                 )
                                 .await,
@@ -679,7 +691,20 @@ where
                             .await
                         {
                             AsyncRetryDecision::RetryAfterDelay(delay) => {
-                                tokio::time::sleep(delay).await;
+                                if let Err(kind) = wait_retry_backoff(
+                                    accessor,
+                                    durable_worker_ctx::<Ctx, U>,
+                                    delay,
+                                )
+                                .await
+                                {
+                                    // As for an interrupt during a read: both `Start`s stay
+                                    // incomplete, and the resume after reconstruction waits
+                                    // the rest of the backoff.
+                                    child.abandon_for_trap();
+                                    stream.abandon_for_trap();
+                                    return Err(wasmtime::Error::from_anyhow(kind.into()));
+                                }
                             }
                             AsyncRetryDecision::FallBackToTrap(semantic_override) => {
                                 resume_semantic_override = semantic_override;

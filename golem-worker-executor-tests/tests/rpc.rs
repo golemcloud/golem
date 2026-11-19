@@ -8492,8 +8492,42 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    reverted_retained_stream_start(last_unique_id, deps, agent_rpc_rust, None).await
+}
+
+/// The revert folds the stream-session records from storage, where each of them is external
+/// here, so it loads them before the fold.
+#[test]
+#[timeout("120s")]
+async fn reverted_retained_stream_start_with_external_stream_session_records(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    reverted_retained_stream_start(last_unique_id, deps, agent_rpc_rust, Some(1)).await
+}
+
+async fn reverted_retained_stream_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_rpc_rust: &PrecompiledComponent,
+    max_payload_size: Option<usize>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                if let Some(max_payload_size) = max_payload_size {
+                    config.oplog.max_payload_size = max_payload_size;
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()

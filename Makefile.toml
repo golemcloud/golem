@@ -12,6 +12,8 @@ extend = [{ path = "Makefile.sdk-validation.toml" }, { path = "Makefile.main-val
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
+# - `cargo make js-guest-tests`: bundles fresh SDK fixture sources and runs process-free JS guest tests; see golem-js-guest-tests/README.md
+# - `cargo make prepare-js-guest-tests`: prepares only the JS bundles for native test iteration
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make worker-executor-tests-ignite-service`: runs ignite service tests only (requires GOLEM_IGNITE_URL)
 # - `cargo make integration-tests`: runs integration tests only
@@ -675,6 +677,29 @@ args = [
 
 ## ** TEST **
 
+[tasks.js-guest-tests]
+description = "Bundles fresh inputs and runs in-process JS guest tests on prebuilt SDK templates"
+dependencies = ["prepare-js-guest-tests"]
+env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-js-guest-tests --test js-guest -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.prepare-js-guest-tests]
+description = "Bundles current SDK fixture sources into ignored native test inputs"
+env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
+script_runner = "@duckscript"
+script = '''
+root = pwd
+rm -r ${GOLEM_JS_GUEST_BUNDLE_DIR}
+cd sdks/ts
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk run build
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk exec vitest run tests/component-bundle.test.mjs -t "builds JS guest bundle fixtures"
+cd ${root}/sdks/effect
+exec --fail-on-error npm exec -- vitest run test/component-build.test.ts -t "builds JS guest bundle fixtures"
+'''
+
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
@@ -759,12 +784,13 @@ args = [
 
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit", "ensure-builtin-artifacts"]
-description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
+description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests, and the size-analysis retention test"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-size-analysis --test retention -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --skip key_value_storage --skip indexed_storage --skip oplog_blob_archive --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
@@ -3075,8 +3101,8 @@ echo "validated ${artifact_count} external built-in artifacts"
 
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"
-command = "python3"
-args = ["test-components/size-analysis/report.py", "--out", "tmp/component-size-report"]
+command = "cargo"
+args = ["run", "--package", "golem-size-analysis", "--", "report", "--out", "tmp/component-size-report", "${@}"]
 
 ## ** BUILD TEST COMPONENTS **
 
