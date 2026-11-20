@@ -321,6 +321,8 @@ fn classify_secret_revision_error(error: &WorkerExecutorError) -> HostFailureKin
         | WorkerExecutorError::AgentAlreadyExists { .. }
         | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
         | WorkerExecutorError::AgentNotFound { .. }
+        | WorkerExecutorError::AgentNeverLive { .. }
+        | WorkerExecutorError::NeverLiveEffectRefused { .. }
         | WorkerExecutorError::PromiseNotFound { .. }
         | WorkerExecutorError::PromiseDropped { .. }
         | WorkerExecutorError::PromiseAlreadyCompleted { .. }

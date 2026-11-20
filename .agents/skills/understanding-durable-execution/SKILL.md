@@ -1454,7 +1454,7 @@ carries no caller or context. Tests:
 `tests/rpc/held_response_restart.rs`.
 
 `CreateParameters.never_live` is the never-live mark of a sandbox agent. Agent creation writes
-`false`, and nothing sets it yet. The status fold copies it into `AgentStatusRecord.never_live`
+`false`; only a fork sets it, from `ForkWorkerRequest.never_live` or from a marked source. The status fold copies it into `AgentStatusRecord.never_live`
 and never changes it. `AgentStatusRecord::reported_status()` gives `Sandboxed` for a marked agent
 and the folded `status` otherwise; the folded `status` never holds `Sandboxed`, and control code
 decides by it, never by the reported status. Every outward view reads the reported status: the
@@ -1463,6 +1463,27 @@ guest's metadata and enumeration (`AgentMetadataForGuests`), the running-agent f
 status metrics. Tests: `the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status`
 in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart` in
 `tests/observability.rs`.
+
+A marked agent never runs guest code live and never reaches a peer. It starts only for a pending
+update: `start_if_needed`, the recovery rules and generation admission at the top of the outer
+loop refuse it otherwise, and `Worker::stop_marked_unless_update_pending` is the one locked
+recheck-and-stop for it. Every automatic update, also to its current revision, replays the
+history and writes one `SuccessfulUpdate` or `FailedUpdate`; a manual update is refused, and
+ingress refuses new work with `AgentNeverLive`. Its replay cursor never publishes Live: settling
+ends in `ReplayTransitionPhase::Ended`, which releases the replay events, and every consumer of
+`FinishReplayToLive::Ended` stops with `InterruptKind::NeverLive`, which writes nothing. A durable
+call that executes instead of replaying is checked against the host-call decision table
+(`durable_host/never_live/mod.rs::allows_execution`) at the five bootstrap-refusal sites, before
+read-only strictness; a refused call traps with `NeverLiveEffectRefused`, which every classifier
+keeps typed up to the outcome table, where it is `NotReplayable` / `UPDATE_NOT_REPLAYABLE`.
+Native peer boundaries (P2 TCP connect, a native DNS lookup, a P3 HTTP send, an incomplete
+transaction terminal) are refused before the native call; under them `SocketPolicy` refuses
+connect, send and receive and the `WasiCtx` disables name lookup. A socket error from that floor
+reaches the guest unrecorded, so it sets the generation taint, and the outcome table then classes
+a target failure as `Operational`. Stream maintenance, the oplog processors and the constructor
+re-enqueue do not run for a marked agent. Tests: `durable_host/never_live/mod.rs` and
+`tests/never_live.rs`, and the `*_load_hook*_replay*_on_a_never_live_fork` cases in
+`tests/filesystem_snapshots.rs`.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet

@@ -321,8 +321,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> BegunCall<Pair, P, Ct
             let finished = pending
                 .finish_at(Some(admission_refusal_before_start(&claim, Pair::FQFN)?))
                 .await?;
-            if finished == FinishReplayToLive::Live
-                && self.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent
+            if matches!(
+                finished,
+                FinishReplayToLive::Live | FinishReplayToLive::Ended
+            ) && self.replay_to_live_role() == ReplayToLiveRole::PrimaryAgent
             {
                 process_pending_replay_events_initiation(access).await?;
             }
@@ -438,8 +440,10 @@ pub(in crate::durable_host::concurrent) async fn publish_incomplete_replay_tail_
         BeginReplayToLive::Pending(pending) => pending,
     };
     let outcome = pending.finish_at(boundary).await?;
-    if outcome == FinishReplayToLive::Live
-        && store_replay_state.role() == ReplayToLiveRole::PrimaryAgent
+    if matches!(
+        outcome,
+        FinishReplayToLive::Live | FinishReplayToLive::Ended
+    ) && store_replay_state.role() == ReplayToLiveRole::PrimaryAgent
     {
         access.process_replay_events().await?;
     }
@@ -473,7 +477,11 @@ where
     Ctx: WorkerCtx,
 {
     let outcome = pending.finish_at(boundary).await?;
-    if outcome == FinishReplayToLive::Live && primary_runtime {
+    if matches!(
+        outcome,
+        FinishReplayToLive::Live | FinishReplayToLive::Ended
+    ) && primary_runtime
+    {
         process_pending_replay_events_access(store, get_ctx).await?;
     }
     Ok(outcome)

@@ -21,6 +21,8 @@ use bytes::Bytes;
 use golem_common::model::environment::EnvironmentId;
 use std::sync::Arc;
 
+pub(crate) mod refusing;
+
 /// Service implementing a persistent key-value store
 #[async_trait]
 pub trait KeyValueService: Send + Sync {

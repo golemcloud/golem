@@ -262,6 +262,59 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentMode::Durable => None,
             AgentMode::Ephemeral => Some(config.suspend.ephemeral_max_sleep),
         };
+        let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
+        // A never-live owner holds only the refusing form of each service that can reach a peer.
+        // It is chosen once, here, before any clone, so no continuation keeps the original.
+        let never_live = replay_state.is_never_live();
+        let promise_service: Arc<dyn PromiseService> = if never_live {
+            Arc::new(crate::services::promise::refusing::RefusingPromiseService {
+                inner: promise_service,
+            })
+        } else {
+            promise_service
+        };
+        let key_value_service: Arc<dyn KeyValueService> = if never_live {
+            Arc::new(
+                crate::services::key_value::refusing::RefusingKeyValueService {
+                    inner: key_value_service,
+                },
+            )
+        } else {
+            key_value_service
+        };
+        let blob_store_service: Arc<dyn BlobStoreService> = if never_live {
+            Arc::new(
+                crate::services::blob_store::refusing::RefusingBlobStoreService {
+                    inner: blob_store_service,
+                },
+            )
+        } else {
+            blob_store_service
+        };
+        let rdbms_service: Arc<dyn RdbmsService> = if never_live {
+            Arc::new(crate::services::rdbms::refusing::RefusingRdbmsService {
+                inner: rdbms_service,
+            })
+        } else {
+            rdbms_service
+        };
+        let card_service: Arc<dyn CardService> = if never_live {
+            Arc::new(crate::services::card::refusing::RefusingCardService {
+                inner: card_service,
+            })
+        } else {
+            card_service
+        };
+        let rpc: Arc<dyn Rpc> = if never_live {
+            Arc::new(crate::services::rpc::refusing::RefusingRpc)
+        } else {
+            rpc
+        };
+        let worker_proxy: Arc<dyn WorkerProxy> = if never_live {
+            Arc::new(crate::services::worker_proxy::refusing::RefusingWorkerProxy)
+        } else {
+            worker_proxy
+        };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             stdin.clone(),
@@ -269,10 +322,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             suspend_threshold,
-            config
-                .agent_sockets
-                .enabled
-                .then(|| SocketPolicy::new(&config)),
+            config.agent_sockets.enabled.then(|| {
+                let policy = SocketPolicy::new(&config);
+                if replay_state.is_never_live() {
+                    policy.never_live(replay_state.generation_taint())
+                } else {
+                    policy
+                }
+            }),
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let wasi_http = WasiHttpCtx::new();
@@ -280,7 +337,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
         // A primary Store starts with the links of its whole history, so a connect that
         // continues live on any path reads them. The replay horizon is a fold of this status.
         let resolved_names = match &runtime {
@@ -465,6 +521,8 @@ impl PrivateDurableWorkerState {
         published_authority_generation: Arc<AtomicU64>,
         resolved_names: sockets::resolved_names::SharedResolvedNames,
     ) -> Result<Self, WorkerExecutorError> {
+        // The replay cursor carries the mark of the owner, also into entity Stores.
+        let never_live = replay_state.is_never_live();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
         let entity_replay_wallet = match (&runtime, entity_execution_mode) {
             (
@@ -604,6 +662,7 @@ impl PrivateDurableWorkerState {
             p2_timer_deadlines: HashMap::new(),
             socket_entries: sockets::SocketEntries::default(),
             snapshotting_mode: false,
+            never_live,
             last_state_change: None,
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,

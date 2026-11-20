@@ -65,6 +65,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                 };
                 let status = this.state_actor.status().await;
+                // A never-live agent starts only to replay its history for a pending update. Its
+                // copied invocations stay pending, and nothing is written.
+                if !status.may_start() {
+                    let error = WorkerExecutorError::AgentNeverLive {
+                        agent_id: this.owned_agent_id.agent_id.clone(),
+                    };
+                    if let Some(start_attempt) = start_attempt {
+                        this.complete_startup(start_attempt, Err(error.clone()));
+                    }
+                    return Err(error);
+                }
                 if this.agent_mode() == AgentMode::Durable
                     && status.status == AgentStatus::Interrupted
                     && status.current_idempotency_key.is_some()

@@ -1590,6 +1590,12 @@ where
     let result = match tx.state {
         RdbmsTransactionState::Reconstructed(_) if confirmed => Ok(()),
         RdbmsTransactionState::Reconstructed(ref id) if pre => {
+            // A never-live owner resolves no incomplete terminal: the live transition ends its
+            // replay here, before any query, and no terminal is appended. Unmarked owners keep
+            // the query before publication.
+            if ctx.state.never_live() {
+                ctx.switch_to_live().await?;
+            }
             let status = ctx
                 .state
                 .rdbms_service

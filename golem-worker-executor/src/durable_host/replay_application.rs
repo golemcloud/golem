@@ -213,6 +213,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
                                     ),
                                     &owner_id.agent_id,
                                     task_worker.retired_for_lost_shard(),
+                                    false,
                                 );
                                 return Err(
                                     super::perform_at_update_point(&task_worker, action).await

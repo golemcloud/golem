@@ -275,6 +275,12 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::PermissionDenied(err) => {
                     format!("Permission Denied: {}", err.details)
                 }
+                worker_execution_error::Error::AgentNeverLive(err) => {
+                    format!("Agent Never Live: Worker ID = {:?}", err.agent_id)
+                }
+                worker_execution_error::Error::NeverLiveEffectRefused(err) => {
+                    format!("Never-Live Effect Refused: Boundary = {}", err.boundary)
+                }
                 worker_execution_error::Error::StaleCursor(err) => format!(
                     "Stale Oplog Cursor: Worker ID = {:?}, Next Index = {}, Reason = {:?}",
                     err.agent_id, err.next_oplog_index, err.reason

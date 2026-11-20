@@ -209,14 +209,20 @@ pub(crate) enum ReplayToLiveRole {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplayToLiveOutcome {
-    Live { replay_target: OplogIndex },
+    Live {
+        replay_target: OplogIndex,
+    },
     ReplayResumed,
+    /// The never-live owner's replay ended at the target. Replay events are released, but the
+    /// cursor never becomes live.
+    Ended,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LivePublicationOutcome {
     Published,
     AlreadyLiveAtSameTarget,
+    AlreadyEndedAtSameTarget,
     ReconstructionClaimsActive,
     OwnerFailed,
     ReplayResumed,
@@ -228,6 +234,8 @@ enum ReplayTransitionPhase {
     Replaying = 0,
     Settling = 1,
     Live = 2,
+    /// The terminal phase of a never-live owner: settled like `Live`, but never live.
+    Ended = 3,
 }
 
 #[derive(Debug)]
@@ -243,6 +251,7 @@ impl AtomicReplayTransitionPhase {
             0 => ReplayTransitionPhase::Replaying,
             1 => ReplayTransitionPhase::Settling,
             2 => ReplayTransitionPhase::Live,
+            3 => ReplayTransitionPhase::Ended,
             _ => unreachable!("invalid replay transition phase"),
         }
     }
@@ -259,6 +268,11 @@ impl AtomicReplayTransitionPhase {
     fn publish_live(&self) {
         self.0
             .store(ReplayTransitionPhase::Live as u8, Ordering::Release);
+    }
+
+    fn end_replay(&self) {
+        self.0
+            .store(ReplayTransitionPhase::Ended as u8, Ordering::Release);
     }
 
     fn resume_replay(&self) {
@@ -595,6 +609,14 @@ struct ReplayCursor {
     /// `Some` for a cursor over the bootstrap block of a core initializer: it records no replay
     /// events, and its live switch publishes only its own phase.
     bootstrap: Option<BootstrapTail>,
+    /// The owner is a never-live sandbox fork: the cursor ends in `Ended` and never publishes
+    /// live.
+    never_live: bool,
+    /// Set while the core initializer runs on this main cursor. A never-live owner refuses to
+    /// end its replay then, since the history before the update point has not replayed.
+    initializer_running: AtomicBool,
+    /// The taint of the generation that this cursor replays for.
+    taint: crate::durable_host::never_live::GenerationTaint,
     owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;

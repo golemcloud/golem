@@ -226,6 +226,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     extract_caller(&request.caller)?,
                     &InvocationContextStack::fresh(),
                 ),
+                request.never_live,
             )
             .await?;
 

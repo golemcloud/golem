@@ -918,6 +918,7 @@ pub(super) mod tests {
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             oplog.current_oplog_index().await,
             None,
+            false,
         )
         .await
         .unwrap();

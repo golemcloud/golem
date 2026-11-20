@@ -117,6 +117,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .await;
                 StartupStep::Stop
             }
+            InterruptKind::NeverLive => {
+                // The replay of a never-live agent ended, and it writes nothing for that. The
+                // next generation admission runs a queued update or stops the agent under the
+                // instance lock.
+                debug!("Never-live replay ended");
+                StartupStep::Retry
+            }
             InterruptKind::ShardLost => {
                 // Nothing is written: the oplog belongs to the shard's new owner
                 // now. Whoever was waiting for this start is told to look there.

@@ -221,6 +221,7 @@ async fn failed_parent_replay_resolution_does_not_warn_on_drop() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .unwrap();

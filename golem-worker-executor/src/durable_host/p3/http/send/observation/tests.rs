@@ -222,6 +222,7 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .unwrap();

@@ -417,6 +417,7 @@ impl From<WorkerExecutorError> for ResponseMapResult {
             WorkerExecutorError::ShardingNotReady => ResponseMapResult::ShardingNotReady,
             WorkerExecutorError::AgentNotFound { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }
+            | WorkerExecutorError::AgentNeverLive { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
             | WorkerExecutorError::ComponentNotFound { .. } => {
                 ResponseMapResult::Expected(error.into())

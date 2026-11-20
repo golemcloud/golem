@@ -142,7 +142,7 @@ async fn execute<Ctx: WorkerCtx>(
         // The immutable target receipt is authoritative for a retry. Do not consult current
         // source state: the source may have advanced, expired or been deleted after publication.
         let success = receipt_answer(&receipt, request, &source_id, Reason::NotFound)?;
-        resume(service, &target_id, &auth).await?;
+        resume(service, &target, &auth).await?;
         return Ok(success);
     }
     let source_metadata = service
@@ -248,7 +248,7 @@ async fn execute<Ctx: WorkerCtx>(
         && let Some(receipt) = creation_receipt(service.oplog_service.as_ref(), &target).await?
     {
         let success = receipt_answer(&receipt, request, &source_id, Reason::NotFound)?;
-        resume(service, &target_id, &auth).await?;
+        resume(service, &target, &auth).await?;
         return Ok(success);
     }
     let mut stage_id = Uuid::new_v4();
@@ -451,7 +451,7 @@ async fn execute<Ctx: WorkerCtx>(
         .await;
     let success = result?;
     cleanup.map_err(WorkerExecutorError::runtime)?;
-    resume(service, &target_id, &auth).await?;
+    resume(service, &target, &auth).await?;
     Ok(success)
 }
 
@@ -562,11 +562,17 @@ fn missing_baseline_answer(
     }
 }
 
+/// Resumes the published target, unless it is a never-live fork, which starts only for a pending
+/// update. The mark is read from the target's `Create`, so a retry decides the same way.
 async fn resume<Ctx: WorkerCtx>(
     service: &DefaultWorkerFork<Ctx>,
-    target: &AgentId,
+    target: &OwnedAgentId,
     auth: &AuthCtx,
 ) -> Result<(), WorkerExecutorError> {
+    if super::publication::target_never_live(service.oplog_service.as_ref(), target).await? {
+        return Ok(());
+    }
+    let target = &target.agent_id;
     match service.worker_proxy.resume(target, true, auth).await {
         Ok(())
         | Err(crate::services::worker_proxy::WorkerProxyError::InternalError(
@@ -613,6 +619,7 @@ async fn stage<Ctx: WorkerCtx>(
             Some(max_bytes),
             Some(candidate),
             fork_request,
+            false,
         )
         .await
         .map_err(|error| {

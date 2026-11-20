@@ -22,6 +22,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+pub(crate) mod refusing;
+
 #[async_trait]
 pub trait CardService: Send + Sync {
     async fn record_revoked_cards(&self, card_ids: &[CardId]);

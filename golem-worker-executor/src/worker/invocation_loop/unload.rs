@@ -22,7 +22,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
                 InterruptKind::Suspend(_) => Some(OplogEntry::suspend()),
                 InterruptKind::Interrupt(_) => Some(OplogEntry::interrupted()),
-                InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => None,
+                InterruptKind::Restart
+                | InterruptKind::Jump
+                | InterruptKind::ShardLost
+                | InterruptKind::NeverLive => None,
             };
             let recorded = match marker {
                 Some(entry) => self

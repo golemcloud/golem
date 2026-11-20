@@ -850,6 +850,19 @@ pub trait TestDsl {
         target_agent_name: &str,
         oplog_index: OplogIndex,
     ) -> anyhow::Result<()>;
+
+    /// Forks the source as a never-live sandbox fork. Only the executor test DSL can request
+    /// the mark; the public fork API does not carry it yet.
+    async fn fork_worker_never_live(
+        &self,
+        _source_agent_id: &AgentId,
+        _target_agent_name: &str,
+        _oplog_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        Err(anyhow::anyhow!(
+            "never-live forks are only available through the executor test DSL"
+        ))
+    }
 }
 
 #[async_trait]
@@ -1329,6 +1342,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             "Failed to get current version of component: {:?}: {}",
             component_id, reason
         ),
+        error @ (WorkerExecutorError::AgentNeverLive { .. }
+        | WorkerExecutorError::NeverLiveEffectRefused { .. }) => error.to_string(),
         WorkerExecutorError::PromiseNotFound { promise_id } => {
             format!("Promise not found: {:?}", promise_id)
         }

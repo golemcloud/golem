@@ -136,8 +136,10 @@ impl<Ctx: WorkerCtx> EntitySettlementContext<Ctx> {
                 },
             ))
             .await?;
-        if outcome == FinishReplayToLive::Live
-            && let Some(sender) = &self.replay_application
+        if matches!(
+            outcome,
+            FinishReplayToLive::Live | FinishReplayToLive::Ended
+        ) && let Some(sender) = &self.replay_application
         {
             let (ack, received) = oneshot::channel();
             sender.send(ack).map_err(|_| {

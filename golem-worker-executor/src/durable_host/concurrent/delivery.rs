@@ -924,6 +924,7 @@ impl CompletionDelivery {
             crate::durable_host::tool::operation::OwnerToolOperations::new(),
             oplog.current_oplog_index().await,
             None,
+            false,
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);

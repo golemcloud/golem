@@ -119,6 +119,14 @@ fn instantiation_failure(
     if let Some(kind) = interrupt_kind_in(error) {
         return Some(WorkerExecutorError::Interrupted { kind });
     }
+    // A refused peer effect of a never-live agent keeps its type, so the start classifies it.
+    if let Some(refused) = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<WorkerExecutorError>()
+            .filter(|error| matches!(error, WorkerExecutorError::NeverLiveEffectRefused { .. }))
+    }) {
+        return Some(refused.clone());
+    }
     match error.root_cause().downcast_ref::<WorkerExecutorError>() {
         Some(
             failed @ (WorkerExecutorError::UnexpectedOplogEntry { .. }
@@ -478,6 +486,7 @@ impl OwnerExecution {
             self.tool_operations.clone(),
             horizon,
             Some(wallet.clone()),
+            status.never_live,
         )
         .await
         .inspect_err(|_| wallet.retire())?;

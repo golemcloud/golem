@@ -1964,6 +1964,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     caller: Some(caller.clone()),
+                    never_live: false,
                 }))
             },
             |response| match response.into_inner() {

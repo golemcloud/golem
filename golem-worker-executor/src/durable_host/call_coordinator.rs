@@ -208,12 +208,13 @@ impl<'a, Ctx: WorkerCtx> DurableCallCoordinator<'a, Ctx> {
         &self,
         admission: DurableCallAdmission<'_>,
     ) -> Result<(), WorkerExecutorError> {
-        self.ctx.state.check_bootstrap_admission(
-            admission.function_type,
-            &golem_common::model::oplog::host_functions::HostFunctionName::from(
-                admission.host_function,
-            ),
-        )?;
+        let host_function = golem_common::model::oplog::host_functions::HostFunctionName::from(
+            admission.host_function,
+        );
+        self.ctx.state.check_never_live_admission(&host_function)?;
+        self.ctx
+            .state
+            .check_bootstrap_admission(admission.function_type, &host_function)?;
         if durability::is_write_side_effect(admission.function_type)
             && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
                 method,

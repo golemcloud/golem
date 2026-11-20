@@ -305,6 +305,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 ));
                             }
                             _ => {
+                                // A refusal of a never-live agent ends the replay with its
+                                // type, before any retry decision: the start classifies it.
+                                if let Some(error) = never_live_refusal(&invoke_result) {
+                                    break Err(error);
+                                }
                                 let owner_failure = store
                                     .as_context()
                                     .data()
@@ -538,6 +543,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Either way the phase observes the durable calls that the initializer appends or claims.
     pub(crate) async fn enter_bootstrap_phase(&mut self, cursor: Option<ReplayState>) {
         let main = cursor.map(|cursor| std::mem::replace(&mut self.state.replay_state, cursor));
+        if main.is_none() {
+            self.state.replay_state.set_initializer_running(true);
+        }
         let replayed_before = self.state.replay_state.last_replayed_non_hint_index();
         let appended_before = self.state.oplog.last_added_non_hint_entry().await;
         self.state.bootstrap = Some(BootstrapPhase {
@@ -561,8 +569,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let replayed = self.state.replay_state.last_replayed_non_hint_index();
         let appended = self.state.oplog.last_added_non_hint_entry().await;
-        if let Some(main) = phase.main {
-            self.state.replay_state = main;
+        match phase.main {
+            Some(main) => self.state.replay_state = main,
+            None => self.state.replay_state.set_initializer_running(false),
         }
         consumed?;
         let end = [
@@ -696,6 +705,14 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             let raw = match &failure {
                                                 AttemptFailure::Load(result) => {
                                                     start_outcome::RawStartError::Load(result)
+                                                }
+                                                AttemptFailure::Replay(ReplayFailure {
+                                                    error,
+                                                    ..
+                                                }) if error.is_never_live_refusal() => {
+                                                    start_outcome::RawStartError::NeverLiveRefused(
+                                                        error,
+                                                    )
                                                 }
                                                 AttemptFailure::Replay(ReplayFailure {
                                                     error,
@@ -837,7 +854,8 @@ impl AttemptFailure {
             Self::Load(
                 SnapshotRecoveryResult::Failed(error, _)
                 | SnapshotRecoveryResult::Unavailable(error, _)
-                | SnapshotRecoveryResult::Lost(error),
+                | SnapshotRecoveryResult::Lost(error)
+                | SnapshotRecoveryResult::Refused(error),
             )
             | Self::Replay(ReplayFailure { error, .. }) => error,
             Self::Load(_) => WorkerExecutorError::runtime(
@@ -947,6 +965,11 @@ fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
 pub(in crate::durable_host) fn should_restart_after_shard_assignment_change(
     status: &AgentStatusRecord,
 ) -> bool {
+    // A never-live agent restarts only for a pending update, also when its folded status is
+    // `Interrupted`.
+    if status.never_live {
+        return !status.pending_updates.is_empty();
+    }
     status.status != AgentStatus::Interrupted
         && (matches!(
             status.status,
@@ -969,6 +992,23 @@ pub(in crate::durable_host) fn should_replay_invocation(
 /// The winner of the tool-owner arbitration comes first. An infrastructure winner is that error;
 /// a trap or a lifecycle winner keeps its own handling, so nothing is selected. Without a winner,
 /// the error is the one of the invocation.
+/// The refusal of a never-live agent that ends a replayed invocation: a refused peer effect, or
+/// the end of the replay where the invocation would continue live.
+fn never_live_refusal(
+    result: &Result<InvokeResult, WorkerExecutorError>,
+) -> Option<WorkerExecutorError> {
+    match result {
+        Err(error) if error.is_never_live_refusal() => Some(error.clone()),
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::NeverLive,
+            ..
+        }) => Some(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::NeverLive,
+        }),
+        _ => None,
+    }
+}
+
 pub(crate) fn selected_recovery_error<'a>(
     owner_failure: Option<&'a crate::durable_host::tool::operation::OwnerFailureWinner>,
     agent_mode: AgentMode,

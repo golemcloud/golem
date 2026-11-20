@@ -1416,6 +1416,30 @@ impl TestDsl for TestWorkerExecutor {
         target_agent_name: &str,
         oplog_index: OplogIndex,
     ) -> anyhow::Result<()> {
+        self.fork_worker_with_mark(source_agent_id, target_agent_name, oplog_index, false)
+            .await
+    }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%source_agent_id, target_agent_name))]
+    async fn fork_worker_never_live(
+        &self,
+        source_agent_id: &AgentId,
+        target_agent_name: &str,
+        oplog_index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        self.fork_worker_with_mark(source_agent_id, target_agent_name, oplog_index, true)
+            .await
+    }
+}
+
+impl TestWorkerExecutor {
+    async fn fork_worker_with_mark(
+        &self,
+        source_agent_id: &AgentId,
+        target_agent_name: &str,
+        oplog_index: OplogIndex,
+        never_live: bool,
+    ) -> anyhow::Result<()> {
         let latest_version = self
             .get_latest_component_revision(&source_agent_id.component_id)
             .await?;
@@ -1437,6 +1461,7 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_email: "test@golem".to_string(),
                 auth_ctx: Some(self.auth_ctx().into()),
                 caller: Some(Caller::anonymous().into()),
+                never_live,
             })
             .await?
             .into_inner();
