@@ -339,8 +339,9 @@ impl ComponentService for StaticComponentService {
         _: EnvironmentId,
         component_id: ComponentId,
         _: ComponentRevision,
-    ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError> {
-        Ok((self.component.id == component_id).then(|| self.tool_state.clone()))
+    ) -> Result<Option<Arc<golem_common::model::tool::ToolDeploymentState>>, ComponentServiceError>
+    {
+        Ok((self.component.id == component_id).then(|| Arc::new(self.tool_state.clone())))
     }
 
     async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {

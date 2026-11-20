@@ -4885,13 +4885,15 @@ mod tests {
             environment_id: EnvironmentId,
             component_id: ComponentId,
             revision: ComponentRevision,
-        ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError>
-        {
+        ) -> Result<
+            Option<Arc<golem_common::model::tool::ToolDeploymentState>>,
+            ComponentServiceError,
+        > {
             self.tool_queries
                 .lock()
                 .unwrap()
                 .push((environment_id, component_id, revision));
-            Ok(self.tool_state.clone())
+            Ok(self.tool_state.clone().map(Arc::new))
         }
 
         async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {

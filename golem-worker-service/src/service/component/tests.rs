@@ -108,6 +108,8 @@ pub(crate) struct TestRegistry {
     pub(crate) deployed: Mutex<Option<Component>>,
     pub(crate) deployed_agent_type: Mutex<Option<RegisteredAgentType>>,
     pub(crate) next_lookup: Mutex<Option<Arc<LookupGate>>>,
+    pub(crate) deployed_tools: Mutex<Option<golem_common::model::tool::ToolDeploymentState>>,
+    pub(crate) tool_state_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// Holds the next deployed lookup after it read the registry state, until the test releases it.
@@ -140,6 +142,8 @@ impl TestRegistry {
             deployed: Mutex::new(deployed),
             deployed_agent_type: Mutex::new(None),
             next_lookup: Mutex::new(None),
+            deployed_tools: Mutex::new(None),
+            tool_state_reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -167,6 +171,15 @@ pub(crate) fn component() -> Component {
 
 #[async_trait]
 impl RegistryService for TestRegistry {
+    async fn get_tool_deployment_state(
+        &self,
+        _: EnvironmentId,
+        _: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, RegistryServiceError> {
+        self.tool_state_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(self.deployed_tools.lock().unwrap().clone())
+    }
     async fn get_component_metadata(
         &self,
         id: ComponentId,
@@ -415,6 +428,66 @@ async fn current_metadata_is_independent_of_cached_revisions() {
         cold_service.get_current_by_id(deployed.id).await,
         Err(ComponentServiceError::ComponentNotFound)
     ));
+}
+
+#[test]
+async fn tool_deployment_state_is_cached_until_invalidation() {
+    let a = component();
+    let registry = Arc::new(TestRegistry::new(vec![a.clone()], Some(a.clone())));
+    let service = RemoteComponentService::new(registry.clone(), &ComponentServiceConfig::default());
+    let state = |tool: &str| {
+        tool_deployment_state(
+            &a,
+            tool,
+            golem_common::schema::tool::Tool {
+                version: "1.0.0".into(),
+                requires_filesystem: false,
+                http_mount: None,
+                schema: golem_common::schema::SchemaGraph::empty(),
+                commands: golem_common::schema::tool::CommandTree { nodes: vec![] },
+            },
+            Vec::new(),
+        )
+    };
+    let read = async |revision: ComponentRevision| {
+        service
+            .get_tool_deployment_state(a.environment_id, a.id, revision)
+            .await
+            .unwrap()
+            .map(|state| {
+                state
+                    .registered_tools
+                    .keys()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let reads = || registry.tool_state_reads.load(Ordering::SeqCst);
+
+    *registry.deployed_tools.lock().unwrap() = Some(state("first"));
+    assert_eq!(read(a.revision).await, Some(vec!["first".to_string()]));
+    *registry.deployed_tools.lock().unwrap() = Some(state("second"));
+    assert_eq!(read(a.revision).await, Some(vec!["first".to_string()]));
+    assert_eq!(reads(), 1);
+
+    // Another revision of the same component is a separate entry.
+    let other_revision = ComponentRevision::new(7).unwrap();
+    assert_eq!(read(other_revision).await, Some(vec!["second".to_string()]));
+    assert_eq!(reads(), 2);
+
+    service.invalidate_current().await;
+    assert_eq!(read(a.revision).await, Some(vec!["second".to_string()]));
+    assert_eq!(reads(), 3);
+
+    // A target without an active tool deployment is cached and invalidated the same way.
+    *registry.deployed_tools.lock().unwrap() = None;
+    service.invalidate_current().await;
+    assert_eq!(read(a.revision).await, None);
+    *registry.deployed_tools.lock().unwrap() = Some(state("third"));
+    assert_eq!(read(a.revision).await, None);
+    assert_eq!(reads(), 4);
+    service.invalidate_current().await;
+    assert_eq!(read(a.revision).await, Some(vec!["third".to_string()]));
 }
 
 #[test]
