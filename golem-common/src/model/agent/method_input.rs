@@ -5,12 +5,16 @@ use crate::base_model::durable_stream::DurableStreamHandle;
 pub use crate::model::invocation_session_public::JsonMethodInput;
 use crate::model::invocation_session_public::{MAX_COLLECTION_SIZE, MAX_LOGICAL_VALUE_SIZE};
 use crate::schema::streaming::{
-    decode_recursive_stream_value, preflight_proto_recursive_stream_value,
-    remap_recursive_stream_references,
+    decode_recursive_stream_value, encode_recursive_stream_value,
+    preflight_proto_recursive_stream_value, remap_recursive_stream_references,
 };
-use crate::schema::{SchemaValue, stream::SchemaValueStream};
+use crate::schema::{
+    IntoSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue, stream::SchemaValueStream,
+};
 use desert_rust::BinaryCodec;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
+use golem_schema::schema::host_managed::redact_host_managed_value;
+use prost::Message;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 
@@ -21,6 +25,83 @@ pub enum AgentMethodInput {
     Native(NativeMethodInput),
     PublicJson(JsonMethodInput),
     Http(HttpMethodInput),
+}
+
+/// Component-independent public oplog representation of the original request.
+/// Native values use the public golem.schema.SchemaValue protobuf with stream IDs
+/// replaced by request-local ordinals. Capability leaves are redacted before encoding.
+#[derive(IntoSchema)]
+#[schema(named = "original-method-input")]
+enum PublicMethodInput {
+    Native {
+        /// Encoded golem.schema.SchemaValue. Decoders must support structural depth
+        /// 128, including the additional protobuf container messages; the default
+        /// Prost recursion limit does not cover the full accepted input domain.
+        protobuf_value: Vec<u8>,
+        streams: Vec<Option<DurableStreamHandle>>,
+    },
+    PublicJson(String),
+    Http {
+        arguments: Vec<HttpMethodArgument>,
+        body: PublicHttpMethodBody,
+    },
+}
+
+#[derive(IntoSchema)]
+#[schema(named = "original-http-method-body")]
+enum PublicHttpMethodBody {
+    Absent,
+    Json(String),
+    Binary {
+        value: Vec<u8>,
+        mime_type: Option<String>,
+    },
+    Text {
+        value: String,
+        language: Option<String>,
+    },
+}
+
+impl AgentMethodInput {
+    /// Projects captured input without resolving a method or an execution revision.
+    /// Raw JSON/HTTP values include fields that execution can subsequently reject.
+    pub fn to_public_value(&self) -> Result<TypedSchemaValue, String> {
+        let public = match self {
+            Self::Native(input) => {
+                let value = input
+                    .decode(|ordinal, _| Ok(SchemaValueStream::from_host_endpoint(ordinal)))?;
+                let value = redact_host_managed_value(value);
+                let value = encode_recursive_stream_value(&value, |stream, _| {
+                    stream.with_host_endpoint::<usize, _>(|ordinal| *ordinal as u64)
+                })?;
+                PublicMethodInput::Native {
+                    protobuf_value: value.encode_to_vec(),
+                    streams: input.streams.clone(),
+                }
+            }
+            Self::PublicJson(input) => PublicMethodInput::PublicJson(input.as_str().to_owned()),
+            Self::Http(input) => PublicMethodInput::Http {
+                arguments: input.arguments.clone(),
+                body: match &input.body {
+                    HttpMethodBody::Absent => PublicHttpMethodBody::Absent,
+                    HttpMethodBody::Json(value) => {
+                        PublicHttpMethodBody::Json(value.as_str().to_owned())
+                    }
+                    HttpMethodBody::Binary { value, mime_type } => PublicHttpMethodBody::Binary {
+                        value: value.clone(),
+                        mime_type: mime_type.clone(),
+                    },
+                    HttpMethodBody::Text { value, language } => PublicHttpMethodBody::Text {
+                        value: value.clone(),
+                        language: language.clone(),
+                    },
+                },
+            },
+        };
+        public
+            .into_typed_schema_value()
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// Schema-native data with request-local stream ordinals instead of transport endpoints.
@@ -116,14 +197,14 @@ pub struct HttpMethodInput {
     body: HttpMethodBody,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema)]
 #[desert(evolution())]
 pub struct HttpMethodArgument {
     pub argument_name: String,
     pub source: HttpMethodArgumentSource,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec, IntoSchema)]
 #[desert(evolution())]
 pub enum HttpMethodArgumentSource {
     Path {
@@ -273,6 +354,146 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
 
+    fn public_json(input: &AgentMethodInput) -> serde_json::Value {
+        let value = input.to_public_value().unwrap();
+        crate::schema::render::to_json_value(value.graph(), value.root_type(), value.value())
+            .unwrap()
+    }
+
+    #[test]
+    fn public_method_input_keeps_uninterpreted_json_and_http_fields() {
+        let raw = JsonMethodInput::capture(br#"{"rejected":1e400,"value":-0.0}"#).unwrap();
+        assert_eq!(
+            public_json(&AgentMethodInput::PublicJson(raw.clone())),
+            serde_json::json!({"PublicJson": r#"{"rejected":1e400,"value":-0.0}"#})
+        );
+        let http = HttpMethodInput::capture(
+            vec![
+                HttpMethodArgument {
+                    argument_name: "count".into(),
+                    source: HttpMethodArgumentSource::Query {
+                        parameter_name: "wire-count".into(),
+                        entries: BTreeMap::from([(
+                            "wire-count".into(),
+                            vec!["0007".into(), "invalid".into()],
+                        )]),
+                    },
+                },
+                HttpMethodArgument {
+                    argument_name: "title".into(),
+                    source: HttpMethodArgumentSource::JsonProperty {
+                        property_name: "wire-title".into(),
+                    },
+                },
+            ],
+            HttpMethodBody::Json(raw),
+        )
+        .unwrap();
+        let rendered = public_json(&AgentMethodInput::Http(http));
+        assert_eq!(
+            rendered,
+            serde_json::json!({"Http": {
+                "arguments": [
+                    {"argument_name": "count", "source": {"Query": {
+                        "parameter_name": "wire-count",
+                        "entries": [["wire-count", ["0007", "invalid"]]]
+                    }}},
+                    {"argument_name": "title", "source": {"JsonProperty": {
+                        "property_name": "wire-title"
+                    }}}
+                ],
+                "body": {"Json": r#"{"rejected":1e400,"value":-0.0}"#}
+            }})
+        );
+    }
+
+    #[test]
+    fn public_native_input_redacts_capabilities_and_preserves_bits_and_ordinals() {
+        use crate::schema::{
+            PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
+        };
+
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::F32(f32::from_bits(0x7fc0_002a)),
+                SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0031)),
+                SchemaValue::F64(-0.0),
+                SchemaValue::Map {
+                    entries: vec![(
+                        SchemaValue::String("nested".into()),
+                        SchemaValue::Option {
+                            inner: Some(Box::new(SchemaValue::List {
+                                elements: vec![
+                                    SchemaValue::Secret(SecretValuePayload {
+                                        secret_id: Uuid::from_u128(41),
+                                        config_key: Some(vec!["private-config-key".into()]),
+                                        version: 9,
+                                        resolved_at: chrono::DateTime::UNIX_EPOCH,
+                                        category: None,
+                                    }),
+                                    SchemaValue::QuotaToken(QuotaTokenValuePayload {
+                                        environment_id: golem_schema::model::EnvironmentId::new(
+                                            Uuid::from_u128(42),
+                                        ),
+                                        resource_name: "private-resource".into(),
+                                        expected_use: 3,
+                                        last_credit: 2,
+                                        last_credit_at: chrono::DateTime::UNIX_EPOCH,
+                                    }),
+                                    SchemaValue::PermissionCard(PermissionCardValuePayload {
+                                        card_id: Uuid::from_u128(43),
+                                        parent_ids: vec![],
+                                        expires_at: None,
+                                        polymorphic: false,
+                                    }),
+                                ],
+                            })),
+                        },
+                    )],
+                },
+            ],
+        };
+        let (input, _) = NativeMethodInput::capture(native(value, 93), vec![]).unwrap();
+        let rendered = public_json(&AgentMethodInput::Native(input));
+        assert_eq!(rendered["Native"]["streams"], serde_json::json!([null]));
+        let bytes: Vec<u8> =
+            serde_json::from_value(rendered["Native"]["protobuf_value"].clone()).unwrap();
+        let proto = ProtoSchemaValue::decode(bytes.as_slice()).unwrap();
+        let mut ordinals = vec![];
+        let decoded = decode_recursive_stream_value(proto, |ordinal, _| {
+            ordinals.push(ordinal);
+            Ok(SchemaValueStream::from_host_endpoint(()))
+        })
+        .unwrap();
+        assert_eq!(ordinals, vec![0]);
+        let SchemaValue::Record { fields } = decoded else {
+            panic!("expected a record")
+        };
+        let SchemaValue::Record { fields } = &fields[0] else {
+            panic!("expected nested data")
+        };
+        assert!(fields[0].bitwise_eq(&SchemaValue::F32(f32::from_bits(0x7fc0_002a))));
+        assert!(fields[1].bitwise_eq(&SchemaValue::F64(f64::from_bits(0x7ff8_0000_0000_0031))));
+        assert!(fields[2].bitwise_eq(&SchemaValue::F64(-0.0)));
+        assert_eq!(
+            fields[3],
+            SchemaValue::Map {
+                entries: vec![(
+                    SchemaValue::String("nested".into()),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::List {
+                            elements: vec![
+                                SchemaValue::String("<redacted: secret>".into()),
+                                SchemaValue::String("<redacted: quota-token>".into()),
+                                SchemaValue::String("<redacted: permission-card>".into()),
+                            ],
+                        })),
+                    }
+                )],
+            }
+        );
+    }
+
     fn native(value: SchemaValue, stream_id: u64) -> ProtoSchemaValue {
         ProtoSchemaValue {
             value: Some(schema_value::Value::RecordValue(RecordValue {
@@ -342,6 +563,7 @@ mod tests {
                 let stored: NativeMethodInput = deserialize(&serialize(&input).unwrap()).unwrap();
                 let restored = stored.decode(|_, _| panic!("no streams expected")).unwrap();
                 assert!(restored.bitwise_eq(&value), "map={map}, depth={depth}");
+                AgentMethodInput::Native(stored).to_public_value().unwrap();
             }
         }
         let too_deep = (0..129).fold(SchemaValue::U32(71), |inner, _| SchemaValue::Option {
@@ -377,6 +599,19 @@ mod tests {
         let input = AgentMethodInput::Native(original.clone());
         let stored: AgentMethodInput = deserialize(&serialize(&input).unwrap()).unwrap();
         assert_eq!(input, stored);
+        let projected = public_json(&stored);
+        assert_eq!(
+            projected["Native"]["streams"][0]["producer"]["uuid"],
+            handle.producer.to_string()
+        );
+        assert_eq!(
+            projected["Native"]["streams"][0]["expected_producer_fingerprint"]["uuid"],
+            handle.expected_producer_fingerprint.0.to_string()
+        );
+        assert_eq!(
+            projected["Native"]["streams"][0]["producer_generation"],
+            "6"
+        );
         let (retry, _) =
             NativeMethodInput::capture(native(SchemaValue::U32(11), 7), vec![(7, handle.clone())])
                 .unwrap();
