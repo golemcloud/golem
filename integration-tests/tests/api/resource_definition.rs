@@ -20,6 +20,7 @@ use golem_client::api::{
 use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinitionCreation,
     ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceLimit, ResourceName,
+    ResourceRateLimit, TimePeriod,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
@@ -133,6 +134,50 @@ async fn update_resource_definition(deps: &EnvBasedTestDependencies) -> anyhow::
         updated.limit,
         ResourceLimit::Capacity(ResourceCapacityLimit { value: 200 })
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn update_replaces_whole_rate_limit(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    let creation = ResourceDefinitionCreation {
+        name: ResourceName("update_rate_resource".to_string()),
+        limit: ResourceLimit::Rate(ResourceRateLimit {
+            value: 1000,
+            period: TimePeriod::Minute,
+            max: 100000,
+        }),
+        enforcement_action: EnforcementAction::Throttle,
+        unit: "row".to_string(),
+        units: "rows".to_string(),
+    };
+
+    let resource = client.create_resource(&env.id.0, &creation).await?;
+
+    let new_limit = ResourceLimit::Rate(ResourceRateLimit {
+        value: 60,
+        period: TimePeriod::Second,
+        max: 60,
+    });
+    let update = ResourceDefinitionUpdate {
+        current_revision: resource.revision,
+        limit: Some(new_limit.clone()),
+        enforcement_action: None,
+        unit: None,
+        units: None,
+    };
+
+    let updated = client.update_resource(&resource.id.0, &update).await?;
+    assert_eq!(updated.revision, resource.revision.next()?);
+    assert_eq!(updated.limit, new_limit);
+
+    let fetched = client.get_resource(&resource.id.0).await?;
+    assert_eq!(fetched, updated);
 
     Ok(())
 }

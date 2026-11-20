@@ -151,12 +151,14 @@ async fn go_reads_the_requests_of_a_failed_update_divergence(
         expected: host_call(&recorded, &recorded.function_name, true, None),
         actual: host_call(&recorded, "replayed::call", true, Some("replayed-request")),
         mismatched: vec![StartIdentityField::FunctionName],
+        replay_start: None,
     };
     let neither = ReplayDivergence {
         oplog_index: recorded_index,
         expected: host_call(&recorded, "recorded::scope", false, None),
         actual: host_call(&recorded, "recorded::scope", true, None),
         mismatched: vec![StartIdentityField::RequestPresence],
+        replay_start: None,
     };
     let worker_oplog = executor
         .active_agent(&worker_id)
