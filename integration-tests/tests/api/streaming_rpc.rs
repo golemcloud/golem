@@ -2508,7 +2508,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         &PublicClientMessage::InputStreamItem {
             channel: invalid_item_channel,
             sequence: DecimalU64(1),
-            value: serde_json::json!({"kind": "secret", "value": {"token": "forged"}}),
+            value: serde_json::json!({"kind": "string", "value": "not a number"}),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2578,6 +2578,89 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         })
     ));
     drop(invalid_item_socket);
+
+    let capability_reference = uuid::Uuid::new_v4();
+    let mut capability_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    send_public_request(
+        &mut capability_socket,
+        &public_start(
+            application_name,
+            environment_name,
+            &agent_name,
+            "consume",
+            native_record([native_stream(serde_json::json!({
+                "provisionalRef": capability_reference
+            }))]),
+        ),
+    )
+    .await?;
+    let accepted = receive_public_response(&mut capability_socket).await?;
+    let (capability_session_token, capability_channel) = match accepted {
+        PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        } => {
+            let channel = mappings
+                .iter()
+                .find(|mapping| mapping.provisional_ref == Some(capability_reference))
+                .map(|mapping| mapping.channel)
+                .ok_or_else(|| anyhow::anyhow!("capability input mapping was omitted"))?;
+            (session_token, channel)
+        }
+        other => anyhow::bail!("capability invocation was not accepted: {other:?}"),
+    };
+    send_public_request(
+        &mut capability_socket,
+        &PublicClientMessage::InputStreamItem {
+            channel: capability_channel,
+            sequence: DecimalU64(0),
+            value: serde_json::json!({"kind": "secret", "value": {"token": "forged"}}),
+            version: INVOCATION_SESSION_VERSION,
+        },
+    )
+    .await?;
+    let close = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match capability_socket.next().await {
+                Some(Ok(Message::Close(close))) => break Ok(close),
+                Some(Ok(_)) => {}
+                Some(Err(error)) => break Err(anyhow::Error::from(error)),
+                None => anyhow::bail!("capability injection ended without a protocol close"),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("capability injection did not close the public session"))??;
+    assert!(matches!(
+        close.map(|frame| frame.code),
+        Some(tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Protocol)
+    ));
+    drop(capability_socket);
+
+    resume_public_input_with_end(
+        deps,
+        &user.token,
+        capability_session_token,
+        capability_channel,
+    )
+    .await?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        run_public_session(
+            deps,
+            &user.token,
+            public_start(
+                application_name,
+                environment_name,
+                &agent_name,
+                "ping",
+                native_record([]),
+            ),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("resumed capability rejection did not finish"))??;
     Ok(())
 }
 
