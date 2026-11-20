@@ -785,7 +785,8 @@ fn validate_message_fields(
   }
   message.each((field, _) => {
     let optional = (kind == "invocationRejected" && field == "attemptId") ||
-      (kind == "outputStreamEnd" && field == "cursorToken")
+      (kind == "outputStreamEnd" && field == "cursorToken") ||
+      (kind == "streamCancel" && (field == "message" || field == "sequence"))
     if !required.contains(field) && !optional {
       raise BridgeError("malformed-message: unknown field \{field}")
     }
@@ -1785,6 +1786,20 @@ async fn dispatch_server_message(
       }
       input.terminal = true
       (input.cancel)()
+      // The server rejected an item the caller sent, so the call fails with it.
+      if expect_string(get_field(message, "reason")) == "invalid-item" {
+        let detail = match field_opt(message, "message") {
+          Some(value) => expect_string(value)
+          None => "invalid stream item"
+        }
+        let item = match field_opt(message, "sequence") {
+          Some(value) => " " + expect_string(value)
+          None => ""
+        }
+        raise BridgeError(
+          "validation-error: the server rejected stream item\{item}: \{detail}",
+        )
+      }
       pump_next_input(session)
     }
     "attachmentRevoked" => {

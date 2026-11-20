@@ -32,8 +32,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     DecimalU64, INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     PublicClientMessage, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
-    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, decode_server_text,
-    encode_text,
+    PublicResumeOperation, PublicServerCancelReason, PublicServerMessage, PublicStreamDirection,
+    decode_server_text, encode_text,
 };
 use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
@@ -2467,88 +2467,117 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         }
     )));
 
-    let capability_reference = uuid::Uuid::new_v4();
-    let mut capability_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
+    let invalid_item_reference = uuid::Uuid::new_v4();
+    let mut invalid_item_socket = connect_public_invocation_socket(deps, Some(&user.token)).await?;
     send_public_request(
-        &mut capability_socket,
+        &mut invalid_item_socket,
         &public_start(
             application_name,
             environment_name,
             &agent_name,
             "consume",
             native_record([native_stream(serde_json::json!({
-                "provisionalRef": capability_reference
+                "provisionalRef": invalid_item_reference
             }))]),
         ),
     )
     .await?;
-    let accepted = receive_public_response(&mut capability_socket).await?;
-    let (capability_session_token, capability_channel) = match accepted {
-        PublicServerMessage::InvocationAccepted {
-            mappings,
-            session_token,
-            ..
-        } => {
-            let channel = mappings
-                .iter()
-                .find(|mapping| mapping.provisional_ref == Some(capability_reference))
-                .map(|mapping| mapping.channel)
-                .ok_or_else(|| anyhow::anyhow!("capability input mapping was omitted"))?;
-            (session_token, channel)
-        }
-        other => anyhow::bail!("capability invocation was not accepted: {other:?}"),
+    let accepted = receive_public_response(&mut invalid_item_socket).await?;
+    let invalid_item_channel = match accepted {
+        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+            .iter()
+            .find(|mapping| mapping.provisional_ref == Some(invalid_item_reference))
+            .map(|mapping| mapping.channel)
+            .ok_or_else(|| anyhow::anyhow!("invalid-item input mapping was omitted"))?,
+        other => anyhow::bail!("invalid-item invocation was not accepted: {other:?}"),
     };
+    // An item that fails its element schema ends only its input stream: the callee sees an
+    // ordinary end of input after the valid prefix and returns a partial result.
     send_public_request(
-        &mut capability_socket,
+        &mut invalid_item_socket,
         &PublicClientMessage::InputStreamItem {
-            channel: capability_channel,
+            channel: invalid_item_channel,
             sequence: DecimalU64(0),
+            value: native_u32(34),
+            version: INVOCATION_SESSION_VERSION,
+        },
+    )
+    .await?;
+    send_public_request(
+        &mut invalid_item_socket,
+        &PublicClientMessage::InputStreamItem {
+            channel: invalid_item_channel,
+            sequence: DecimalU64(1),
             value: serde_json::json!({"kind": "secret", "value": {"token": "forged"}}),
             version: INVOCATION_SESSION_VERSION,
         },
     )
     .await?;
-    let close = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let responses = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let mut responses = Vec::new();
         loop {
-            match capability_socket.next().await {
-                Some(Ok(Message::Close(close))) => break Ok(close),
-                Some(Ok(_)) => {}
-                Some(Err(error)) => break Err(anyhow::Error::from(error)),
-                None => anyhow::bail!("capability injection ended without a protocol close"),
+            let response = receive_public_response(&mut invalid_item_socket).await?;
+            let finished = matches!(response, PublicServerMessage::InvocationFinished { .. });
+            responses.push(response);
+            if finished {
+                break Ok::<_, anyhow::Error>(responses);
             }
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("capability injection did not close the public session"))??;
+    .map_err(|_| anyhow::anyhow!("an invalid input item left the callee waiting"))??;
+    let cancel_index = responses
+        .iter()
+        .position(|response| {
+            matches!(
+                response,
+                PublicServerMessage::StreamCancel {
+                    channel,
+                    reason: PublicServerCancelReason::InvalidItem,
+                    sequence: Some(DecimalU64(1)),
+                    message: Some(_),
+                    ..
+                } if *channel == invalid_item_channel
+            )
+        })
+        .ok_or_else(|| anyhow::anyhow!("invalid input item was not cancelled: {responses:?}"))?;
+    let acks = responses
+        .iter()
+        .enumerate()
+        .filter(|(_, response)| {
+            matches!(response, PublicServerMessage::InputStreamAck { channel, .. } if *channel == invalid_item_channel)
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert_eq!(acks.len(), 1, "unexpected input ACKs: {responses:?}");
+    assert!(acks[0] < cancel_index, "an ACK followed the cancellation");
+    let cancels = responses
+        .iter()
+        .filter(|response| {
+            matches!(response, PublicServerMessage::StreamCancel { channel, .. } if *channel == invalid_item_channel)
+        })
+        .count();
+    assert_eq!(cancels, 1, "duplicate input cancellation: {responses:?}");
+    assert!(responses.iter().any(|response| matches!(
+        response,
+        PublicServerMessage::InvocationResult { result, .. }
+            if matches!(
+                result.as_ref(),
+                PublicInvocationResult::Value { value, .. }
+                    if *value == serde_json::json!({
+                        "kind": "list",
+                        "value": {"elements": [native_u32(34)]}
+                    })
+            )
+    )));
     assert!(matches!(
-        close.map(|frame| frame.code),
-        Some(tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Protocol)
+        responses.last(),
+        Some(PublicServerMessage::InvocationFinished {
+            outcome: PublicInvocationOutcome::Success,
+            ..
+        })
     ));
-    drop(capability_socket);
-
-    resume_public_input_with_end(
-        deps,
-        &user.token,
-        capability_session_token,
-        capability_channel,
-    )
-    .await?;
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        run_public_session(
-            deps,
-            &user.token,
-            public_start(
-                application_name,
-                environment_name,
-                &agent_name,
-                "ping",
-                native_record([]),
-            ),
-        ),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("resumed capability rejection did not finish"))??;
+    drop(invalid_item_socket);
     Ok(())
 }
 

@@ -1813,7 +1813,11 @@ async fn handle_response(
         }
         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {}
         ServerFrame::Message(PublicServerMessage::StreamCancel {
-            channel, reason, ..
+            channel,
+            message,
+            reason,
+            sequence,
+            ..
         }) => {
             failed |= server_cancellation_is_failure(reason);
             let output_stream = if let Some(stream) = output_streams.get_mut(&channel) {
@@ -1833,7 +1837,15 @@ async fn handle_response(
                     event.path = Some(stream.path);
                 }
                 event.reason = Some(format!("{reason:?}"));
+                event.offset = sequence.map(|sequence| sequence.0);
+                event.error = message;
                 emit(output_tx, OutputJob::Event(event)).await?;
+            } else if reason == PublicServerCancelReason::InvalidItem {
+                eprint_line(format!(
+                    "Stream {channel} was cancelled: the server rejected item {}: {}",
+                    sequence.map(|sequence| sequence.0).unwrap_or_default(),
+                    message.as_deref().unwrap_or("invalid stream item")
+                ));
             } else {
                 eprint_line(format!("Stream {channel} was cancelled"));
             }
@@ -1871,6 +1883,7 @@ fn server_cancellation_is_failure(reason: PublicServerCancelReason) -> bool {
             | PublicServerCancelReason::ProducerDeleted
             | PublicServerCancelReason::InvocationFailed
             | PublicServerCancelReason::ProtocolError
+            | PublicServerCancelReason::InvalidItem
     )
 }
 
@@ -3018,6 +3031,7 @@ mod public_tests {
             PublicServerCancelReason::ProducerDeleted,
             PublicServerCancelReason::InvocationFailed,
             PublicServerCancelReason::ProtocolError,
+            PublicServerCancelReason::InvalidItem,
         ] {
             assert!(server_cancellation_is_failure(reason));
         }

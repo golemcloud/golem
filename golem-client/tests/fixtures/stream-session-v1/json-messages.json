@@ -98,6 +98,12 @@
       "type": "streamCancel"
     },
     {
+      "canonical": "{\"channel\":1,\"message\":\"stream item does not satisfy its element schema\",\"reason\":\"invalid-item\",\"sequence\":\"2\",\"type\":\"streamCancel\",\"version\":1}",
+      "direction": "server",
+      "name": "server-stream-cancel-invalid-item",
+      "type": "streamCancel"
+    },
+    {
       "canonical": "{\"reason\":\"replaced\",\"type\":\"attachmentRevoked\",\"version\":1}",
       "direction": "server",
       "name": "attachment-revoked",
