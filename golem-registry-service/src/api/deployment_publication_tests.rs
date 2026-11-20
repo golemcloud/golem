@@ -470,7 +470,7 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
         source: AgentConfigSource::Local,
         path: vec![name.into()],
         value_type: SchemaType::u32(),
-        default_value: Some(default.into()),
+        default_value: Some(SchemaValue::U32(default.parse().unwrap())),
     };
     let schema = ComponentConfigSchema {
         schema: SchemaGraph::empty(),

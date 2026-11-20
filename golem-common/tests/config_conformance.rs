@@ -49,7 +49,46 @@ struct Reference {
 #[derive(Deserialize)]
 struct MetadataFixture {
     graph: SchemaGraph,
-    declarations: Vec<AgentConfigDeclarationSchema>,
+    declarations: Vec<DeclarationFixture>,
+}
+
+// The independent corpus authors defaults as canonical JSON input, not serialized metadata.
+#[derive(Deserialize)]
+struct DeclarationFixture {
+    source: golem_common::model::agent::AgentConfigSource,
+    path: Vec<String>,
+    value_type: SchemaType,
+    default_value: Option<String>,
+}
+
+impl MetadataFixture {
+    fn declarations(&self) -> Result<Vec<AgentConfigDeclarationSchema>, String> {
+        self.declarations
+            .iter()
+            .map(|declaration| {
+                let default_value = declaration
+                    .default_value
+                    .as_ref()
+                    .map(|json| {
+                        let json = serde_json::from_str(json)
+                            .map_err(|error| format!("invalid code default: {error}"))?;
+                        golem_common::schema::render::from_untrusted_json_value(
+                            &self.graph,
+                            &declaration.value_type,
+                            &json,
+                        )
+                        .map_err(|error| format!("invalid code default: {error}"))
+                    })
+                    .transpose()?;
+                Ok(AgentConfigDeclarationSchema {
+                    source: declaration.source,
+                    path: declaration.path.clone(),
+                    value_type: declaration.value_type.clone(),
+                    default_value,
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Deserialize)]
@@ -158,10 +197,11 @@ fn common_config_corpus() {
     for case in &corpus.static_cases {
         assert!(ids.insert(&case.id), "duplicate case {}", case.id);
         let fixture = &corpus.schemas[&case.schema];
-        let result =
-            ConfigSchema::from_declarations(&fixture.graph, &fixture.declarations, &origin("code"))
+        let result = fixture.declarations().and_then(|declarations| {
+            ConfigSchema::from_declarations(&fixture.graph, &declarations, &origin("code"))
                 .map_err(|e| e.to_string())
-                .and_then(|schema| resolve(&schema, &case.inputs));
+                .and_then(|schema| resolve(&schema, &case.inputs))
+        });
         check(&case.id, &case.inputs, result);
     }
     for case in &corpus.source_cases {
@@ -214,8 +254,8 @@ async fn check_reference_metadata(component: &str, agent_type: &str) -> anyhow::
         assert_eq!(actual.source, field.source, "{:?}", field.path);
         let actual_default = actual
             .default_value
-            .as_deref()
-            .map(serde_json::from_str::<Value>)
+            .as_ref()
+            .map(|value| to_json_value(&agent.schema, &actual.value_type, value))
             .transpose()?;
         let expected_default = field
             .default_value

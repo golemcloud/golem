@@ -1,7 +1,7 @@
 package golem:agent@2.0.0;
 
 interface common {
-  use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value,
+  use golem:core/types@2.0.0.{schema-graph, type-node-index, typed-schema-value, schema-value-tree,
     metadata-envelope, agent-id, account-id, component-id};
   use golem:core/http@2.0.0.{http-route-mode, durable-stream-route-options,
     http-method as concrete-http-method, path-segment as neutral-path-segment,
@@ -230,8 +230,8 @@ interface common {
     path: list<string>,
     /// Index into the owning agent-type `schema` graph.
     value-type: type-node-index,
-    /// Canonical schema JSON. None differs from the explicit default "null".
-    default-value: option<string>,
+    /// Static data in the declared value type. Absence differs from an option-none value.
+    default-value: option<schema-value-tree>,
   }
 
   record typed-agent-config-value {

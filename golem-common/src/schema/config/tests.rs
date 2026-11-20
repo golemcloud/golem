@@ -157,7 +157,19 @@ fn metadata_defaults_preserve_recursive_values_and_explicit_absence() {
         source: AgentConfigSource::Local,
         path: vec!["settings".into()],
         value_type: SchemaType::ref_to(node),
-        default_value: Some(r#"{"label":"outer","next":{"label":"inner","next":null}}"#.into()),
+        default_value: Some(SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("outer".into()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String("inner".into()),
+                            SchemaValue::Option { inner: None },
+                        ],
+                    })),
+                },
+            ],
+        }),
     };
     let schema =
         ConfigSchema::from_declarations(&graph, &[declaration.clone()], &origin("code")).unwrap();
@@ -186,7 +198,7 @@ fn metadata_defaults_preserve_recursive_values_and_explicit_absence() {
     );
 
     declaration.value_type = SchemaType::option(SchemaType::u32());
-    declaration.default_value = Some("null".into());
+    declaration.default_value = Some(SchemaValue::Option { inner: None });
     let schema =
         ConfigSchema::from_declarations(&graph, &[declaration.clone()], &origin("code")).unwrap();
     assert_eq!(
@@ -204,11 +216,16 @@ fn metadata_rejects_invalid_defaults_and_ambiguous_paths() {
         source: AgentConfigSource::Local,
         path: vec!["requestLimit".into()],
         value_type: SchemaType::u8(),
-        default_value: Some("23".into()),
+        default_value: Some(SchemaValue::U8(23)),
     };
-    for value in ["256", "-1", "null", "\"23\"", "not JSON"] {
+    for value in [
+        SchemaValue::U32(23),
+        SchemaValue::S8(-1),
+        SchemaValue::Option { inner: None },
+        SchemaValue::String("23".into()),
+    ] {
         let invalid = AgentConfigDeclarationSchema {
-            default_value: Some(value.into()),
+            default_value: Some(value),
             ..declaration.clone()
         };
         assert!(

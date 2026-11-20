@@ -1095,11 +1095,17 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
     );
     assert_eq!(
         visible["properties"]["configSchema"]["value"]["declarations"][0]["default_value"],
-        "\"manifest-default-secret\""
+        json!({"kind": "string", "value": "manifest-default-secret"})
     );
     assert!(visible["properties"].get("config").is_none());
     let value = hidden_structured_output(trace);
 
+    assert!(COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&visible));
+    assert!(COMMAND_OUTPUT_SCHEMA_VALIDATOR.is_valid(&value));
+    assert_eq!(
+        value["properties"]["configSchema"]["value"]["declarations"][0]["default_value"],
+        json!({"kind": "string", "value": "***"})
+    );
     assert_no_plaintext(
         &value,
         &[
@@ -1434,7 +1440,9 @@ fn sample_component_layer_properties() -> crate::model::app::ComponentLayerPrope
                 source: golem_common::model::agent::AgentConfigSource::Local,
                 path: vec!["password".into()],
                 value_type: golem_common::schema::SchemaType::string(),
-                default_value: Some("\"manifest-default-secret\"".into()),
+                default_value: Some(golem_common::schema::SchemaValue::String(
+                    "manifest-default-secret".into(),
+                )),
             }],
         }),
     );
@@ -3367,7 +3375,7 @@ fn arb_agent_config_declaration()
         proptest::collection::vec(arb_small_string(), 1..3),
         arb_schema_type(),
         proptest::option::of(
-            arb_small_string().prop_map(|value| serde_json::to_string(&value).unwrap()),
+            arb_small_string().prop_map(golem_common::schema::SchemaValue::String),
         ),
     )
         .prop_map(|(source, path, value_type, default_value)| {

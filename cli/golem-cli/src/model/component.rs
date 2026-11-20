@@ -1658,7 +1658,7 @@ fn mask_config_schema_defaults(value: &mut Value) {
         Value::Object(object) => {
             for (key, value) in object {
                 if key == "default_value" {
-                    mask_json_leaf_values(value);
+                    *value = serde_json::json!({ "kind": "string", "value": mask_secret() });
                 } else {
                     mask_config_schema_defaults(value);
                 }
