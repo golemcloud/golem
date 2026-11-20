@@ -171,7 +171,7 @@ enum Slot {
         output: p2::OutputStream,
         socket: p2::TcpSocket,
     },
-    P2TcpConnecting {
+    P2TcpSocket {
         socket: p2::TcpSocket,
     },
     P2Udp {
@@ -282,6 +282,15 @@ pub trait SocketSession {
     /// the socket with its streams there.
     fn p2_tcp_finish_connect(&self, slot: String) -> Result<(), String>;
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String>;
+    /// Binds a P2 TCP socket to `127.0.0.1:0` and keeps it in `slot`, finishing the bind when
+    /// `finish`. Returns the local address.
+    fn p2_tcp_bind(&self, slot: String, finish: bool) -> Result<String, String>;
+    /// Calls `finish-bind` on the socket that `p2_tcp_bind` kept in `slot`.
+    fn p2_tcp_finish_bind(&self, slot: String) -> Result<(), String>;
+    /// The local address of the socket that `p2_tcp_bind` kept in `slot`.
+    fn p2_tcp_bound_local_address(&self, slot: String) -> Result<String, String>;
+    /// Connects the socket that `p2_tcp_bind` kept in `slot` and drops the streams.
+    fn p2_tcp_connect_bound(&self, slot: String, port: u16) -> Result<(), String>;
     fn p2_tcp_send(&self, slot: String, data: Vec<u8>) -> Result<(), String>;
     fn p2_tcp_receive(&self, slot: String, len: u32) -> Result<Vec<u8>, String>;
     /// Connects a P2 TCP socket and drops it, in a read-only method.
@@ -876,13 +885,13 @@ impl SocketSession for SocketSessionImpl {
             .start_connect(&p2::instance_network(), p2_loopback(port))
             .map_err(error)?;
         socket.subscribe().block();
-        self.insert(slot, Slot::P2TcpConnecting { socket });
+        self.insert(slot, Slot::P2TcpSocket { socket });
         Ok(())
     }
 
     fn p2_tcp_finish_connect(&self, slot: String) -> Result<(), String> {
         let socket = match self.slots.borrow_mut().remove(&slot) {
-            Some(Slot::P2TcpConnecting { socket }) => socket,
+            Some(Slot::P2TcpSocket { socket }) => socket,
             _ => return Err(format!("slot {slot} holds no connecting P2 TCP socket")),
         };
         let (input, output) = socket.finish_connect().map_err(error)?;
@@ -895,6 +904,54 @@ impl SocketSession for SocketSessionImpl {
             },
         );
         Ok(())
+    }
+
+    fn p2_tcp_bind(&self, slot: String, finish: bool) -> Result<String, String> {
+        let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(p2::IpAddressFamily::Ipv4)
+            .map_err(error)?;
+        socket
+            .start_bind(&p2::instance_network(), p2_loopback(0))
+            .map_err(error)?;
+        if finish {
+            socket.finish_bind().map_err(error)?;
+        }
+        let address = socket.local_address().map(p2_address).map_err(error)?;
+        self.insert(slot, Slot::P2TcpSocket { socket });
+        Ok(address)
+    }
+
+    fn p2_tcp_finish_bind(&self, slot: String) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2TcpSocket { socket } => socket.finish_bind().map_err(error),
+            _ => Err(format!("slot {slot} holds no bound P2 TCP socket")),
+        })
+    }
+
+    fn p2_tcp_bound_local_address(&self, slot: String) -> Result<String, String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2TcpSocket { socket } => socket.local_address().map(p2_address).map_err(error),
+            _ => Err(format!("slot {slot} holds no bound P2 TCP socket")),
+        })
+    }
+
+    fn p2_tcp_connect_bound(&self, slot: String, port: u16) -> Result<(), String> {
+        self.with_slot(&slot, |value| match value {
+            Slot::P2TcpSocket { socket } => {
+                socket
+                    .start_connect(&p2::instance_network(), p2_loopback(port))
+                    .map_err(error)?;
+                loop {
+                    match socket.finish_connect() {
+                        Ok(_streams) => return Ok(()),
+                        Err(wasi::sockets::network::ErrorCode::WouldBlock) => {
+                            socket.subscribe().block()
+                        }
+                        Err(other) => return Err(error(other)),
+                    }
+                }
+            }
+            _ => Err(format!("slot {slot} holds no bound P2 TCP socket")),
+        })
     }
 
     fn p2_tcp_local_address(&self, slot: String) -> Result<String, String> {

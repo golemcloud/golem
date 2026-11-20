@@ -1116,6 +1116,205 @@ async fn p2_tcp_peer_reset_before_finish_connect_does_not_trap(
     session.finish().await
 }
 
+fn no_error_entry(oplog: &[PublicOplogEntry]) -> bool {
+    !oplog
+        .iter()
+        .any(|entry| matches!(entry, PublicOplogEntry::Error(_)))
+}
+
+/// A `finish-connect` whose connect started in an earlier Store completes with `connection-reset`,
+/// and that result replays: a further restart records no new `finish-connect` and does not
+/// connect.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_connect_started_before_a_restart_finishes_with_connection_reset(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-connect-across-restart",
+    )
+    .await?;
+    let started: Result<(), String> = session
+        .call(
+            "p2_tcp_start_connect",
+            data_value!("c".to_string(), peer.port),
+        )
+        .await?;
+    assert_eq!(started, Ok(()));
+    peer.wait_until("one connection", |connections| connections.len() == 1)
+        .await?;
+
+    session.restart_executor().await?;
+    let finished: Result<(), String> = session
+        .call("p2_tcp_finish_connect", data_value!("c".to_string()))
+        .await?;
+    assert!(
+        finished
+            .as_ref()
+            .is_err_and(|error| error.contains("connection-reset")),
+        "expected connection-reset, got {finished:?}"
+    );
+    assert!(no_error_entry(&session.oplog().await?));
+    let finishes = session.starts("sockets::tcp::finish_connect").await?;
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(log.is_empty());
+    assert_eq!(
+        session.starts("sockets::tcp::finish_connect").await?,
+        finishes,
+        "replay records no new finish-connect"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not connect");
+    assert!(no_error_entry(&session.oplog().await?));
+    session.finish().await
+}
+
+/// The first operation on a stand-in stream of a replayed connection fails with
+/// `connection-reset`, and the next ones report `closed`. A further restart replays that sequence
+/// and a later operation still reports `closed`.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_lost_stream_reports_closed_after_its_first_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p2-lost-stream-closed",
+    )
+    .await?;
+    let connected: Result<(), String> = session
+        .call("p2_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    assert_eq!(connected, Ok(()));
+
+    session.restart_executor().await?;
+    let mut results = Vec::new();
+    for _ in 0..2 {
+        let sent: Result<(), String> = session
+            .call("p2_tcp_send", data_value!("a".to_string(), b"x".to_vec()))
+            .await?;
+        results.push(sent);
+    }
+    assert_eq!(
+        results,
+        vec![
+            Err("last-operation-failed: connection reset".to_string()),
+            Err("closed".to_string())
+        ]
+    );
+
+    session.restart_executor().await?;
+    let third: Result<(), String> = session
+        .call("p2_tcp_send", data_value!("a".to_string(), b"x".to_vec()))
+        .await?;
+    assert_eq!(third, Err("closed".to_string()));
+    assert!(no_error_entry(&session.oplog().await?));
+    assert_eq!(peer.connections().len(), 1, "replay does not connect");
+    session.finish().await
+}
+
+/// `start-bind` records the selected address and replay binds nothing. After a restart, the
+/// local addresses of a finished and of a pending bind do not change, `finish-bind` of the
+/// replayed pending bind succeeds once, a replayed bound socket refuses `start-connect` with
+/// `connection-reset`, and a replayed pending bind refuses it with `concurrency-conflict`. The
+/// peer sees no connection, and a further restart replays all of it.
+#[test]
+#[timeout("3m")]
+async fn p2_tcp_bind_replays_and_reconstructed_states_refuse_connect(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-bind-replay").await?;
+    let mut bound = Vec::new();
+    for (slot, finish) in [("done", true), ("pending", false), ("pending2", false)] {
+        let address: Result<String, String> = session
+            .call("p2_tcp_bind", data_value!(slot.to_string(), finish))
+            .await?;
+        bound.push((slot, address.map_err(anyhow::Error::msg)?));
+    }
+
+    session.restart_executor().await?;
+    for (slot, expected) in &bound {
+        let after: Result<String, String> = session
+            .call("p2_tcp_bound_local_address", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(after.as_ref(), Ok(expected), "local address of {slot}");
+    }
+    let finish_bind: Result<(), String> = session
+        .call("p2_tcp_finish_bind", data_value!("pending".to_string()))
+        .await?;
+    assert_eq!(
+        finish_bind,
+        Ok(()),
+        "finish-bind of a replayed pending bind"
+    );
+    let again: Result<(), String> = session
+        .call("p2_tcp_finish_bind", data_value!("pending".to_string()))
+        .await?;
+    assert!(
+        again
+            .as_ref()
+            .is_err_and(|error| error.contains("not-in-progress")),
+        "a second finish-bind: {again:?}"
+    );
+
+    let connect_done: Result<(), String> = session
+        .call(
+            "p2_tcp_connect_bound",
+            data_value!("done".to_string(), peer.port),
+        )
+        .await?;
+    assert!(
+        connect_done
+            .as_ref()
+            .is_err_and(|error| error.contains("connection-reset")),
+        "connect on a replayed bound socket: {connect_done:?}"
+    );
+    let connect_pending: Result<(), String> = session
+        .call(
+            "p2_tcp_connect_bound",
+            data_value!("pending2".to_string(), peer.port),
+        )
+        .await?;
+    assert!(
+        connect_pending
+            .as_ref()
+            .is_err_and(|error| error.contains("concurrency-conflict")),
+        "connect on a replayed pending bind: {connect_pending:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(peer.connections().len(), 0, "no native connect");
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(log.is_empty());
+    assert!(no_error_entry(&session.oplog().await?));
+    session.finish().await
+}
+
 /// S10 on P2: a read-only method cannot connect a P2 TCP socket. `start-connect` is a recorded
 /// write, so the read-only guard refuses it before any poll can drive the native connect.
 #[test]
