@@ -50,6 +50,8 @@ File system and SQLite blob storage need no extra snapshot setting. All executor
 The following is the complete configuration with default tuning values. The key has no default; replace the placeholder with your secret key.
 
 ```toml
+retained_update_snapshots = 2
+
 [filesystem_snapshots]
 type = "Enabled"
 
@@ -63,8 +65,6 @@ save_threads = 2
 confirmation_wait = "60s"
 store_check_limit = "5s"
 capture_wait = "5s"
-retained_periodic_snapshots = 128
-retained_update_snapshots = 2
 max_pending_deletes_per_agent = 1024
 
 [filesystem_snapshots.config.storage_retry]
@@ -84,7 +84,9 @@ Enable snapshots on every executor that can run the same agents, using the same 
 
 ## Tune capture, upload, and restore
 
-All settings below belong to `[filesystem_snapshots.config]` and apply only when enabled. Durations use [humantime](https://docs.rs/humantime), such as `"500ms"` or `"2m"`. Counts and waits must be positive. Invalid settings prevent startup.
+Set `retained_update_snapshots` at the top level, or use `GOLEM__RETAINED_UPDATE_SNAPSHOTS`. Its default is `2`. It counts manual-update snapshots in addition to those protected by successful or pending updates. Retention for automatic snapshots is not a self-host setting.
+
+The settings in the table belong to `[filesystem_snapshots.config]` and apply only when enabled. Durations use [humantime](https://docs.rs/humantime), such as `"500ms"` or `"2m"`. Counts and waits must be positive. Invalid settings prevent startup.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -96,15 +98,13 @@ All settings below belong to `[filesystem_snapshots.config]` and apply only when
 | `confirmation_wait` | `60s` | Bounds the wait for a same-executor upload and its subsequent storage check at start or automatic-update restart. Also bounds a manual update's wait for an existing upload and an upload slot. |
 | `store_check_limit` | `5s` | Bounds a storage check when a start or automatic-update restart did not wait for an upload. Also bounds a fork's baseline snapshot check. |
 | `capture_wait` | `5s` | Maximum wait for open agent file calls before abandoning a capture. |
-| `retained_periodic_snapshots` | `128` | Automatic snapshots retained per agent, in addition to protected snapshots. Limits how far back a revert can use retained snapshots instead of replay. |
-| `retained_update_snapshots` | `2` | Manual-update snapshots retained in addition to those protected by successful or pending updates. |
 | `max_pending_deletes_per_agent` | `1024` | Named snapshots from a revert that can wait in the clean-up queue for one agent. |
 
 See [Recovery and storage](/next/operate/filesystem_snapshots/recovery) for confirmation, retention, and clean-up rules.
 
 ### Memory and volume pressure
 
-Uploads and restore reader threads allocate memory outside agent memory. `[memory] worker_memory_ratio` defaults to `0.8`; the remaining share must hold the executor, uploads, and restores. Size concurrency and reader-thread counts for the available CPU and memory, then monitor executor memory use.
+Uploads and restore reader threads allocate memory outside agent memory. `[advanced.worker_executor.memory] worker_memory_ratio` defaults to `0.8`; the remaining share must hold the executor, uploads, and restores. Size concurrency and reader-thread counts for the available CPU and memory, then monitor executor memory use.
 
 Capture admission checks `[advanced.worker_executor.filesystem_storage.pressure] target_available_bytes` and `target_available_filesystem_objects`. If either target is unmet, or free capacity cannot be read, automatic snapshots are skipped and manual updates fail. Targets must fit within the volume's capacity. See [Monitoring and troubleshooting](/next/operate/filesystem_snapshots/monitoring).
 

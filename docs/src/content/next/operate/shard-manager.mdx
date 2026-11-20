@@ -294,7 +294,7 @@ spec:
 
 This example connects to etcd over `http://`. For an etcd with TLS, give the container the `GOLEM__ETCD__TLS__*` variables, an `https://` endpoint and the Secret mounted as a directory, as in the pod template under [Renew certificates](#renew-certificates), and add the Secret volume to the pod. With an etcd user, add `GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__USERNAME` and the password as described in [Authenticate as an etcd user](#authenticate-as-an-etcd-user).
 
-Point the executors' and worker services' `shard_manager.host` (`GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST`) at the Service name, and set their `shard_manager.port` (`GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT`) to the Service's gRPC port, `9092` in this example. The host alone is not enough: the client's default port is `9002`, which the Service does not expose. A rolling update that replaces the leader's pod sends it `SIGTERM`, so a standby takes over within milliseconds and serves once its startup completes.
+Point the executors at the Service with `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST` and `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT`. For worker services, use `GOLEM_ADVANCED__WORKER_SERVICE__SHARD_MANAGER__HOST` and `GOLEM_ADVANCED__WORKER_SERVICE__SHARD_MANAGER__PORT`. Set each host to the Service name and each port to `9092` in this example. The host alone is not enough: the client's default port is `9002`, which the Service does not expose. A rolling update that replaces the leader's pod sends it `SIGTERM`, so a standby takes over within milliseconds and serves once its startup completes.
 
 `minReadySeconds: 20` matters for rollouts. A new pod is Ready at once, because a standby is ready while etcd answers it. Without a pause, Kubernetes then stops the next old pod while a just-elected leader is still running its startup, and several startups can follow in a row. A rollout to a newer version hands the leadership over once, whatever order Kubernetes stops the old pods in. A rollout that keeps the version, such as a configuration change, and a rollback keep the queue's order, so `minReadySeconds` is what keeps a just-elected leader from being stopped in the middle of its startup.
 
@@ -329,7 +329,7 @@ services:
       GOLEM_ADVANCED__SHARD_MANAGER__GRPC__ADVERTISED_HOST: golem-shard-manager-3
 ```
 
-The worker executors and worker services set `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST: golem-shard-manager` and `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT: 9002`. The complete example, with etcd and the other services, is in [docker-examples/distributed-etcd](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd).
+The worker executors set `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST: golem-shard-manager` and `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT: 9002`. The worker services set `GOLEM_ADVANCED__WORKER_SERVICE__SHARD_MANAGER__HOST: golem-shard-manager` and `GOLEM_ADVANCED__WORKER_SERVICE__SHARD_MANAGER__PORT: 9002`. The complete example, with etcd and the other services, is in [docker-examples/distributed-etcd](https://github.com/golemcloud/golem/tree/main/docker-examples/distributed-etcd).
 
 ### Upgrade from earlier replicas
 

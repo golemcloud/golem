@@ -95,9 +95,9 @@ impl Services {
         config.blob_storage.validate()?;
         let golem_issuer = GolemIssuer::configured_or_generated(config.golem_issuer.clone());
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
-            BlobStorageConfig::S3(config) => {
-                Arc::new(S3BlobStorage::new(config.clone(), &config.custom_data_bucket).await?)
-            }
+            BlobStorageConfig::S3(config) => Arc::new(
+                S3BlobStorage::new(config.clone(), &config.initial_agent_files_bucket).await?,
+            ),
             BlobStorageConfig::LocalFileSystem(config) => {
                 Arc::new(FileSystemBlobStorage::new(&config.root).await?)
             }

@@ -158,6 +158,10 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         command_parse_result: GolemCliCommandParseResult,
         hooks: Arc<Hooks>,
     ) -> ExitCode {
+        #[cfg(feature = "server-commands")]
+        let server_run = requires_executor_runtime(&command_parse_result);
+        #[cfg(not(feature = "server-commands"))]
+        let server_run = false;
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(mut command) => {
                 // A server must outlive the reader of its console. Any other command ends once
@@ -203,15 +207,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 #[cfg(not(feature = "server-commands"))]
                 let pretty_mode = false;
 
-                #[cfg(feature = "server-commands")]
-                let server_run = matches!(
-                    command.subcommand,
-                    GolemCliSubcommand::Server {
-                        subcommand: ServerSubcommand::Run { .. }
-                    }
-                );
-                #[cfg(not(feature = "server-commands"))]
-                let server_run = false;
                 if !server_run {
                     init_tracing(verbosity, pretty_mode);
                 }

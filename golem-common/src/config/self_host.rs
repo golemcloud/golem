@@ -118,6 +118,31 @@ pub fn server(input: &Figment) -> figment::Result<Figment> {
         .merge(Serialized::defaults(server)))
 }
 
+/// Projects one advanced layer and retains supported settings for the selected variants.
+pub fn server_advanced(input: &Figment, lower: &Figment) -> figment::Result<Figment> {
+    let value: Value = input.extract()?;
+    let lower: Value = lower.extract()?;
+    let persistence = "/advanced/shard_manager/persistence/type";
+    let snapshots = "/advanced/worker_executor/filesystem_snapshots/type";
+    let inherited = [
+        (
+            "etcd",
+            value.pointer(persistence).and_then(Value::as_str) == Some("Etcd")
+                && value.pointer(persistence) != lower.pointer(persistence),
+        ),
+        (
+            "retained_update_snapshots",
+            value.pointer(snapshots).and_then(Value::as_str) == Some("Enabled"),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(key, needed)| lower.get(key).filter(|_| needed).map(|value| (key, value)))
+    .fold(Figment::new(), |inherited, (key, value)| {
+        inherited.merge(Serialized::default(key, value))
+    });
+    server(&inherited.merge(input))
+}
+
 /// Gives the common defaults and puts unsupported defaults in the named advanced section.
 pub fn reference(service: &str, input: &Figment) -> Figment {
     let mut advanced = without_nulls(input.extract().expect("service defaults must serialize"));

@@ -78,3 +78,6 @@ libc = { workspace = true }
 
 [features]
 default = []
+
+[dev-dependencies]
+figment = { workspace = true, features = ["test"] }

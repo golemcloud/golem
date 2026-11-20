@@ -29,7 +29,7 @@ One ECS service runs one task of the [`golemservices/golem` image](/next/deploy/
 | Desired count | **1** |
 | Deployment | Minimum healthy 0%, maximum 100% |
 | Container ports | Golem 9881; Caddy 8006 for requests and 8007 for health checks |
-| Environment | The `GOLEM__` settings that [`generate-env.sh`](/next/deploy/server#environment-file) prints, and `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST` set to the management host |
+| Environment | All settings that [`generate-env.sh`](/next/deploy/server#environment-file) prints, including the `GOLEM_ADVANCED__` secrets, and `GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST` set to the management host |
 | Target group | Caddy port 8006, HTTP health check `/healthcheck` on port 8007, a grace period of at least 120 seconds |
 | Listener | The default action of the HTTPS listener forwards to the target group |
 
@@ -37,7 +37,7 @@ Add the [Caddy sidecar](#forwarded-headers) to the task. Allow the load balancer
 
 The deployment settings make ECS stop the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two servers would run on the same database, which can run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager). Do not use the AWS access key variables: the task role gives the S3 client its credentials.
 
-Run `generate-env.sh` with the bucket and the database inputs, such as `GOLEM_S3_BUCKET`, `GOLEM_S3_REGION`, `GOLEM_POSTGRES_HOST`, `GOLEM_POSTGRES_USER` and `GOLEM_POSTGRES_PASSWORD`. These are inputs of the script, not of the image: the task definition needs what the script prints. That is the secrets, the S3 settings of every service, and for each of the six stores `GOLEM__<STORE>__TYPE=Postgres` and its `GOLEM__<STORE>__CONFIG__*` settings, such as `GOLEM_ADVANCED__REGISTRY_SERVICE__DB__CONFIG__HOST`. See [Managed Postgres](/next/deploy/server#managed-postgres) for the stores. Keep the secrets and the passwords in AWS Secrets Manager, and give them to the container as `secrets` of the task definition.
+Run `generate-env.sh` with the bucket and the database inputs, such as `GOLEM_S3_BUCKET`, `GOLEM_S3_REGION`, `GOLEM_POSTGRES_HOST`, `GOLEM_POSTGRES_USER` and `GOLEM_POSTGRES_PASSWORD`. These are inputs of the script, not of the image. The task definition needs all settings that the script prints, including the advanced secrets. The script selects `GOLEM__STATE_STORE=postgres` and emits one shared connection under `GOLEM__POSTGRES__*`, such as `GOLEM__POSTGRES__HOST`. It also emits `GOLEM__BLOB_STORE=s3` and the shared `GOLEM__OBJECT_STORAGE__*` settings. See [Managed Postgres](/next/deploy/server#managed-postgres) for the stores that use the connection. Keep the secrets and the passwords in AWS Secrets Manager, and give them to the container as `secrets` of the task definition.
 
 The task has no volume, so every start of a task downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) again: in a deploy, when ECS replaces a failed task, and at a restart. A download takes about a minute, so give the service a health check grace period, and let the task open HTTPS connections to GitHub, for example through a NAT gateway. If it cannot, the task does not start. To download only once, mount an Amazon EFS file system at `/var/lib/golem` through an access point whose POSIX user and root directory owner are uid and gid 65534, the user of the image. To move to a fixed cluster later, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
 
@@ -79,7 +79,7 @@ Read [Fixed cluster](/next/deploy/cluster) for the settings of each service. Thi
 | Component compilation service | 1 or more | Rolling | `compilation-service.golem.internal` | None |
 | Worker executor | N | Rolling | None | None |
 
-Point the hosts of the services at each other with their DNS names: `GOLEM_ADVANCED__REGISTRY_SERVICE__HOST=registry-service.golem.internal` and so on, as the Compose file does with its service names.
+Point each service at its peers with their DNS names. For example, set `GOLEM_ADVANCED__WORKER_EXECUTOR__REGISTRY_SERVICE__HOST=registry-service.golem.internal` for an executor. Use `WORKER_SERVICE` or `SHARD_MANAGER` instead of `WORKER_EXECUTOR` for the other registry clients. The Compose file uses the same settings with its service names.
 
 Give the registry service a health check grace period long enough to download and inspect the built-in plugins and tools before it opens its listeners, for example 600 seconds. With no persistent cache at `/app/builtin-artifacts`, every replacement repeats this startup work and needs HTTPS access to GitHub. Size the grace period for a start with an empty cache, not only for a warm restart.
 
@@ -126,7 +126,7 @@ Run exactly one shard manager task, in Postgres mode. With minimum healthy 0% an
 
 Do not run a second replica in etcd mode as a standby on ECS. A standby keeps its gRPC port closed, and ECS replaces a task that fails its container or load balancer health check, so it would replace the standby again and again. When the shard manager task fails, ECS starts a new one; the executors keep their shards for the length of their lease (1 minute by default) while it starts.
 
-Set `GOLEM_ADVANCED__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS` on the executors high enough that an executor that starts during a shard manager restart keeps retrying its registration.
+Set `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS` on the executors high enough that an executor that starts during a shard manager restart keeps retrying its registration.
 
 #### Worker executors
 

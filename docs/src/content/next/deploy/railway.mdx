@@ -125,5 +125,5 @@ Restore the stores together so that the shard-manager epochs and indexed-storage
 ## Fixed cluster
 
 <Callout type="warning">
-  A [fixed cluster](/next/deploy/cluster) on Railway needs verification. The shard manager records the source address of each executor's registration, and Railway does not document whether its private network keeps that address. Railway environments created before 16 October 2025 have an IPv6-only private network, which needs `GOLEM_ADVANCED__SERVER__BIND_ADDRESS=::` on every service.
+  A [fixed cluster](/next/deploy/cluster) on Railway needs verification. The shard manager records the source address of each executor's registration, and Railway does not document whether its private network keeps that address. Railway environments created before 16 October 2025 have an IPv6-only private network. Each standalone service then needs `GOLEM_ADVANCED__<SERVICE>__BIND_ADDRESS=::`. Replace `<SERVICE>` with `REGISTRY_SERVICE`, `SHARD_MANAGER`, `WORKER_SERVICE`, `WORKER_EXECUTOR`, or `COMPONENT_COMPILATION_SERVICE` for that service.
 </Callout>

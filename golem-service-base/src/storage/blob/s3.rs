@@ -20,7 +20,7 @@ use crate::storage::blob::{
     ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_positions,
     check_blob_name, join_blob_key, namespace_segments, validate_range,
 };
-use anyhow::{Error, anyhow, ensure};
+use anyhow::{Context, Error, anyhow, ensure};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::http::HttpResponse;
@@ -410,6 +410,17 @@ fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRan
     Ok(blob)
 }
 
+async fn check_bucket_access(client: &Client, startup_bucket: &str) -> Result<(), Error> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.head_bucket().bucket(startup_bucket).send(),
+    )
+    .await
+    .with_context(|| format!("S3 startup check timed out for bucket {startup_bucket}"))?
+    .with_context(|| format!("S3 startup check failed for bucket {startup_bucket}"))?;
+    Ok(())
+}
+
 impl S3BlobStorage {
     /// Connects to S3 and checks access to the bucket needed at startup.
     pub async fn new(config: S3BlobStorageConfig, startup_bucket: &str) -> Result<Self, Error> {
@@ -449,13 +460,7 @@ impl S3BlobStorage {
         }
 
         let storage = Self::with_sdk_config(config, s3_config_builder.build());
-        tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            storage.client.head_bucket().bucket(startup_bucket).send(),
-        )
-        .await
-        .map_err(|err| anyhow!("S3 startup check timed out: {err}"))?
-        .map_err(|err| anyhow!("S3 startup check failed: {err}"))?;
+        check_bucket_access(&storage.client, startup_bucket).await?;
         Ok(storage)
     }
 

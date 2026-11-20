@@ -11,13 +11,13 @@ The **default log level and filtering** can be configured using the `RUST_LOG` e
 The Golem specific config keys are the following:
 
 ```toml
-[tracing]
+[logging]
 console = false
 dtor_friendly = false
 file_name = "worker-executor.log"
 file_truncate = true
 
-[tracing.file]
+[logging.file]
 ansi = false
 compact = false
 enabled = false
@@ -29,7 +29,7 @@ span_events_active = false
 span_events_full = false
 without_time = false
 
-[tracing.stdout]
+[logging.stdout]
 ansi = true
 compact = false
 enabled = true
@@ -53,7 +53,7 @@ GOLEM__LOGGING__STDOUT__ENABLED=false
 
 ### Configurable options
 
-The top-level `tracing` block allows setting the file name and truncate behavior for file logging, as well as enabling connection to [`tokio-console`](https://github.com/tokio-rs/console).
+The top-level `logging` block allows setting the file name and truncate behavior for file logging, as well as enabling connection to [`tokio-console`](https://github.com/tokio-rs/console).
 
 For both `file` and `stdout` logging, a set of boolean flags control the format of the emitted log lines:
 
