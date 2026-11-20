@@ -1737,6 +1737,45 @@ fn arb_retry_policy_defaults_model()
     .boxed()
 }
 
+fn arb_config_catalog_value() -> BoxedStrategy<Value> {
+    let initializer = prop_oneof![Just(Value::Null), arb_json_value()];
+    let leaf = prop_oneof![
+        initializer.clone(),
+        prop::option::of(initializer.clone()).prop_map(|initializer| {
+            let mut value = serde_json::json!({"$kind":"shared"});
+            if let Some(initializer) = initializer { value["$init"] = initializer; }
+            value
+        }),
+        (prop::option::of(initializer), prop::option::of(prop::collection::vec(arb_ident(), 0..=2))).prop_map(|(initializer, destinations)| {
+            let mut value = serde_json::json!({"$kind":"secret"});
+            if let Some(initializer) = initializer { value["$init"] = initializer; }
+            if let Some(destinations) = destinations { value["$destinations"] = serde_json::json!(destinations); }
+            value
+        }),
+        (arb_ident(), prop::option::of(arb_ident()), prop::collection::vec(arb_ident(), 0..=2)).prop_map(|(client, secret, scopes)| {
+            let mut value = serde_json::json!({"$kind":"secret","$oauth":{"authorizationServer":"login","clientId":client,"scopes":scopes,"resource":"service"}});
+            if let Some(secret) = secret { value["$oauth"]["clientSecret"] = serde_json::json!({"$secret":secret}); }
+            value
+        }),
+        prop::option::of(arb_resource_limit_model()).prop_map(|limit| {
+            let mut value = serde_json::json!({"$kind":"resource"});
+            if let Some(limit) = limit { value["$init"] = serde_json::json!({"limit":limit,"enforcementAction":"reject","unit":"call","units":"calls"}); }
+            value
+        }),
+        arb_ident().prop_map(|path| serde_json::json!({"$secret":path})),
+    ];
+    prop::collection::btree_map(
+        arb_ident(),
+        leaf.prop_recursive(2, 24, 3, |entry| {
+            prop::collection::btree_map(arb_ident(), entry, 1..=3)
+                .prop_map(|entries| serde_json::json!(entries))
+        }),
+        1..=3,
+    )
+    .prop_map(|entries| serde_json::json!(entries))
+    .boxed()
+}
+
 fn arb_application_model_v3() -> BoxedStrategy<Application> {
     (
         arb_opt(arb_semver()),
@@ -1774,6 +1813,13 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
             arb_secret_defaults_model(),
             arb_retry_policy_defaults_model(),
             arb_resource_defaults_model(),
+            prop::collection::vec(
+                (
+                    arb_ident().prop_map(EnvironmentName),
+                    arb_config_catalog_value(),
+                ),
+                1..=2,
+            ),
         ),
     )
         .prop_map(
@@ -1792,6 +1838,7 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
                     secret_defaults,
                     retry_policy_defaults,
                     resource_defaults,
+                    config,
                 ),
             )| Application {
                 manifest_version,
@@ -1809,7 +1856,12 @@ fn arb_application_model_v3() -> BoxedStrategy<Application> {
                 environments,
                 version,
                 bridge,
-                config: Default::default(),
+                config: config
+                    .into_iter()
+                    .map(|(environment, value)| {
+                        (environment, serde_json::from_value(value).unwrap())
+                    })
+                    .collect(),
                 secret_defaults,
                 retry_policy_defaults,
                 resource_defaults,
@@ -2195,7 +2247,7 @@ fn manifest_loading_rejects_invalid_tool_binding_scopes() {
 }
 
 #[test]
-fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
+fn manifest_loading_accepts_wildcard_and_exact_tool_binding_paths() {
     let source = indoc::indoc! { r#"
             app: test-app
             agents:
@@ -2203,8 +2255,8 @@ fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
                 tools:
                   grep:
                     configKeysReadable: "*"
-                    secretKeysReadable: ['credentials.github\=token']
-                    secretKeysRevealable: ['"database url".password']
+                    secretKeysReadable: ['credentials.github=token']
+                    secretKeysRevealable: ['database url.password']
         "# };
 
     Application::from_yaml_str(source).expect("valid scopes should load");
@@ -2219,8 +2271,8 @@ fn middleware_secret_scopes_preserve_omitted_empty_wildcard_and_concrete_values(
   secretKeysReadable: []
   secretKeysRevealable: "*"
 - name: audit
-  secretKeysReadable: ['credentials.github\=token']
-  secretKeysRevealable: ['"database url".password']
+  secretKeysReadable: ['credentials.github=token']
+  secretKeysRevealable: ['database url.password']
 "#,
     )
     .unwrap();
@@ -3018,6 +3070,22 @@ proptest! {
         cases: 256,
         .. ProptestConfig::default()
     })]
+
+    #[test]
+    fn proptest_config_catalog_wire_contract(catalog in arb_config_catalog_value(), invalid_kind in "[a-z]{1,8}") {
+        let document = serde_json::json!({"config":{"local":catalog}});
+        for format in [Format::Json, Format::Yaml] {
+            let text = match format { Format::Json => serde_json::to_string(&document).unwrap(), _ => serde_yaml::to_string(&document).unwrap() };
+            let app: Application = match format { Format::Json => serde_json::from_str(&text).unwrap(), _ => serde_yaml::from_str(&text).unwrap() };
+            prop_assert_eq!(&serde_json::to_value(app).unwrap()["config"], &document["config"]);
+        }
+        prop_assert!(JSON_SCHEMA_VALIDATOR.is_valid(&document));
+        let mut invalid = document;
+        invalid["config"]["local"]["invalid"] = serde_json::json!({"$kind":format!("invalid-{invalid_kind}")});
+        prop_assert!(serde_json::from_value::<Application>(invalid.clone()).is_err());
+        prop_assert!(serde_yaml::from_str::<Application>(&serde_yaml::to_string(&invalid).unwrap()).is_err());
+        prop_assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&invalid));
+    }
 
     #[test]
     fn proptest_schema_accepts_serialized_application_documents(app in arb_application_document()) {

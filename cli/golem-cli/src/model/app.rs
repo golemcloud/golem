@@ -3042,8 +3042,9 @@ pub struct ComponentLayerProperties {
         OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
     #[serde(skip)]
     node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
-    pub config: JsonProperty<ComponentLayer>,
     #[serde(skip)]
+    pub config: JsonProperty<ComponentLayer>,
+    #[serde(rename = "configInputs")]
     pub config_layers: Vec<ConfigLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -6695,6 +6696,20 @@ mod test {
                         ConfigSourcePlan::Static(SchemaValue::U32(4000))
                     );
                     assert_eq!(plan[2].origins[&vec!["port".into()]].layer, "code");
+                    let mut next_schema = schema.clone();
+                    next_schema.fields[2].default = Some(SchemaValue::U32(5000));
+                    let next = app
+                        .resolve_config(&next_schema, agent.config_layers(), &code)
+                        .unwrap();
+                    assert_eq!(next[0].source, plan[0].source);
+                    assert_eq!(
+                        next[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(5000))
+                    );
+                    assert_eq!(
+                        plan[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(4000))
+                    );
                 }
             });
             let tool = app
