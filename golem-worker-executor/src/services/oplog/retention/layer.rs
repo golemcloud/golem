@@ -61,16 +61,24 @@ impl RetentionOplog {
             retention,
         }
     }
+}
 
-    fn checked(&self, oplog_index: OplogIndex, n: u64) -> Result<(), UnreadableOplog> {
-        self.retention
-            .check_read(oplog_index, n)
-            .map_err(|error| UnreadableOplog::new(&self.agent_id, error))
-    }
-
-    fn classified(&self, unreadable: UnreadableOplog) -> UnreadableOplog {
-        UnreadableOplog::new(&self.agent_id, self.retention.classify(unreadable.error))
-    }
+/// Reads `n` entries from `idx` with `read`, by the rules of `retention`: the check of the read
+/// comes first, and a failed read goes through [`OplogRetention::classify`]. The open handle and
+/// the service both read through it.
+async fn read_retained<Fut>(
+    retention: OplogRetention,
+    agent_id: &AgentId,
+    idx: OplogIndex,
+    n: u64,
+    read: Fut,
+) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>
+where
+    Fut: Future<Output = Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>>,
+{
+    retention.check_agent_read(agent_id, idx, n)?;
+    read.await
+        .map_err(|unreadable| retention.classify_unreadable(unreadable))
 }
 
 impl Debug for RetentionOplog {
@@ -156,11 +164,14 @@ impl Oplog for RetentionOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        self.checked(oplog_index, n)?;
-        self.inner
-            .read_exact(oplog_index, n)
-            .await
-            .map_err(|error| self.classified(error))
+        read_retained(
+            self.retention,
+            &self.agent_id,
+            oplog_index,
+            n,
+            self.inner.read_exact(oplog_index, n),
+        )
+        .await
     }
 
     async fn read_source(
@@ -168,11 +179,14 @@ impl Oplog for RetentionOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        self.checked(oplog_index, n)?;
-        self.inner
-            .read_source(oplog_index, n)
-            .await
-            .map_err(|error| self.classified(error))
+        read_retained(
+            self.retention,
+            &self.agent_id,
+            oplog_index,
+            n,
+            self.inner.read_source(oplog_index, n),
+        )
+        .await
     }
 
     async fn try_read_source(
@@ -180,7 +194,8 @@ impl Oplog for RetentionOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
-        self.checked(oplog_index, n)
+        self.retention
+            .check_agent_read(&self.agent_id, oplog_index, n)
             .map_err(|error| error.to_string())?;
         // The inner read gives the part of the range that its layer holds, so it reports no gap.
         self.inner.try_read_source(oplog_index, n).await
@@ -257,9 +272,9 @@ impl Oplog for RetentionOplog {
 }
 
 /// The [`OplogService`] that reads the retention record of each agent oplog and keeps every read
-/// at or after the retained start. A new oplog keeps every entry. Deleting an oplog removes its
-/// record only after the delete of the oplog succeeds, so a delete that is refused or that fails
-/// keeps the start of the oplog that stays.
+/// at or after the retained start. A new oplog keeps every entry. The delete removes the record
+/// only after the fenced delete of the oplog succeeds. When the fence refuses the delete, or the
+/// delete fails, the record stays, and the oplog that stays keeps its start.
 pub struct RetentionOplogService {
     inner: Arc<dyn OplogService>,
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
@@ -276,35 +291,31 @@ impl RetentionOplogService {
         }
     }
 
-    /// Reads through `read` with the retention rules. A read of the `Create` entry alone needs
-    /// the retained start only when it fails, so the usual identity read costs no record lookup.
-    async fn read_retained<F, Fut>(
+    /// Reads `n` entries from `idx` with `read`. A read of the `Create` entry alone and an empty
+    /// read need the retained start only when they fail, so the usual identity read costs no
+    /// record lookup. Every other read loads the record once, before the read.
+    async fn read_with_retention<Fut>(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
-        read: F,
+        read: Fut,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>
     where
-        F: FnOnce() -> Fut,
         Fut: Future<Output = Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>>,
     {
         let agent_id = &owned_agent_id.agent_id;
         if OplogRetention::read_needs_start(idx, n) {
-            self.retention(owned_agent_id, agent_mode)
-                .await?
-                .check_read(idx, n)
-                .map_err(|error| UnreadableOplog::new(agent_id, error))?;
-        }
-        match read().await {
-            Ok(entries) => Ok(entries),
-            Err(unreadable) => {
-                let retention = self.retention(owned_agent_id, agent_mode).await?;
-                Err(UnreadableOplog::new(
-                    agent_id,
-                    retention.classify(unreadable.error),
-                ))
+            let retention = self.retention(owned_agent_id, agent_mode).await?;
+            read_retained(retention, agent_id, idx, n, read).await
+        } else {
+            match read.await {
+                Ok(entries) => Ok(entries),
+                Err(unreadable) => Err(self
+                    .retention(owned_agent_id, agent_mode)
+                    .await?
+                    .classify_unreadable(unreadable)),
             }
         }
     }
@@ -543,9 +554,13 @@ impl OplogService for RetentionOplogService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        self.read_retained(owned_agent_id, agent_mode, idx, n, || {
-            self.inner.read_exact(owned_agent_id, agent_mode, idx, n)
-        })
+        self.read_with_retention(
+            owned_agent_id,
+            agent_mode,
+            idx,
+            n,
+            self.inner.read_exact(owned_agent_id, agent_mode, idx, n),
+        )
         .await
     }
 
@@ -556,9 +571,13 @@ impl OplogService for RetentionOplogService {
         idx: OplogIndex,
         n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        self.read_retained(owned_agent_id, agent_mode, idx, n, || {
-            self.inner.read_source(owned_agent_id, agent_mode, idx, n)
-        })
+        self.read_with_retention(
+            owned_agent_id,
+            agent_mode,
+            idx,
+            n,
+            self.inner.read_source(owned_agent_id, agent_mode, idx, n),
+        )
         .await
     }
 
@@ -774,5 +793,53 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// The retained range read of the handle and of the service reads only the retained
+    /// entries, and an empty retained range reads nothing. The deletion scan, the revert append
+    /// and the consumer probe read through it.
+    #[test]
+    async fn a_retained_range_read_reads_only_the_retained_entries() {
+        use crate::services::oplog::{OplogOps, OplogServiceOps};
+
+        let oplog = RetainedOplog::new().await;
+        oplog.with_jumps(6).await;
+        oplog.advance(4).await;
+        let keys = |entries: BTreeMap<OplogIndex, OplogEntry>| {
+            entries
+                .into_keys()
+                .map(|index| index.as_u64())
+                .collect::<Vec<_>>()
+        };
+        let handle = oplog.open().await;
+        let service = |from: u64, last: u64| {
+            oplog.service.read_retained_range(
+                &oplog.owned_agent_id,
+                AgentMode::Durable,
+                idx(from),
+                idx(last),
+            )
+        };
+
+        assert_eq!(
+            keys(
+                handle
+                    .read_retained_range(OplogIndex::INITIAL, idx(6))
+                    .await
+                    .unwrap()
+            ),
+            vec![4, 5, 6]
+        );
+        assert_eq!(
+            keys(handle.read_retained_range(idx(5), idx(6)).await.unwrap()),
+            vec![5, 6]
+        );
+        assert_eq!(
+            keys(handle.read_retained_range(idx(1), idx(3)).await.unwrap()),
+            Vec::<u64>::new()
+        );
+        assert_eq!(keys(service(1, 6).await.unwrap()), vec![4, 5, 6]);
+        assert_eq!(keys(service(1, 4).await.unwrap()), vec![4]);
+        assert_eq!(keys(service(1, 3).await.unwrap()), Vec::<u64>::new());
     }
 }

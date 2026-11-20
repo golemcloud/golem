@@ -34,8 +34,7 @@ use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 use bytes::Bytes;
 use desert_rust::BinaryCodec;
-use futures::FutureExt;
-use futures::future::BoxFuture;
+use futures::{StreamExt, TryStreamExt};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::OplogIndex;
@@ -61,6 +60,11 @@ impl OplogRange {
         start: OplogIndex::INITIAL,
         count: 1,
     };
+
+    /// The index after the last entry of the range.
+    pub fn end(self) -> OplogIndex {
+        OplogIndex::from_u64(self.start.as_u64() + self.count)
+    }
 }
 
 impl Default for OplogRetention {
@@ -103,6 +107,40 @@ impl OplogRetention {
         })
     }
 
+    /// The next read of a walk that reads at most `max` entries at a time: the retained entries
+    /// from `from` to `last`, both included, cut to `max` entries. A `from` below the start moves
+    /// to the start. A `max` of 0 reads one entry, so that the walk always moves forward. `None`
+    /// when the range holds no retained entry, which ends the walk.
+    pub fn chunk(self, from: OplogIndex, last: OplogIndex, max: u64) -> Option<OplogRange> {
+        self.range(from, last).map(|range| OplogRange {
+            start: range.start,
+            count: range.count.min(max.max(1)),
+        })
+    }
+
+    /// The read of one page: at most `max` entries from `start` to `last`, both included. Unlike
+    /// [`Self::chunk`], the page does not move its start: a start below the retained start is
+    /// expired, except the read of the `Create` entry alone, as in [`Self::check_read`]. `None`
+    /// when the page is empty.
+    pub fn page(
+        self,
+        start: OplogIndex,
+        last: OplogIndex,
+        max: u64,
+    ) -> Result<Option<OplogRange>, OplogReadError> {
+        self.check_read(start, max)?;
+        Ok((max > 0)
+            .then(|| Self::FULL.chunk(start, last, max))
+            .flatten())
+    }
+
+    /// Whether the retained oplog holds the entry at `index`, that is, whether the index is at or
+    /// after the start. The `Create` entry below the start is readable alone, but the retained
+    /// oplog does not hold it.
+    pub fn retains(self, index: OplogIndex) -> bool {
+        index >= self.retained_start
+    }
+
     /// The number of retained entries of an oplog whose last index is `last`. The `Create` entry
     /// below the start does not count.
     pub fn retained_length(self, last: OplogIndex) -> u64 {
@@ -120,7 +158,7 @@ impl OplogRetention {
     /// Whether the check of a read of `count` entries from `start` needs the retained start. An
     /// empty read and a read of the `Create` entry alone are always allowed, because the `Create`
     /// entry is the identity of the agent.
-    pub fn read_needs_start(start: OplogIndex, count: u64) -> bool {
+    pub(super) fn read_needs_start(start: OplogIndex, count: u64) -> bool {
         count != 0 && OplogRange { start, count } != OplogRange::CREATE
     }
 
@@ -139,11 +177,32 @@ impl OplogRetention {
     /// or a copy of the whole history. A start below the retained start fails with
     /// [`OplogReadError::Expired`], also at index 1.
     pub fn check_from(self, start: OplogIndex) -> Result<(), OplogReadError> {
-        if start < self.retained_start {
-            Err(self.expired())
-        } else {
+        if self.retains(start) {
             Ok(())
+        } else {
+            Err(self.expired())
         }
+    }
+
+    /// [`Self::check_read`] for the oplog of `agent_id`. The error is an [`UnreadableOplog`].
+    pub fn check_agent_read(
+        self,
+        agent_id: &AgentId,
+        start: OplogIndex,
+        count: u64,
+    ) -> Result<(), UnreadableOplog> {
+        self.check_read(start, count)
+            .map_err(|error| UnreadableOplog::new(agent_id, error))
+    }
+
+    /// [`Self::check_from`] for the oplog of `agent_id`. The error is an [`UnreadableOplog`].
+    pub fn check_agent_from(
+        self,
+        agent_id: &AgentId,
+        start: OplogIndex,
+    ) -> Result<(), UnreadableOplog> {
+        self.check_from(start)
+            .map_err(|error| UnreadableOplog::new(agent_id, error))
     }
 
     /// The error of a read, with a gap that ends below the retained start given as
@@ -153,6 +212,14 @@ impl OplogRetention {
         match error {
             OplogReadError::Gap { end, .. } if end < self.retained_start => self.expired(),
             other => other,
+        }
+    }
+
+    /// [`Self::classify`] for a failed read of the oplog of `agent_id`.
+    pub fn classify_unreadable(self, unreadable: UnreadableOplog) -> UnreadableOplog {
+        UnreadableOplog {
+            error: self.classify(unreadable.error),
+            agent_id: unreadable.agent_id,
         }
     }
 
@@ -231,43 +298,56 @@ pub async fn read_oplog_retention(
 
 /// Moves the retained start of the oplog of the agent in `agent_mode` forward to `to`, and returns
 /// the stored retention. A start that is already at or after `to` stays. The write compares the
-/// record it read, so a writer with an old start cannot move the start back.
-pub fn advance_oplog_retention<'a>(
-    storage: &'a (dyn KeyValueStorage + Send + Sync),
-    agent_id: &'a AgentId,
+/// record it read, so a writer with an old start cannot move the start back. When another writer
+/// changes the record between the read and the write, the attempt starts again from a new read.
+pub async fn advance_oplog_retention(
+    storage: &(dyn KeyValueStorage + Send + Sync),
+    agent_id: &AgentId,
     agent_mode: AgentMode,
     to: OplogIndex,
-) -> BoxFuture<'a, Result<OplogRetention, UnreadableOplog>> {
-    async move {
-        let (current, stored) = load(storage, agent_id, agent_mode).await?;
-        let advanced = current.advanced_to(to);
-        if advanced == current {
-            return Ok(current);
-        }
-        let encoded = serialize(&advanced).map_err(|error| {
-            UnreadableOplog::new(agent_id, OplogReadError::corruption(SOURCE, error))
-        })?;
-        let field = field(agent_mode);
-        let written = storage
-            .compare_and_set_many(
-                SVC_NAME,
-                "advance_retention",
-                ENTITY_NAME,
-                namespace(agent_id),
-                field,
-                stored.as_deref(),
-                &[],
-                &[(field, &encoded)],
-            )
-            .await
-            .map_err(|error| unreadable(agent_id, error))?;
-        if written {
-            Ok(advanced)
-        } else {
-            advance_oplog_retention(storage, agent_id, agent_mode, to).await
-        }
+) -> Result<OplogRetention, UnreadableOplog> {
+    let attempts = futures::stream::repeat(())
+        .then(|()| try_advance_oplog_retention(storage, agent_id, agent_mode, to))
+        .try_filter_map(|written| futures::future::ready(Ok(written)));
+    std::pin::pin!(attempts).try_next().await?.ok_or_else(|| {
+        UnreadableOplog::new(
+            agent_id,
+            OplogReadError::source_failure(SOURCE, "the advance attempts ended"),
+        )
+    })
+}
+
+/// One attempt of [`advance_oplog_retention`]. `None` when another writer changed the record
+/// after the read.
+async fn try_advance_oplog_retention(
+    storage: &(dyn KeyValueStorage + Send + Sync),
+    agent_id: &AgentId,
+    agent_mode: AgentMode,
+    to: OplogIndex,
+) -> Result<Option<OplogRetention>, UnreadableOplog> {
+    let (current, stored) = load(storage, agent_id, agent_mode).await?;
+    let advanced = current.advanced_to(to);
+    if advanced == current {
+        return Ok(Some(current));
     }
-    .boxed()
+    let encoded = serialize(&advanced).map_err(|error| {
+        UnreadableOplog::new(agent_id, OplogReadError::corruption(SOURCE, error))
+    })?;
+    let field = field(agent_mode);
+    let written = storage
+        .compare_and_set_many(
+            SVC_NAME,
+            "advance_retention",
+            ENTITY_NAME,
+            namespace(agent_id),
+            field,
+            stored.as_deref(),
+            &[],
+            &[(field, &encoded)],
+        )
+        .await
+        .map_err(|error| unreadable(agent_id, error))?;
+    Ok(written.then_some(advanced))
 }
 
 /// Removes the retention record of the oplog of the agent in `agent_mode`.
@@ -289,16 +369,14 @@ pub(crate) async fn remove_oplog_retention(
 
 #[cfg(test)]
 mod tests {
+    use super::test_oplog::{at, idx};
     use super::*;
+    use crate::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use std::sync::Arc;
     use test_r::test;
-
-    fn idx(value: u64) -> OplogIndex {
-        OplogIndex::from_u64(value)
-    }
-
-    fn at(start: u64) -> OplogRetention {
-        OplogRetention::FULL.advanced_to(idx(start))
-    }
 
     fn range(start: u64, count: u64) -> Option<OplogRange> {
         Some(OplogRange {
@@ -338,6 +416,19 @@ mod tests {
     }
 
     #[test]
+    fn only_an_index_at_or_after_the_start_is_retained() {
+        assert!(!at(4).retains(idx(3)));
+        assert!(at(4).retains(idx(4)));
+        assert!(at(4).retains(idx(5)));
+        assert!(
+            !at(4).retains(OplogIndex::INITIAL),
+            "the `Create` entry below the start"
+        );
+        assert!(at(1).retains(OplogIndex::INITIAL));
+        assert!(!at(1).retains(OplogIndex::NONE));
+    }
+
+    #[test]
     fn the_range_holds_the_retained_entries_and_is_none_when_empty() {
         assert_eq!(at(4).range(idx(1), idx(10)), range(4, 7));
         assert_eq!(at(4).range(idx(3), idx(10)), range(4, 7));
@@ -349,6 +440,74 @@ mod tests {
         assert_eq!(at(4).range(idx(1), idx(3)), None);
         assert_eq!(at(1).range(OplogIndex::NONE, idx(2)), range(1, 2));
         assert_eq!(at(1).range(idx(1), OplogIndex::NONE), None);
+    }
+
+    #[test]
+    fn a_range_ends_before_the_index_after_its_last_entry() {
+        assert_eq!(range(4, 7).unwrap().end(), idx(11));
+        assert_eq!(range(4, 1).unwrap().end(), idx(5));
+        assert_eq!(OplogRange::CREATE.end(), idx(2));
+    }
+
+    #[test]
+    fn a_chunk_is_the_retained_range_cut_to_the_maximum() {
+        assert_eq!(at(4).chunk(idx(1), idx(10), 3), range(4, 3));
+        assert_eq!(at(4).chunk(idx(3), idx(10), 3), range(4, 3));
+        assert_eq!(at(4).chunk(idx(4), idx(10), 3), range(4, 3));
+        assert_eq!(at(4).chunk(idx(5), idx(10), 3), range(5, 3));
+        assert_eq!(at(4).chunk(idx(8), idx(10), 3), range(8, 3));
+        assert_eq!(at(4).chunk(idx(9), idx(10), 3), range(9, 2));
+        assert_eq!(at(4).chunk(idx(10), idx(10), 3), range(10, 1));
+        assert_eq!(at(4).chunk(idx(11), idx(10), 3), None);
+        assert_eq!(at(4).chunk(idx(1), idx(3), 3), None);
+        assert_eq!(at(4).chunk(idx(4), idx(10), 7), range(4, 7));
+        assert_eq!(at(4).chunk(idx(4), idx(10), 8), range(4, 7));
+        assert_eq!(at(4).chunk(idx(4), idx(10), 0), range(4, 1));
+        assert_eq!(at(1).chunk(OplogIndex::NONE, idx(2), 1024), range(1, 2));
+    }
+
+    #[test]
+    fn a_walk_of_chunks_reads_every_retained_entry_once() {
+        let walk = |retention: OplogRetention, last: u64, max: u64| {
+            std::iter::successors(retention.chunk(OplogIndex::NONE, idx(last), max), |chunk| {
+                retention.chunk(chunk.end(), idx(last), max)
+            })
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            walk(at(4), 10, 3),
+            vec![range(4, 3), range(7, 3), range(10, 1)]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            walk(at(4), 9, 3),
+            vec![range(4, 3), range(7, 3)]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(walk(at(4), 3, 3), Vec::new());
+    }
+
+    #[test]
+    fn a_page_keeps_its_start_and_is_expired_below_the_retained_start() {
+        assert_eq!(at(4).page(idx(4), idx(10), 3), Ok(range(4, 3)));
+        assert_eq!(at(4).page(idx(5), idx(10), 3), Ok(range(5, 3)));
+        assert_eq!(at(4).page(idx(9), idx(10), 3), Ok(range(9, 2)));
+        assert_eq!(at(4).page(idx(10), idx(10), 3), Ok(range(10, 1)));
+        assert_eq!(at(4).page(idx(11), idx(10), 3), Ok(None));
+        assert_eq!(at(4).page(idx(4), idx(10), 0), Ok(None));
+        assert_eq!(at(4).page(idx(3), idx(10), 3), expired(4).map(|()| None));
+        assert_eq!(at(4).page(idx(2), idx(10), 1), expired(4).map(|()| None));
+        assert_eq!(
+            at(4).page(idx(1), idx(10), 1),
+            Ok(range(1, 1)),
+            "the `Create` entry alone"
+        );
+        assert_eq!(at(4).page(idx(1), idx(10), 2), expired(4).map(|()| None));
+        assert_eq!(at(1).page(idx(1), idx(10), 20), Ok(range(1, 10)));
     }
 
     #[test]
@@ -368,24 +527,19 @@ mod tests {
     }
 
     #[test]
-    fn only_an_empty_read_and_the_create_entry_alone_do_not_need_the_start() {
-        assert!(!OplogRetention::read_needs_start(idx(1), 1));
-        assert!(!OplogRetention::read_needs_start(idx(2), 0));
-        assert!(OplogRetention::read_needs_start(idx(1), 2));
-        assert!(OplogRetention::read_needs_start(idx(2), 1));
-        assert!(OplogRetention::read_needs_start(OplogIndex::NONE, 1));
-    }
-
-    #[test]
-    fn a_read_below_the_start_is_expired_except_the_create_entry_alone() {
+    fn a_read_below_the_start_is_expired_except_an_empty_read_and_the_create_entry_alone() {
         assert_eq!(at(4).check_read(idx(4), 3), Ok(()));
         assert_eq!(at(4).check_read(idx(5), 3), Ok(()));
         assert_eq!(at(4).check_read(idx(3), 3), expired(4));
+        assert_eq!(at(4).check_read(idx(3), 1), expired(4));
         assert_eq!(at(4).check_read(idx(1), 1), Ok(()));
         assert_eq!(at(4).check_read(idx(1), 2), expired(4));
         assert_eq!(at(4).check_read(idx(2), 1), expired(4));
         assert_eq!(at(4).check_read(idx(2), 0), Ok(()));
+        assert_eq!(at(4).check_read(OplogIndex::NONE, 0), Ok(()));
+        assert_eq!(at(4).check_read(OplogIndex::NONE, 1), expired(4));
         assert_eq!(at(1).check_read(idx(1), 10), Ok(()));
+        assert_eq!(at(1).check_read(OplogIndex::NONE, 1), expired(1));
     }
 
     #[test]
@@ -395,6 +549,37 @@ mod tests {
         assert_eq!(at(4).check_from(idx(5)), Ok(()));
         assert_eq!(at(4).check_from(idx(1)), expired(4));
         assert_eq!(at(1).check_from(idx(1)), Ok(()));
+    }
+
+    #[test]
+    fn the_agent_checks_name_the_agent() {
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "checked".to_string(),
+        };
+        let unreadable = UnreadableOplog::new(&agent_id, expired(4).unwrap_err());
+        assert_eq!(
+            at(4).check_agent_read(&agent_id, idx(3), 1),
+            Err(unreadable.clone())
+        );
+        assert_eq!(at(4).check_agent_read(&agent_id, idx(4), 1), Ok(()));
+        assert_eq!(
+            at(4).check_agent_from(&agent_id, idx(3)),
+            Err(unreadable.clone())
+        );
+        assert_eq!(at(4).check_agent_from(&agent_id, idx(4)), Ok(()));
+        let gap = OplogReadError::Gap {
+            start: idx(1),
+            end: idx(3),
+        };
+        assert_eq!(
+            at(4).classify_unreadable(UnreadableOplog::new(&agent_id, gap.clone())),
+            unreadable
+        );
+        assert_eq!(
+            at(3).classify_unreadable(UnreadableOplog::new(&agent_id, gap.clone())),
+            UnreadableOplog::new(&agent_id, gap)
+        );
     }
 
     #[test]
@@ -414,5 +599,50 @@ mod tests {
         assert_eq!(at(4).classify(gap(6, 8)), gap(6, 8));
         let corrupt = OplogReadError::corruption(OplogReadSource::Primary, "bad");
         assert_eq!(at(4).classify(corrupt.clone()), corrupt);
+    }
+
+    /// A writer that read the record before another writer moved the start to 5 loses its
+    /// compare-and-set, reads the record again, and keeps the start at 5 without a second write.
+    #[test]
+    async fn a_stale_writer_does_not_move_the_start_back() {
+        let faults = KeyValueStorageFaults::default();
+        let inner: Arc<dyn KeyValueStorage + Send + Sync> =
+            Arc::new(InMemoryKeyValueStorage::new());
+        let storage = FaultInjectingKeyValueStorage::new(inner, faults.clone());
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "stale-writer".to_string(),
+        };
+        let gate = faults.pause_next("advance_retention");
+        let (stale, other) = futures::join!(
+            advance_oplog_retention(&storage, &agent_id, AgentMode::Durable, idx(3)),
+            async {
+                gate.entered().await;
+                let other =
+                    advance_oplog_retention(&storage, &agent_id, AgentMode::Durable, idx(5)).await;
+                gate.release();
+                other
+            }
+        );
+        assert_eq!(other.unwrap(), at(5));
+        assert_eq!(stale.unwrap(), at(5));
+        assert_eq!(
+            faults.calls("advance_retention"),
+            2,
+            "the stale writer lost its compare-and-set and wrote nothing after it read 5"
+        );
+        assert_eq!(
+            read_oplog_retention(&storage, &agent_id, AgentMode::Durable)
+                .await
+                .unwrap(),
+            at(5)
+        );
+        assert_eq!(
+            read_oplog_retention(&storage, &agent_id, AgentMode::Ephemeral)
+                .await
+                .unwrap(),
+            OplogRetention::FULL,
+            "each agent mode has its own record"
+        );
     }
 }

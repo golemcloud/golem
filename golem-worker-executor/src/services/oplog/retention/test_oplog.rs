@@ -63,6 +63,11 @@ pub(crate) fn jump(index: u64) -> OplogEntry {
     }
 }
 
+/// The retention whose start is at `start`.
+pub(crate) fn at(start: u64) -> OplogRetention {
+    OplogRetention::FULL.advanced_to(idx(start))
+}
+
 pub(crate) fn expired(start: u64) -> OplogReadError {
     OplogReadError::Expired {
         retained_start: idx(start),
