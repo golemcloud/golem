@@ -1011,10 +1011,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error))),
             OpenNode::Directory(_) => Err(ErrorCode::BadDescriptor.into()),
         })?;
-        let bytes = observe_filesystem_operation(self.create_interrupt_signal(), call)
+        let read = observe_filesystem_operation(self.create_interrupt_signal(), call)
             .await
-            .map_err(FsError::trap)?
-            .map_err(p2_agent_error)?;
+            .map_err(FsError::trap)?;
+        self.taint_never_live_generation(|| "a local filesystem read".to_string());
+        let bytes = read.map_err(p2_agent_error)?;
         let eof = bytes.is_empty();
         Ok((bytes.to_vec(), eof))
     }
@@ -1464,7 +1465,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             flags,
             self.create_interrupt_signal(),
         )
-        .await?;
+        .await;
+        self.taint_never_live_generation(|| "a local filesystem open".to_string());
+        let opened = opened?;
         Ok(push_agent_descriptor(
             self,
             AgentDescriptor::new(opened.node, descriptor_path),

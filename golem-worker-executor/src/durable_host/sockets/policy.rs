@@ -40,7 +40,8 @@ pub struct SocketPolicy {
     own_ports: Arc<[u16]>,
     /// Set for a never-live agent: the floor under the typed socket wrappers refuses every
     /// connect and datagram, and taints the generation, because the guest sees the refusal as
-    /// a socket error that the oplog does not record.
+    /// a socket error that the oplog does not record. A native bind, whose result the oplog does
+    /// not record either, also taints it.
     never_live: Option<crate::durable_host::never_live::GenerationTaint>,
 }
 
@@ -124,6 +125,11 @@ impl SocketPolicy {
         {
             taint.set(|| format!("the never-live socket floor refused {usage:?} to {address}"));
             return false;
+        }
+        if let Some(taint) = &self.never_live
+            && matches!(usage, SocketAddrUse::TcpBind | SocketAddrUse::UdpBind)
+        {
+            taint.set(|| format!("a native socket {usage:?} to {address}"));
         }
         match usage {
             SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => {

@@ -662,6 +662,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.filesystem_generation_handle.clone()
     }
 
+    /// Taints the generation of a never-live owner with `source`, because its guest observed a
+    /// native result that the oplog does not record, such as local filesystem data or a socket
+    /// bind result. An unmarked owner is not tainted.
+    pub(crate) fn taint_never_live_generation(&self, source: impl FnOnce() -> String) {
+        self.state.taint_never_live_generation(source);
+    }
+
+    /// The generation taint of a never-live owner, for a producer that delivers an unrecorded
+    /// result later; `None` for an unmarked owner.
+    pub(crate) fn never_live_generation_taint(&self) -> Option<never_live::GenerationTaint> {
+        self.state.never_live_generation_taint()
+    }
+
     pub(crate) fn activate_resident_generation_handle(
         &mut self,
         generation_handle: FilesystemGenerationHandle,
@@ -1663,10 +1676,11 @@ impl PrivateDurableWorkerState {
 
     /// Refuses `host_function` for a never-live owner when the call executes now instead of
     /// returning its recorded result, unless the host-call decision table
-    /// ([`never_live::allows_execution`]) allows it. A call executes now when the Store is live
+    /// ([`never_live::execution`]) allows it. A call executes now when the Store is live
     /// for it, which a bootstrap cursor with a live tail also makes it, or when durability is
     /// suppressed for a snapshot hook. A call that can only return its recorded result is
-    /// admitted, so recorded replay does not change. Unmarked owners are admitted.
+    /// admitted, so recorded replay does not change. Unmarked owners are admitted. An allowed
+    /// call whose result the oplog does not record taints the generation.
     ///
     /// The admission functions run this check before the read-only strictness check, so that a
     /// load hook's refused remote read is not replayable instead of a read-only violation.
@@ -1674,15 +1688,37 @@ impl PrivateDurableWorkerState {
         &self,
         host_function: &HostFunctionName,
     ) -> Result<(), WorkerExecutorError> {
-        if self.never_live
-            && (self.durable_call_is_live() || self.durability_is_suppressed())
-            && !never_live::allows_execution(host_function)
-        {
-            return Err(WorkerExecutorError::NeverLiveEffectRefused {
-                boundary: host_function.to_string(),
-            });
+        if self.never_live && (self.durable_call_is_live() || self.durability_is_suppressed()) {
+            match never_live::execution(host_function) {
+                never_live::Execution::Refused => {
+                    return Err(WorkerExecutorError::NeverLiveEffectRefused {
+                        boundary: host_function.to_string(),
+                    });
+                }
+                never_live::Execution::AllowedUnrecorded => {
+                    self.taint_never_live_generation(|| {
+                        format!("{host_function} executed without a recorded result")
+                    })
+                }
+                never_live::Execution::Allowed => {}
+            }
         }
         Ok(())
+    }
+
+    /// Taints the generation of a never-live owner with `source`, because its guest observed a
+    /// result that the oplog does not record. An unmarked owner is not tainted.
+    pub(crate) fn taint_never_live_generation(&self, source: impl FnOnce() -> String) {
+        if self.never_live {
+            self.replay_state.generation_taint().set(source);
+        }
+    }
+
+    /// The generation taint of a never-live owner, for a producer that delivers an unrecorded
+    /// result later; `None` for an unmarked owner.
+    pub(crate) fn never_live_generation_taint(&self) -> Option<never_live::GenerationTaint> {
+        self.never_live
+            .then(|| self.replay_state.generation_taint())
     }
 
     /// Whether the owner is a never-live sandbox fork.

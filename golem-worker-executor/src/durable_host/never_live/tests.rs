@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::allows_execution;
+use super::{Execution, execution};
+
+fn allows_execution(name: &HostFunctionName) -> bool {
+    execution(name) != Execution::Refused
+}
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use std::collections::BTreeSet;
 use test_r::test;
@@ -74,6 +78,42 @@ fn only_the_local_host_functions_are_allowed_and_custom_is_refused() {
     assert!(!allows_execution(&HostFunctionName::Custom(
         "my::custom::effect".to_string()
     )));
+}
+
+/// The allowed functions whose result the oplog does not record when they execute now: clocks,
+/// random, the environment and the filesystem. They taint the generation. Polling, spans, the
+/// pinned configuration and the agent's own metadata do not.
+#[test]
+fn clock_random_environment_and_filesystem_reads_taint_the_generation() {
+    let tainting = HostFunctionName::NAMED
+        .iter()
+        .filter(|name| execution(name) == Execution::AllowedUnrecorded)
+        .map(|name| name.to_string())
+        .collect::<BTreeSet<_>>();
+    let expected = HostFunctionName::NAMED
+        .iter()
+        .filter(|name| allows_execution(name))
+        .filter(|name| {
+            let interface = interface_of(name);
+            ["clock", "random", "environment", "filesystem"]
+                .iter()
+                .any(|family| interface.contains(family))
+        })
+        .map(|name| name.to_string())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(tainting, expected);
+    for untainting in [
+        "io::poll::pollable::ready",
+        "golem::api::get_self_metadata",
+        "wasi:config/store::get",
+    ] {
+        assert!(
+            HostFunctionName::NAMED.iter().any(|name| {
+                name.to_string() == untainting && execution(name) == Execution::Allowed
+            }),
+            "{untainting}"
+        );
+    }
 }
 
 #[test]

@@ -28,7 +28,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> Result<Resource<UdpSocket>, SocketError> {
         self.observe_function_call("sockets::udp_create_socket", "create_udp_socket");
         let socket =
-            Host::create_udp_socket(&mut self.as_wasi_view().sockets(), address_family).await?;
+            Host::create_udp_socket(&mut self.as_wasi_view().sockets(), address_family).await;
+        self.taint_never_live_generation(|| "a native UDP socket create".to_string());
+        let socket = socket?;
         self.state.socket_entries.insert(
             socket.rep(),
             SocketEntry::new(super::udp::p3_family(address_family)),

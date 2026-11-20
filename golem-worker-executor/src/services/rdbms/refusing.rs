@@ -14,6 +14,10 @@
 
 //! The RDBMS service of a never-live owner. It refuses every operation that opens a
 //! connection, begins, queries, resolves a transaction status or cleans up.
+//!
+//! The refusal is returned as `RdbmsError::Other`, so its text keeps the refusal but the typed
+//! `NeverLiveEffectRefused` is lost. This layer is the floor under the named gates: a call that
+//! reaches it missed its gate, and its failure takes the class of its own error chain.
 
 use super::*;
 

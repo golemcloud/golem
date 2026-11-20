@@ -6967,6 +6967,131 @@ async fn rust_load_hook_replays_on_a_never_live_fork(
     .await
 }
 
+/// The Rust load hook reads the environment without a recorded result, so it taints the
+/// generation of a never-live fork. A later divergence of the suffix then proves no
+/// incompatibility: the marked update fails as `Operational` and keeps the divergence as a
+/// diagnostic. The unmarked twin of the same cut runs the same load hook, is never tainted, and
+/// fails as `Divergence`.
+#[test]
+#[timeout("6m")]
+async fn a_divergence_after_an_unrecorded_load_hook_read_of_a_never_live_fork_is_operational(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::UpdateFailureClass;
+
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_update_v1)
+            .store()
+            .await?;
+        let agent = agent_id!("SnapshotUpdateTest");
+        let source_id = executor.start_agent(&component.id, agent.clone()).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "stable_value", data_value!())
+            .await?;
+        newest_snapshot_recorded(&executor, &source_id).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "suffix_host_value", data_value!())
+            .await?;
+        // The cut excludes the snapshot record after the suffix, so the update loads the record
+        // before it and replays the suffix.
+        let cut = executor
+            .get_oplog(&source_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .rev()
+            .find(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .map(|entry| entry.oplog_index)
+            .ok_or_else(|| anyhow!("the suffix did not finish"))?;
+        let target = executor
+            .update_component(&component.id, "it_agent_update_v2_release")
+            .await?;
+
+        let fork = || {
+            crate::never_live::ForkTarget::new(
+                &component,
+                golem_common::phantom_agent_id!("SnapshotUpdateTest", uuid::Uuid::new_v4()),
+            )
+        };
+        let (marked, twin) = (fork()?, fork()?);
+        executor
+            .fork_worker_never_live(&source_id, &marked.agent.to_string(), cut)
+            .await?;
+        executor
+            .auto_update_worker(&marked.worker_id, target.revision, false)
+            .await?;
+        let outcomes = crate::never_live::settled_update_outcomes(
+            &executor,
+            context.default_environment_id,
+            &marked.worker_id,
+        )
+        .await?;
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        let PublicOplogEntry::FailedUpdate(marked_failure) = &outcomes[0].entry else {
+            return Err(anyhow!("the marked update did not fail: {outcomes:?}"));
+        };
+        assert!(
+            marked_failure.snapshot_assisted_details.is_some(),
+            "{marked_failure:?}"
+        );
+        assert_eq!(
+            marked_failure.failure_class,
+            UpdateFailureClass::Operational,
+            "{marked_failure:?}"
+        );
+        assert!(marked_failure.divergence.is_some(), "{marked_failure:?}");
+
+        executor
+            .fork_worker(&source_id, &twin.agent.to_string(), cut)
+            .await?;
+        executor
+            .auto_update_worker(&twin.worker_id, target.revision, false)
+            .await?;
+        let twin_failure = eventually(Duration::from_secs(60), || async {
+            Ok(executor
+                .get_oplog(&twin.worker_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .find_map(|entry| match entry.entry {
+                    PublicOplogEntry::FailedUpdate(failure) => Some(failure),
+                    _ => None,
+                }))
+        })
+        .await?;
+        assert!(
+            twin_failure.snapshot_assisted_details.is_some(),
+            "{twin_failure:?}"
+        );
+        assert_eq!(
+            twin_failure.failure_class,
+            UpdateFailureClass::Divergence,
+            "{twin_failure:?}"
+        );
+        assert_eq!(
+            marked_failure
+                .divergence
+                .as_ref()
+                .map(|divergence| divergence.oplog_index),
+            twin_failure
+                .divergence
+                .as_ref()
+                .map(|divergence| divergence.oplog_index)
+        );
+        Ok(())
+    })
+    .await
+}
+
 #[test]
 #[timeout("6m")]
 async fn moonbit_load_hook_replays_on_a_never_live_fork(

@@ -55,16 +55,26 @@ pub(crate) fn refusal(boundary: &str) -> WorkerExecutorError {
     }
 }
 
-/// Whether a never-live agent may execute `host_function` now.
-pub(crate) fn allows_execution(host_function: &HostFunctionName) -> bool {
+/// What a never-live agent may do with a host call that executes now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Execution {
+    /// The call is refused: it would reach a peer, or its effect is not local.
+    Refused,
+    /// The call is local, and its result comes from pinned or deterministic state.
+    Allowed,
+    /// The call is local, but the guest observes a result that the oplog does not record: a
+    /// clock, random or environment read, or local filesystem data. It taints the generation.
+    AllowedUnrecorded,
+}
+
+/// The decision of the host-call decision table for `host_function` when it executes now.
+pub(crate) fn execution(host_function: &HostFunctionName) -> Execution {
     match host_function {
         HostFunctionName::RandomInsecureSeedInsecureSeed
         | HostFunctionName::RandomInsecureGetInsecureRandomBytes
         | HostFunctionName::RandomInsecureGetInsecureRandomU64
         | HostFunctionName::RandomGetRandomBytes
         | HostFunctionName::RandomGetRandomU64
-        | HostFunctionName::IoPollReady
-        | HostFunctionName::IoPollPoll
         | HostFunctionName::WallClockNow
         | HostFunctionName::WallClockResolution
         | HostFunctionName::MonotonicClockNow
@@ -73,10 +83,6 @@ pub(crate) fn allows_execution(host_function: &HostFunctionName) -> bool {
         | HostFunctionName::P3MonotonicClockWaitFor
         | HostFunctionName::FilesystemTypesDescriptorStat
         | HostFunctionName::FilesystemTypesDescriptorStatAt
-        | HostFunctionName::GolemApiGetSelfMetadata
-        | HostFunctionName::GolemContextStartSpan
-        | HostFunctionName::GolemContextSpanFinish
-        | HostFunctionName::GolemContextSpanSetAttributes
         | HostFunctionName::P3SystemClockNow
         | HostFunctionName::P3SystemClockGetResolution
         | HostFunctionName::P3MonotonicClockNow
@@ -92,12 +98,18 @@ pub(crate) fn allows_execution(host_function: &HostFunctionName) -> bool {
         | HostFunctionName::FilesystemInputStreamRead
         | HostFunctionName::FilesystemInputStreamSkip
         | HostFunctionName::FilesystemOutputStreamCheckWrite
-        | HostFunctionName::WasiConfigGet
-        | HostFunctionName::WasiConfigGetAll
         | HostFunctionName::P3FilesystemTypesDescriptorWriteViaStream
         | HostFunctionName::P3FilesystemTypesDescriptorAppendViaStream
         | HostFunctionName::WasiCliEnvironmentGetEnvironment
-        | HostFunctionName::FilesystemPermissionCheck => true,
+        | HostFunctionName::FilesystemPermissionCheck => Execution::AllowedUnrecorded,
+        HostFunctionName::IoPollReady
+        | HostFunctionName::IoPollPoll
+        | HostFunctionName::GolemApiGetSelfMetadata
+        | HostFunctionName::GolemContextStartSpan
+        | HostFunctionName::GolemContextSpanFinish
+        | HostFunctionName::GolemContextSpanSetAttributes
+        | HostFunctionName::WasiConfigGet
+        | HostFunctionName::WasiConfigGetAll => Execution::Allowed,
         HostFunctionName::RdbmsMysqlDbConnectionExecute
         | HostFunctionName::RdbmsMysqlDbConnectionQuery
         | HostFunctionName::RdbmsMysqlDbConnectionQueryStream
@@ -263,7 +275,7 @@ pub(crate) fn allows_execution(host_function: &HostFunctionName) -> bool {
         | HostFunctionName::SocketsUdpSend
         | HostFunctionName::GolemPermissionsSelfWallet
         | HostFunctionName::GolemPermissionsSelfVersion
-        | HostFunctionName::Custom(_) => false,
+        | HostFunctionName::Custom(_) => Execution::Refused,
     }
 }
 

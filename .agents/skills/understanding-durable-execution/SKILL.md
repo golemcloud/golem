@@ -1473,14 +1473,17 @@ ingress refuses new work with `AgentNeverLive`. Its replay cursor never publishe
 ends in `ReplayTransitionPhase::Ended`, which releases the replay events, and every consumer of
 `FinishReplayToLive::Ended` stops with `InterruptKind::NeverLive`, which writes nothing. A durable
 call that executes instead of replaying is checked against the host-call decision table
-(`durable_host/never_live/mod.rs::allows_execution`) at the five bootstrap-refusal sites, before
+(`durable_host/never_live/mod.rs::execution`) at the five bootstrap-refusal sites, before
 read-only strictness; a refused call traps with `NeverLiveEffectRefused`, which every classifier
-keeps typed up to the outcome table, where it is `NotReplayable` / `UPDATE_NOT_REPLAYABLE`.
+keeps typed up to the outcome table, where it is `NotReplayable` / `UPDATE_NOT_REPLAYABLE`. An
+allowed call whose result the oplog does not record (clock, random, environment, filesystem) sets
+the generation taint, and so do the native filesystem reads and opens and the native socket
+creates and binds of a marked owner.
 Native peer boundaries (P2 TCP connect, a native DNS lookup, a P3 HTTP send, an incomplete
 transaction terminal) are refused before the native call; under them `SocketPolicy` refuses
 connect, send and receive and the `WasiCtx` disables name lookup. A socket error from that floor
-reaches the guest unrecorded, so it sets the generation taint, and the outcome table then classes
-a target failure as `Operational`. Stream maintenance, the oplog processors and the constructor
+reaches the guest unrecorded, so it sets the generation taint too. In a tainted generation the
+outcome table classes a divergence or a target failure as `Operational`. Stream maintenance, the oplog processors and the constructor
 re-enqueue do not run for a marked agent. Tests: `durable_host/never_live/mod.rs` and
 `tests/never_live.rs`, and the `*_load_hook*_replay*_on_a_never_live_fork` cases in
 `tests/filesystem_snapshots.rs`.

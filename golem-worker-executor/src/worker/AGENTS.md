@@ -89,7 +89,9 @@ outcome; audit new paired constructs against that validation.
 A never-live agent (`AgentStatusRecord::never_live`) starts only for a pending update and never
 publishes Live. Do not add a start, wake or recovery path that skips `may_start()` or
 `Worker::stop_marked_unless_update_pending`. Every new durable call gets a decision in
-`durable_host/never_live/mod.rs::allows_execution`; the match is exhaustive, so refusal is the
-default. Every new guest import or host-side effect that has no durable call is either a native
-peer boundary, which calls `refuse_native_peer_effect` before the native call, or has no peer
-effect. Mark which in the change.
+`durable_host/never_live/mod.rs::execution`; the match is exhaustive, so a new function does not
+compile without one. An allowed call whose result the oplog does not record is
+`AllowedUnrecorded`, which taints the generation. Every new guest import or host-side effect that
+has no durable call is either a native peer boundary, which calls `refuse_native_peer_effect`
+before the native call, or has no peer effect; if the guest sees a result that the oplog does not
+record, it calls `taint_never_live_generation`. Mark which in the change.

@@ -697,7 +697,11 @@ impl<Ctx: WorkerCtx> types::HostTcpSocket for DurableP3View<'_, Ctx> {
     ) -> SocketResult<Resource<TcpSocket>> {
         observe_function_call(&*self.0, "sockets::types::tcp-socket", "create");
         let socket =
-            types::HostTcpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)?;
+            types::HostTcpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family);
+        self.0
+            .durable_ctx_mut()
+            .taint_never_live_generation(|| "a native TCP socket create".to_string());
+        let socket = socket?;
         self.0
             .durable_ctx_mut()
             .state

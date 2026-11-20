@@ -28,7 +28,7 @@ use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    WorkerExecutorTestDependencies, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -44,6 +44,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_update_v3")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -437,5 +441,136 @@ async fn a_key_value_read_in_the_load_hook_of_a_never_live_fork_is_refused_as_no
         )
         .await?;
     assert_eq!(reads.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+/// The kinds of the entries after `after`, in oplog order.
+fn entry_kinds(oplog: &[PublicOplogEntryWithIndex], after: OplogIndex) -> Vec<String> {
+    oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > after)
+        .map(|entry| {
+            let rendered = format!("{:?}", entry.entry);
+            rendered
+                .split(['(', ' ', '{'])
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+/// Checks that `kinds` are the entries of one automatic update: its `PendingUpdate` entries (the
+/// admission and the chosen strategy), then exactly one outcome.
+fn assert_only_update_entries(kinds: &[String]) {
+    let (outcome, pending) = kinds.split_last().expect("no entries were appended");
+    assert!(
+        !pending.is_empty() && pending.iter().all(|kind| kind == "PendingUpdate"),
+        "{kinds:?}"
+    );
+    assert!(
+        outcome == "SuccessfulUpdate" || outcome == "FailedUpdate",
+        "{kinds:?}"
+    );
+}
+
+/// A never-live fork of an agent that was interrupted during an invocation keeps the interrupted
+/// invocation as it is: each automatic update appends only its `PendingUpdate` entries and its
+/// outcome, and no `Resumed`, also after a cold restart of the executor.
+#[test]
+#[timeout("4m")]
+async fn an_interrupted_never_live_fork_appends_only_its_update_outcomes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // The parked wait must not suspend, so that the interrupt finds a running invocation.
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.suspend.wait_suspend_grace = Duration::from_secs(300);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let source = agent_id!("Clock", "never-live-interrupted");
+    let source_id = executor.start_agent(&component.id, source.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &source, "healthcheck", data_value!())
+        .await?;
+    let sleeping = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let source = source.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(&component, &source, "sleep_p3", data_value!(60u64))
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    executor.interrupt(&source_id).await?;
+    assert!(sleeping.await?.is_err());
+    executor
+        .wait_for_status(
+            &source_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let cut = tip(&executor, &source_id).await?;
+
+    let fork = ForkTarget::new(
+        &component,
+        phantom_agent_id!("Clock", uuid::Uuid::new_v4(), "never-live-interrupted"),
+    )?;
+    executor
+        .fork_worker_never_live(&source_id, &fork.agent.to_string(), cut)
+        .await?;
+    let forked = tip(&executor, &fork.worker_id).await?;
+    executor
+        .auto_update_worker(&fork.worker_id, component.revision, false)
+        .await?;
+    let outcomes =
+        settled_update_outcomes(&executor, context.default_environment_id, &fork.worker_id).await?;
+    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+    let oplog = executor
+        .get_oplog(&fork.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let first_outcome = outcomes[0].oplog_index;
+    assert_only_update_entries(&entry_kinds(&oplog, forked));
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &fork.worker_id);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(!executor.worker_is_loaded(&owned).await);
+    executor
+        .auto_update_worker(&fork.worker_id, component.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            if update_outcomes(&executor, &fork.worker_id).await?.len() == 2
+                && !executor.worker_is_loaded(&owned).await
+            {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let oplog = executor
+        .get_oplog(&fork.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_only_update_entries(&entry_kinds(&oplog, first_outcome));
+    assert_eq!(
+        executor.get_worker_metadata(&fork.worker_id).await?.status,
+        AgentStatus::Sandboxed
+    );
     Ok(())
 }

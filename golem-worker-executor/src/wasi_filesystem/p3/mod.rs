@@ -162,6 +162,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             return Err(types::ErrorCode::BadDescriptor.into());
         }
 
+        let taint = accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).never_live_generation_taint()
+        });
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let producer = FilesystemReadProducer::new(
             generation_handle,
@@ -170,14 +173,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             result_tx,
             filesystem_interrupt::<Ctx, U>(accessor),
         )
-        .await?;
+        .await?
+        .tainting(taint.clone());
         let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
+        let result = async move {
+            let result = wait_filesystem_task_result(result_rx, result_interrupt).await;
+            if let Some(taint) = &taint {
+                taint.set(|| "a local filesystem read result".to_string());
+            }
+            result
+        };
         accessor.with(|mut store| {
             let mut stream = StreamReader::new(&mut store, producer)?;
-            let future = match FutureReader::new(
-                &mut store,
-                wait_filesystem_task_result(result_rx, result_interrupt),
-            ) {
+            let future = match FutureReader::new(&mut store, result) {
                 Ok(future) => future,
                 Err(error) => {
                     let _ = stream.close(&mut store);
@@ -896,7 +904,12 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             flags,
             filesystem_interrupt::<Ctx, U>(accessor),
         )
-        .await?;
+        .await;
+        accessor.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .taint_never_live_generation(|| "a local filesystem open".to_string())
+        });
+        let opened = opened?;
         push_agent_descriptor_from_accessor(
             accessor,
             AgentDescriptor::new(opened.node, descriptor_path),

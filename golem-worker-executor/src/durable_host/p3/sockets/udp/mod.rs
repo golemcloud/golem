@@ -465,7 +465,11 @@ impl<Ctx: WorkerCtx> types::HostUdpSocket for DurableP3View<'_, Ctx> {
         observe_function_call(&*self.0, "sockets::types::udp-socket", "create");
         let socket =
             types::HostUdpSocket::create(&mut WasiSocketsView::sockets(self.0), address_family)
-                .await?;
+                .await;
+        self.0
+            .durable_ctx_mut()
+            .taint_never_live_generation(|| "a native UDP socket create".to_string());
+        let socket = socket?;
         self.0
             .durable_ctx_mut()
             .state

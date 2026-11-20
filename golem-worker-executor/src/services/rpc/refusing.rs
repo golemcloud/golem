@@ -13,6 +13,11 @@
 // limitations under the License.
 
 //! The RPC of a never-live owner. It refuses every call, so no other agent is reached.
+//!
+//! A method whose error type is `RpcError` returns the refusal as `RpcError::Denied`, so its
+//! text keeps the refusal but the typed `NeverLiveEffectRefused` is lost. This layer is the floor
+//! under the named gates: a call that reaches it missed its gate, and its failure takes the class
+//! of its own error chain.
 
 use super::*;
 

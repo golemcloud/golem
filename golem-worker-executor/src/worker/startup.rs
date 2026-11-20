@@ -76,7 +76,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     return Err(error);
                 }
+                // A never-live agent writes only the outcome of its update, so its interrupted
+                // invocation does not resume.
                 if this.agent_mode() == AgentMode::Durable
+                    && !status.never_live
                     && status.status == AgentStatus::Interrupted
                     && status.current_idempotency_key.is_some()
                 {
