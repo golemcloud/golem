@@ -78,7 +78,8 @@ fi
 # Keep LIMA_HOME unchanged so VM disks never enter the persistent image cache.
 if [[ $(uname -s) == Linux ]]; then
   images=$(limactl template yq "${template}" '.images')
-  image_key=$(printf '%s' "${images}" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  image_key=$(printf '%s' "${images}" | sha256sum)
+  image_key=${image_key%% *}
   export XDG_CACHE_HOME="${repo_root}/.validation-cache/lima-images-v1/${image_key}"
   mkdir -p "${XDG_CACHE_HOME}"
 fi

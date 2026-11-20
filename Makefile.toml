@@ -69,7 +69,6 @@ JUNIT_OPTS = "${TEST_R_REPORT_OPTS}"
 WORKER_TEST_THREAD_OPTS = ""
 CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
-CI = "true"
 # CARGO_LOG="cargo::compiler::fingerprint=trace"
 
 [tasks.default]
@@ -1269,19 +1268,25 @@ description = "Generates openapi spec from the code, saves it to the openapi dir
 [tasks.generate-registry-service-openapi]
 description = "Generates openapi spec for registry service"
 dependencies = ["build-registry-service-non-ci"]
+script_runner = "@duckscript"
 script = '''
-target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-mkdir -pv ./target/data
-"$target_dir/debug/golem-registry-service" --dump-openapi-yaml > ./target/golem-registry-service.yaml
+exit_on_error true
+mkdir ./target/data
+yaml = exec ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-registry-service --dump-openapi-yaml
+assert_eq ${yaml.code} 0
+writefile ./target/golem-registry-service.yaml ${yaml.stdout}
 '''
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
 dependencies = ["build-worker-service-non-ci"]
+script_runner = "@duckscript"
 script = '''
-target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-mkdir -pv ./target/data
-"$target_dir/debug/golem-worker-service" --dump-openapi-yaml > ./target/golem-worker-service.yaml
+exit_on_error true
+mkdir ./target/data
+yaml = exec ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-worker-service --dump-openapi-yaml
+assert_eq ${yaml.code} 0
+writefile ./target/golem-worker-service.yaml ${yaml.stdout}
 '''
 
 [tasks.build-openapi-generator-non-ci]
@@ -1898,25 +1903,24 @@ writefile cli/golem/config/golem-server.sample.env ${env_var.stdout}
 [tasks.generate-configs]
 description = "Generates default and example config files"
 dependencies = ["build-shard-manager-kubernetes", "generate-golem-server-configs"]
-
+script_runner = "@duckscript"
 script = '''
-export RUST_BACKTRACE=1
-target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-
-"$target_dir/debug/golem-registry-service" --dump-config-default-toml > golem-registry-service/config/registry-service.toml
-"$target_dir/debug/golem-registry-service" --dump-config-default-env-var > golem-registry-service/config/registry-service.sample.env
-
-"$target_dir/debug/golem-shard-manager" --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
-"$target_dir/debug/golem-shard-manager" --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
-
-"$target_dir/debug/golem-component-compilation-service" --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
-"$target_dir/debug/golem-component-compilation-service" --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
-
-"$target_dir/debug/golem-worker-service" --dump-config-default-toml > golem-worker-service/config/worker-service.toml
-"$target_dir/debug/golem-worker-service" --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
-
-"$target_dir/debug/worker-executor" --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
-"$target_dir/debug/worker-executor" --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+exit_on_error true
+set_env RUST_BACKTRACE 1
+services = array registry-service shard-manager component-compilation-service worker-service worker-executor
+for service in ${services}
+    if equals ${service} worker-executor
+        binary = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/worker-executor"
+    else
+        binary = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-${service}"
+    end
+    toml = exec ${binary} --dump-config-default-toml
+    assert_eq ${toml.code} 0
+    writefile golem-${service}/config/${service}.toml ${toml.stdout}
+    env_var = exec ${binary} --dump-config-default-env-var
+    assert_eq ${env_var.code} 0
+    writefile golem-${service}/config/${service}.sample.env ${env_var.stdout}
+end
 '''
 
 ## ** CHECK CONFIGS **

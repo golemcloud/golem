@@ -325,7 +325,7 @@ filesystem_image_size=$(select_filesystem_image_size \
   "${filesystem_workload_benchmark}" \
   "${filesystem_native_workload_baseline}")
 
-for command in flock getent losetup mkfs.xfs mount python3 setpriv stat tee timeout truncate; do
+for command in bun flock getent losetup mkfs.xfs mount setpriv stat tee timeout truncate; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "missing required command: ${command}" >&2
     exit 1
@@ -555,8 +555,8 @@ build_test_binaries() {
 
   lib_test_binary=
   integration_test_binary=
-  if ! run_vm_cargo python3 \
-    "${repo_root}/integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py" \
+  if ! run_vm_cargo bun \
+    "${repo_root}/.github/main-validation/select-test-executables.ts" \
     "${build_messages}" "${repo_root}" lib integration > "${selected_executables}"; then
     run_vm_cargo rm -f "${lib_decoy}" "${integration_decoy}"
     return 1
