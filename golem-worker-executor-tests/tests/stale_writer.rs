@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{IdempotencyKey, OwnedAgentId, ShardEpoch};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::HasOplog;
 use golem_worker_executor::services::oplog::OplogError;
@@ -117,7 +117,7 @@ async fn stale_writer_takeover(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent = agent_id!("HttpClient2");
+    let agent = agent_key!("HttpClient2");
     let worker_id = old
         .start_agent_with(
             &component.id,
@@ -125,7 +125,8 @@ async fn stale_writer_takeover(
             HashMap::from([("PORT".into(), port.to_string())]),
             Vec::new(),
         )
-        .await?;
+        .await?
+        .agent_id;
     let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
     // Finish construction before arming the method's success gate.
     old.invoke_and_await_agent(&component, &agent, "get_count", data_value!())

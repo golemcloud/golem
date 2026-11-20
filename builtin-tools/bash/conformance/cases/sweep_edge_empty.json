@@ -1,0 +1,4332 @@
+{
+  "tier": "sweep",
+  "description": "Edge inputs: empty input and input with no trailing newline, through every text filter and the\nshell's own readers, as a pipe, as /dev/null on stdin and as an empty file operand.\n\nGenerated from fixed tables with plain loops, so every Python 3 produces the same scripts.",
+  "cases": [
+    {
+      "name": "edge empty: cat empty pipe",
+      "script": "printf '' | cat; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat null stdin",
+      "script": "cat < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat empty file",
+      "script": ": > /tmp/e; cat /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat no newline",
+      "script": "printf 'b a' | cat; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat no newline two lines",
+      "script": "printf 'b a\\n1 c' | cat; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat only newline",
+      "script": "printf '\\n' | cat; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat blank lines",
+      "script": "printf '\\n\\n\\n' | cat; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat whitespace only",
+      "script": "printf ' \\t \\n' | cat; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n empty pipe",
+      "script": "printf '' | cat -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n null stdin",
+      "script": "cat -n < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n empty file",
+      "script": ": > /tmp/e; cat -n /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n no newline",
+      "script": "printf 'b a' | cat -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n no newline two lines",
+      "script": "printf 'b a\\n1 c' | cat -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n only newline",
+      "script": "printf '\\n' | cat -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n blank lines",
+      "script": "printf '\\n\\n\\n' | cat -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -n whitespace only",
+      "script": "printf ' \\t \\n' | cat -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s empty pipe",
+      "script": "printf '' | cat -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s null stdin",
+      "script": "cat -s < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s empty file",
+      "script": ": > /tmp/e; cat -s /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s no newline",
+      "script": "printf 'b a' | cat -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s no newline two lines",
+      "script": "printf 'b a\\n1 c' | cat -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s only newline",
+      "script": "printf '\\n' | cat -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s blank lines",
+      "script": "printf '\\n\\n\\n' | cat -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cat -s whitespace only",
+      "script": "printf ' \\t \\n' | cat -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 empty pipe",
+      "script": "printf '' | head -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 null stdin",
+      "script": "head -n 1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 empty file",
+      "script": ": > /tmp/e; head -n 1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 no newline",
+      "script": "printf 'b a' | head -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | head -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 only newline",
+      "script": "printf '\\n' | head -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 blank lines",
+      "script": "printf '\\n\\n\\n' | head -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n 1 whitespace only",
+      "script": "printf ' \\t \\n' | head -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 empty pipe",
+      "script": "printf '' | head -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 null stdin",
+      "script": "head -c 1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 empty file",
+      "script": ": > /tmp/e; head -c 1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 no newline",
+      "script": "printf 'b a' | head -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | head -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 only newline",
+      "script": "printf '\\n' | head -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 blank lines",
+      "script": "printf '\\n\\n\\n' | head -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -c 1 whitespace only",
+      "script": "printf ' \\t \\n' | head -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 empty pipe",
+      "script": "printf '' | head -n -1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 null stdin",
+      "script": "head -n -1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 empty file",
+      "script": ": > /tmp/e; head -n -1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 no newline",
+      "script": "printf 'b a' | head -n -1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | head -n -1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 only newline",
+      "script": "printf '\\n' | head -n -1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 blank lines",
+      "script": "printf '\\n\\n\\n' | head -n -1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: head -n -1 whitespace only",
+      "script": "printf ' \\t \\n' | head -n -1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 empty pipe",
+      "script": "printf '' | tail -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 null stdin",
+      "script": "tail -n 1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 empty file",
+      "script": ": > /tmp/e; tail -n 1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 no newline",
+      "script": "printf 'b a' | tail -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | tail -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 only newline",
+      "script": "printf '\\n' | tail -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 blank lines",
+      "script": "printf '\\n\\n\\n' | tail -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n 1 whitespace only",
+      "script": "printf ' \\t \\n' | tail -n 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 empty pipe",
+      "script": "printf '' | tail -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 null stdin",
+      "script": "tail -c 1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 empty file",
+      "script": ": > /tmp/e; tail -c 1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 no newline",
+      "script": "printf 'b a' | tail -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | tail -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 only newline",
+      "script": "printf '\\n' | tail -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 blank lines",
+      "script": "printf '\\n\\n\\n' | tail -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -c 1 whitespace only",
+      "script": "printf ' \\t \\n' | tail -c 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 empty pipe",
+      "script": "printf '' | tail -n +2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 null stdin",
+      "script": "tail -n +2 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 empty file",
+      "script": ": > /tmp/e; tail -n +2 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 no newline",
+      "script": "printf 'b a' | tail -n +2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 no newline two lines",
+      "script": "printf 'b a\\n1 c' | tail -n +2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 only newline",
+      "script": "printf '\\n' | tail -n +2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 blank lines",
+      "script": "printf '\\n\\n\\n' | tail -n +2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tail -n +2 whitespace only",
+      "script": "printf ' \\t \\n' | tail -n +2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc empty pipe",
+      "script": "printf '' | wc; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc null stdin",
+      "script": "wc < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc empty file",
+      "script": ": > /tmp/e; wc /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc no newline",
+      "script": "printf 'b a' | wc; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc no newline two lines",
+      "script": "printf 'b a\\n1 c' | wc; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc only newline",
+      "script": "printf '\\n' | wc; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc blank lines",
+      "script": "printf '\\n\\n\\n' | wc; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc whitespace only",
+      "script": "printf ' \\t \\n' | wc; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l empty pipe",
+      "script": "printf '' | wc -l; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l null stdin",
+      "script": "wc -l < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l empty file",
+      "script": ": > /tmp/e; wc -l /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l no newline",
+      "script": "printf 'b a' | wc -l; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l no newline two lines",
+      "script": "printf 'b a\\n1 c' | wc -l; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l only newline",
+      "script": "printf '\\n' | wc -l; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l blank lines",
+      "script": "printf '\\n\\n\\n' | wc -l; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -l whitespace only",
+      "script": "printf ' \\t \\n' | wc -l; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w empty pipe",
+      "script": "printf '' | wc -w; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w null stdin",
+      "script": "wc -w < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w empty file",
+      "script": ": > /tmp/e; wc -w /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w no newline",
+      "script": "printf 'b a' | wc -w; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w no newline two lines",
+      "script": "printf 'b a\\n1 c' | wc -w; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w only newline",
+      "script": "printf '\\n' | wc -w; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w blank lines",
+      "script": "printf '\\n\\n\\n' | wc -w; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -w whitespace only",
+      "script": "printf ' \\t \\n' | wc -w; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c empty pipe",
+      "script": "printf '' | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c null stdin",
+      "script": "wc -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c empty file",
+      "script": ": > /tmp/e; wc -c /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c no newline",
+      "script": "printf 'b a' | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c no newline two lines",
+      "script": "printf 'b a\\n1 c' | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c only newline",
+      "script": "printf '\\n' | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c blank lines",
+      "script": "printf '\\n\\n\\n' | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c whitespace only",
+      "script": "printf ' \\t \\n' | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m empty pipe",
+      "script": "printf '' | wc -m; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m null stdin",
+      "script": "wc -m < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m empty file",
+      "script": ": > /tmp/e; wc -m /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m no newline",
+      "script": "printf 'b a' | wc -m; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m no newline two lines",
+      "script": "printf 'b a\\n1 c' | wc -m; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m only newline",
+      "script": "printf '\\n' | wc -m; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m blank lines",
+      "script": "printf '\\n\\n\\n' | wc -m; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -m whitespace only",
+      "script": "printf ' \\t \\n' | wc -m; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L empty pipe",
+      "script": "printf '' | wc -L; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L null stdin",
+      "script": "wc -L < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L empty file",
+      "script": ": > /tmp/e; wc -L /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L no newline",
+      "script": "printf 'b a' | wc -L; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L no newline two lines",
+      "script": "printf 'b a\\n1 c' | wc -L; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L only newline",
+      "script": "printf '\\n' | wc -L; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L blank lines",
+      "script": "printf '\\n\\n\\n' | wc -L; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -L whitespace only",
+      "script": "printf ' \\t \\n' | wc -L; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort empty pipe",
+      "script": "printf '' | sort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort null stdin",
+      "script": "sort < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort empty file",
+      "script": ": > /tmp/e; sort /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort no newline",
+      "script": "printf 'b a' | sort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort no newline two lines",
+      "script": "printf 'b a\\n1 c' | sort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort only newline",
+      "script": "printf '\\n' | sort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort blank lines",
+      "script": "printf '\\n\\n\\n' | sort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort whitespace only",
+      "script": "printf ' \\t \\n' | sort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n empty pipe",
+      "script": "printf '' | sort -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n null stdin",
+      "script": "sort -n < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n empty file",
+      "script": ": > /tmp/e; sort -n /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n no newline",
+      "script": "printf 'b a' | sort -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n no newline two lines",
+      "script": "printf 'b a\\n1 c' | sort -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n only newline",
+      "script": "printf '\\n' | sort -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n blank lines",
+      "script": "printf '\\n\\n\\n' | sort -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -n whitespace only",
+      "script": "printf ' \\t \\n' | sort -n; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u empty pipe",
+      "script": "printf '' | sort -u; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u null stdin",
+      "script": "sort -u < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u empty file",
+      "script": ": > /tmp/e; sort -u /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u no newline",
+      "script": "printf 'b a' | sort -u; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u no newline two lines",
+      "script": "printf 'b a\\n1 c' | sort -u; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u only newline",
+      "script": "printf '\\n' | sort -u; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u blank lines",
+      "script": "printf '\\n\\n\\n' | sort -u; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -u whitespace only",
+      "script": "printf ' \\t \\n' | sort -u; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c empty pipe",
+      "script": "printf '' | sort -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c null stdin",
+      "script": "sort -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c empty file",
+      "script": ": > /tmp/e; sort -c /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c no newline",
+      "script": "printf 'b a' | sort -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c no newline two lines",
+      "script": "printf 'b a\\n1 c' | sort -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c only newline",
+      "script": "printf '\\n' | sort -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c blank lines",
+      "script": "printf '\\n\\n\\n' | sort -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sort -c whitespace only",
+      "script": "printf ' \\t \\n' | sort -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq empty pipe",
+      "script": "printf '' | uniq; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq null stdin",
+      "script": "uniq < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq empty file",
+      "script": ": > /tmp/e; uniq /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq no newline",
+      "script": "printf 'b a' | uniq; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq no newline two lines",
+      "script": "printf 'b a\\n1 c' | uniq; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq only newline",
+      "script": "printf '\\n' | uniq; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq blank lines",
+      "script": "printf '\\n\\n\\n' | uniq; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq whitespace only",
+      "script": "printf ' \\t \\n' | uniq; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c empty pipe",
+      "script": "printf '' | uniq -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c null stdin",
+      "script": "uniq -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c empty file",
+      "script": ": > /tmp/e; uniq -c /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c no newline",
+      "script": "printf 'b a' | uniq -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c no newline two lines",
+      "script": "printf 'b a\\n1 c' | uniq -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c only newline",
+      "script": "printf '\\n' | uniq -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c blank lines",
+      "script": "printf '\\n\\n\\n' | uniq -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: uniq -c whitespace only",
+      "script": "printf ' \\t \\n' | uniq -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 empty pipe",
+      "script": "printf '' | cut -c1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 null stdin",
+      "script": "cut -c1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 empty file",
+      "script": ": > /tmp/e; cut -c1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 no newline",
+      "script": "printf 'b a' | cut -c1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | cut -c1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 only newline",
+      "script": "printf '\\n' | cut -c1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 blank lines",
+      "script": "printf '\\n\\n\\n' | cut -c1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -c1 whitespace only",
+      "script": "printf ' \\t \\n' | cut -c1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 empty pipe",
+      "script": "printf '' | cut -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 null stdin",
+      "script": "cut -f1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 empty file",
+      "script": ": > /tmp/e; cut -f1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 no newline",
+      "script": "printf 'b a' | cut -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | cut -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 only newline",
+      "script": "printf '\\n' | cut -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 blank lines",
+      "script": "printf '\\n\\n\\n' | cut -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -f1 whitespace only",
+      "script": "printf ' \\t \\n' | cut -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 empty pipe",
+      "script": "printf '' | cut -d ' ' -f2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 null stdin",
+      "script": "cut -d ' ' -f2 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 empty file",
+      "script": ": > /tmp/e; cut -d ' ' -f2 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 no newline",
+      "script": "printf 'b a' | cut -d ' ' -f2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 no newline two lines",
+      "script": "printf 'b a\\n1 c' | cut -d ' ' -f2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 only newline",
+      "script": "printf '\\n' | cut -d ' ' -f2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 blank lines",
+      "script": "printf '\\n\\n\\n' | cut -d ' ' -f2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -d -f2 whitespace only",
+      "script": "printf ' \\t \\n' | cut -d ' ' -f2; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s empty pipe",
+      "script": "printf '' | cut -s -d ' ' -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s null stdin",
+      "script": "cut -s -d ' ' -f1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s empty file",
+      "script": ": > /tmp/e; cut -s -d ' ' -f1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s no newline",
+      "script": "printf 'b a' | cut -s -d ' ' -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s no newline two lines",
+      "script": "printf 'b a\\n1 c' | cut -s -d ' ' -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s only newline",
+      "script": "printf '\\n' | cut -s -d ' ' -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s blank lines",
+      "script": "printf '\\n\\n\\n' | cut -s -d ' ' -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cut -s whitespace only",
+      "script": "printf ' \\t \\n' | cut -s -d ' ' -f1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper empty pipe",
+      "script": "printf '' | tr a-z A-Z; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper null stdin",
+      "script": "tr a-z A-Z < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper empty file",
+      "script": ": > /tmp/e; tr a-z A-Z < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper no newline",
+      "script": "printf 'b a' | tr a-z A-Z; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper no newline two lines",
+      "script": "printf 'b a\\n1 c' | tr a-z A-Z; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper only newline",
+      "script": "printf '\\n' | tr a-z A-Z; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper blank lines",
+      "script": "printf '\\n\\n\\n' | tr a-z A-Z; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr upper whitespace only",
+      "script": "printf ' \\t \\n' | tr a-z A-Z; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline empty pipe",
+      "script": "printf '' | tr -d '\\n'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline null stdin",
+      "script": "tr -d '\\n' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline empty file",
+      "script": ": > /tmp/e; tr -d '\\n' < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline no newline",
+      "script": "printf 'b a' | tr -d '\\n'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline no newline two lines",
+      "script": "printf 'b a\\n1 c' | tr -d '\\n'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline only newline",
+      "script": "printf '\\n' | tr -d '\\n'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline blank lines",
+      "script": "printf '\\n\\n\\n' | tr -d '\\n'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tr -d newline whitespace only",
+      "script": "printf ' \\t \\n' | tr -d '\\n'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev empty pipe",
+      "script": "printf '' | rev; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev null stdin",
+      "script": "rev < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev empty file",
+      "script": ": > /tmp/e; rev /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev no newline",
+      "script": "printf 'b a' | rev; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev no newline two lines",
+      "script": "printf 'b a\\n1 c' | rev; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev only newline",
+      "script": "printf '\\n' | rev; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev blank lines",
+      "script": "printf '\\n\\n\\n' | rev; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: rev whitespace only",
+      "script": "printf ' \\t \\n' | rev; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac empty pipe",
+      "script": "printf '' | tac; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac null stdin",
+      "script": "tac < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac empty file",
+      "script": ": > /tmp/e; tac /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac no newline",
+      "script": "printf 'b a' | tac; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac no newline two lines",
+      "script": "printf 'b a\\n1 c' | tac; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac only newline",
+      "script": "printf '\\n' | tac; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac blank lines",
+      "script": "printf '\\n\\n\\n' | tac; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tac whitespace only",
+      "script": "printf ' \\t \\n' | tac; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl empty pipe",
+      "script": "printf '' | nl; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl null stdin",
+      "script": "nl < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl empty file",
+      "script": ": > /tmp/e; nl /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl no newline",
+      "script": "printf 'b a' | nl; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl no newline two lines",
+      "script": "printf 'b a\\n1 c' | nl; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl only newline",
+      "script": "printf '\\n' | nl; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl blank lines",
+      "script": "printf '\\n\\n\\n' | nl; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: nl whitespace only",
+      "script": "printf ' \\t \\n' | nl; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold empty pipe",
+      "script": "printf '' | fold -w 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold null stdin",
+      "script": "fold -w 1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold empty file",
+      "script": ": > /tmp/e; fold -w 1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold no newline",
+      "script": "printf 'b a' | fold -w 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold no newline two lines",
+      "script": "printf 'b a\\n1 c' | fold -w 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold only newline",
+      "script": "printf '\\n' | fold -w 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold blank lines",
+      "script": "printf '\\n\\n\\n' | fold -w 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fold whitespace only",
+      "script": "printf ' \\t \\n' | fold -w 1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt empty pipe",
+      "script": "printf '' | fmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt null stdin",
+      "script": "fmt < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt empty file",
+      "script": ": > /tmp/e; fmt /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt no newline",
+      "script": "printf 'b a' | fmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt no newline two lines",
+      "script": "printf 'b a\\n1 c' | fmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt only newline",
+      "script": "printf '\\n' | fmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt blank lines",
+      "script": "printf '\\n\\n\\n' | fmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: fmt whitespace only",
+      "script": "printf ' \\t \\n' | fmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s empty pipe",
+      "script": "printf '' | paste -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s null stdin",
+      "script": "paste -s < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s empty file",
+      "script": ": > /tmp/e; paste -s /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s no newline",
+      "script": "printf 'b a' | paste -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s no newline two lines",
+      "script": "printf 'b a\\n1 c' | paste -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s only newline",
+      "script": "printf '\\n' | paste -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s blank lines",
+      "script": "printf '\\n\\n\\n' | paste -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste -s whitespace only",
+      "script": "printf ' \\t \\n' | paste -s; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns empty pipe",
+      "script": "printf '' | paste - -; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns null stdin",
+      "script": "paste - - < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns empty file",
+      "script": ": > /tmp/e; paste - - < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns no newline",
+      "script": "printf 'b a' | paste - -; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns no newline two lines",
+      "script": "printf 'b a\\n1 c' | paste - -; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns only newline",
+      "script": "printf '\\n' | paste - -; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns blank lines",
+      "script": "printf '\\n\\n\\n' | paste - -; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: paste two columns whitespace only",
+      "script": "printf ' \\t \\n' | paste - -; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand empty pipe",
+      "script": "printf '' | expand; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand null stdin",
+      "script": "expand < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand empty file",
+      "script": ": > /tmp/e; expand /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand no newline",
+      "script": "printf 'b a' | expand; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand no newline two lines",
+      "script": "printf 'b a\\n1 c' | expand; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand only newline",
+      "script": "printf '\\n' | expand; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand blank lines",
+      "script": "printf '\\n\\n\\n' | expand; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: expand whitespace only",
+      "script": "printf ' \\t \\n' | expand; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a empty pipe",
+      "script": "printf '' | unexpand -a; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a null stdin",
+      "script": "unexpand -a < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a empty file",
+      "script": ": > /tmp/e; unexpand -a /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a no newline",
+      "script": "printf 'b a' | unexpand -a; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a no newline two lines",
+      "script": "printf 'b a\\n1 c' | unexpand -a; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a only newline",
+      "script": "printf '\\n' | unexpand -a; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a blank lines",
+      "script": "printf '\\n\\n\\n' | unexpand -a; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unexpand -a whitespace only",
+      "script": "printf ' \\t \\n' | unexpand -a; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c empty pipe",
+      "script": "printf '' | od -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c null stdin",
+      "script": "od -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c empty file",
+      "script": ": > /tmp/e; od -c /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c no newline",
+      "script": "printf 'b a' | od -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c no newline two lines",
+      "script": "printf 'b a\\n1 c' | od -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c only newline",
+      "script": "printf '\\n' | od -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c blank lines",
+      "script": "printf '\\n\\n\\n' | od -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -c whitespace only",
+      "script": "printf ' \\t \\n' | od -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 empty pipe",
+      "script": "printf '' | od -An -tx1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 null stdin",
+      "script": "od -An -tx1 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 empty file",
+      "script": ": > /tmp/e; od -An -tx1 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 no newline",
+      "script": "printf 'b a' | od -An -tx1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 no newline two lines",
+      "script": "printf 'b a\\n1 c' | od -An -tx1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 only newline",
+      "script": "printf '\\n' | od -An -tx1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 blank lines",
+      "script": "printf '\\n\\n\\n' | od -An -tx1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: od -tx1 whitespace only",
+      "script": "printf ' \\t \\n' | od -An -tx1; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 empty pipe",
+      "script": "printf '' | base64; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 null stdin",
+      "script": "base64 < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 empty file",
+      "script": ": > /tmp/e; base64 /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 no newline",
+      "script": "printf 'b a' | base64; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 no newline two lines",
+      "script": "printf 'b a\\n1 c' | base64; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 only newline",
+      "script": "printf '\\n' | base64; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 blank lines",
+      "script": "printf '\\n\\n\\n' | base64; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 whitespace only",
+      "script": "printf ' \\t \\n' | base64; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d empty pipe",
+      "script": "printf '' | base64 -d; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d null stdin",
+      "script": "base64 -d < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d empty file",
+      "script": ": > /tmp/e; base64 -d /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d no newline",
+      "script": "printf 'b a' | base64 -d; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d no newline two lines",
+      "script": "printf 'b a\\n1 c' | base64 -d; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d only newline",
+      "script": "printf '\\n' | base64 -d; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d blank lines",
+      "script": "printf '\\n\\n\\n' | base64 -d; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: base64 -d whitespace only",
+      "script": "printf ' \\t \\n' | base64 -d; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum empty pipe",
+      "script": "printf '' | md5sum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum null stdin",
+      "script": "md5sum < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum empty file",
+      "script": ": > /tmp/e; md5sum /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum no newline",
+      "script": "printf 'b a' | md5sum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum no newline two lines",
+      "script": "printf 'b a\\n1 c' | md5sum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum only newline",
+      "script": "printf '\\n' | md5sum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum blank lines",
+      "script": "printf '\\n\\n\\n' | md5sum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum whitespace only",
+      "script": "printf ' \\t \\n' | md5sum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum empty pipe",
+      "script": "printf '' | cksum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum null stdin",
+      "script": "cksum < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum empty file",
+      "script": ": > /tmp/e; cksum /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum no newline",
+      "script": "printf 'b a' | cksum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum no newline two lines",
+      "script": "printf 'b a\\n1 c' | cksum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum only newline",
+      "script": "printf '\\n' | cksum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum blank lines",
+      "script": "printf '\\n\\n\\n' | cksum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: cksum whitespace only",
+      "script": "printf ' \\t \\n' | cksum; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c empty pipe",
+      "script": "printf '' | md5sum -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c null stdin",
+      "script": "md5sum -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c empty file",
+      "script": ": > /tmp/e; md5sum -c /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c no newline",
+      "script": "printf 'b a' | md5sum -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c no newline two lines",
+      "script": "printf 'b a\\n1 c' | md5sum -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c only newline",
+      "script": "printf '\\n' | md5sum -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c blank lines",
+      "script": "printf '\\n\\n\\n' | md5sum -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: md5sum -c whitespace only",
+      "script": "printf ' \\t \\n' | md5sum -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p empty pipe",
+      "script": "printf '' | sed p; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p null stdin",
+      "script": "sed p < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p empty file",
+      "script": ": > /tmp/e; sed p /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p no newline",
+      "script": "printf 'b a' | sed p; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p no newline two lines",
+      "script": "printf 'b a\\n1 c' | sed p; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p only newline",
+      "script": "printf '\\n' | sed p; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p blank lines",
+      "script": "printf '\\n\\n\\n' | sed p; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed p whitespace only",
+      "script": "printf ' \\t \\n' | sed p; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d empty pipe",
+      "script": "printf '' | sed '$d'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d null stdin",
+      "script": "sed '$d' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d empty file",
+      "script": ": > /tmp/e; sed '$d' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d no newline",
+      "script": "printf 'b a' | sed '$d'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d no newline two lines",
+      "script": "printf 'b a\\n1 c' | sed '$d'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d only newline",
+      "script": "printf '\\n' | sed '$d'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d blank lines",
+      "script": "printf '\\n\\n\\n' | sed '$d'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $d whitespace only",
+      "script": "printf ' \\t \\n' | sed '$d'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count empty pipe",
+      "script": "printf '' | sed -n '$='; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count null stdin",
+      "script": "sed -n '$=' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count empty file",
+      "script": ": > /tmp/e; sed -n '$=' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count no newline",
+      "script": "printf 'b a' | sed -n '$='; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count no newline two lines",
+      "script": "printf 'b a\\n1 c' | sed -n '$='; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count only newline",
+      "script": "printf '\\n' | sed -n '$='; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count blank lines",
+      "script": "printf '\\n\\n\\n' | sed -n '$='; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed line count whitespace only",
+      "script": "printf ' \\t \\n' | sed -n '$='; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N empty pipe",
+      "script": "printf '' | sed 'N;s/\\n/+/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N null stdin",
+      "script": "sed 'N;s/\\n/+/' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N empty file",
+      "script": ": > /tmp/e; sed 'N;s/\\n/+/' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N no newline",
+      "script": "printf 'b a' | sed 'N;s/\\n/+/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N no newline two lines",
+      "script": "printf 'b a\\n1 c' | sed 'N;s/\\n/+/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N only newline",
+      "script": "printf '\\n' | sed 'N;s/\\n/+/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N blank lines",
+      "script": "printf '\\n\\n\\n' | sed 'N;s/\\n/+/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed N whitespace only",
+      "script": "printf ' \\t \\n' | sed 'N;s/\\n/+/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a empty pipe",
+      "script": "printf '' | sed '$a end'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a null stdin",
+      "script": "sed '$a end' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a empty file",
+      "script": ": > /tmp/e; sed '$a end' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a no newline",
+      "script": "printf 'b a' | sed '$a end'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a no newline two lines",
+      "script": "printf 'b a\\n1 c' | sed '$a end'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a only newline",
+      "script": "printf '\\n' | sed '$a end'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a blank lines",
+      "script": "printf '\\n\\n\\n' | sed '$a end'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed $a whitespace only",
+      "script": "printf ' \\t \\n' | sed '$a end'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z empty pipe",
+      "script": "printf '' | sed -z 's/^/>/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z null stdin",
+      "script": "sed -z 's/^/>/' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z empty file",
+      "script": ": > /tmp/e; sed -z 's/^/>/' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z no newline",
+      "script": "printf 'b a' | sed -z 's/^/>/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z no newline two lines",
+      "script": "printf 'b a\\n1 c' | sed -z 's/^/>/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z only newline",
+      "script": "printf '\\n' | sed -z 's/^/>/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z blank lines",
+      "script": "printf '\\n\\n\\n' | sed -z 's/^/>/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: sed -z whitespace only",
+      "script": "printf ' \\t \\n' | sed -z 's/^/>/'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot empty pipe",
+      "script": "printf '' | grep .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot null stdin",
+      "script": "grep . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot empty file",
+      "script": ": > /tmp/e; grep . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot no newline",
+      "script": "printf 'b a' | grep .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot no newline two lines",
+      "script": "printf 'b a\\n1 c' | grep .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot only newline",
+      "script": "printf '\\n' | grep .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot blank lines",
+      "script": "printf '\\n\\n\\n' | grep .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep dot whitespace only",
+      "script": "printf ' \\t \\n' | grep .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot empty pipe",
+      "script": "printf '' | grep -c .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot null stdin",
+      "script": "grep -c . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot empty file",
+      "script": ": > /tmp/e; grep -c . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot no newline",
+      "script": "printf 'b a' | grep -c .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot no newline two lines",
+      "script": "printf 'b a\\n1 c' | grep -c .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot only newline",
+      "script": "printf '\\n' | grep -c .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot blank lines",
+      "script": "printf '\\n\\n\\n' | grep -c .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c dot whitespace only",
+      "script": "printf ' \\t \\n' | grep -c .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty empty pipe",
+      "script": "printf '' | grep -c ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty null stdin",
+      "script": "grep -c '' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty empty file",
+      "script": ": > /tmp/e; grep -c '' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty no newline",
+      "script": "printf 'b a' | grep -c ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty no newline two lines",
+      "script": "printf 'b a\\n1 c' | grep -c ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty only newline",
+      "script": "printf '\\n' | grep -c ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty blank lines",
+      "script": "printf '\\n\\n\\n' | grep -c ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -c empty whitespace only",
+      "script": "printf ' \\t \\n' | grep -c ''; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v empty pipe",
+      "script": "printf '' | grep -v x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v null stdin",
+      "script": "grep -v x < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v empty file",
+      "script": ": > /tmp/e; grep -v x /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v no newline",
+      "script": "printf 'b a' | grep -v x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v no newline two lines",
+      "script": "printf 'b a\\n1 c' | grep -v x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v only newline",
+      "script": "printf '\\n' | grep -v x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v blank lines",
+      "script": "printf '\\n\\n\\n' | grep -v x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -v whitespace only",
+      "script": "printf ' \\t \\n' | grep -v x; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o empty pipe",
+      "script": "printf '' | grep -o '[a-z]'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o null stdin",
+      "script": "grep -o '[a-z]' < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o empty file",
+      "script": ": > /tmp/e; grep -o '[a-z]' /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o no newline",
+      "script": "printf 'b a' | grep -o '[a-z]'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o no newline two lines",
+      "script": "printf 'b a\\n1 c' | grep -o '[a-z]'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o only newline",
+      "script": "printf '\\n' | grep -o '[a-z]'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o blank lines",
+      "script": "printf '\\n\\n\\n' | grep -o '[a-z]'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: grep -o whitespace only",
+      "script": "printf ' \\t \\n' | grep -o '[a-z]'; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq empty pipe",
+      "script": "printf '' | jq .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq null stdin",
+      "script": "jq . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq empty file",
+      "script": ": > /tmp/e; jq . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq no newline",
+      "script": "printf 'b a' | jq .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq no newline two lines",
+      "script": "printf 'b a\\n1 c' | jq .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq only newline",
+      "script": "printf '\\n' | jq .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq blank lines",
+      "script": "printf '\\n\\n\\n' | jq .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq whitespace only",
+      "script": "printf ' \\t \\n' | jq .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s empty pipe",
+      "script": "printf '' | jq -c -s .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s null stdin",
+      "script": "jq -c -s . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s empty file",
+      "script": ": > /tmp/e; jq -c -s . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s no newline",
+      "script": "printf 'b a' | jq -c -s .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s no newline two lines",
+      "script": "printf 'b a\\n1 c' | jq -c -s .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s only newline",
+      "script": "printf '\\n' | jq -c -s .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s blank lines",
+      "script": "printf '\\n\\n\\n' | jq -c -s .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -s whitespace only",
+      "script": "printf ' \\t \\n' | jq -c -s .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R empty pipe",
+      "script": "printf '' | jq -R .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R null stdin",
+      "script": "jq -R . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R empty file",
+      "script": ": > /tmp/e; jq -R . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R no newline",
+      "script": "printf 'b a' | jq -R .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R no newline two lines",
+      "script": "printf 'b a\\n1 c' | jq -R .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R only newline",
+      "script": "printf '\\n' | jq -R .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R blank lines",
+      "script": "printf '\\n\\n\\n' | jq -R .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -R whitespace only",
+      "script": "printf ' \\t \\n' | jq -R .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs empty pipe",
+      "script": "printf '' | jq -Rs .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs null stdin",
+      "script": "jq -Rs . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs empty file",
+      "script": ": > /tmp/e; jq -Rs . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs no newline",
+      "script": "printf 'b a' | jq -Rs .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs no newline two lines",
+      "script": "printf 'b a\\n1 c' | jq -Rs .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs only newline",
+      "script": "printf '\\n' | jq -Rs .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs blank lines",
+      "script": "printf '\\n\\n\\n' | jq -Rs .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -Rs whitespace only",
+      "script": "printf ' \\t \\n' | jq -Rs .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e empty pipe",
+      "script": "printf '' | jq -e .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e null stdin",
+      "script": "jq -e . < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e empty file",
+      "script": ": > /tmp/e; jq -e . /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e no newline",
+      "script": "printf 'b a' | jq -e .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e no newline two lines",
+      "script": "printf 'b a\\n1 c' | jq -e .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e only newline",
+      "script": "printf '\\n' | jq -e .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e blank lines",
+      "script": "printf '\\n\\n\\n' | jq -e .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: jq -e whitespace only",
+      "script": "printf ' \\t \\n' | jq -e .; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs empty pipe",
+      "script": "printf '' | xargs echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs null stdin",
+      "script": "xargs echo run < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs empty file",
+      "script": ": > /tmp/e; xargs echo run < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs no newline",
+      "script": "printf 'b a' | xargs echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs no newline two lines",
+      "script": "printf 'b a\\n1 c' | xargs echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs only newline",
+      "script": "printf '\\n' | xargs echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs blank lines",
+      "script": "printf '\\n\\n\\n' | xargs echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs whitespace only",
+      "script": "printf ' \\t \\n' | xargs echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r empty pipe",
+      "script": "printf '' | xargs -r echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r null stdin",
+      "script": "xargs -r echo run < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r empty file",
+      "script": ": > /tmp/e; xargs -r echo run < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r no newline",
+      "script": "printf 'b a' | xargs -r echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r no newline two lines",
+      "script": "printf 'b a\\n1 c' | xargs -r echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r only newline",
+      "script": "printf '\\n' | xargs -r echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r blank lines",
+      "script": "printf '\\n\\n\\n' | xargs -r echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: xargs -r whitespace only",
+      "script": "printf ' \\t \\n' | xargs -r echo run; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee empty pipe",
+      "script": "printf '' | tee /tmp/t | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee null stdin",
+      "script": "tee /tmp/t | wc -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee empty file",
+      "script": ": > /tmp/e; tee /tmp/t | wc -c < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee no newline",
+      "script": "printf 'b a' | tee /tmp/t | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee no newline two lines",
+      "script": "printf 'b a\\n1 c' | tee /tmp/t | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee only newline",
+      "script": "printf '\\n' | tee /tmp/t | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee blank lines",
+      "script": "printf '\\n\\n\\n' | tee /tmp/t | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tee whitespace only",
+      "script": "printf ' \\t \\n' | tee /tmp/t | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort empty pipe",
+      "script": "printf '' | tsort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort null stdin",
+      "script": "tsort < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort empty file",
+      "script": ": > /tmp/e; tsort /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort no newline",
+      "script": "printf 'b a' | tsort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort no newline two lines",
+      "script": "printf 'b a\\n1 c' | tsort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort only newline",
+      "script": "printf '\\n' | tsort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort blank lines",
+      "script": "printf '\\n\\n\\n' | tsort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: tsort whitespace only",
+      "script": "printf ' \\t \\n' | tsort; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt empty pipe",
+      "script": "printf '' | numfmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt null stdin",
+      "script": "numfmt < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt empty file",
+      "script": ": > /tmp/e; numfmt < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt no newline",
+      "script": "printf 'b a' | numfmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt no newline two lines",
+      "script": "printf 'b a\\n1 c' | numfmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt only newline",
+      "script": "printf '\\n' | numfmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt blank lines",
+      "script": "printf '\\n\\n\\n' | numfmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: numfmt whitespace only",
+      "script": "printf ' \\t \\n' | numfmt; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor empty pipe",
+      "script": "printf '' | factor; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor null stdin",
+      "script": "factor < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor empty file",
+      "script": ": > /tmp/e; factor < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor no newline",
+      "script": "printf 'b a' | factor; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor no newline two lines",
+      "script": "printf 'b a\\n1 c' | factor; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor only newline",
+      "script": "printf '\\n' | factor; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor blank lines",
+      "script": "printf '\\n\\n\\n' | factor; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: factor whitespace only",
+      "script": "printf ' \\t \\n' | factor; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file empty pipe",
+      "script": "printf '' | file -b; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file null stdin",
+      "script": "file -b < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file empty file",
+      "script": ": > /tmp/e; file -b /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file no newline",
+      "script": "printf 'b a' | file -b; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file no newline two lines",
+      "script": "printf 'b a\\n1 c' | file -b; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file only newline",
+      "script": "printf '\\n' | file -b; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file blank lines",
+      "script": "printf '\\n\\n\\n' | file -b; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file whitespace only",
+      "script": "printf ' \\t \\n' | file -b; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read empty pipe",
+      "script": "printf '' | { read -r l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read null stdin",
+      "script": "{ read -r l; echo \"read=$? [$l]\"; } < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read empty file",
+      "script": ": > /tmp/e; { read -r l; echo \"read=$? [$l]\"; } < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read no newline",
+      "script": "printf 'b a' | { read -r l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read no newline two lines",
+      "script": "printf 'b a\\n1 c' | { read -r l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read only newline",
+      "script": "printf '\\n' | { read -r l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read blank lines",
+      "script": "printf '\\n\\n\\n' | { read -r l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read whitespace only",
+      "script": "printf ' \\t \\n' | { read -r l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty empty pipe",
+      "script": "printf '' | { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty null stdin",
+      "script": "{ IFS= read -r -d '' l; echo \"read=$? ${#l}\"; } < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty empty file",
+      "script": ": > /tmp/e; { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; } < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty no newline",
+      "script": "printf 'b a' | { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty no newline two lines",
+      "script": "printf 'b a\\n1 c' | { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty only newline",
+      "script": "printf '\\n' | { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty blank lines",
+      "script": "printf '\\n\\n\\n' | { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -d empty whitespace only",
+      "script": "printf ' \\t \\n' | { IFS= read -r -d '' l; echo \"read=$? ${#l}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n empty pipe",
+      "script": "printf '' | { read -r -n 1 l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n null stdin",
+      "script": "{ read -r -n 1 l; echo \"read=$? [$l]\"; } < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n empty file",
+      "script": ": > /tmp/e; { read -r -n 1 l; echo \"read=$? [$l]\"; } < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n no newline",
+      "script": "printf 'b a' | { read -r -n 1 l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n no newline two lines",
+      "script": "printf 'b a\\n1 c' | { read -r -n 1 l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n only newline",
+      "script": "printf '\\n' | { read -r -n 1 l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n blank lines",
+      "script": "printf '\\n\\n\\n' | { read -r -n 1 l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: read -n whitespace only",
+      "script": "printf ' \\t \\n' | { read -r -n 1 l; echo \"read=$? [$l]\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile empty pipe",
+      "script": "printf '' | { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile null stdin",
+      "script": "{ mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; } < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile empty file",
+      "script": ": > /tmp/e; { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; } < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile no newline",
+      "script": "printf 'b a' | { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile no newline two lines",
+      "script": "printf 'b a\\n1 c' | { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile only newline",
+      "script": "printf '\\n' | { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile blank lines",
+      "script": "printf '\\n\\n\\n' | { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: mapfile whitespace only",
+      "script": "printf ' \\t \\n' | { mapfile -t a; echo \"n=${#a[@]}\"; printf '[%s]' \"${a[@]}\"; echo; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read empty pipe",
+      "script": "printf '' | while IFS= read -r l; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read null stdin",
+      "script": "while IFS= read -r l; do echo \"[$l]\"; done < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read empty file",
+      "script": ": > /tmp/e; while IFS= read -r l; do echo \"[$l]\"; done < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read no newline",
+      "script": "printf 'b a' | while IFS= read -r l; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read no newline two lines",
+      "script": "printf 'b a\\n1 c' | while IFS= read -r l; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read only newline",
+      "script": "printf '\\n' | while IFS= read -r l; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read blank lines",
+      "script": "printf '\\n\\n\\n' | while IFS= read -r l; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read whitespace only",
+      "script": "printf ' \\t \\n' | while IFS= read -r l; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last empty pipe",
+      "script": "printf '' | while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last null stdin",
+      "script": "while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last empty file",
+      "script": ": > /tmp/e; while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last no newline",
+      "script": "printf 'b a' | while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last no newline two lines",
+      "script": "printf 'b a\\n1 c' | while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last only newline",
+      "script": "printf '\\n' | while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last blank lines",
+      "script": "printf '\\n\\n\\n' | while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: while read or last whitespace only",
+      "script": "printf ' \\t \\n' | while IFS= read -r l || [ -n \"$l\" ]; do echo \"[$l]\"; done; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution empty pipe",
+      "script": "printf '' | { x=$(cat); echo \"[$x] ${#x}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution null stdin",
+      "script": "{ x=$(cat); echo \"[$x] ${#x}\"; } < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution empty file",
+      "script": ": > /tmp/e; { x=$(cat); echo \"[$x] ${#x}\"; } < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution no newline",
+      "script": "printf 'b a' | { x=$(cat); echo \"[$x] ${#x}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution no newline two lines",
+      "script": "printf 'b a\\n1 c' | { x=$(cat); echo \"[$x] ${#x}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution only newline",
+      "script": "printf '\\n' | { x=$(cat); echo \"[$x] ${#x}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution blank lines",
+      "script": "printf '\\n\\n\\n' | { x=$(cat); echo \"[$x] ${#x}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution whitespace only",
+      "script": "printf ' \\t \\n' | { x=$(cat); echo \"[$x] ${#x}\"; }; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat empty pipe",
+      "script": "printf '' | cat | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat null stdin",
+      "script": "cat | wc -c < /dev/null; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat empty file",
+      "script": ": > /tmp/e; cat | wc -c < /tmp/e; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat no newline",
+      "script": "printf 'b a' | cat | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat no newline two lines",
+      "script": "printf 'b a\\n1 c' | cat | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat only newline",
+      "script": "printf '\\n' | cat | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat blank lines",
+      "script": "printf '\\n\\n\\n' | cat | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: wc -c via cat whitespace only",
+      "script": "printf ' \\t \\n' | cat | wc -c; echo \"status=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm -3 e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm -3 /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm -3 f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm -3 /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm -3 e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm -3 /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm -3 n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm -3 /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm -3 f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm -3 /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: comm -3 n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; comm -3 /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join -a1 e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join -a1 /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join -a1 f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join -a1 /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join -a1 e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join -a1 /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join -a1 n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join -a1 /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join -a1 f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join -a1 /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: join -a1 n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; join -a1 /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: paste e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; paste /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: paste f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; paste /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: paste e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; paste /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: paste n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; paste /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: paste f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; paste /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: paste n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; paste /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff -u e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff -u /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff -u f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff -u /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff -u e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff -u /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff -u n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff -u /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff -u f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff -u /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: diff -u n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; diff -u /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: cmp e f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; cmp /tmp/e /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: cmp f e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; cmp /tmp/f /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: cmp e e",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; cmp /tmp/e /tmp/e | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: cmp n f",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; cmp /tmp/n /tmp/f | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: cmp f n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; cmp /tmp/f /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty pairs: cmp n n",
+      "script": ": > /tmp/e; printf 'a\\nb' > /tmp/n; printf 'a\\nb\\n' > /tmp/f; cmp /tmp/n /tmp/n | sed 's/[0-9-]* [0-9:.]* [-+][0-9]*$//'; echo \"status=${PIPESTATUS[0]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: heredoc empty",
+      "script": "cat <<EOF\nEOF\necho status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: heredoc empty wc",
+      "script": "wc -c <<EOF\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: herestring empty",
+      "script": "wc -c <<< ''",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: herestring unset",
+      "script": "od -An -c <<< \"$unset\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution empty",
+      "script": "x=$(true); echo \"[${x}] ${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution newlines only",
+      "script": "x=$(printf '\\n\\n\\n'); echo \"[${x}] ${#x}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: command substitution keeps inner newlines",
+      "script": "x=$(printf 'a\\n\\nb\\n\\n'); echo \"[${x}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file substitution empty",
+      "script": ": > /tmp/e; x=$(</tmp/e); echo \"[${x}] $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file substitution no newline",
+      "script": "printf 'a' > /tmp/n; x=$(</tmp/n); echo \"[${x}]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: file substitution missing",
+      "script": "x=$(</tmp/missing); echo \"[${x}] $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: semicolon only",
+      "script": ";",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty function body call",
+      "script": "f() { :; }; f; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty array",
+      "script": "a=(); echo \"${#a[@]} [${a[*]}]\"; for x in \"${a[@]}\"; do echo in; done; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty positional",
+      "script": "set --; echo \"$# [$*] [$@]\"; for x; do echo in; done; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty string argument",
+      "script": "printf '[%s]\\n' '' \"\" $''",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty word removed",
+      "script": "x=; printf '[%s]\\n' $x a $x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty quoted kept",
+      "script": "x=; printf '[%s]\\n' \"$x\" a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty IFS",
+      "script": "IFS=; x='a b'; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: unset IFS",
+      "script": "unset IFS; x=' a  b '; set -- $x; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty case",
+      "script": "case '' in '') echo empty;; *) echo other;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty test",
+      "script": "[ '' ]; echo $?; [ -n '' ]; echo $?; [ -z '' ]; echo $?; test; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty cond",
+      "script": "[[ '' ]]; echo $?; [[ -z '' ]]; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty arith",
+      "script": "echo $(( )); x=; echo $((x + 1))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty for list",
+      "script": "for x in; do echo in; done; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty glob literal",
+      "script": "cd /tmp && echo *",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty glob nullglob",
+      "script": "cd /tmp && shopt -s nullglob && echo * && echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty directory ls",
+      "script": "mkdir /tmp/d && ls /tmp/d; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty directory find",
+      "script": "mkdir /tmp/d && find /tmp/d; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty directory rmdir",
+      "script": "mkdir /tmp/d && rmdir /tmp/d && echo gone",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file test -s",
+      "script": ": > /tmp/e; [ -s /tmp/e ]; echo $?; [ -f /tmp/e ]; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file stat",
+      "script": ": > /tmp/e; stat -c %s /tmp/e",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file truncate",
+      "script": "printf abc > /tmp/f; truncate -s 0 /tmp/f; wc -c < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file cp",
+      "script": ": > /tmp/e; cp /tmp/e /tmp/c; wc -c /tmp/c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file split",
+      "script": "cd /tmp && : > e && split e && ls x* 2>&1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file csplit",
+      "script": "cd /tmp && : > e && csplit e 1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file grep -L",
+      "script": ": > /tmp/e; grep -L x /tmp/e; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty file sed -i",
+      "script": ": > /tmp/e; sed -i 's/^/x/' /tmp/e; wc -c < /tmp/e",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline sed -i",
+      "script": "printf 'a' > /tmp/n; sed -i 's/a/b/' /tmp/n; od -An -c /tmp/n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline sed $a",
+      "script": "printf 'a' | sed '$a z' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline sed -s",
+      "script": "printf 'a' > /tmp/x; printf 'b' > /tmp/y; sed -s '$a z' /tmp/x /tmp/y | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline cat two files",
+      "script": "printf 'a' > /tmp/x; printf 'b' > /tmp/y; cat /tmp/x /tmp/y | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline sort two files",
+      "script": "printf 'b' > /tmp/x; printf 'a' > /tmp/y; sort /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline head two files",
+      "script": "printf 'a' > /tmp/x; printf 'b' > /tmp/y; head /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline tail two files",
+      "script": "printf 'a' > /tmp/x; printf 'b' > /tmp/y; tail -n 1 /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline grep two files",
+      "script": "printf 'a' > /tmp/x; printf 'a' > /tmp/y; grep a /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline wc two files",
+      "script": "printf 'a' > /tmp/x; printf 'b\\nc' > /tmp/y; wc /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline nl two files",
+      "script": "printf 'a' > /tmp/x; printf 'b' > /tmp/y; nl /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline tac two files",
+      "script": "printf 'a\\nb' > /tmp/x; tac /tmp/x /tmp/x | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline uniq",
+      "script": "printf 'a\\na' | uniq -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline diff",
+      "script": "printf 'a' > /tmp/x; printf 'a\\n' > /tmp/y; diff /tmp/x /tmp/y; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline diff both",
+      "script": "printf 'a' > /tmp/x; printf 'b' > /tmp/y; diff /tmp/x /tmp/y; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline patch",
+      "script": "printf 'a\\n' > /tmp/x; printf 'b' > /tmp/y; diff -u /tmp/x /tmp/y > /tmp/p; cd /tmp && patch x < p; od -An -c x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline cmp",
+      "script": "printf 'a' > /tmp/x; printf 'a\\n' > /tmp/y; cmp /tmp/x /tmp/y; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline comm",
+      "script": "printf 'a\\nb' > /tmp/x; printf 'b\\n' > /tmp/y; comm /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline join",
+      "script": "printf '1 a' > /tmp/x; printf '1 b' > /tmp/y; join /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline paste",
+      "script": "printf 'a' > /tmp/x; printf 'b\\nc' > /tmp/y; paste /tmp/x /tmp/y",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline jq values",
+      "script": "printf '1 2' | jq -c .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline jq object",
+      "script": "printf '{\"a\":1}' | jq -c .a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline jq truncated",
+      "script": "printf '{\"a\":' | jq -c . 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline xargs",
+      "script": "printf 'a b' | xargs -n 1 echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline mapfile",
+      "script": "printf 'a\\nb' | { mapfile a; printf '[%s]' \"${a[@]}\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline read -d",
+      "script": "printf 'a,b' | { while IFS= read -r -d , x; do echo \"[$x]\"; done; echo \"last [$x]\"; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline source",
+      "script": "printf 'echo sourced' > /tmp/s; . /tmp/s",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline sh -c",
+      "script": "sh -c 'printf done'; echo",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline heredoc body",
+      "script": "cat <<'EOF' | od -An -c\na\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline base64 -d",
+      "script": "printf 'YQ==' | base64 -d | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline md5sum -c",
+      "script": "printf 'a' > /tmp/x; md5sum /tmp/x | tr -d '\\n' > /tmp/s; md5sum -c /tmp/s",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline factor",
+      "script": "printf '6\\n10' | factor; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline tr",
+      "script": "printf 'abc' | tr b '\\n' | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline fold",
+      "script": "printf 'abcde' | fold -w 2 | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline fmt",
+      "script": "printf 'a b c' | fmt -w 3 | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline expand",
+      "script": "printf 'a\\tb' | expand | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline tail -c",
+      "script": "printf 'abc' | tail -c 2 | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline tail -n 0",
+      "script": "printf 'a\\nb' | tail -n 0 | od -An -c; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: no newline head -n 0",
+      "script": "printf 'a\\nb' | head -n 0 | od -An -c; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: echo -n then wc",
+      "script": "echo -n | wc -c; echo -n '' | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: printf empty format",
+      "script": "printf ''; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: printf missing format",
+      "script": "printf; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: echo nothing",
+      "script": "echo | od -An -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: true pipe",
+      "script": "true | cat; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge empty: empty pipeline stage",
+      "script": "echo a | : | cat; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

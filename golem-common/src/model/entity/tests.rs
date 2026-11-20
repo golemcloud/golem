@@ -189,7 +189,7 @@ fn entity_invocation_id_protobuf_roundtrip_is_structured() {
 fn owner_principal(owner: &OwnedAgentId) -> Principal {
     Principal::Agent(AgentPrincipal::of_agent(
         "https://golem.example".to_string(),
-        owner.agent_id.clone(),
+        owner.agent_id,
         crate::model::AgentFingerprint(uuid::Uuid::from_u128(0xf1)),
         AgentTypeName("Relay".to_string()),
         owner.environment_id,

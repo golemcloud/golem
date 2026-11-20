@@ -1427,10 +1427,10 @@ async fn create_oplog_service_with_presence(
             "seed_archive_presence",
             "oplog",
             IndexedStorageNamespace::OpLog {
-                agent_id: owned_agent_id.agent_id.clone(),
+                owned_agent_id: owned_agent_id.clone(),
                 agent_mode: AgentMode::Durable,
             },
-            &owned_agent_id.agent_id.to_redis_key(),
+            &owned_agent_id.storage_key(),
             1,
             vec![],
             None,
