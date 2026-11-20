@@ -16,7 +16,7 @@
 
 package golem.tool
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.{FromSchema, IntoSchema, SchemaEncodeError, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
 import golem.tool.wire.WitToolError
@@ -109,7 +109,7 @@ trait ToolInvokeHandler {
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]]
 }
 
@@ -129,9 +129,13 @@ trait ToolInvokeEnv {
 final class ToolInvocationContext(
   val fields: List[CanonicalInputValue],
   val stdin: Option[ToolInputStream],
-  val principal: Principal,
+  val context: InvocationContext,
   val env: ToolInvokeEnv
-)
+) {
+
+  /** Who caused the running invocation. */
+  def caller: golem.Caller = context.caller
+}
 
 /**
  * One tool method's dispatch entry: the command path it serves and the
@@ -172,8 +176,8 @@ object ToolParamDecoder {
   /** Decoded from the canonical input field with the given surface name. */
   final case class Field(name: String, decode: SchemaValue => Either[String, Any]) extends ToolParamDecoder
 
-  /** Auto-injected from the invocation principal. */
-  case object PrincipalParam extends ToolParamDecoder
+  /** Auto-injected from the invocation context. */
+  case object InvocationContextParam extends ToolParamDecoder
 
   /** Auto-injected from the invocation stdin stream. */
   case object StdinParam extends ToolParamDecoder
@@ -219,13 +223,13 @@ object ToolInvokerRuntime {
         commandPath: List[String],
         input: TypedSchemaValue,
         stdin: Option[ToolInputStream],
-        principal: Principal
+        context: InvocationContext
       ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
         dispatch.get(commandPath) match {
           case Some((commandIndex, binding)) =>
-            invokeBinding(tool, env, commandIndex, binding, input, stdin, principal)
+            invokeBinding(tool, env, commandIndex, binding, input, stdin, context)
           case None =>
-            ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, principal)
+            ToolInvokerRuntime.invoke(tool, handle, env, commandPath, input, stdin, context)
         }
     }
   }
@@ -237,11 +241,11 @@ object ToolInvokerRuntime {
     binding: ToolMethodBinding,
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
     tool.decodeCanonicalInputRecord(commandIndex, input.value) match {
       case Left(err)     => failed(ToolInvokeError.InvalidInput(err.message))
-      case Right(fields) => binding.run(new ToolInvocationContext(fields, stdin, principal, env))
+      case Right(fields) => binding.run(new ToolInvocationContext(fields, stdin, context, env))
     }
 
   def invoke(
@@ -251,7 +255,7 @@ object ToolInvokerRuntime {
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
     tool.commandIndexByPath(commandPath) match {
       case None               => failed(ToolInvokeError.InvalidCommandPath(commandPath))
@@ -264,11 +268,11 @@ object ToolInvokerRuntime {
             }
             binding match {
               case Some(b) =>
-                b.run(new ToolInvocationContext(fields, stdin, principal, env))
+                b.run(new ToolInvocationContext(fields, stdin, context, env))
               case None =>
                 handle.subtreeForwards.find(f => commandPath.startsWith(f.pathPrefix)) match {
                   case Some(forward) =>
-                    forwardToSubtree(env, forward, commandPath, fields, input, stdin, principal)
+                    forwardToSubtree(env, forward, commandPath, fields, input, stdin, context)
                   case None =>
                     failed(ToolInvokeError.InvalidCommandPath(commandPath))
                 }
@@ -289,14 +293,14 @@ object ToolInvokerRuntime {
     fields: List[CanonicalInputValue],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    principal: Principal
+    context: InvocationContext
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] = {
     val subPath = commandPath.drop(forward.pathPrefix.length)
     env.invokerFor(forward.childToolName) match {
       case None          => failed(ToolInvokeError.InvalidToolName(forward.childToolName))
       case Some(invoker) =>
         env.extendedToolFor(forward.childToolName) match {
-          case None          => invoker.invoke(subPath, input, stdin, principal)
+          case None          => invoker.invoke(subPath, input, stdin, context)
           case Some(subtool) =>
             subtool.commandIndexByPath(subPath) match {
               case None           => failed(ToolInvokeError.InvalidCommandPath(commandPath))
@@ -336,7 +340,7 @@ object ToolInvokerRuntime {
                       model.recordSchema,
                       SchemaValue.RecordValue(values.result())
                     )
-                    invoker.invoke(subPath, subInput, stdin, principal)
+                    invoker.invoke(subPath, subInput, stdin, context)
                 }
             }
         }
@@ -345,7 +349,7 @@ object ToolInvokerRuntime {
 
   /**
    * Resolves every method parameter for one invocation: canonical fields are
-   * found by surface name and decoded, and Principal / stdin / stdout
+   * found by surface name and decoded, and InvocationContext / stdin / stdout
    * parameters are injected. Returns the positional argument vector plus the
    * stdout handle when the method declared one.
    */
@@ -374,8 +378,8 @@ object ToolInvokerRuntime {
                 case Right(value)  => args += value
               }
           }
-        case ToolParamDecoder.PrincipalParam =>
-          args += ctx.principal
+        case ToolParamDecoder.InvocationContextParam =>
+          args += ctx.context
         case ToolParamDecoder.StdinParam =>
           ctx.stdin match {
             case None =>

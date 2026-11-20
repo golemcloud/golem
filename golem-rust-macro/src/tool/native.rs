@@ -226,7 +226,7 @@ fn optional_type_is(ty: &Type, expected: &str) -> bool {
     segment.ident == "Option" && arguments.args.iter().any(|argument| matches!(argument, syn::GenericArgument::Type(inner) if terminal_type_is(inner, expected)))
 }
 
-fn is_principal(ty: &Type) -> bool {
+fn is_caller(ty: &Type) -> bool {
     let Type::Path(path) = ty else { return false };
     let segments = path
         .path
@@ -234,7 +234,7 @@ fn is_principal(ty: &Type) -> bool {
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
-    matches!(segments.as_slice(), [sdk, principal] if (sdk == "golem_native_tool" || sdk == "crate") && principal == "Principal")
+    matches!(segments.as_slice(), [sdk, caller] if (sdk == "golem_native_tool" || sdk == "crate") && caller == "Caller")
 }
 fn is_cancellation(ty: &Type) -> bool {
     terminal_type_is(ty, "NativeToolCancellation")
@@ -313,8 +313,8 @@ fn synthesize_native_invoke(
             let ident = &param.ident;
             let ty = &param.ty;
             let field = super::definition::canonical_param_name(ir, command, param, &tool_name);
-            if is_principal(ty) {
-                quote! { let #ident = __invocation.principal.clone(); }
+            if is_caller(ty) {
+                quote! { let #ident = __invocation.caller.clone(); }
             } else if is_cancellation(ty) {
                 quote! { let #ident = __invocation.cancellation.clone(); }
             } else if is_stdin(ty) {

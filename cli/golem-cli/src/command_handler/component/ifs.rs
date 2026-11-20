@@ -154,7 +154,9 @@ pub async fn expand_component_files(
     for component_file in component_files {
         let scheme = component_file.source.as_url().scheme();
         match scheme {
-            "file" | "" => expanded.extend(expand_local_component_file(component_file).await?),
+            "file" | "" => {
+                expanded.extend(expand_local_component_file(component_file, None).await?)
+            }
             _ => expanded.push(component_file.clone()),
         }
     }
@@ -162,8 +164,24 @@ pub async fn expand_component_files(
     Ok(expanded)
 }
 
+pub(super) async fn expand_package_files(
+    files: &[InitialComponentFile],
+    root: &Path,
+) -> anyhow::Result<Vec<InitialComponentFile>> {
+    let mut expanded = Vec::new();
+    for file in files {
+        anyhow::ensure!(
+            file.source.as_url().scheme() == "file",
+            "Package initial files must be local"
+        );
+        expanded.extend(expand_local_component_file(file, Some(root)).await?);
+    }
+    Ok(expanded)
+}
+
 async fn expand_local_component_file(
     component_file: &InitialComponentFile,
+    package_root: Option<&Path>,
 ) -> anyhow::Result<Vec<InitialComponentFile>> {
     let source_path = component_file.source.as_url().to_file_path().map_err(|_| {
         anyhow!(
@@ -171,7 +189,7 @@ async fn expand_local_component_file(
             component_file.source.as_url()
         )
     })?;
-    if !source_path.is_dir() {
+    if package_root.is_none() && !source_path.is_dir() {
         return Ok(vec![component_file.clone()]);
     }
 
@@ -181,6 +199,22 @@ async fn expand_local_component_file(
         vec![(source_path, component_file.target.clone())].into();
 
     while let Some((path, target)) = queue.pop_front() {
+        let path = if let Some(root) = package_root {
+            let path = tokio::fs::canonicalize(&path)
+                .await
+                .with_context(|| format!("Cannot resolve initial file {}", path.display()))?;
+            anyhow::ensure!(
+                path.starts_with(root),
+                "Package initial file leaves the application root"
+            );
+            anyhow::ensure!(
+                path.is_file() || path.is_dir(),
+                "Package initial-file source must be a regular file or directory"
+            );
+            path
+        } else {
+            path
+        };
         if path.is_dir() {
             let canonical_path = tokio::fs::canonicalize(&path)
                 .await
@@ -425,7 +459,12 @@ impl IfsFileManager {
         component_file: &InitialComponentFile,
     ) -> anyhow::Result<Vec<R>> {
         // if it's a directory, we need to recursively load all files and combine them with their target paths and permissions.
-        let source_path = PathBuf::from(component_file.source.as_url().path());
+        let source_path = component_file.source.as_url().to_file_path().map_err(|_| {
+            anyhow!(
+                "Invalid local initial-file URL: {}",
+                component_file.source.as_url()
+            )
+        })?;
 
         let mut results: Vec<R> = vec![];
         let mut visited_dirs = HashSet::new();
@@ -722,6 +761,33 @@ mod tests {
     use tokio::io::BufReader;
     use url::Url;
 
+    #[cfg(unix)]
+    #[test]
+    async fn package_initial_files_stay_inside_the_application() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("app");
+        let files = root.join("files");
+        std::fs::create_dir_all(&files).unwrap();
+        let outside = temp.path().join("outside.txt");
+        std::fs::write(&outside, "not part of the application").unwrap();
+        std::os::unix::fs::symlink(outside, files.join("link.txt")).unwrap();
+        let source = Url::from_file_path(files).unwrap();
+        let entry = InitialComponentFile {
+            source: InitialComponentFileSource::new(source.as_str(), Path::new("/golem.yaml"))
+                .unwrap(),
+            target: CanonicalFilePathWithPermissions {
+                path: CanonicalFilePath::from_abs_str("/files").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            },
+        };
+        let root = std::fs::canonicalize(root).unwrap();
+        let error = match super::expand_package_files(&[entry], &root).await {
+            Ok(_) => panic!("An initial file outside the application was staged"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("leaves the application root"));
+    }
+
     #[test]
     fn archive_path_uses_counter_on_name_collision() {
         let first_source = Url::parse("file:///tmp/a/main.ts").unwrap();
@@ -807,7 +873,7 @@ mod tests {
     #[test]
     async fn duplicate_sources_are_written_to_the_archive_once() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let source = temp_dir.path().join("shared.txt");
+        let source = temp_dir.path().join("shared file.txt");
         std::fs::write(&source, "shared").unwrap();
         let files = vec![
             local_file(&source, "/first.txt"),

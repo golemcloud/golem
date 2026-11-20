@@ -1077,6 +1077,8 @@ fn failed(
             },
         ),
         snapshot_fault: fault,
+        failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+        divergence: None,
     }
 }
 

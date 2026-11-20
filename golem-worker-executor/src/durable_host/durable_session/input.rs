@@ -1156,6 +1156,7 @@ impl StreamSession {
                 if original_index >= index || !record.matches_reobserved(&original) {
                     return Err(SessionError::from(
                         WorkerExecutorError::unexpected_oplog_entry(
+                            index,
                             "unchanged logical consumer input",
                             format!("invalid re-observation at {index} of {original_index}"),
                         ),

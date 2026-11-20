@@ -49,6 +49,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 if let ReplayDeliveryDisposition::AtMarker(marker_idx) = disposition {
                     self.state = pending_call.accept_terminal().into_session();
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        marker_idx,
                         "a completion-delivery marker for an accessor durable call",
                         format!(
                             "CompletionDelivered at {marker_idx} references non-accessor durable call Start at {}",
@@ -64,6 +65,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
@@ -216,8 +218,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         {
             self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "End for an effectful resource drop",
+                self.start_idx,
                 format!("Cancelled for Start {}", self.start_idx),
+                "End for an effectful resource drop",
             ));
         }
         if require_completed
@@ -228,6 +231,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         {
             self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
                 "completed host-internal child",
                 "completed parent has an unfinished host-internal child",
             ));
@@ -245,6 +249,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         {
             self.state = pending_call.accept_terminal().into_session();
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
                 "host-internal terminal without a guest delivery marker",
                 format!("delivery marker for host-internal Start {}", self.start_idx),
             ));
@@ -254,6 +259,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
@@ -314,11 +320,12 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     }) {
                         self.state = pending_call.accept_terminal().into_session();
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
-                            "End for an effectful resource drop",
+                            self.start_idx,
                             format!(
                                 "incomplete Start {} during completed entity replay",
                                 self.start_idx
                             ),
+                            "End for an effectful resource drop",
                         ));
                     }
                     // Do not acquire a live-call permit while later invocations must still
@@ -379,6 +386,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     if destination != AccessResultDestination::Guest {
                         self.abandon_for_trap();
                         return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            self.start_idx,
                             "host-internal Start without a denial",
                             format!("denied host-internal Start {}", self.start_idx),
                         ));
@@ -434,6 +442,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
@@ -461,6 +470,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.state = pending_call.accept_terminal().into_session();
                 end_durable_function_access(store, get_ctx, function_type, false).await?;
                 Err(WorkerExecutorError::unexpected_oplog_entry(
+                    cancelled_idx,
                     "entity cancellation with partial terminal provenance",
                     format!("Cancelled without partial at {cancelled_idx}"),
                 ))
@@ -516,12 +526,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 let cancelled = matches!(payload, ReplayedPayload::CancelledPartial(_));
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
                 .await?;
                 if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        self.start_idx,
                         "internal entity terminal without delivery marker",
                         "CompletionDelivered for internal entity invocation",
                     ));
@@ -535,6 +547,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ReplayedResolution::Incomplete => {
                 self.state = pending_call.accept_terminal().into_session();
                 Err(WorkerExecutorError::unexpected_oplog_entry(
+                    self.start_idx,
                     "completed entity invocation terminal",
                     format!(
                         "end of replay after entity Start at {}; the completed reconstruction was unresolved",
@@ -616,6 +629,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
@@ -654,6 +668,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.state = pending_call.accept_terminal().into_session();
                 let response = decode_replayed_payload::<Pair>(
                     &oplog,
+                    self.start_idx,
                     ReplayedPayload::Completed(response),
                     self.execution_scope.trap_retry_point(),
                 )
@@ -832,6 +847,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             CallReplayOutcome::Incomplete(mut handle) => {
                 handle.abandon_for_trap();
                 Err(WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_idx,
                     "End or Cancelled",
                     "an incomplete non-re-executable durable call".to_string(),
                 ))
@@ -858,12 +874,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 self.state = pending_call.accept_terminal().into_session();
                 if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        self.start_idx,
                         "a direct host-return terminal",
                         "a completion-delivery marker".to_string(),
                     ));
                 }
                 let response = decode_replayed_payload::<Pair>(
                     &ctx.state.oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
@@ -916,8 +934,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 } => (request, denial, span_started),
                 entry => {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        format!("denied {} Start with a request", Pair::FQFN),
+                        start_idx,
                         format!("{entry:?}"),
+                        format!("denied {} Start with a request", Pair::FQFN),
                     ));
                 }
             };
@@ -929,7 +948,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             })?;
             let request = Pair::Req::try_from(request).map_err(|actual| {
-                WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN.to_string(), actual)
+                WorkerExecutorError::unexpected_oplog_entry(
+                    start_idx,
+                    Pair::FQFN.to_string(),
+                    actual,
+                )
             })?;
             let span_finished =
                 span_started.map(|started| golem_common::model::oplog::SpanFinished {
@@ -941,6 +964,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 .map(|response| Some((response, span_finished)))
                 .ok_or_else(|| {
                     WorkerExecutorError::unexpected_oplog_entry(
+                        start_idx,
                         format!("{} Start without a denial", Pair::FQFN),
                         format!("denial at {}: {denial}", start_idx),
                     )
@@ -1044,6 +1068,7 @@ impl
                 self.state = pending_call.accept_terminal().into_session();
                 if matches!(disposition, ReplayDeliveryDisposition::AtMarker(_)) {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        self.start_idx,
                         "internal entity terminal without delivery marker",
                         "CompletionDelivered for internal entity invocation",
                     ));
@@ -1053,6 +1078,7 @@ impl
                     golem_common::model::oplog::host_functions::GolemEntityInvoke,
                 >(
                     &context.oplog,
+                    self.start_idx,
                     payload,
                     self.execution_scope.trap_retry_point(),
                 )
@@ -1138,6 +1164,7 @@ impl UndeliveredTerminal {
         match self {
             UndeliveredTerminal::CancelledWithoutPartial { cancelled_idx } => {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    *cancelled_idx,
                     "End or Cancelled { partial: Some(..) }",
                     format!("Cancelled without partial at {cancelled_idx}"),
                 )
@@ -1147,6 +1174,7 @@ impl UndeliveredTerminal {
                 marker_idx,
                 ..
             } => WorkerExecutorError::unexpected_oplog_entry(
+                *marker_idx,
                 "End delivered to the guest",
                 format!(
                     "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a non-accessor durable call"
@@ -1212,16 +1240,18 @@ pub(in crate::durable_host::concurrent) fn classify_replay_resolution(
 /// Decodes a replayed delivery's recorded payload into the call's typed response.
 async fn decode_replayed_payload<Pair: HostPayloadPair>(
     oplog: &Arc<dyn Oplog>,
+    start_idx: OplogIndex,
     payload: ReplayedPayload,
     retry_from: OplogIndex,
 ) -> Result<Pair::Resp, WorkerExecutorError> {
     match payload {
         ReplayedPayload::Completed(response) => {
-            decode_completed_response::<Pair>(oplog, response, retry_from).await
+            decode_completed_response::<Pair>(oplog, start_idx, response, retry_from).await
         }
         ReplayedPayload::CancelledPartial(payload) => {
             download_and_decode_response::<Pair>(
                 oplog,
+                start_idx,
                 payload,
                 "Cancelled partial payload",
                 retry_from,
@@ -1236,6 +1266,7 @@ async fn decode_replayed_payload<Pair: HostPayloadPair>(
 /// corrupt or missing data and type mismatches are unexpected oplog entries.
 async fn download_and_decode_response<Pair: HostPayloadPair>(
     oplog: &Arc<dyn Oplog>,
+    start_idx: OplogIndex,
     payload: OplogPayload<HostResponse>,
     payload_kind: &str,
     retry_from: OplogIndex,
@@ -1252,6 +1283,7 @@ async fn download_and_decode_response<Pair: HostPayloadPair>(
             }
             crate::services::oplog::OplogPayloadDownloadError::Corrupt(error) => {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    start_idx,
                     "valid durable call response payload",
                     format!("{payload_kind} is corrupt: {error}"),
                 )
@@ -1259,23 +1291,25 @@ async fn download_and_decode_response<Pair: HostPayloadPair>(
         })?;
     host_response
         .try_into()
-        .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN, err))
+        .map_err(|err| WorkerExecutorError::unexpected_oplog_entry(start_idx, Pair::FQFN, err))
 }
 
 /// Decodes a replayed successful completion's response: requires the recorded `End` to carry a
 /// response payload, then downloads and decodes it via [`download_and_decode_response`].
 pub(super) async fn decode_completed_response<Pair: HostPayloadPair>(
     oplog: &Arc<dyn Oplog>,
+    start_idx: OplogIndex,
     response: Option<OplogPayload<HostResponse>>,
     retry_from: OplogIndex,
 ) -> Result<Pair::Resp, WorkerExecutorError> {
     let payload = response.ok_or_else(|| {
         WorkerExecutorError::unexpected_oplog_entry(
+            start_idx,
             "End { response: Some(..) }",
             "End { response: None }".to_string(),
         )
     })?;
-    download_and_decode_response::<Pair>(oplog, payload, "End payload", retry_from).await
+    download_and_decode_response::<Pair>(oplog, start_idx, payload, "End payload", retry_from).await
 }
 
 /// Validates a replay-side cancellation: the recorded resolution must be `Cancelled`. A recorded
@@ -1286,9 +1320,13 @@ pub(super) fn expect_cancelled_resolution(
 ) -> Result<(), WorkerExecutorError> {
     match resolution {
         Resolution::Completed { end_idx, .. }
-        | Resolution::CompletedButDiscarded { end_idx, .. } => Err(
-            WorkerExecutorError::unexpected_oplog_entry("Cancelled", format!("End at {end_idx}")),
-        ),
+        | Resolution::CompletedButDiscarded { end_idx, .. } => {
+            Err(WorkerExecutorError::unexpected_oplog_entry(
+                *end_idx,
+                format!("End at {end_idx}"),
+                "Cancelled",
+            ))
+        }
         Resolution::Cancelled { .. } => Ok(()),
     }
 }

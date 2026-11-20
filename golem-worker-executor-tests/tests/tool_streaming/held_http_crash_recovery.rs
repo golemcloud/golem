@@ -30,6 +30,7 @@ use anyhow::Context;
 use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{ReplayAdmissionGateHandle, ReplayAdmissionStage};
 use std::time::Instant;
 use test_r::test;
@@ -185,7 +186,7 @@ struct Fixture {
     owner_component: ComponentDto,
     owner_type: &'static str,
     clock_race: Option<golem_common::schema::tool::Tool>,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
 }
 
 async fn fixture(
@@ -265,9 +266,7 @@ async fn fixture(
         owner_component,
         owner_type,
         clock_race,
-        principal: Principal::GolemUser(GolemUserPrincipal {
-            account_id: context.account_id,
-        }),
+        caller: callers::account(context.account_id),
     })
 }
 
@@ -347,7 +346,7 @@ impl Fixture {
                 vec![command.to_string()],
                 input,
                 InvocationContextStack::fresh(),
-                self.principal.clone(),
+                self.caller.clone(),
                 None,
             )
             .await?;
@@ -400,7 +399,7 @@ impl Fixture {
                 let executor = self.executor.clone();
                 let worker_id = worker_id.clone();
                 let key = key.clone();
-                let principal = self.principal.clone();
+                let caller = self.caller.clone();
                 Ok(Some(tokio::spawn(async move {
                     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
                     let output = executor
@@ -412,7 +411,7 @@ impl Fixture {
                             vec!["nap-then-fetch".to_string()],
                             input,
                             InvocationContextStack::fresh(),
-                            principal,
+                            caller,
                             None,
                         )
                         .await?;

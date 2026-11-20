@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use uuid::Uuid;
 
 use golem_common::model::InvocationId;
@@ -1729,6 +1730,7 @@ fn lookup_keeps_retrying_error_pending() {
                     error: AgentError::TransientError("in-function retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
                     semantic_trap_retry_override: None,
+                    provenance: crate::model::FailureProvenance::Host,
                 },
                 stderr: String::new(),
             }),
@@ -1782,6 +1784,7 @@ fn lookup_reports_terminal_error_as_failure() {
                     error: AgentError::TransientError("in-function retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
                     semantic_trap_retry_override: None,
+                    provenance: crate::model::FailureProvenance::Host,
                 },
                 stderr: String::new(),
             }),
@@ -1814,6 +1817,7 @@ fn lookup_keeps_prior_retry_error_pending_during_recovery_failure() {
                     error: AgentError::TransientError("prior retry".to_string()),
                     retry_from: OplogIndex::from_u64(17),
                     semantic_trap_retry_override: None,
+                    provenance: crate::model::FailureProvenance::Host,
                 },
                 stderr: String::new(),
             }),
@@ -1835,6 +1839,7 @@ fn reconstructed_permission_denial_keeps_its_executor_error_type() {
                     error: AgentError::PermissionDenied("permission denied".to_string()),
                     retry_from: OplogIndex::from_u64(17),
                     semantic_trap_retry_override: None,
+                    provenance: crate::model::FailureProvenance::Host,
                 },
                 stderr: String::new(),
             }),
@@ -2140,13 +2145,10 @@ fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
 #[test]
 fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
     use super::acquisition::{CreateDecision, CreateIdentity, decide_create};
-    use golem_common::model::account::AccountId;
-    use golem_common::model::agent::GolemUserPrincipal;
-
     let request = CreateRequest::new(
         CreateRequestKind::Exclusive,
         Some(IdempotencyKey::new("create-1".into())),
-        Principal::anonymous(),
+        Caller::anonymous(),
         &InvocationContextStack::fresh(),
     );
     let env = vec![("A".into(), "one".into()), ("B".into(), "two".into())];
@@ -2197,7 +2199,7 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
     let mut retry = CreateRequest::new(
         request.kind,
         request.idempotency_key.clone(),
-        request.principal.clone(),
+        request.caller.clone(),
         &InvocationContextStack::fresh(),
     );
     assert_eq!(
@@ -2236,15 +2238,13 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
         CreateDecision::IdempotencyKeyConflict
     );
     retry.kind = request.kind;
-    retry.principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: AccountId::new(),
-    });
+    retry.caller = crate::test_callers::sample_caller();
     assert_eq!(
         decide(&retry, Some("Counter(17)"), &env, &config, true),
         CreateDecision::IdempotencyKeyConflict
     );
     retry.idempotency_key = None;
-    retry.principal = request.principal.clone();
+    retry.caller = request.caller.clone();
     assert_eq!(
         decide(&retry, Some("Counter(17)"), &env, &config, true),
         CreateDecision::AlreadyExists
@@ -2267,14 +2267,58 @@ fn create_admission_decides_exclusivity_and_compares_retry_fields_as_maps() {
 }
 
 #[test]
+fn create_admission_compares_callers_as_records() {
+    use super::acquisition::{CreateDecision, CreateIdentity, decide_create};
+    use golem_common::model::caller::{Claims, Principal, UserPrincipal};
+
+    let stored = CreateRequest::new(
+        CreateRequestKind::Exclusive,
+        Some(IdempotencyKey::new("create-1".into())),
+        crate::test_callers::sample_caller(),
+        &InvocationContextStack::fresh(),
+    );
+    let decide = |incoming: &CreateRequest| {
+        decide_create(
+            Some(CreateIdentity {
+                request: &stored,
+                canonical_key: Some("Counter(17)"),
+                env: &[],
+                config: &[],
+            }),
+            CreateIdentity {
+                request: incoming,
+                canonical_key: Some("Counter(17)"),
+                env: &[],
+                config: &[],
+            },
+            true,
+        )
+    };
+
+    // The same caller is a retry.
+    let mut same = stored.clone();
+    assert_eq!(decide(&same), CreateDecision::IdempotentRetry);
+
+    // A caller that differs only in its claims is another request under the same key.
+    let Principal::User(user) = crate::test_callers::user_principal() else {
+        unreachable!()
+    };
+    same.caller.original = Principal::User(UserPrincipal {
+        claims: Claims::from_json(user.claims.as_json().replace(',', ", ")).unwrap(),
+        ..user
+    });
+    assert_eq!(decide(&same), CreateDecision::IdempotencyKeyConflict);
+}
+
+#[test]
 fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() {
     let key = IdempotencyKey::new("create-key".to_string());
-    let principal = Principal::anonymous();
+    let caller = Caller::anonymous();
     let context = InvocationContextStack::fresh();
     let derived_phantom = Some(ephemeral_invocation_phantom_id(&key));
     let chosen_phantom = Some(Uuid::new_v4());
     let recorded = |intent: CreateIntent, phantom_id: Option<Uuid>| {
-        let request = intent.request(phantom_id, principal.clone(), &context);
+        let request = intent.request(phantom_id, caller.clone(), &context);
         (request.kind, request.idempotency_key)
     };
     let invocation = CreateIntent::Invocation {

@@ -233,8 +233,9 @@ object AgentClientMacro {
     value
 
   /**
-   * The user-supplied `class Id(...)` parameters (name + type), Principal
-   * params filtered out. These define the constructor input record's shape.
+   * The user-supplied `class Id(...)` parameters (name + type),
+   * InvocationContext params filtered out. These define the constructor input
+   * record's shape.
    */
   private def agentInputParams(using
     Quotes
@@ -272,7 +273,7 @@ object AgentClientMacro {
               case v: ValDef => (sym.name, v.tpt.tpe)
               case other     => report.errorAndAbort(s"Unsupported parameter declaration in Id class: $other")
             }
-        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
+        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.InvocationContext" }
     }
   }
 
@@ -341,7 +342,7 @@ object AgentClientMacro {
               case v: ValDef => (sym.name, v.tpt.tpe)
               case other     => report.errorAndAbort(s"Unsupported parameter declaration in ${method.name}: $other")
             }
-        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
+        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.InvocationContext" }
     }.getOrElse(Nil)
   }
 

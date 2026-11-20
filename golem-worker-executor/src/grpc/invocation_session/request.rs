@@ -18,19 +18,20 @@ use super::{
     HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
     InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
     MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentKey,
-    PersistedInvocationTarget, PersistedStreamInvocationDescriptor, Principal,
-    ProducerRegistrationRequest, ResumeAttach, ResumeAttemptDescriptor, ResumeOperation,
-    SchemaGraph, SchemaType, SchemaValue, SchemaValueStream, SessionError, SessionStreamRole,
-    StartAttemptDescriptor, StreamCancellationRequest, StreamEndpointSide, StreamInvocationId,
-    StreamItemsPayload, StreamRegistrationCoordinate, StreamRegistrationInvocation,
-    StreamResumeCursor, StreamResumeOperation, StreamRootKind, StreamSession, StreamSessionMapping,
-    StreamSourceKind, StreamTerminal, StreamTerminalAuthor, StreamValuePathStep,
-    ToolByteStreamRole, ToolInvocationInput, ToolInvocationOutput, TransportStreamId,
-    WorkerExecutorError, decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
+    PersistedInvocationTarget, PersistedStreamInvocationDescriptor, ProducerRegistrationRequest,
+    ResumeAttach, ResumeAttemptDescriptor, ResumeOperation, SchemaGraph, SchemaType, SchemaValue,
+    SchemaValueStream, SessionError, SessionStreamRole, StartAttemptDescriptor,
+    StreamCancellationRequest, StreamEndpointSide, StreamInvocationId, StreamItemsPayload,
+    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeCursor,
+    StreamResumeOperation, StreamRootKind, StreamSession, StreamSessionMapping, StreamSourceKind,
+    StreamTerminal, StreamTerminalAuthor, StreamValuePathStep, ToolByteStreamRole,
+    ToolInvocationInput, ToolInvocationOutput, TransportStreamId, WorkerExecutorError,
+    decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
     encode_recursive_stream_value_with_schema, invocation_request, invocation_response, mpsc,
     schema_fingerprint_v1,
 };
+use golem_common::model::caller::{Caller, Principal};
 
 pub(crate) fn decode_invocation_input(
     input: golem_schema::proto::golem::schema::SchemaValue,
@@ -322,9 +323,8 @@ pub(crate) fn build_durable_streaming_request(
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
         let fingerprint: uuid::Uuid = origin.callee_fingerprint.ok_or_else(invalid)?.into();
-        let principal = request.principal.clone().ok_or_else(invalid)?;
-        let principal =
-            Principal::try_from(principal).map_err(WorkerExecutorError::invalid_request)?;
+        let caller = request.caller.clone().ok_or_else(invalid)?;
+        let caller = Caller::try_from(caller).map_err(WorkerExecutorError::invalid_request)?;
         let parent: AgentId = request
             .context
             .as_ref()
@@ -334,7 +334,7 @@ pub(crate) fn build_durable_streaming_request(
             .map_err(WorkerExecutorError::invalid_request)?;
         if fingerprint.is_nil()
             || origin.idempotency_key.is_none()
-            || !matches!(principal, Principal::Agent(agent) if agent.agent_id == parent)
+            || !matches!(&caller.immediate, Principal::Agent(agent) if agent.address == parent)
         {
             return Err(invalid());
         }
@@ -430,7 +430,7 @@ pub(crate) fn build_durable_streaming_request(
     execution.external_tool = None;
     execution.idempotency_key = None;
     execution.auth_ctx = None;
-    execution.principal = None;
+    execution.caller = None;
     execution.environment_id = None;
     execution.component_owner_account_id = None;
     execution.attempt_id = None;
@@ -455,7 +455,7 @@ pub(crate) fn build_durable_streaming_request(
         has_stderr,
     ))
     .map_err(WorkerExecutorError::runtime)?;
-    let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal)?;
+    let effective_identity = effective_session_identity(&request.auth_ctx, &request.caller)?;
     let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: session_key.clone(),
@@ -655,7 +655,7 @@ pub(super) fn build_resume_attempt(
         expected_callee_fingerprint,
         attempt_id,
         expected_epoch: request.expected_epoch,
-        effective_identity: effective_session_identity(&request.auth_ctx, &request.principal)?,
+        effective_identity: effective_session_identity(&request.auth_ctx, &request.caller)?,
         cursors,
         live_join_buffer_events: u32::try_from(live_join_buffer_events).map_err(|_| {
             WorkerExecutorError::invalid_request("live join buffer capacity does not fit in u32")
@@ -665,7 +665,7 @@ pub(super) fn build_resume_attempt(
 
 pub(super) fn effective_session_identity(
     auth_ctx: &Option<golem_api_grpc::proto::golem::auth::AuthCtx>,
-    principal: &Option<golem_api_grpc::proto::golem::component::Principal>,
+    caller: &Option<golem_api_grpc::proto::golem::component::Caller>,
 ) -> Result<Vec<u8>, WorkerExecutorError> {
     let auth_ctx = auth_ctx
         .as_ref()
@@ -689,7 +689,7 @@ pub(super) fn effective_session_identity(
         })
         .transpose()?;
     let mut effective_identity = Vec::new();
-    for identity in [auth_ctx, principal.as_ref().map(Message::encode_to_vec)]
+    for identity in [auth_ctx, caller.as_ref().map(Message::encode_to_vec)]
         .into_iter()
         .flatten()
     {
@@ -800,14 +800,14 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
             method_name,
             input,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         } => AgentInvocation::AgentMethod {
             idempotency_key,
             method_name,
             input: erase_streams(input),
             invocation_context,
-            principal,
+            caller,
             scope_card,
         },
         AgentInvocation::ExternalTool {
@@ -820,7 +820,7 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
             stderr,
             activation,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         } => {
             let (graph, value) = input.into_parts();
@@ -837,7 +837,7 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
                 stderr,
                 activation,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             }
         }

@@ -37,6 +37,7 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import { anonymousContext } from './callerTestSupport';
 
 const Pending = z.object({ tag: z.literal('pending'), retryAfter: z.number() });
 type Pending = z.infer<typeof Pending>;
@@ -104,12 +105,14 @@ const guestInvoke = async (name: string, id: string) => {
     `UnstructuredOutputs(${JSON.stringify(schemaValueToWit(idValue))})`;
   const initiated = await AgentInitiatorRegistry.lookup('UnstructuredOutputs')!.initiate(
     schemaValueToWit(idValue),
-    { tag: 'anonymous' },
+    anonymousContext,
   );
   if (initiated.tag !== 'ok') throw new Error('initiate failed');
-  const result = await initiated.val.invoke(name, schemaValueToWit(v.record([v.string(id)])), {
-    tag: 'anonymous',
-  });
+  const result = await initiated.val.invoke(
+    name,
+    schemaValueToWit(v.record([v.string(id)])),
+    anonymousContext,
+  );
   if (result.tag !== 'ok') throw new Error(`invoke failed: ${JSON.stringify(result.val)}`);
   return result.val!;
 };

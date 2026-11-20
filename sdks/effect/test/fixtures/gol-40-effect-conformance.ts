@@ -71,7 +71,7 @@ export const artifactDefinition = toolDefinition("artifact").command(
 
 export interface ProviderObservation {
   readonly path: string
-  readonly principal: unknown
+  readonly caller: string
   readonly input: unknown
   readonly stdinClosed: boolean
 }
@@ -95,7 +95,7 @@ export const installArtifactProvider = (observations: ProviderObservation[]) =>
           yield* context.stderr!(Stream.succeed(Uint8Array.of(0, 1, 2)))
           observations.push({
             path: "render/execute",
-            principal: context.principal,
+            caller: context.caller.immediate.toString(),
             input,
             stdinClosed,
           })
@@ -117,7 +117,7 @@ export const installArtifactProvider = (observations: ProviderObservation[]) =>
         Effect.sync(() => {
           observations.push({
             path: "render/status",
-            principal: context.principal,
+            caller: context.caller.immediate.toString(),
             input: { artifactId },
             stdinClosed: true,
           })

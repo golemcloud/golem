@@ -58,14 +58,14 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     """package example
       |
       |import golem.runtime.annotations._
-      |import golem.Principal
+      |import golem.InvocationContext
       |
       |@toolDefinition
       |trait Git {
       |  @arg("git-dir", scope = "global")
       |  def git(gitDir: Option[String]): Unit
       |
-      |  def status(short: Boolean, principal: Principal): Either[GitError, String]
+      |  def status(short: Boolean, context: InvocationContext): Either[GitError, String]
       |
       |  @arg("verbose", kind = "flag")
       |  def remote(verbose: Boolean): Remote
@@ -128,7 +128,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("WireToolMacro.inputGraph[RootTool]"))
   }
 
-  test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
+  test("drops InvocationContext and stdout parameters and keeps stdin; stdout returns a started invocation") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
 
     // stdout is excluded from parameters and exposed independently from the structured result.
@@ -186,7 +186,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val result  = generate("Git.scala" -> gitSource)
     val content = result.files.find(_.relativePath == "example/GitClient.scala").get.content
 
-    // status inherits the root global `gitDir` and excludes the Principal parameter
+    // status inherits the root global `gitDir` and excludes the InvocationContext parameter
     assert(
       content.contains(
         "def status(gitDir: Option[String], short: Boolean): " +

@@ -264,7 +264,7 @@ class FixtureCacheTests(unittest.TestCase):
             for app in re.findall(r'"([^"]+)"', declaration):
                 self.write(f"test-components/{app}/golem.yaml", f"app: {app}\n")
         for directory in ("tool-streaming/rust-provider", "tool-streaming/rust-caller",
-                          "agent-rpc/golem-it-agent-rpc-rust"):
+                          "agent-rpc/golem-it-agent-rpc-rust", "size-analysis/fixtures"):
             self.write(f"test-components/{directory}/Cargo.toml", "[package]\n")
         self.write("test-components/build-components.sh", script).chmod(0o755)
         self.write(".github/main-validation/fixture-cache.py", HELPER.read_bytes())
@@ -289,7 +289,14 @@ fi
         cli.chmod(0o755)
         self.write("bin/npm", "#!/bin/bash\nexit 0\n").chmod(0o755)
         self.write("bin/cargo", '''#!/bin/bash
+set -eu
 if [ "$1" = metadata ]; then printf '{"target_directory":"%s"}' "$CARGO_MAKE_CRATE_TARGET_DIRECTORY"; fi
+if [ "$1" = build ]; then
+  mkdir -p "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release"
+  for name in retention_empty retention_non_reflective retention_reflection; do
+    printf 'retention:%s' "$name" > "$CARGO_MAKE_CRATE_TARGET_DIRECTORY/wasm32-wasip2/release/$name.wasm"
+  done
+fi
 ''').chmod(0o755)
         self.track()
         environment = {**os.environ, "GOLEM_CLI": str(cli), "GOLEM_FIXTURE_CACHE": str(self.cache),
@@ -307,6 +314,8 @@ if [ "$1" = metadata ]; then printf '{"target_directory":"%s"}' "$CARGO_MAKE_CRA
         run("bash", "test-components/build-components.sh", "benchmarks", "rebuild")
         cold = {path.name: path.read_bytes() for path in (self.root / "test-components").glob("*.wasm")}
         self.assertGreater(len(cold), 30)
+        for name in ("retention_empty", "retention_non_reflective", "retention_reflection"):
+            self.assertEqual(cold[f"{name}.wasm"], f"retention:{name}".encode())
         run(*helper, "publish")
         for path in (self.root / "test-components").glob("*.wasm"):
             path.unlink()

@@ -5,7 +5,7 @@ import golem.host.QuotaApi.{NamedQuotaToken, QuotaToken}
 import golem.host.SecretApi
 import golem.runtime.annotations.*
 import golem.schema.{AgentStream, GuestPermissionCardHandle, GuestSecretHandle}
-import golem.{BaseAgent, HostApi, Principal, UInt}
+import golem.{BaseAgent, HostApi, InvocationContext, UInt}
 import zio.blocks.schema.Schema
 
 import scala.concurrent.ExecutionContext
@@ -52,19 +52,19 @@ trait MatrixResourceTool {
 @toolDefinition(name = "secret", version = "1.0.0")
 trait MatrixSecretTool {
   @command(name = "exchange")
-  def secretExchange(secret: GuestSecretHandle, principal: Principal): SecretExchange
+  def secretExchange(secret: GuestSecretHandle, context: InvocationContext): SecretExchange
 }
 
 @toolDefinition(name = "quota", version = "1.0.0")
 trait MatrixQuotaTool {
   @command(name = "exchange")
-  def quotaExchange(token: NamedQuotaToken["matrix-capacity"], principal: Principal): QuotaExchange
+  def quotaExchange(token: NamedQuotaToken["matrix-capacity"], context: InvocationContext): QuotaExchange
 }
 
 @toolDefinition(name = "permissions", version = "1.0.0")
 trait MatrixPermissionsTool {
   @command(name = "exchange")
-  def permissionExchange(card: GuestPermissionCardHandle, principal: Principal): PermissionExchange
+  def permissionExchange(card: GuestPermissionCardHandle, context: InvocationContext): PermissionExchange
 }
 
 @toolDefinition(name = "typed", version = "1.0.0")
@@ -74,7 +74,7 @@ trait MatrixTypedTool {
 
 @toolDefinition(name = "matrix-permission-issuer", version = "1.0.0")
 trait MatrixPermissionIssuer {
-  def issue(principal: Principal): PermissionIssue
+  def issue(context: InvocationContext): PermissionIssue
 }
 
 @toolImplementation()
@@ -86,8 +86,8 @@ final class MatrixResourceToolImpl extends MatrixResourceTool {
 }
 
 final class MatrixSecretToolImpl extends MatrixSecretTool {
-  override def secretExchange(secret: GuestSecretHandle, principal: Principal): SecretExchange = {
-    val (provider, principalEvidence, ownerAgentId) = matrixResourceEvidence(principal)
+  override def secretExchange(secret: GuestSecretHandle, context: InvocationContext): SecretExchange = {
+    val (provider, principalEvidence, ownerAgentId) = matrixResourceEvidence(context)
     SecretExchange(
       provider = provider,
       principal = principalEvidence,
@@ -99,8 +99,8 @@ final class MatrixSecretToolImpl extends MatrixSecretTool {
 }
 
 final class MatrixQuotaToolImpl extends MatrixQuotaTool {
-  override def quotaExchange(token: NamedQuotaToken["matrix-capacity"], principal: Principal): QuotaExchange = {
-    val (provider, principalEvidence, ownerAgentId) = matrixResourceEvidence(principal)
+  override def quotaExchange(token: NamedQuotaToken["matrix-capacity"], context: InvocationContext): QuotaExchange = {
+    val (provider, principalEvidence, ownerAgentId) = matrixResourceEvidence(context)
     val reserved = token.reserve(BigInt(1)) match {
       case Right(reservation) => reservation.commit(BigInt(1)); true
       case Left(_)            => false
@@ -110,8 +110,8 @@ final class MatrixQuotaToolImpl extends MatrixQuotaTool {
 }
 
 final class MatrixPermissionsToolImpl extends MatrixPermissionsTool {
-  override def permissionExchange(card: GuestPermissionCardHandle, principal: Principal): PermissionExchange = {
-    val (provider, principalEvidence, ownerAgentId) = matrixResourceEvidence(principal)
+  override def permissionExchange(card: GuestPermissionCardHandle, context: InvocationContext): PermissionExchange = {
+    val (provider, principalEvidence, ownerAgentId) = matrixResourceEvidence(context)
     PermissionExchange(provider, principalEvidence, ownerAgentId, card)
   }
 }
@@ -123,17 +123,16 @@ final class MatrixTypedToolImpl extends MatrixTypedTool {
     input.map(value => UInt(value.value * 3L + 1L))
 }
 
-private def matrixResourceEvidence(principal: Principal): (String, String, String) =
+private def matrixResourceEvidence(context: InvocationContext): (String, String, String) =
   (
     "scala",
-    principal match {
-      case Principal.Anonymous                             => "anonymous"
-      case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-      case Principal.Agent(_, _)                           => "agent"
-      case Principal.GolemUser(_)                          => "golem-user"
-    },
+    context.caller.immediate.toString,
     HostApi.getSelfMetadata().agentId.agentId
   )
+
+/** The evidence of a user caller whose subject is the acceptance subject. */
+private def isAcceptanceCaller(text: String): Boolean =
+  text.startsWith("user (") && text.endsWith(",\"matrix-resource-acceptance\")")
 
 final case class MatrixResourceConfig(secret: Secret[String])
 object MatrixResourceConfig {
@@ -249,10 +248,10 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
       case Left(error) => Future.failed(new IllegalStateException(s"matrix permission issue failed: $error"))
       case Right(issue) if issue.issuer != "rust" =>
         Future.failed(new IllegalStateException(s"matrix permission issuer was ${issue.issuer}, expected rust"))
-      case Right(issue) if issue.principal != "oidc:matrix-resource-acceptance" =>
+      case Right(issue) if !isAcceptanceCaller(issue.principal) =>
         Future.failed(
           new IllegalStateException(
-            s"matrix permission issuer principal was ${issue.principal}, expected oidc:matrix-resource-acceptance"
+            s"matrix permission issuer principal was ${issue.principal}, expected a user caller with subject matrix-resource-acceptance"
           )
         )
       case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>
@@ -303,10 +302,10 @@ final class ScalaResourceToolStreamingCallerImpl(name: String, config: Config[Ma
                   case Left(error) => Future.failed(new IllegalStateException(s"matrix permission issue failed: $error"))
                   case Right(issue) if issue.issuer != "rust" =>
                     Future.failed(new IllegalStateException(s"matrix permission issuer was ${issue.issuer}, expected rust"))
-                  case Right(issue) if issue.principal != "oidc:matrix-resource-acceptance" =>
+                  case Right(issue) if !isAcceptanceCaller(issue.principal) =>
                     Future.failed(
                       new IllegalStateException(
-                        s"matrix permission issuer principal was ${issue.principal}, expected oidc:matrix-resource-acceptance"
+                        s"matrix permission issuer principal was ${issue.principal}, expected a user caller with subject matrix-resource-acceptance"
                       )
                     )
                   case Right(issue) if issue.ownerAgentId != HostApi.getSelfMetadata().agentId.agentId =>

@@ -32,12 +32,12 @@ use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use futures::future::Either;
-use golem_common::base_model::agent::Principal;
 use golem_common::model::AgentInvocation;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
+use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextSpan;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::DurableFunctionType;
@@ -55,12 +55,6 @@ use golem_schema::schema::wit::decode_value_with;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::component::Resource;
-
-fn scheduled_invocation_principal(owner: &OwnedAgentId) -> Principal {
-    Principal::Agent(golem_common::model::agent::AgentPrincipal {
-        agent_id: owner.agent_id(),
-    })
-}
 
 pub(super) fn validate_cancellation_token_owner(
     token: &CancellationTokenEntry,
@@ -362,6 +356,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.agent_id(),
                     &env,
                     self.clone_as_inherited_stack(&span_id),
+                    &Caller::entry(self.self_principal()),
                     config,
                     handle.agent_auth_ctx(),
                     Some(idempotency_key),
@@ -388,7 +383,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             method_name,
             input: input_value,
             invocation_context: stack,
-            principal: scheduled_invocation_principal(self.owned_agent_id()),
+            caller: Caller::entry(self.self_principal()),
             scope_card: None,
         };
         let result = self

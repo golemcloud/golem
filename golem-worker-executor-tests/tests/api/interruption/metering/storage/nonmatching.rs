@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
@@ -128,7 +129,7 @@ async fn nonmatching_storage(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
     )
     .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();

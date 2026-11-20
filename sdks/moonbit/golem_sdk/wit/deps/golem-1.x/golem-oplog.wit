@@ -108,7 +108,10 @@ interface oplog {
         initial-active-plugins: list<plugin-installation-description>,
         local-agent-config: list<local-agent-config-entry>,
         original-phantom-id: option<uuid>,
-        instance-id: uuid
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
     }
 
     enum owner-kind {
@@ -568,6 +571,76 @@ interface oplog {
         details: option<string>,
         snapshot-assisted-details: option<failed-snapshot-assisted-update-details>,
         update-attempt-index: option<oplog-index>,
+        /// Why the update failed
+        failure-class: update-failure-class,
+        /// The first divergence from the recorded history, when the replay of the target diverged
+        /// at a recorded entry
+        divergence: option<replay-divergence>,
+    }
+
+    /// Why an update failed
+    enum update-failure-class {
+        /// The history did not replay on the target
+        divergence,
+        /// The target code trapped, panicked or returned an agent error on recorded inputs
+        target-trap,
+        /// Replaying needs a peer effect
+        not-replayable,
+        /// The target revision was missing, refused or unsupported, or changes the agent's mode
+        target-rejected,
+        /// The replay was interrupted
+        interrupted,
+        /// An operational failure, such as storage, load or quota
+        operational,
+        /// Snapshot, restore and other failures
+        other,
+    }
+
+    /// The first entry at which a replay did not reproduce the recorded execution
+    record replay-divergence {
+        /// The oplog index of the first divergence
+        oplog-index: oplog-index,
+        /// What the oplog holds at the index
+        expected: replay-step,
+        /// What the replay did at the index
+        actual: replay-step,
+        /// The identity fields on which the two steps differ; empty when the steps differ in kind
+        mismatched: list<start-identity-field>,
+    }
+
+    /// One step of a replay
+    variant replay-step {
+        /// A host call
+        host-call(replay-host-call),
+        /// The end of an invocation
+        invocation-end,
+        /// The end of the recorded history
+        end-of-history,
+        /// Another step, which the text describes
+        other(string),
+    }
+
+    /// The identity of a recorded `Start`, or of the call that a replay made in its place
+    record replay-host-call {
+        function-name: string,
+        durable-function-type: wrapped-function-type,
+        parent-start-index: option<oplog-index>,
+        invocation-id: option<durable-invocation-id>,
+        observational-owner: option<oplog-index>,
+        /// Whether the call carries a request: true for a durable call, false for a durable scope
+        carries-request: bool,
+        /// The request of the call, when it is known
+        request: option<typed-schema-value>,
+    }
+
+    /// An identity field of a recorded `Start`, which a replayed host call must match
+    enum start-identity-field {
+        function-name,
+        function-type,
+        invocation-id,
+        observational-owner,
+        request-presence,
+        parent,
     }
 
     record failed-snapshot-assisted-update-details {
@@ -769,7 +842,10 @@ interface oplog {
         initial-active-plugins: list<environment-plugin-grant-id>,
         local-agent-config: list<raw-local-agent-config-entry>,
         original-phantom-id: option<uuid>,
-        instance-id: uuid
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
     }
 
     record raw-start-parameters {

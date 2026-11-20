@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-pub use golem_common::base_model::agent::Principal;
+pub use golem_common::base_model::caller::Caller;
 pub use golem_rust_macro::{
     ToolError, arg, command, constraint, native_tool_definition as tool_definition,
     native_tool_implementation as tool_implementation, result,
@@ -161,7 +161,7 @@ pub trait NativeToolCancellationObserver: Send + Sync + 'static {
 pub struct NativeToolInvocation<Ctx> {
     pub command_path: Vec<String>,
     pub input: TypedSchemaValue,
-    pub principal: Principal,
+    pub caller: Caller,
     pub cancellation: NativeToolCancellation,
     pub stdin: Option<NativeToolStdin<Ctx>>,
     pub stdout: Option<NativeToolOutput<Ctx>>,
@@ -250,7 +250,7 @@ pub mod conformance_fixture {
             context: &mut Ctx,
             value: String,
             count: u64,
-            principal: golem_native_tool::Principal,
+            caller: golem_native_tool::Caller,
         ) -> Evidence;
 
         fn supported_error(
@@ -278,7 +278,7 @@ pub mod conformance_fixture {
             _context: &mut Ctx,
             value: String,
             count: u64,
-            _principal: Principal,
+            _caller: Caller,
         ) -> Evidence {
             Evidence {
                 value,
@@ -453,7 +453,7 @@ pub mod conformance_fixture {
                                 fields: vec![SchemaValue::String("value".into())],
                             },
                         ),
-                        principal: Principal::anonymous(),
+                        caller: Caller::anonymous(),
                         cancellation: NativeToolCancellation::unavailable(),
                         stdin: None,
                         stdout: Some(Box::new(Output)),

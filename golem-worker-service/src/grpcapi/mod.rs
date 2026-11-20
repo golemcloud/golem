@@ -233,10 +233,16 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::ValueMismatch(err) => {
                     format!("Value Mismatch: {}", err.details)
                 }
-                worker_execution_error::Error::UnexpectedOplogEntry(err) => format!(
-                    "Unexpected Oplog Entry: Expected = {}, Got = {}",
-                    err.expected, err.got
-                ),
+                worker_execution_error::Error::UnexpectedOplogEntry(err) => {
+                    match err
+                        .divergence
+                        .map(golem_common::model::oplog::ReplayDivergence::try_from)
+                    {
+                        Some(Ok(divergence)) => divergence.to_string(),
+                        Some(Err(error)) => format!("Unexpected oplog entry: {error}"),
+                        None => "Unexpected oplog entry".to_string(),
+                    }
+                }
                 worker_execution_error::Error::RuntimeError(err) => {
                     format!("Runtime Error: {}", err.details)
                 }

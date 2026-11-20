@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use crate::durable_host::durability::find_durable_call_trap_context;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::{
-    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel,
+    HostRequestNoInput, HostResponseMonotonicClockTimestamp, LogLevel, ReplayDivergence, ReplayStep,
 };
 use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy, RetryPolicyState};
 use std::time::Duration;
@@ -2625,9 +2625,15 @@ fn undelivered_cancellation_direct_divergence_error() {
         cancelled_idx: idx(5),
     };
     match terminal.direct_divergence_error() {
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
-            assert_eq!(expected, "End or Cancelled { partial: Some(..) }");
-            assert!(got.contains("Cancelled without partial at 5"), "{got}");
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            assert_eq!(
+                *divergence,
+                ReplayDivergence::described(
+                    idx(5),
+                    "End or Cancelled { partial: Some(..) }",
+                    "Cancelled without partial at 5",
+                )
+            );
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),
     }
@@ -2867,11 +2873,19 @@ fn undelivered_discarded_completion_direct_divergence_error() {
         response: None,
     };
     match terminal.direct_divergence_error() {
-        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => {
-            assert_eq!(expected, "End delivered to the guest");
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+            assert_eq!(divergence.oplog_index, idx(8));
+            assert_eq!(
+                divergence.expected,
+                ReplayStep::described("End delivered to the guest")
+            );
             assert!(
-                got.contains("End at 7 marked CompletionDiscarded at 8"),
-                "{got}"
+                divergence
+                    .actual
+                    .to_string()
+                    .contains("End at 7 marked CompletionDiscarded at 8"),
+                "{}",
+                divergence.actual
             );
         }
         other => panic!("expected UnexpectedOplogEntry, got {other:?}"),

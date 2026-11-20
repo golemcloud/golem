@@ -122,7 +122,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Worker::get_exact_existing_suspended_for_response(
                     self,
                     &owned_agent_id,
-                    request.principal(),
+                    request.caller()?,
                     None,
                 )
                 .await?

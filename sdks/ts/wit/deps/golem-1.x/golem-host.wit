@@ -59,6 +59,8 @@ interface host {
         failed,
         /// The agent exited after a successful invocation and can no longer be invoked
         exited,
+        /// The agent is a never-live sandbox: it replays its history and never runs live
+        sandboxed,
     }
 
     /// Describes a filter condition on agent IDs when enumerating agents

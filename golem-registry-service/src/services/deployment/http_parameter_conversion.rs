@@ -19,12 +19,8 @@
 //! the persisted [`ConstructorParameter`] / [`MethodParameter`] bindings plus
 //! the [`RequestBodySchema`] for a route.
 //!
-//! Auto-injected fields ([`FieldSource::AutoInjected`]) are never bound to
-//! HTTP and never appear in the request body — the host injects them at
-//! invocation time. They are still part of the method/constructor input record
-//! (carried in the compiled [`CompiledInputSchema`]); the worker-service
-//! runtime reconstructs the full positional record by iterating the
-//! [`InputSchema`] and inserting auto-injected fields in declaration order.
+//! Every field of the input schema is supplied by the caller, so each one is bound to a path,
+//! query or header variable, or read from the request body.
 
 use golem_common::model::agent::{
     HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
@@ -59,18 +55,6 @@ pub fn build_http_agent_constructor_parameters<E>(
     let mut result = Vec::with_capacity(fields.len());
 
     for field in fields {
-        // Auto-injected fields are supplied by the host; they must not bind to
-        // HTTP path segments and they are not part of the caller-facing route.
-        if matches!(field.source, FieldSource::AutoInjected(_)) {
-            if path_bindings.contains_key(&field.name) {
-                return Err(make_error(format!(
-                    "Auto-injected field '{}' cannot be bound to a path variable",
-                    field.name
-                )));
-            }
-            continue;
-        }
-
         let name = &field.name;
 
         let (path_index, segment) = path_bindings.get(name).ok_or_else(|| {
@@ -129,26 +113,9 @@ pub fn build_http_agent_method_parameters<E>(
     let mut per_field: Vec<Option<MethodParameter>> = vec![None; fields.len()];
     let mut consumed = vec![false; fields.len()];
 
-    // First pass: classify path / query / header bindings (user-supplied fields
-    // only). Auto-injected fields are supplied by the host out-of-band, so they
-    // must not bind to HTTP and are excluded from the invocation record.
+    // First pass: classify path / query / header bindings.
     for (idx, field) in fields.iter().enumerate() {
         let name = &field.name;
-
-        if matches!(field.source, FieldSource::AutoInjected(_)) {
-            if path_bindings.contains_key(name)
-                || query_bindings.contains_key(name)
-                || header_bindings.contains_key(name)
-            {
-                return Err(make_error(format!(
-                    "Auto-injected field '{}' cannot be bound to a path, query or header variable",
-                    name
-                )));
-            }
-            // mark consumed so it is excluded from the body record too
-            consumed[idx] = true;
-            continue;
-        }
 
         let bindings = usize::from(path_bindings.contains_key(name))
             + endpoint

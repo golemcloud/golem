@@ -1,5 +1,5 @@
 ///|
-pub type Principal = @agentCommon.Principal
+pub using @caller {type InvocationContext}
 
 ///|
 pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {

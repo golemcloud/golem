@@ -16,7 +16,7 @@
 
 package golem.runtime.macros
 
-import golem.Principal
+import golem.InvocationContext
 import golem.runtime.annotations.*
 import golem.schema.{IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.tool.*
@@ -43,7 +43,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     @arg("config", scope = "global")
     def middlewareEcho(config: String): Unit
 
-    def act(value: String, principal: Principal): Either[PublicError, String]
+    def act(value: String, context: InvocationContext): Either[PublicError, String]
 
     @arg("cfg", scope = "global", aliases = Array("config"))
     def aliased(cfg: String, value: String): String
@@ -213,7 +213,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
         underlying: U,
         @internalToolMiddlewareField("config") config: String,
         @internalToolMiddlewareField("value") value: String,
-        principal: Principal
+        context: InvocationContext
       ): Future[Either[ToolInvokeError[PublicError], String]]
       def aliased(
         underlying: U,
@@ -241,12 +241,12 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
   }
 
   object TransparentMiddleware {
-    var constructions                = 0
-    var principal: Option[Principal] = None
+    var constructions                      = 0
+    var context: Option[InvocationContext] = None
 
     def reset(): Unit = {
       constructions = 0
-      principal = None
+      context = None
     }
   }
 
@@ -265,9 +265,9 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       underlying: MiddlewareEchoUnderlying,
       config: String,
       value: String,
-      principal: Principal
+      context: InvocationContext
     ): Future[Either[ToolInvokeError[PublicError], String]] = {
-      TransparentMiddleware.principal = Some(principal)
+      TransparentMiddleware.context = Some(context)
       value match {
         case "reject"      => Future.successful(Left(ToolInvokeError.Tool(PublicError.Rejected("denied"))))
         case "short"       => Future.successful(Right("short-circuit"))
@@ -328,7 +328,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       underlying: BackendEchoUnderlying,
       config: String,
       value: String,
-      principal: Principal
+      context: InvocationContext
     ): Future[Either[ToolInvokeError[PublicError], String]] =
       underlying
         .execute(s"$config:$value")
@@ -503,7 +503,12 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     }
   }
 
-  private val anonymous = Principal.Anonymous
+  private val anonymous = InvocationContext.anonymous
+
+  private def callerContext(subject: String): InvocationContext = {
+    val user = golem.Principal.User(golem.PrincipalRef("issuer", subject), "{}", java.time.Instant.EPOCH)
+    InvocationContext.of(golem.Caller(user, user))
+  }
 
   private lazy val transparentHandle =
     ToolMiddlewareMacro.transparentHandle[
@@ -548,7 +553,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     path: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle] = None,
-    principal: Principal = anonymous
+    context: InvocationContext = anonymous
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     ToolMiddlewareInvokerRuntime.invoke(
       presented,
@@ -559,7 +564,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       input,
       ToolMiddleware.noParametersValue,
       stdin,
-      principal
+      context
     )
 
   private def invokeUniversal(
@@ -567,7 +572,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     path: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle] = None,
-    principal: Principal = anonymous,
+    context: InvocationContext = anonymous,
     toolName: String = presented.toolName
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
     UniversalToolMiddlewareInvokerRuntime.invoke(
@@ -579,7 +584,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       path,
       input,
       stdin,
-      principal
+      context
     )
 
   private def success[A: IntoSchema](value: A): Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult] =
@@ -664,11 +669,11 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
           raw.calls.isEmpty
         )
       },
-      test("forwarding injects principal and transforms the result") {
+      test("forwarding injects context and transforms the result") {
         TransparentMiddleware.reset()
-        val raw       = new FakeRaw(List(success("from-underlying")))
-        val principal = Principal.Oidc("alice", "issuer", "{}")
-        val result    = outcome(
+        val raw     = new FakeRaw(List(success("from-underlying")))
+        val context = callerContext("alice")
+        val result  = outcome(
           invoke(
             transparentHandle,
             raw,
@@ -678,12 +683,12 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
               SchemaValue.StringValue("cfg"),
               SchemaValue.StringValue("forward")
             ),
-            principal = principal
+            context = context
           )
         )
         assertTrue(
           result == success("FROM-UNDERLYING"),
-          TransparentMiddleware.principal.contains(principal),
+          TransparentMiddleware.context.contains(context),
           raw.calls.map(_.path).toList == List(List("act"))
         )
       },
@@ -1130,18 +1135,18 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       },
       test("universal descriptor and raw invocation context are preserved") {
         UniversalMiddleware.reset()
-        val input     = IntoSchema[String].toTyped("input")
-        val stdin     = FakeStdin("universal-in")
-        val stdout    = FakeStdout("universal-out")
-        val principal = Principal.Oidc("bob", "issuer", "{}")
-        val raw       = new FakeRaw(List(Right(ToolMiddlewareResult(Some(input), Some(stdout), None))))
-        val result    = outcome(
+        val input   = IntoSchema[String].toTyped("input")
+        val stdin   = FakeStdin("universal-in")
+        val stdout  = FakeStdout("universal-out")
+        val context = callerContext("bob")
+        val raw     = new FakeRaw(List(Right(ToolMiddlewareResult(Some(input), Some(stdout), None))))
+        val result  = outcome(
           invokeUniversal(
             raw,
             List("nested", "forward"),
             input,
             Some(stdin),
-            principal,
+            context,
             "runtime-tool"
           )
         )
@@ -1157,7 +1162,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
           observed.commandPath == List("nested", "forward"),
           observed.input == input,
           observed.stdin.contains(stdin),
-          observed.principal == principal,
+          observed.context == context,
           UniversalMiddleware.observedUnderlying.nonEmpty,
           raw.calls.toList == List(RawCall(List("nested", "forward"), input, Some(stdin))),
           result.toOption.exists(value => value.result.contains(input) && value.stdout.contains(stdout)),

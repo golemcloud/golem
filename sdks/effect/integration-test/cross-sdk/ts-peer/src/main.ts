@@ -7,6 +7,7 @@ import {
   method,
   ok,
   ParsedAgentId,
+  PrincipalRef,
   reflection,
   Result,
   s,
@@ -73,7 +74,7 @@ TsEphemeralPeer.implement({
 
 export const TsPrincipalPeer = defineAgent({
   name: "TsPrincipalPeer",
-  id: { tenant: z.string(), caller: s.principal() },
+  id: { tenant: z.string(), owner: s.principalRef() },
   methods: { value: method({ input: {}, returns: z.string() }) },
 })
 
@@ -312,18 +313,29 @@ TsPeer.implement({
     },
     async principalIdentityRoundTrip() {
       const tenant = `principal-${this.name}`
-      const complete = await TsPrincipalPeer.client.get({ tenant }).value()
+      const owner = new PrincipalRef("https://cross-sdk.example", "ts-peer")
+      const complete = await TsPrincipalPeer.client.get({ tenant, owner }).value()
       const discovered = reflection.getAgentType("TsPrincipalPeer")
       if (!discovered) return "missing-principal-type"
-      const reflected = await discovered.client.get({ tenant }).method("value").invokeJson({})
+      const reflected = await discovered.client
+        .get({ tenant, owner: owner.toJSON() })
+        .method("value")
+        .invokeJson({})
       const identity = new ParsedAgentId(reflected.metadata.agentId)
       const parts = identity.parts()
       if (
         parts.typeName !== "TsPrincipalPeer" ||
         parts.constructorValue.tag !== "record" ||
-        parts.constructorValue.fields.length !== 1 ||
+        parts.constructorValue.fields.length !== 2 ||
         parts.constructorValue.fields[0]?.tag !== "string" ||
-        parts.constructorValue.fields[0].value !== tenant
+        parts.constructorValue.fields[0].value !== tenant ||
+        // The reference is ordinary data: the named record { issuer, subject }.
+        parts.constructorValue.fields[1]?.tag !== "record" ||
+        parts.constructorValue.fields[1].fields.length !== 2 ||
+        parts.constructorValue.fields[1].fields.some((field) => field.tag !== "string") ||
+        parts.constructorValue.fields[1].fields
+          .map((field) => (field as { value: string }).value)
+          .join("|") !== `${owner.issuer}|${owner.subject}`
       ) {
         return "invalid-principal-identity"
       }

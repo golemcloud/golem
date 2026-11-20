@@ -74,8 +74,8 @@ func TestWitTagSwitchesCoverEveryCase(t *testing.T) {
 		{"golem_agent_common", "AgentError", "client.go agentErrorToGo", 5},
 		// rpc.go rpcErrorToGo.
 		{"golem_agent_host", "RpcError", "rpc.go rpcErrorToGo", 5},
-		// principal.go principalFromWit: an unknown principal must never pass as anonymous.
-		{"golem_agent_common", "Principal", "principal.go principalFromWit", 4},
+		// caller.go principalFromWit: an unknown principal must never pass as anonymous.
+		{"golem_agent_common", "Principal", "caller.go principalFromWit", 5},
 		// agentops.go agentOperationErrorFromWit.
 		{"golem_api_host", "AgentOperationError", "agentops.go agentOperationErrorFromWit", 2},
 		// promise.go webhookErrorToGo.

@@ -127,7 +127,7 @@ impl AgentFilter {
                 comparator.matches(&metadata.created_at, &value)
             }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
-                comparator.matches(&metadata.last_known_status.status, &value)
+                comparator.matches(&metadata.last_known_status.reported_status(), &value)
             }
             AgentFilter::Mode(AgentModeFilter { comparator, value }) => {
                 comparator.matches(&metadata.agent_mode, &value)
@@ -599,6 +599,9 @@ pub struct AgentStatusRecord {
     /// any of its guest code runs, so a set bit means the agent may have executed and must never
     /// be started again.
     pub ephemeral_execution_begun: bool,
+    /// The never-live mark of the `Create` entry. The fold sets it from `Create` and never
+    /// changes it.
+    pub never_live: bool,
     pub pending_durable_stream_cancellations: HashMap<
         (crate::model::durable_stream::StreamRecordReference, u64),
         Vec<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
@@ -676,6 +679,7 @@ impl Default for AgentStatusRecord {
             export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             ephemeral_execution_begun: false,
+            never_live: false,
             pending_durable_stream_cancellations: HashMap::new(),
             current_idempotency_key: None,
             current_invocation_started_at: None,
@@ -1313,6 +1317,22 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
 }
 
 impl AgentStatusRecord {
+    /// The status that the agent reports outside: `Sandboxed` for a never-live agent, and the
+    /// folded `status` otherwise. The folded `status` never holds `Sandboxed`; control code
+    /// decides by it, by `never_live` and by `pending_updates`.
+    pub fn reported_status(&self) -> AgentStatus {
+        if self.never_live {
+            AgentStatus::Sandboxed
+        } else {
+            self.status
+        }
+    }
+
+    /// The folded status underneath a reported `Sandboxed` status, and `None` otherwise.
+    pub fn underlying_status(&self) -> Option<AgentStatus> {
+        self.never_live.then_some(self.status)
+    }
+
     pub fn has_pending_work(&self, now: Timestamp) -> bool {
         self.pending_invocations
             .iter()
@@ -1332,6 +1352,8 @@ pub struct FailedUpdateRecord {
     /// Whether the failure is about the record that the update selected. `None` for any other
     /// failure.
     pub snapshot_fault: Option<oplog::SnapshotFault>,
+    pub failure_class: oplog::UpdateFailureClass,
+    pub divergence: Option<Box<oplog::ReplayDivergence>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

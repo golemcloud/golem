@@ -165,7 +165,6 @@ fn decode_input(
           body: decode_root_type(decoded, field.schema),
           metadata: field.metadata,
         })
-      AutoInjected(_) => ()
     }
   }
   SchemaRef::new({

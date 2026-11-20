@@ -43,7 +43,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
-use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -103,7 +104,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
@@ -116,7 +117,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError>;
@@ -135,7 +136,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: Caller,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -208,7 +209,7 @@ pub trait WorkerProxy: Send + Sync {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError>;
 
@@ -388,7 +389,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
@@ -417,7 +418,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         env: caller_env,
                         tracing: Some(caller_stack.clone().into()),
                     }),
-                    principal: Some(principal.clone().into()),
+                    caller: Some(caller.clone().into()),
                     method_name: Some(method_name.to_string()),
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: match freshness_disposition {
@@ -452,7 +453,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: &AuthCtx,
         idempotency_key: Option<IdempotencyKey>,
     ) -> Result<AgentFingerprint, WorkerProxyError> {
@@ -474,7 +475,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         env: caller_env,
                         tracing: Some(caller_stack.clone().into()),
                     }),
-                    principal: Some(principal.clone().into()),
+                    caller: Some(caller.clone().into()),
                     method_name: None,
                     idempotency_key: idempotency_key.clone().map(Into::into),
                     freshness_disposition: 0,
@@ -513,7 +514,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
-        principal: Principal,
+        caller: Caller,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
@@ -579,7 +580,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: Some(principal.clone().into()),
+                    caller: Some(caller.clone().into()),
                     environment_id: Some(environment_id.into()),
                     freshness_disposition: proto_freshness_disposition,
                     config: config.clone().into_iter().map(Into::into).collect(),
@@ -915,7 +916,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         source_agent_id: &AgentId,
         target_agent_id: &AgentId,
         oplog_index_cutoff: &OplogIndex,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         debug!("Forking remote worker");
@@ -928,7 +929,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     target_agent_id: Some(target_agent_id.clone().into()),
                     oplog_index_cutoff: u64::from(*oplog_index_cutoff),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: Some(principal.clone().into()),
+                    caller: Some(caller.clone().into()),
                 }))
             })
             .await?
@@ -1099,7 +1100,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     request_key: None,
                     context: None,
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: Some(Principal::anonymous().into()),
+                    caller: Some(Caller::anonymous().into()),
                     environment_id: environment_id.map(|id| id.into()),
                     freshness_disposition: golem_api_grpc::proto::golem::worker::v1::InvocationFreshnessDisposition::MayExist
                         as i32,
@@ -1597,7 +1598,7 @@ mod tests {
                     HashMap::new(),
                     InvocationContextStack::fresh(),
                     vec![],
-                    Principal::anonymous(),
+                    Caller::anonymous(),
                     &AuthCtx::System,
                     Some(key.clone()),
                 )
@@ -1676,7 +1677,7 @@ mod tests {
                     HashMap::new(),
                     InvocationContextStack::fresh(),
                     vec![],
-                    Principal::anonymous(),
+                    Caller::anonymous(),
                     &AuthCtx::System,
                     Some(key.clone()),
                     InvocationFreshnessDisposition::KnownFresh,
@@ -2110,7 +2111,7 @@ mod tests {
                 HashMap::new(),
                 InvocationContextStack::fresh(),
                 vec![],
-                Principal::anonymous(),
+                Caller::anonymous(),
                 EnvironmentId::new(),
                 &AuthCtx::System,
                 Some(ScopeCard {
@@ -2187,6 +2188,7 @@ mod tests {
             &caller,
             &[],
             InvocationContextStack::fresh(),
+            &golem_common::model::caller::Caller::anonymous(),
             vec![],
             &AuthCtx::System,
         )
@@ -2204,6 +2206,7 @@ mod tests {
             &caller,
             &[],
             InvocationContextStack::fresh(),
+            &golem_common::model::caller::Caller::anonymous(),
             vec![],
             &AuthCtx::System,
             None,
@@ -2342,6 +2345,7 @@ mod tests {
                 &caller,
                 &[],
                 InvocationContextStack::fresh(),
+                &golem_common::model::caller::Caller::anonymous(),
                 Vec::new(),
                 &AuthCtx::System,
                 None,

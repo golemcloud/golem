@@ -1,6 +1,6 @@
 import { Effect, HashMap, Option, Schema, Stream } from "effect"
 import {
-  Principal,
+  InvocationContext,
   Multimodal,
   Tool,
   Unstructured,
@@ -42,7 +42,7 @@ const Rich = Schema.Struct({
   binary: WitTypes.Binary(),
   flags: WitTypes.Flags(["read", "write", "admin"]),
   elapsed: WitTypes.Duration,
-  who: Principal.PrincipalSchema,
+  who: InvocationContext.PrincipalRefSchema,
 })
 const Settings = defineConfig("ConcreteSettings", {
   nested: Schema.Struct({ number: Schema.NumberFromString }),

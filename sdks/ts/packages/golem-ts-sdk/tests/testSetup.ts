@@ -81,10 +81,14 @@ vi.mock('golem:agent/host@2.0.0', () => ({
 }));
 
 // Entry points read the caller from the invocation context. Tests that need a
-// specific principal override `caller` with `mockReturnValue`.
+// specific caller override `caller` with `mockReturnValue`.
 vi.mock('golem:agent/invocation-context@2.0.0', () => ({
   invocationId: vi.fn(() => undefined),
-  caller: vi.fn(() => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } })),
+  caller: vi.fn(() => ({
+    original: { tag: 'anonymous' },
+    immediate: { tag: 'anonymous' },
+    tokens: [],
+  })),
 }));
 
 vi.mock('golem:tool/host@0.1.0', () => {

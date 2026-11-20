@@ -11,10 +11,10 @@ definition-owned `ToolClientDefinition` proxy for the same encoded call and stru
 `optional_round_trip` compares reflected and ordinary generated-client optional-input encoding,
 while `canonical_round_trip` covers canonical 64-bit, duration, and quantity values. The GOL-40
 artifact assertion verifies both generated constructors (`new` and proxy-targeted `new_for`), nested
-subclients, canonical inherited-argument order, typed errors, principal injection, and
+subclients, canonical inherited-argument order, typed errors, invocation-context injection, and
 stdin/stdout/stderr surfaces.
 
-Principal and owner observations and complete stream tuples need a deployed host. They remain work
+Caller and owner observations and complete stream tuples need a deployed host. They remain work
 for the executor matrix rather than being represented by an SDK echo or a source-text-only runtime
 claim.
 

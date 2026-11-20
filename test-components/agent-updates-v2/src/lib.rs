@@ -143,7 +143,11 @@ impl UpdateTest for UpdateTestImpl {
         }
     }
 
+    // The agent environment variable `SAVE_SNAPSHOT` steers the save: `exit` exits the guest.
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        if std::env::var("SAVE_SNAPSHOT").as_deref() == Ok("exit") {
+            std::process::exit(1);
+        }
         let mut result = Vec::new();
         result.extend_from_slice(&self.last.to_be_bytes());
         Ok(result)

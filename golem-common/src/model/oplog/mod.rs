@@ -23,7 +23,9 @@ mod tests;
 
 pub use crate::base_model::OplogIndex;
 pub use crate::base_model::oplog::{
-    OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex, attachment, public_oplog_entry,
+    OplogEntry, PublicOplogEntry, PublicOplogEntryWithIndex, ReplayDivergence, ReplayHostCall,
+    ReplayStep, ReplayStepDescription, StartIdentityField, UpdateFailureClass, attachment,
+    public_oplog_entry,
 };
 pub use payload::*;
 pub use public_types::*;
