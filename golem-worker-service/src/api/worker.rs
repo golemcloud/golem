@@ -1450,6 +1450,19 @@ mod tests {
         )
         .await
         .unwrap();
+        // A read without `from` keeps its start open, so that the executor starts it at the first
+        // entry that the oplog holds.
+        api.get_oplog_internal(
+            agent_id.clone(),
+            None,
+            Some(9),
+            50,
+            None,
+            None,
+            AuthCtx::system(),
+        )
+        .await
+        .unwrap();
         assert!(
             api.get_oplog_internal(
                 agent_id,
@@ -1473,6 +1486,10 @@ mod tests {
                 },
                 OplogRead {
                     range: OplogRange::new(Some(index(4)), None).unwrap(),
+                    query: None,
+                },
+                OplogRead {
+                    range: OplogRange::new(None, Some(index(9))).unwrap(),
                     query: None,
                 },
             ]

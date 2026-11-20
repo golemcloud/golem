@@ -123,6 +123,17 @@ use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
+/// Checks that an oplog read that writes a file with `--output` has the format `jsonl`, from
+/// `--format` or from the profile, so that the format of the file is explicit.
+fn check_oplog_output_format(output: Option<&Path>, format: Format) -> anyhow::Result<()> {
+    match (output, format) {
+        (None, _) | (Some(_), Format::Jsonl) => Ok(()),
+        (Some(_), format) => Err(anyhow!(
+            "--output writes JSON Lines, not {format}; pass --format jsonl"
+        )),
+    }
+}
+
 fn client_update_mode(mode: AgentUpdateMode) -> golem_common::model::agent::AgentUpdateMode {
     match mode {
         AgentUpdateMode::Automatic => golem_common::model::agent::AgentUpdateMode::Automatic,
@@ -291,14 +302,15 @@ impl AgentCommandHandler {
                 } => {
                     let range = OplogRange::from_indices(from, to)
                         .map_err(|error| anyhow!("Invalid oplog range: {error}"))?;
+                    check_oplog_output_format(output.as_deref(), self.ctx.format())?;
                     if page {
-                        self.cmd_oplog_page(agent_id, from, to, cursor, query, omit_payloads)
+                        self.cmd_oplog_page(agent_id, range, cursor, query, omit_payloads)
                             .await
                     } else if let Some(output) = output {
-                        self.cmd_oplog_jsonl_export(agent_id, from, range, query, &output)
+                        self.cmd_oplog_jsonl_export(agent_id, range, query, &output)
                             .await
                     } else {
-                        self.cmd_oplog(agent_id, from, to, query, omit_payloads, viewer, export)
+                        self.cmd_oplog(agent_id, range, query, omit_payloads, viewer, export)
                             .await
                     }
                 }
@@ -927,13 +939,13 @@ impl AgentCommandHandler {
     async fn cmd_oplog(
         &self,
         agent_id: AgentIdArgs,
-        from: Option<u64>,
-        to: Option<u64>,
+        range: OplogRange,
         query: Option<String>,
         omit_payloads: bool,
         viewer: OplogViewerArgs,
         export: OplogExportArgs,
     ) -> anyhow::Result<()> {
+        let (from, to) = range.to_indices();
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
@@ -1089,8 +1101,7 @@ impl AgentCommandHandler {
         Ok(())
     }
 
-    /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. `from` is
-    /// the `--from` argument, which sets where an export of every entry must start. The export
+    /// Exports the oplog entries of `range` that match `query` to `path` as JSON Lines. The export
     /// follows the cursor of each page to the end of the range and writes each page before it
     /// reads the next, so its memory does not grow with the oplog. A search page that the scan
     /// budget of the server ends early still has a cursor, so the budget does not end the export.
@@ -1101,19 +1112,10 @@ impl AgentCommandHandler {
     async fn cmd_oplog_jsonl_export(
         &self,
         agent_id: AgentIdArgs,
-        from: Option<u64>,
         range: OplogRange,
         query: Option<String>,
         path: &Path,
     ) -> anyhow::Result<()> {
-        if self.ctx.format() != Format::Jsonl {
-            log_error(format!(
-                "{} writes JSON Lines; pass {}",
-                "--output".log_color_highlight(),
-                "--format jsonl".log_color_highlight()
-            ));
-            bail!(NonSuccessfulExit);
-        }
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
@@ -1127,9 +1129,7 @@ impl AgentCommandHandler {
             .with_context(|| format!("Failed to create a file in {}", directory.display()))?;
         let selection = match query {
             Some(_) => OplogExportSelection::Matches,
-            None => OplogExportSelection::EveryEntry {
-                start: from.map(|_| range.start().as_u64()),
-            },
+            None => OplogExportSelection::EveryEntry(range),
         };
         let writer = OplogJsonlWriter::new(
             std::io::BufWriter::new(file),
@@ -1144,7 +1144,7 @@ impl AgentCommandHandler {
             query.as_deref(),
         );
         let batch_size = ctx.http_batch_size();
-        let (from, to) = (from, range.end().map(u64::from));
+        let (from, to) = range.to_indices();
         let pages =
             futures_util::stream::try_unfold(Some(None::<OplogCursor>), move |cursor| async move {
                 let Some(cursor) = cursor else {
@@ -1182,7 +1182,7 @@ impl AgentCommandHandler {
                     },
                 )
                 .await?;
-                Ok((writer, Some(last_index)))
+                Ok((writer, Some(OplogIndex::from_u64(last_index))))
             },
         )
         .await?;
@@ -1215,12 +1215,12 @@ impl AgentCommandHandler {
     async fn cmd_oplog_page(
         &self,
         agent_id: AgentIdArgs,
-        from: Option<u64>,
-        to: Option<u64>,
+        range: OplogRange,
         cursor: Option<OplogCursor>,
         query: Option<String>,
         omit_payloads: bool,
     ) -> anyhow::Result<()> {
+        let (from, to) = range.to_indices();
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
@@ -3982,8 +3982,9 @@ fn validate_public_invocation_agent_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter, invocation_agent_id,
-        is_selected_update_attempt, normalize_public_agent_id, parse_method_argument_schema_value,
+        AgentListMode, AgentUpdateMode, ScanCursor, apply_list_mode_filter,
+        check_oplog_output_format, invocation_agent_id, is_selected_update_attempt,
+        normalize_public_agent_id, parse_method_argument_schema_value,
         parse_method_parameters_with_error_table, pending_update_progress, read_page,
         render_revert_command, split_agent_id, validate_ordinary_agent_type,
         validate_public_invocation_agent_id,
@@ -4629,5 +4630,37 @@ mod tests {
             ])),
             r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#,
         );
+    }
+
+    #[test]
+    fn an_oplog_file_export_needs_the_jsonl_format() {
+        use crate::model::format::Format;
+        use strum::IntoEnumIterator;
+        let rows = [
+            (Format::Json, false),
+            (Format::Jsonl, true),
+            (Format::PrettyJson, false),
+            (Format::Yaml, false),
+            (Format::PrettyYaml, false),
+            (Format::Toon, false),
+            (Format::Text, false),
+        ];
+        assert_eq!(
+            rows.iter().map(|(format, _)| *format).collect::<Vec<_>>(),
+            Format::iter().collect::<Vec<_>>(),
+            "the table has one row for each format"
+        );
+        let output = std::path::Path::new("oplog.jsonl");
+        rows.into_iter().for_each(|(format, accepted)| {
+            assert_eq!(
+                check_oplog_output_format(Some(output), format).is_ok(),
+                accepted,
+                "--output with {format}"
+            );
+            assert!(
+                check_oplog_output_format(None, format).is_ok(),
+                "no --output with {format}"
+            );
+        });
     }
 }

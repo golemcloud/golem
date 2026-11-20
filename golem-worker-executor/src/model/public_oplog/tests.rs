@@ -2719,7 +2719,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         OwnerKind::ComponentAgent,
         None,
         page_revision,
-        OplogRange::new(Some(OplogIndex::INITIAL), None).unwrap(),
+        OplogRange::ALL,
         page_limits(1_000_000, 1000),
     )
     .await
@@ -3135,6 +3135,23 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     let second = guest(first.next_oplog_index).await.unwrap();
     assert_eq!(indices(&second.entries), vec![matching[2]]);
     assert_eq!(second.last_index, matching[2]);
+    // A search from after the pinned end reads no entry, keeps its start and its revision, and
+    // gives the pinned end as its last index, so that the guest sees the end of the search.
+    let after_the_end = guest(second.next_oplog_index).await.unwrap();
+    assert!(second.next_oplog_index > matching[2]);
+    assert!(after_the_end.entries.is_empty());
+    assert_eq!(
+        (
+            after_the_end.next_oplog_index,
+            after_the_end.current_component_revision,
+            after_the_end.last_index
+        ),
+        (
+            second.next_oplog_index,
+            ComponentRevision::INITIAL,
+            matching[2]
+        )
+    );
 }
 
 #[test]
@@ -3265,7 +3282,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
     // The budget ends the first search after five entries, before the match. The page is empty,
     // and its cursor points to the first entry it did not read, with the revision and the hash of
     // the query.
-    let first = search(start.start(), revision).await.unwrap();
+    let first = search(start.start().unwrap(), revision).await.unwrap();
     assert!(first.entries.is_empty());
     let cursor = oplog_page_cursor(
         first.next_oplog_index,
@@ -3317,7 +3334,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             updated_revision
         )
     );
-    let second = search(start.start(), revision).await.unwrap();
+    let second = search(start.start().unwrap(), revision).await.unwrap();
     assert_eq!(page_indices(&second.entries), vec![(indices[9], true)]);
     let second_cursor = oplog_page_cursor(
         second.next_oplog_index,
@@ -3366,7 +3383,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         match result {
             Ok((start, _)) => {
                 assert!(accepted, "a cursor at {next_oplog_index} must be refused");
-                assert_eq!(start.start().as_u64(), next_oplog_index);
+                assert_eq!(start.to_indices(), (Some(next_oplog_index), None));
             }
             Err(error) => {
                 assert!(!accepted, "a cursor at {next_oplog_index} must be accepted");

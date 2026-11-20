@@ -19,10 +19,10 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::oplog::{
-    MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
-    PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationOperation, PublicExternalToolResult, PublicOplogEntry,
-    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
+    MultipartPartData, OmittedOplogEntry, OplogIndex, OplogRange, PluginInstallationDescription,
+    PublicAgentInvocation, PublicAgentInvocationResult, PublicEntityCallMode,
+    PublicEntityInvocation, PublicEntityInvocationOperation, PublicExternalToolResult,
+    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
     PublicUpdateDescription,
 };
 use golem_common::schema::TypedSchemaValue;
@@ -139,34 +139,36 @@ impl StructuredOutput for AgentOplogPageView {
 /// The entries that an oplog export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OplogExportSelection {
-    /// Every entry of the range: each entry directly follows the entry before it. `start` is the
-    /// index of the first entry when the export sets the start of the range.
-    EveryEntry { start: Option<u64> },
+    /// Every entry of the range: each entry directly follows the entry before it.
+    EveryEntry(OplogRange),
     /// The entries of the range that match a query: each entry comes after the entry before it.
     Matches,
 }
 
 /// Checks that an oplog export can write the entry at `index` after the entry at `previous`.
 /// An entry at or before `previous` is refused, because the read repeated or reordered entries.
-/// When the export holds every entry, an entry after `previous + 1` is refused too, because the
-/// read left out entries, and so is a first entry that is not at the `start` of the range.
-pub fn check_oplog_export_order(
+/// When the export holds every entry, an entry that does not directly follow `previous` is
+/// refused too, because the read left out entries. So is a first entry that is not at the start
+/// of a range with a start. The first entry of a range without a start is not checked, because
+/// only the server knows the first entry that the oplog holds.
+fn check_oplog_export_order(
     selection: OplogExportSelection,
-    previous: Option<u64>,
-    index: u64,
+    previous: Option<OplogIndex>,
+    index: OplogIndex,
 ) -> anyhow::Result<()> {
     match (selection, previous) {
-        (OplogExportSelection::EveryEntry { start: Some(start) }, None) if index != start => {
-            anyhow::bail!(
+        (OplogExportSelection::EveryEntry(range), None) => match range.start() {
+            Some(start) if index != start => anyhow::bail!(
                 "the oplog read started at the entry at index {index}, not at the start of the \
                  range at index {start}"
-            )
-        }
-        (_, None) => Ok(()),
+            ),
+            _ => Ok(()),
+        },
+        (OplogExportSelection::Matches, None) => Ok(()),
         (_, Some(previous)) if index <= previous => anyhow::bail!(
             "the oplog read returned the entry at index {index} after the entry at index {previous}"
         ),
-        (OplogExportSelection::EveryEntry { .. }, Some(previous)) if index - previous > 1 => {
+        (OplogExportSelection::EveryEntry(_), Some(previous)) if previous.next() != index => {
             anyhow::bail!(
                 "the oplog read returned the entry at index {index} after the entry at index \
                  {previous}, without the entries between them"
@@ -180,24 +182,22 @@ pub fn check_oplog_export_order(
 /// written entry, and `range_last` is the last index of the range in the oplog, as the last page
 /// of the read gives it. When the export holds every entry, its last entry must be at
 /// `range_last`, because the read otherwise left out the entries at the end. An export of every
-/// entry without entries is accepted only when the range holds no index of the oplog: when
-/// `range_last` is before the start of the range. An export of the matches has no end rule.
-pub fn check_oplog_export_end(
+/// entry without entries is accepted only when the range holds no index of the oplog, as
+/// [`OplogRange::is_empty_in`] gives it. An export of the matches has no end rule.
+fn check_oplog_export_end(
     selection: OplogExportSelection,
-    last: Option<u64>,
-    range_last: u64,
+    last: Option<OplogIndex>,
+    range_last: OplogIndex,
 ) -> anyhow::Result<()> {
     match (selection, last) {
         (OplogExportSelection::Matches, _) => Ok(()),
-        (OplogExportSelection::EveryEntry { .. }, Some(last)) if last == range_last => Ok(()),
-        (OplogExportSelection::EveryEntry { start }, None) if range_last < start.unwrap_or(1) => {
-            Ok(())
-        }
-        (OplogExportSelection::EveryEntry { .. }, Some(last)) => anyhow::bail!(
+        (OplogExportSelection::EveryEntry(_), Some(last)) if last == range_last => Ok(()),
+        (OplogExportSelection::EveryEntry(range), None) if range.is_empty_in(range_last) => Ok(()),
+        (OplogExportSelection::EveryEntry(_), Some(last)) => anyhow::bail!(
             "the oplog read ended at the entry at index {last}, not at the end of the range at \
              index {range_last}"
         ),
-        (OplogExportSelection::EveryEntry { .. }, None) => anyhow::bail!(
+        (OplogExportSelection::EveryEntry(_), None) => anyhow::bail!(
             "the oplog read returned no entry, but the range ends at index {range_last}"
         ),
     }
@@ -205,13 +205,13 @@ pub fn check_oplog_export_end(
 
 /// Writes an oplog export as JSON Lines: each entry is the `agent.oplog` document that
 /// `--format json` prints for it, on its own line. The writer refuses an entry that
-/// [`check_oplog_export_order`] refuses, and an end that [`check_oplog_export_end`] refuses, so
-/// that a wrong read fails the export and does not write a wrong file.
+/// `check_oplog_export_order` refuses, and an end that `check_oplog_export_end` refuses, so that
+/// a wrong read fails the export and does not write a wrong file.
 pub struct OplogJsonlWriter<W: std::io::Write> {
     writer: W,
     masking: crate::model::masking::MaskingConfig,
     selection: OplogExportSelection,
-    last_index: Option<u64>,
+    last_index: Option<OplogIndex>,
     count: u64,
 }
 
@@ -231,8 +231,8 @@ impl<W: std::io::Write> OplogJsonlWriter<W> {
     }
 
     pub fn write(&mut self, entry: AgentOplogEntryView) -> anyhow::Result<()> {
-        check_oplog_export_order(self.selection, self.last_index, entry.index)?;
-        let index = entry.index;
+        let index = OplogIndex::from_u64(entry.index);
+        check_oplog_export_order(self.selection, self.last_index, index)?;
         let document =
             crate::model::cli_output::to_structured_output_value_masked(entry, self.masking)?;
         serde_json::to_writer(&mut self.writer, &document)?;
@@ -245,7 +245,7 @@ impl<W: std::io::Write> OplogJsonlWriter<W> {
     /// Checks the end of the export against `range_last`, the last index of the range in the
     /// oplog, flushes the written lines, and gives the inner writer and the count of the written
     /// entries.
-    pub fn finish(mut self, range_last: u64) -> anyhow::Result<(W, u64)> {
+    pub fn finish(mut self, range_last: OplogIndex) -> anyhow::Result<(W, u64)> {
         check_oplog_export_end(self.selection, self.last_index, range_last)?;
         self.writer.flush()?;
         Ok((self.writer, self.count))
@@ -1607,11 +1607,15 @@ mod tests {
         }
     }
 
+    fn every_entry(from: Option<u64>, to: Option<u64>) -> OplogExportSelection {
+        OplogExportSelection::EveryEntry(OplogRange::from_indices(from, to).unwrap())
+    }
+
     #[test]
     fn an_oplog_export_refuses_a_repeated_or_earlier_entry_and_a_gap_in_every_entry() {
         use OplogExportSelection::Matches;
-        const EVERY: OplogExportSelection = OplogExportSelection::EveryEntry { start: None };
-        let from = |start| OplogExportSelection::EveryEntry { start: Some(start) };
+        const EVERY: OplogExportSelection = OplogExportSelection::EveryEntry(OplogRange::ALL);
+        let from = |start| every_entry(Some(start), None);
         [
             ((EVERY, None, 1), true),
             ((EVERY, None, 7), true),
@@ -1619,6 +1623,8 @@ mod tests {
             ((from(7), None, 8), false),
             ((from(7), None, 6), false),
             ((from(7), Some(7), 8), true),
+            ((every_entry(None, Some(9)), None, 4), true),
+            ((every_entry(Some(0), None), None, 4), true),
             ((EVERY, Some(3), 4), true),
             ((EVERY, Some(3), 3), false),
             ((EVERY, Some(3), 2), false),
@@ -1633,7 +1639,12 @@ mod tests {
         .into_iter()
         .for_each(|((selection, previous, index), accepted)| {
             assert_eq!(
-                check_oplog_export_order(selection, previous, index).is_ok(),
+                check_oplog_export_order(
+                    selection,
+                    previous.map(OplogIndex::from_u64),
+                    OplogIndex::from_u64(index)
+                )
+                .is_ok(),
                 accepted,
                 "{selection:?}, entry {index} after {previous:?}"
             )
@@ -1643,8 +1654,8 @@ mod tests {
     #[test]
     fn an_oplog_export_of_every_entry_ends_at_the_end_of_its_range() {
         use OplogExportSelection::Matches;
-        const EVERY: OplogExportSelection = OplogExportSelection::EveryEntry { start: None };
-        let from = |start| OplogExportSelection::EveryEntry { start: Some(start) };
+        const EVERY: OplogExportSelection = OplogExportSelection::EveryEntry(OplogRange::ALL);
+        let from = |start| every_entry(Some(start), None);
         [
             ((EVERY, Some(9), 9), true),
             ((EVERY, Some(8), 9), false),
@@ -1654,13 +1665,21 @@ mod tests {
             ((from(5), None, 4), true),
             ((from(5), None, 5), false),
             ((from(5), Some(5), 5), true),
+            ((every_entry(Some(5), Some(9)), None, 4), true),
+            ((every_entry(Some(5), Some(9)), None, 9), false),
+            ((every_entry(None, Some(9)), None, 9), false),
             ((Matches, None, 9), true),
             ((Matches, Some(3), 9), true),
         ]
         .into_iter()
         .for_each(|((selection, last, range_last), accepted)| {
             assert_eq!(
-                check_oplog_export_end(selection, last, range_last).is_ok(),
+                check_oplog_export_end(
+                    selection,
+                    last.map(OplogIndex::from_u64),
+                    OplogIndex::from_u64(range_last)
+                )
+                .is_ok(),
                 accepted,
                 "{selection:?}, last entry {last:?}, range ends at {range_last}"
             )
@@ -1672,7 +1691,7 @@ mod tests {
         let mut writer = OplogJsonlWriter::new(
             Vec::new(),
             crate::model::masking::MaskingConfig::hide_secrets(),
-            OplogExportSelection::EveryEntry { start: Some(1) },
+            every_entry(Some(1), None),
         );
         // Two pages; the second, last page starts right after the first one.
         [vec![(1, "a"), (2, "b")], vec![(3, "c")]]
@@ -1685,7 +1704,7 @@ mod tests {
         assert!(writer.write(log_view(3, "c")).is_err());
         assert!(writer.write(log_view(2, "b")).is_err());
         assert!(writer.write(log_view(5, "e")).is_err());
-        let (written, count) = writer.finish(3).unwrap();
+        let (written, count) = writer.finish(OplogIndex::from_u64(3)).unwrap();
         assert_eq!(count, 3);
         let written = String::from_utf8(written).unwrap();
 

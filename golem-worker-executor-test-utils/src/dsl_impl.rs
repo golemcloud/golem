@@ -115,6 +115,7 @@ impl TestWorkerExecutor {
             Option<golem_api_grpc::proto::golem::worker::OplogCursor>,
         )>,
     > {
+        let (from_oplog_index, to_oplog_index) = range.to_indices();
         match query {
             None => {
                 let response = self
@@ -123,8 +124,8 @@ impl TestWorkerExecutor {
                     .get_oplog(workerexecutor::v1::GetOplogRequest {
                         agent_id: Some(agent_id.clone().into()),
                         environment_id: Some(environment_id.into()),
-                        from_oplog_index: Some(range.start().into()),
-                        to_oplog_index: range.end().map(Into::into),
+                        from_oplog_index,
+                        to_oplog_index,
                         cursor,
                         count: 100,
                         auth_ctx: Some(self.auth_ctx().into()),
@@ -148,8 +149,8 @@ impl TestWorkerExecutor {
                     .search_oplog(SearchOplogRequest {
                         agent_id: Some(agent_id.clone().into()),
                         environment_id: Some(environment_id.into()),
-                        from_oplog_index: Some(range.start().into()),
-                        to_oplog_index: range.end().map(Into::into),
+                        from_oplog_index,
+                        to_oplog_index,
                         cursor,
                         count: 100,
                         query: query.to_string(),

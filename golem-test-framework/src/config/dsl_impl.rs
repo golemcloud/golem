@@ -664,6 +664,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             .worker_service()
             .worker_http_client(&self.token)
             .await;
+        let (from, to) = range.to_indices();
 
         let pages = futures::stream::try_unfold(
             Some(None::<golem_client::model::OplogCursor>),
@@ -675,8 +676,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     .get_oplog(
                         &agent_id.component_id.0,
                         &agent_id.agent_id,
-                        Some(range.start().as_u64()),
-                        range.end().map(u64::from),
+                        from,
+                        to,
                         100,
                         cursor.as_ref(),
                         query,

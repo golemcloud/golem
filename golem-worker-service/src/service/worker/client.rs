@@ -1479,11 +1479,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             "get_oplog",
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
+                let (from_oplog_index, to_oplog_index) = range.to_indices();
                 Box::pin(
                     worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
                         agent_id: Some(agent_id.into()),
-                        from_oplog_index: Some(range.start().into()),
-                        to_oplog_index: range.end().map(Into::into),
+                        from_oplog_index,
+                        to_oplog_index,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.into()),
@@ -1609,6 +1610,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
                 let query_clone = query.clone();
+                let (from_oplog_index, to_oplog_index) = range.to_indices();
                 Box::pin(
                     worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
                         agent_id: Some(agent_id.into()),
@@ -1617,8 +1619,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         count,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        from_oplog_index: Some(range.start().into()),
-                        to_oplog_index: range.end().map(Into::into),
+                        from_oplog_index,
+                        to_oplog_index,
                     }),
                 )
             },
