@@ -256,12 +256,15 @@ impl ChainHarness {
     }
 }
 
+/// One `report_and_bump` dispatch: its idempotency key and the caller that it gives the target.
+type Dispatch = (Option<IdempotencyKey>, Caller);
+
 /// Forwards every call and, once the first `report_and_bump` call has run on its target, never
 /// returns its answer to the caller: the call stays pending until the executor is dropped.
 struct HoldReportAnswerRpc {
     inner: Arc<dyn Rpc>,
-    /// The idempotency key and the caller that each `report_and_bump` dispatch gives the target.
-    dispatches: Arc<Mutex<Vec<(Option<IdempotencyKey>, Caller)>>>,
+    /// Every `report_and_bump` dispatch, in order.
+    dispatches: Arc<Mutex<Vec<Dispatch>>>,
     answer_held: Arc<tokio::sync::Notify>,
 }
 
