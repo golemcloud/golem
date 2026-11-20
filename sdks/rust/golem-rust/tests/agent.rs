@@ -1343,9 +1343,8 @@ mod tests {
         let agent_types = get_all_agent_types();
 
         // Helper to find an agent type by name
-        let find_agent = |name: &str| -> Option<AgentType> {
-            agent_types.iter().find(|a| a.type_name == name).cloned()
-        };
+        let find_agent =
+            |name: &str| -> Option<&AgentType> { agent_types.iter().find(|a| a.type_name == name) };
 
         // Test: default (no attribute) should be Durable
         if let Some(agent) = find_agent("EchoDurableDefault") {
@@ -1930,9 +1929,8 @@ mod tests {
 
         let agent_types = get_all_agent_types();
 
-        let find_agent = |name: &str| -> Option<AgentType> {
-            agent_types.iter().find(|a| a.type_name == name).cloned()
-        };
+        let find_agent =
+            |name: &str| -> Option<&AgentType> { agent_types.iter().find(|a| a.type_name == name) };
 
         if let Some(agent) = find_agent("AgentSnapshottingDefault") {
             assert!(
@@ -2328,7 +2326,7 @@ mod tests {
             ExtendedAgentType, get_agent_type_by_name, get_enriched_agent_type_by_name,
             register_agent_type,
         };
-        use golem_rust::schema::render::json_value::from_json_value;
+        use golem_rust::schema::SchemaValue;
         use golem_rust::schema::wit::direct::WireSchemaBuilder;
 
         #[derive(IntoSchema, WireSchema)]
@@ -2341,26 +2339,36 @@ mod tests {
         let mut builder = WireSchemaBuilder::default();
         let value_type = <Option<Settings> as WireSchema>::append_schema(&mut builder);
         wire.schema = builder.finish(value_type);
-        let defaults = [None, Some("null"), Some(r#"{"retry_limit":7}"#)];
+        let defaults = [
+            None,
+            Some(SchemaValue::Option { inner: None }),
+            Some(SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::Record {
+                    fields: vec![SchemaValue::U32(7)],
+                })),
+            }),
+        ];
         let paths: Vec<Vec<String>> = ["NoDefault", "explicit-null", "code_default"]
             .into_iter()
             .map(|name| vec!["Exact.Path".to_string(), name.to_string()])
             .collect();
         wire.config = paths
             .iter()
-            .zip(defaults)
+            .zip(&defaults)
             .map(|(path, default_value)| AgentConfigDeclaration {
                 source: AgentConfigSource::Local,
                 path: path.clone(),
                 value_type,
-                default_value: default_value.map(str::to_string),
+                default_value: default_value
+                    .as_ref()
+                    .map(|value| golem_rust::schema::wit::encode_value(value).unwrap()),
             })
             .collect();
 
         let extended = ExtendedAgentType::from_agent_type(wire).unwrap();
-        for ((entry, path), default) in extended.config.iter().zip(&paths).zip(defaults) {
+        for ((entry, path), default) in extended.config.iter().zip(&paths).zip(&defaults) {
             assert_eq!(&entry.path, path);
-            assert_eq!(entry.default_value.as_deref(), default);
+            assert_eq!(&entry.default_value, default);
             assert!(matches!(entry.source, AgentConfigSource::Local));
             assert!(!entry.value_type.defs.is_empty());
         }
@@ -2368,9 +2376,16 @@ mod tests {
         let name = AgentTypeName("RawConfigDefaults".to_string());
         register_agent_type(AgentTypeName(name.0.clone()), extended.clone());
         let reflected_wire = get_agent_type_by_name(&name).unwrap();
-        for ((entry, path), default) in reflected_wire.config.iter().zip(&paths).zip(defaults) {
+        for ((entry, path), default) in reflected_wire.config.into_iter().zip(&paths).zip(&defaults)
+        {
             assert_eq!(&entry.path, path);
-            assert_eq!(entry.default_value.as_deref(), default);
+            assert_eq!(
+                entry
+                    .default_value
+                    .map(|value| golem_rust::schema::wit::decode_value(value).unwrap())
+                    .as_ref(),
+                default.as_ref()
+            );
         }
         let reflected = get_enriched_agent_type_by_name(&name).unwrap();
         for (entry, original) in reflected.config.iter().zip(&extended.config) {
@@ -2379,11 +2394,7 @@ mod tests {
         }
         for (index, expected) in [None, Some(Settings { retry_limit: 7 })].iter().enumerate() {
             let entry = &reflected.config[index + 1];
-            let json = serde_json::from_str(entry.default_value.as_deref().unwrap()).unwrap();
-            assert_eq!(
-                from_json_value(&entry.value_type, &entry.value_type.root, &json).unwrap(),
-                expected.to_value()
-            );
+            assert_eq!(entry.default_value.as_ref().unwrap(), &expected.to_value());
         }
     }
 

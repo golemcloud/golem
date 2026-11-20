@@ -87,8 +87,10 @@ pub trait ConfigSchema: Sized {
 
 /// Validates and exports data for a derived static config default.
 #[doc(hidden)]
-pub fn static_config_default<T: WireSchema>(json: &str) -> Result<String, String> {
-    use crate::schema::render::{from_untrusted_json_value, to_json_value};
+pub fn static_config_default<T: WireSchema>(
+    json: &str,
+) -> Result<crate::schema::SchemaValue, String> {
+    use crate::schema::render::from_untrusted_json_value;
     use crate::schema::validation::{validate_graph, validate_value};
     use crate::schema::wit::wire::SchemaTypeBody;
 
@@ -119,9 +121,7 @@ pub fn static_config_default<T: WireSchema>(json: &str) -> Result<String, String
     let value =
         from_untrusted_json_value(&graph, &graph.root, &json).map_err(|error| error.to_string())?;
     validate_value(&graph, &graph.root, &value).map_err(|errors| format!("{errors:?}"))?;
-    let canonical =
-        to_json_value(&graph, &graph.root, &value).map_err(|error| error.to_string())?;
-    serde_json::to_string(&canonical).map_err(|error| error.to_string())
+    Ok(value)
 }
 
 impl ConfigSchema for () {

@@ -105,7 +105,12 @@ mod tests {
                         .unwrap()
                 };
                 assert_eq!(
-                    parse(&actual.default_value),
+                    actual.default_value.as_ref().map(|value| to_json_value(
+                        &actual.value_type,
+                        &actual.value_type.root,
+                        value
+                    )
+                    .unwrap()),
                     parse(&expected.default_value),
                     "{agent}: {:?}",
                     expected.path
@@ -254,7 +259,10 @@ mod tests {
         assert_eq!(entries[0].path, ["CanonicalParent", "noDefault"]);
         assert_eq!(entries[0].default_value, None);
         assert_eq!(entries[1].path, ["CanonicalParent", "ExplicitNull"]);
-        assert_eq!(entries[1].default_value.as_deref(), Some("null"));
+        assert_eq!(
+            entries[1].default_value,
+            Some(golem_rust::schema::SchemaValue::Option { inner: None })
+        );
         let rpc = NestedFieldsRpc {
             settings: OptionalFieldsRpc {
                 no_default: None,

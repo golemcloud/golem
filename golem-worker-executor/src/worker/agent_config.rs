@@ -366,7 +366,14 @@ mod tests {
             source: AgentConfigSource::Local,
             path: vec!["settings".into(), name.into()],
             value_type: SchemaType::option(SchemaType::ref_to(id.clone())),
-            default_value: default.map(str::to_string),
+            default_value: default.map(|json| {
+                golem_common::schema::render::from_untrusted_json_value(
+                    &graph,
+                    &SchemaType::option(SchemaType::ref_to(id.clone())),
+                    &serde_json::from_str(json).unwrap(),
+                )
+                .unwrap()
+            }),
         })
         .collect();
         let entry = |name: &str, label: &str| TypedAgentConfigEntry {
@@ -410,7 +417,9 @@ mod tests {
         assert!(effective_agent_config(vec![], vec![], &declarations).is_empty());
         let mut changed_defaults = declarations.clone();
         for declaration in &mut changed_defaults {
-            declaration.default_value = Some("\"changed-code-default\"".into());
+            declaration.default_value = Some(SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::String("changed-code-default".into()))),
+            });
         }
         let rebuilt =
             effective_agent_config(creation.clone(), provisioned.clone(), &changed_defaults);

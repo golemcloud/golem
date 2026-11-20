@@ -207,7 +207,13 @@ fn generate_config_schema_impl(
                     source: #golem_rust_crate_ident::golem_agentic::golem::agent::common::AgentConfigSource::#source,
                     path: field_path,
                     value_type: #value_type,
-                    default_value: #default_value,
+                    default_value: {
+                        let default_value: Option<#golem_rust_crate_ident::schema::SchemaValue> = #default_value;
+                        default_value.as_ref().map(|value| {
+                            #golem_rust_crate_ident::schema::wit::encode_value(value)
+                                .expect("invalid static config default")
+                        })
+                    },
                 });
             }
         };

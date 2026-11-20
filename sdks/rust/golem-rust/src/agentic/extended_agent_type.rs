@@ -20,7 +20,7 @@ use crate::golem_agentic::golem::agent::common::{
     InputSchema, NamedField, OutputSchema, ReadOnlyConfig, Snapshotting,
 };
 use crate::schema::wit::GraphEncoder;
-use crate::schema::{MetadataEnvelope, SchemaGraph, merge_agent_graphs};
+use crate::schema::{MetadataEnvelope, SchemaGraph, SchemaValue, merge_agent_graphs};
 use std::collections::HashSet;
 
 // An enriched representation is a different view of the agent type that will include
@@ -51,8 +51,8 @@ pub struct ExtendedAgentConfigDeclaration {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaGraph,
-    /// Canonical schema JSON. `None` is no default; `Some("null")` is an explicit null default.
-    pub default_value: Option<String>,
+    /// Native static data. An absent default differs from an option-none value.
+    pub default_value: Option<SchemaValue>,
 }
 
 impl ExtendedAgentType {
@@ -135,7 +135,10 @@ impl ExtendedAgentType {
                         source: config.source,
                         path: config.path,
                         value_type: graph(config.value_type)?,
-                        default_value: config.default_value,
+                        default_value: config
+                            .default_value
+                            .map(crate::schema::wit::decode_value)
+                            .transpose()?,
                     })
                 })
                 .collect::<Result<_, crate::schema::wit::DecodeError>>()?,
@@ -189,7 +192,10 @@ impl ExtendedAgentType {
                     source: config.source,
                     path: config.path.clone(),
                     value_type,
-                    default_value: config.default_value.clone(),
+                    default_value: config.default_value.as_ref().map(|value| {
+                        crate::schema::wit::encode_value(value)
+                            .expect("invalid static config default")
+                    }),
                 })
                 .collect(),
         }
