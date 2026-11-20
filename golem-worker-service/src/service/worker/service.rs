@@ -5591,6 +5591,7 @@ mod tests {
             ),
             created_at: Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         }
     }

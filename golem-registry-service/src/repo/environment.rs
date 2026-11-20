@@ -1062,7 +1062,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                             SELECT cr.component_id, cr.revision_id, cr.hash,
                                    cr.created_at, cr.created_by, cr.deleted,
                                    cr.size, cr.metadata,
-                                   cr.object_store_key, cr.binary_hash
+                                   cr.object_store_key, cr.binary_hash, cr.package_metadata
                             FROM component_revisions cr
                             JOIN components c ON c.component_id = cr.component_id
                             WHERE c.environment_id = $1

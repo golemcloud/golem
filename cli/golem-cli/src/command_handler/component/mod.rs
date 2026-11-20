@@ -1942,7 +1942,9 @@ impl ComponentCommandHandler {
         let tools = extracted_metadata.tools;
         let tool_middlewares = extracted_metadata.tool_middlewares;
         let component = app_ctx.application().component(component_name);
-        let wasm_path = component.wasm();
+        let installed = app_ctx.installed_components.get(component_name);
+        let wasm_path =
+            installed.map_or_else(|| component.wasm(), |installed| installed.wasm_path.clone());
 
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
@@ -2031,6 +2033,7 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             wasm_path,
+            package_metadata: installed.map(|installed| installed.package_metadata.clone()),
             config_schema: component.config_schema().clone(),
             component_config: config(
                 &AgentTypeName("component".to_string()),
@@ -2477,6 +2480,7 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            package_metadata: properties.package_metadata.clone(),
             agent_types: properties
                 .agent_types
                 .iter()
@@ -2552,6 +2556,7 @@ impl ComponentCommandHandler {
                 &environment.environment_id.0,
                 &ComponentCreation {
                     component_name: component_name.clone(),
+                    package_metadata: component_deploy_properties.package_metadata.clone(),
                     config_schema: component_deploy_properties.config_schema.clone(),
                     component_provision_config: component_stager
                         .component_provision_config(None, environment, component_name)
@@ -2669,6 +2674,9 @@ impl ComponentCommandHandler {
                 &component.id.0,
                 &ComponentUpdate {
                     current_revision: component.revision,
+                    package_metadata: wasm
+                        .as_ref()
+                        .and(component_deploy_properties.package_metadata.clone()),
                     config_schema: component_stager
                         .component_config_changed()
                         .then(|| component_deploy_properties.config_schema.clone()),

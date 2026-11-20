@@ -15,7 +15,9 @@
 use applying::Apply;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component::{
+    ComponentId, ComponentName, ComponentPackageMetadata, ComponentRevision,
+};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
@@ -38,6 +40,7 @@ pub struct Component {
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Hash of the wasm before any transformations
     pub wasm_hash: diff::Hash,
+    pub package_metadata: Option<ComponentPackageMetadata>,
     pub object_store_key: String,
 }
 
@@ -56,6 +59,7 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             metadata: metadata.into(),
             created_at: value.created_at,
             wasm_hash: value.wasm_hash,
+            package_metadata: value.package_metadata,
             hash: value.hash,
         }
     }
@@ -131,6 +135,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             metadata,
             created_at,
             wasm_hash,
+            package_metadata: None,
             hash,
             object_store_key: value.object_store_key,
         })

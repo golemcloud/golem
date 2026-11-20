@@ -278,6 +278,7 @@ fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId)
         metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: "test-object".to_string(),
     }
 }

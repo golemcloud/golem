@@ -947,6 +947,7 @@ impl InvocationHarness {
             ),
             created_at: Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_ids = Arc::new(Mutex::new(Vec::new()));

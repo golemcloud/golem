@@ -118,7 +118,14 @@ pub trait PackageEffects: Send {
 #[derive(Debug, Default)]
 pub struct ExpandedPackages {
     pub declarations: Declarations,
-    pub metadata: BTreeMap<ComponentName, ExtractedComponentMetadata>,
+    pub components: BTreeMap<ComponentName, InstalledComponent>,
+}
+
+#[derive(Debug)]
+pub struct InstalledComponent {
+    pub wasm_path: PathBuf,
+    pub metadata: ExtractedComponentMetadata,
+    pub package_metadata: golem_common::model::component::ComponentPackageMetadata,
 }
 
 /// Ordinary manifest declarations, separate from publisher metadata. Build commands,
@@ -220,9 +227,18 @@ async fn expand_one(
             serde_json::to_value(&spec.config_schema)?,
         );
         insert(&mut output.declarations.components, component, declaration)?;
-        output
-            .metadata
-            .insert(ComponentName(component.into()), spec.metadata.clone());
+        output.components.insert(
+            ComponentName(component.into()),
+            InstalledComponent {
+                wasm_path: root.join(wasm),
+                metadata: spec.metadata.clone(),
+                package_metadata: golem_common::model::component::ComponentPackageMetadata {
+                    source: pin.source.clone(),
+                    package_digest: pin.digest.clone(),
+                    layer_digest: spec.wasm.clone(),
+                },
+            },
+        );
         for (name, provision) in &spec.agents {
             insert(
                 &mut output.declarations.agents,

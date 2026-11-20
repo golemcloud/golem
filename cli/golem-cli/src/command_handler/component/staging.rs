@@ -65,7 +65,7 @@ pub(super) async fn extract_local_component(
     Agents,
 )> {
     let metadata = match package_bytes {
-        Some(bytes) if !app.packaged_metadata.contains_key(name) => {
+        Some(bytes) if !app.installed_components.contains_key(name) => {
             let metadata =
                 crate::model::agent::extraction::extract_component_metadata_from_bytes(bytes)
                     .await?;
@@ -327,7 +327,9 @@ impl<'a> ComponentStager<'a> {
     }
 
     pub async fn open_wasm_if_changed(&self) -> anyhow::Result<Option<File>> {
-        if self.diff.wasm_changed() {
+        let package_metadata_changed =
+            matches!(&self.diff, ComponentDiff::Diff { diff } if diff.package_metadata_changed);
+        if self.diff.wasm_changed() || package_metadata_changed {
             Ok(Some(self.open_wasm().await?))
         } else {
             Ok(None)
@@ -1757,6 +1759,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
@@ -1776,6 +1779,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::from([(
                     "Counter".to_string(),
                     diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff {
@@ -1801,6 +1805,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: true,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
@@ -1820,6 +1825,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: true,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::new(),
@@ -1838,6 +1844,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::from([(
@@ -1859,6 +1866,7 @@ mod tests {
             diff: diff::ComponentDiff {
                 component_config_changed: false,
                 wasm_changed: false,
+                package_metadata_changed: false,
                 agent_type_changes: BTreeMap::new(),
                 agent_type_provision_config_changes: BTreeMap::new(),
                 tool_deployment_config_changes: BTreeMap::from([(

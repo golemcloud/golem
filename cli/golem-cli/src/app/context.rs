@@ -327,8 +327,7 @@ pub struct ApplicationContext {
     application: Application,
     component_metadata: crate::app::component_metadata::ComponentMetadataRegistry,
     pub(crate) publisher_package: Option<golem_package::PackageIdentity>,
-    pub(crate) packaged_metadata:
-        BTreeMap<ComponentName, golem_common::model::agent::extraction::ExtractedComponentMetadata>,
+    pub(crate) installed_components: BTreeMap<ComponentName, golem_package::InstalledComponent>,
     _package_dir: Option<crate::package::UnpackRoot>,
     calling_working_dir: PathBuf,
     selected_component_names: BTreeSet<ComponentName>,
@@ -354,7 +353,7 @@ impl ApplicationContext {
                 false,
             ),
             publisher_package: None,
-            packaged_metadata: BTreeMap::new(),
+            installed_components: BTreeMap::new(),
             _package_dir: None,
             builtin_local_url: "http://localhost:9881".parse().unwrap(),
             tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps::new(),
@@ -484,12 +483,24 @@ impl ApplicationContext {
                         app_root: &loaded.app_root_dir,
                         cache_root: config_dir.join("package-cache"),
                     };
-                    let expanded =
+                    let mut expanded =
                         golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
+                    for installed in expanded.components.values_mut() {
+                        // The lock is a local locator, not the source label sent to the registry.
+                        let source = fs::absolute_lexical_path_from_base_dir(
+                            Path::new(&installed.package_metadata.source),
+                            &loaded.app_root_dir,
+                        );
+                        installed.package_metadata.source =
+                            match source.strip_prefix(&loaded.app_root_dir) {
+                                Ok(relative) => fs::path_to_unix_str(relative)?,
+                                Err(_) => fs::file_name_to_str(&source)?.to_owned(),
+                            };
+                    }
                     loaded
                         .raw_apps
                         .push(package_manifest(dir.path(), &expanded.declarations)?);
-                    (publisher_package, expanded.metadata, Some(dir))
+                    (publisher_package, expanded.components, Some(dir))
                 }
             }
             _ => (None, Default::default(), None),
@@ -513,7 +524,7 @@ impl ApplicationContext {
             }),
         )?;
         ctx.publisher_package = publisher_package;
-        ctx.packaged_metadata = expanded;
+        ctx.installed_components = expanded;
         ctx._package_dir = package_dir;
 
         if ctx.config.offline {
@@ -561,7 +572,7 @@ impl ApplicationContext {
                 application,
                 component_metadata,
                 publisher_package: None,
-                packaged_metadata: BTreeMap::new(),
+                installed_components: BTreeMap::new(),
                 _package_dir: None,
                 calling_working_dir,
                 selected_component_names: BTreeSet::new(),

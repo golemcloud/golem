@@ -509,6 +509,7 @@ pub fn agent_type_reads_agent_id_from_env(agent_type: &AgentTypeSchema) -> bool 
 #[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
+    pub package_metadata: Option<golem_common::model::component::ComponentPackageMetadata>,
     pub config_schema: ComponentConfigSchema,
     pub component_config: Vec<AgentConfigEntryDto>,
     pub component_initial_card: Option<ParsedInitialPermissionCard>,
