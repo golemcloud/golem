@@ -7,8 +7,8 @@ use futures_concurrency::prelude::*;
 use golem_rust::agentic::get_agent_id;
 use golem_rust::schema::{FromSchema, IntoSchema};
 use golem_rust::tool::{
-    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, PrincipalKind,
-    RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, RawCustomToolError,
+    Tool, ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{TypedSchemaValue, universal_tool_middleware};
 use model::{
@@ -229,26 +229,22 @@ fn owner_summary() -> OwnerSummary {
     }
 }
 
-fn principal_summary(principal: Principal) -> PrincipalSummary {
+fn principal_summary(principal: &Principal) -> PrincipalSummary {
     match principal {
         Principal::Anonymous => PrincipalSummary::Anonymous,
-        Principal::Oidc(oidc) => PrincipalSummary::Oidc {
-            issuer: oidc.issuer,
-            subject: oidc.sub,
+        Principal::User(user) => PrincipalSummary::User {
+            issuer: user.issuer().to_string(),
+            subject: user.subject().to_string(),
         },
         Principal::Agent(agent) => PrincipalSummary::Agent {
-            agent_id: golem_rust::Uuid::from_u64_pair(
-                agent.agent_id.uuid.high_bits,
-                agent.agent_id.uuid.low_bits,
-            )
-            .to_string(),
+            agent_id: agent.agent_id().uuid.to_string(),
         },
-        Principal::GolemUser(user) => PrincipalSummary::GolemUser {
-            account_id: golem_rust::Uuid::from_u64_pair(
-                user.account_id.uuid.high_bits,
-                user.account_id.uuid.low_bits,
-            )
-            .to_string(),
+        Principal::Account(account) => PrincipalSummary::Account {
+            account_id: account.account_id().uuid.to_string(),
+        },
+        Principal::Tool(tool) => PrincipalSummary::Tool {
+            environment_id: tool.environment_id().uuid.to_string(),
+            tool_name: tool.tool_name().to_string(),
         },
     }
 }
