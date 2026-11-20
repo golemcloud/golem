@@ -12,35 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::layer::Layer;
-
 pub mod json;
 pub mod map;
 pub mod optional;
 pub mod tool_bindings;
 pub mod vec;
 
-pub trait Property<L: Layer> {
-    type Value;
-    type PropertyLayer;
-    type TraceElem;
-
-    fn value(&self) -> &Self::Value;
-    fn trace(&self) -> &[Self::TraceElem];
-
-    fn apply_layer(
-        &mut self,
-        id: &L::Id,
-        selection: Option<&L::AppliedSelection>,
-        layer: Self::PropertyLayer,
-    );
-
-    fn compact_trace(&mut self);
-}
-
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::model::cascade::layer::Layer;
+    use golem_common::cascade::layer::Layer;
 
     #[derive(Debug, Clone, serde::Serialize)]
     pub struct TestLayer {

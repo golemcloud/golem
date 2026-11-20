@@ -28,6 +28,7 @@ use std::fmt::{Display, Formatter};
 
 pub mod agentic;
 pub mod base_model;
+pub mod cascade;
 pub mod schema;
 
 #[cfg(not(feature = "full"))]

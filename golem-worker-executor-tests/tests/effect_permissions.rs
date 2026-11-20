@@ -28,7 +28,7 @@ use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, ScopeCard, StoredCard,
     parse_polymorphic_permission,
 };
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{AgentTypeProvisionConfigUpdate, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -49,7 +49,7 @@ use golem_worker_executor_test_utils::{
     WorkerExecutorTestDependencies, start_with_overrides,
 };
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -88,7 +88,7 @@ async fn effect_static_config_captures_survive_reconstruction(
     };
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    let component = executor
+    let mut component = executor
         .component_dep(&context.default_environment_id, component)
         .with_agent_config(agent_type, entries("deployment"))
         .store()
@@ -103,6 +103,9 @@ async fn effect_static_config_captures_survive_reconstruction(
         )
         .await?;
     let deployed_agent_id = agent_id!(agent_type, "deployment");
+    let deployed_worker_id = executor
+        .start_agent(&component.id, deployed_agent_id.clone())
+        .await?;
     let mut expected_deployment = reference["expectedDeploymentRead"].clone();
     let mut expected_creation = reference["expectedRead"].clone();
     for expected in [&mut expected_deployment, &mut expected_creation] {
@@ -134,6 +137,72 @@ async fn effect_static_config_captures_survive_reconstruction(
             assert_eq!(&serde_json::from_str::<Value>(&actual)?, expected);
         }
     }
+    let mut current_expected = corpus["staticCases"][0]["expected"].clone();
+    for (label, count, config) in [
+        (
+            "new-revision",
+            0,
+            Some(vec![AgentConfigEntryDto {
+                path: vec!["settings".into()],
+                value: json!({"label":"new-revision", "count":0}).into(),
+            }]),
+        ),
+        ("new-revision", 0, None),
+        ("code-default", 31, Some(vec![])),
+    ] {
+        component = executor
+            .update_component_with(
+                &component.id,
+                component.revision,
+                None,
+                Some(BTreeMap::from([(
+                    AgentTypeName(agent_type.into()),
+                    AgentTypeProvisionConfigUpdate {
+                        config,
+                        ..Default::default()
+                    },
+                )])),
+                vec![],
+            )
+            .await?;
+        current_expected["settings"] = json!({"label":label, "count":count});
+        for ((id, expected), worker) in [
+            (&deployed_agent_id, &current_expected),
+            (&agent_id, &expected_creation),
+        ]
+        .into_iter()
+        .zip([&deployed_worker_id, &worker_id])
+        {
+            executor
+                .auto_update_worker(worker, component.revision, false)
+                .await?;
+            let actual = executor
+                .invoke_and_await_agent(&component, id, "read", data_value!())
+                .await?
+                .into_typed::<String>()?;
+            assert_eq!(&serde_json::from_str::<Value>(&actual)?, expected);
+            assert_eq!(
+                executor
+                    .get_worker_metadata(worker)
+                    .await?
+                    .component_revision,
+                component.revision
+            );
+        }
+    }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    for (id, expected) in [
+        (&deployed_agent_id, &current_expected),
+        (&agent_id, &expected_creation),
+    ] {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(&serde_json::from_str::<Value>(&actual)?, expected);
+    }
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     for entry in &oplog {
         if let PublicOplogEntry::Start(_) = &entry.entry {
@@ -152,7 +221,7 @@ async fn effect_static_config_captures_survive_reconstruction(
             .iter()
             .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
             .count(),
-        5
+        9
     );
     Ok(())
 }

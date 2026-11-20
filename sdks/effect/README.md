@@ -288,7 +288,8 @@ positions retain their shape. Catalog paths are exact and are not recased by the
 `defineConfig` returns an explicit Context service and a `.layer`. Setting an agent's `config`
 provides that service during initialization, invocation and snapshot hooks. User Layers can depend
 on it normally; `.layer` can also construct the service within the current agent owner context.
-Static reads share the host capture within that owner. Retaining a service or a memoized Layer and
+Static reads obtain the host capture for the current owner revision, without an SDK value cache.
+Values saved by application code remain application state. Retaining a service or a memoized Layer and
 using it for another owner fails instead of returning the previous owner's values. Constructing
 static access outside an agent owner context also fails when read.
 

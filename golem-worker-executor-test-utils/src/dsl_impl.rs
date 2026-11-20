@@ -36,7 +36,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     resolve_revert_last_invocations_response, resume_worker_response, revert_worker_response,
     search_oplog_response, update_worker_response,
 };
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{AgentTypeProvisionConfig, OwnerConfig};
 use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::account::AccountEmail;
@@ -352,7 +352,7 @@ impl TestDsl for TestWorkerExecutor {
                             initial_permissions: creation.initial_permissions.to_polymorphic_card(),
                             env: creation.env,
                             files,
-                            config,
+                            config: OwnerConfig::from_captures(config),
                             plugins: vec![],
                         },
                     ))
@@ -501,7 +501,8 @@ impl TestDsl for TestWorkerExecutor {
                         &latest_revision.metadata,
                         &agent_type_name,
                         config,
-                    )?,
+                    )
+                    .map(OwnerConfig::from_captures)?,
                     None => existing.config,
                 };
 
@@ -1491,7 +1492,7 @@ fn parse_provision_config_from_agent_type_schema(
     agent_type_name: &AgentTypeName,
     config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
-    config
+    let mut captures = config
         .into_iter()
         .map(|entry| {
             let declaration = agent_type
@@ -1535,5 +1536,16 @@ fn parse_provision_config_from_agent_type_schema(
                 value: TypedSchemaValue::new(graph, schema_value),
             })
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let schema = golem_common::schema::config::ConfigSchema::from_declarations(
+        &agent_type.schema,
+        &agent_type.config,
+        &golem_common::schema::config::ConfigOrigin {
+            file: agent_type_name.0.clone().into(),
+            path: vec!["config".into()],
+            layer: "code".into(),
+        },
+    )?;
+    schema.capture_missing_defaults(&mut captures);
+    Ok(captures)
 }

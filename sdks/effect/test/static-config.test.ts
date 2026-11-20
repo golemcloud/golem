@@ -393,7 +393,7 @@ describe("portable static config", () => {
   )
 
   it.effect(
-    "constructs explicit owner Layers, caches within an owner and rejects a retained service for another",
+    "constructs explicit owner Layers, reads current captures and rejects a retained service for another",
     () =>
       Effect.gen(function* () {
         const Settings = Config.defineConfig("Static.Layer", {
@@ -402,13 +402,11 @@ describe("portable static config", () => {
         const compiled = yield* Settings.__compile()
         const owner = {}
         const other = {}
-        let reads = 0
         let supplied = 0
         const host = Layer.succeed(
           ConfigClient,
           ConfigClient.of({
             getConfigValue: () => {
-              reads++
               return Effect.runSync(
                 compiled.leaves[0]!.codec.encode(supplied) as Effect.Effect<any, any>,
               )
@@ -422,9 +420,8 @@ describe("portable static config", () => {
         }).pipe(Effect.provide(layer))
         expect(yield* get.pipe(Effect.provideService(ConfigOwner, owner))).toBe(0)
         supplied = 7
-        expect(yield* get.pipe(Effect.provideService(ConfigOwner, owner))).toBe(0)
+        expect(yield* get.pipe(Effect.provideService(ConfigOwner, owner))).toBe(7)
         expect(yield* get.pipe(Effect.provideService(ConfigOwner, other))).toBe(7)
-        expect(reads).toBe(2)
         const retained = yield* Settings.pipe(
           Effect.provide(layer),
           Effect.provideService(ConfigOwner, owner),
@@ -492,7 +489,10 @@ describe("portable static config", () => {
     await loadSnapshot.load(snapshot)
     expect(await read()).toEqual(corpus.staticCases[0].expected)
     values = corpus.staticCases[3].expected
-    expect(await read()).toEqual(corpus.staticCases[0].expected)
+    expect(await read()).toEqual(values)
+    const constructor = schemaValueFromWit((await guest.invoke("constructorRead", empty()))!)
+    if (constructor.tag !== "string") throw new Error("expected JSON string")
+    expect(JSON.parse(constructor.value)).toEqual(corpus.staticCases[0].expected)
     await __resetAgents()
     await guest.initialize("EffectStaticDefaultsAgent", id())
     expect(await read()).toEqual(values)

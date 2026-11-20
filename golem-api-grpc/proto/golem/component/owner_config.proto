@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/schema/schema.proto";
+
+message OwnerConfig {
+  repeated OwnerConfigEntry entries = 1;
+  map<string, ConfigSourceMetadata> source_meta = 2;
+}
+
+message OwnerConfigEntry {
+  repeated string path = 1;
+  oneof source {
+    golem.schema.TypedSchemaValue captured = 2;
+  }
+}
+
+message ConfigSourceMetadata {
+  string source = 1;
+  repeated string path = 2;
+  string layer = 3;
+}

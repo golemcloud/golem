@@ -31,10 +31,6 @@ export function compiledConfigRuntime(
   leaves: ReadonlyArray<WireConfigLeaf>,
   branches: ReadonlySet<string>,
 ) {
-  const captures = new WeakMap<
-    object,
-    Map<WireConfigLeaf, Effect.Effect<unknown, ConfigError, any>>
-  >()
   const ensure = (root: Record<string, unknown>, path: ReadonlyArray<string>) => {
     let cursor = root
     for (const segment of path) cursor = (cursor[segment] ??= {}) as Record<string, unknown>
@@ -83,19 +79,6 @@ export function compiledConfigRuntime(
           )
           let value: unknown
           if (leaf.static) {
-            let captured: Effect.Effect<unknown, ConfigError, any> | undefined
-            if (owner !== undefined) {
-              let values = captures.get(owner)
-              if (values === undefined) {
-                values = new Map()
-                captures.set(owner, values)
-              }
-              captured = values.get(leaf)
-              if (captured === undefined) {
-                captured = yield* Effect.cached(read)
-                values.set(leaf, captured)
-              }
-            }
             value = Effect.gen(function* () {
               const current = yield* ConfigOwner
               if (owner === undefined || current !== owner) {
@@ -106,7 +89,7 @@ export function compiledConfigRuntime(
                   }),
                 )
               }
-              return yield* captured!
+              return yield* read
             })
           } else {
             value =

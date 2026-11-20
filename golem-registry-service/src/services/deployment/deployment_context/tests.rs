@@ -65,14 +65,14 @@ fn static_config_readiness_validates_each_owner_and_missing_values() {
     use golem_common::model::agent::TypedAgentConfigEntry;
     use golem_common::model::component::AgentTypeInitialPermissions;
     use golem_common::model::component_metadata::{
-        AgentTypeProvisionConfig, ComponentProvisionConfig,
+        AgentTypeProvisionConfig, ComponentProvisionConfig, OwnerConfig,
     };
     use golem_common::schema::{ComponentConfigSchema, TypedSchemaValue};
 
     for agent_owner in [false, true] {
         for (ty, default, capture, nested, accepted) in [
             (SchemaType::u32(), None, None, false, false),
-            (SchemaType::u32(), Some("23"), None, false, true),
+            (SchemaType::u32(), Some("23"), None, false, false),
             (
                 SchemaType::u32(),
                 Some("23"),
@@ -151,7 +151,7 @@ fn static_config_readiness_validates_each_owner_and_missing_values() {
                             initial_permissions: AgentTypeInitialPermissions::default()
                                 .to_polymorphic_card(),
                             env: BTreeMap::new(),
-                            config: captures,
+                            config: OwnerConfig::from_captures(captures),
                             plugins: vec![],
                             files: vec![],
                         },
@@ -164,7 +164,7 @@ fn static_config_readiness_validates_each_owner_and_missing_values() {
                         declarations: vec![declaration],
                     },
                     ComponentProvisionConfig {
-                        config: captures,
+                        config: OwnerConfig::from_captures(captures),
                         ..Default::default()
                     },
                 )
@@ -915,7 +915,7 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
     let provision = |file| AgentTypeProvisionConfig {
         files: vec![file],
         env: BTreeMap::new(),
-        config: vec![],
+        config: Default::default(),
         plugins: vec![],
         initial_permissions: golem_common::model::card::PolymorphicCard {
             card_id: golem_common::model::card::CardId::new(),

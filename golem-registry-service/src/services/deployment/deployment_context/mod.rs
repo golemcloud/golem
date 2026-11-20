@@ -111,14 +111,16 @@ impl DeploymentContext {
                 None,
                 &component_schema.schema,
                 component_schema.declarations.as_slice(),
-                metadata.component_provision_config().config.as_slice(),
+                metadata.component_provision_config().config.captures(),
             ))
             .chain(metadata.agent_types().iter().map(|agent| {
                 (
                     Some(&agent.type_name),
                     &agent.schema,
                     agent.config.as_slice(),
-                    metadata.agent_type_config(&agent.type_name).unwrap_or(&[]),
+                    metadata
+                        .agent_type_config(&agent.type_name)
+                        .unwrap_or_default(),
                 )
             }));
             for (agent_type, graph, declarations, captures) in owners {
@@ -163,12 +165,10 @@ impl DeploymentContext {
                                     .map_err(|_| {
                                         format!("invalid capture at '{}'", field.path.join("."))
                                     })?;
-                            } else if field.default.is_none()
-                                && !matches!(
-                                    graph.resolve_ref(&field.value_type),
-                                    Ok(SchemaType::Option { .. })
-                                )
-                            {
+                            } else if !matches!(
+                                graph.resolve_ref(&field.value_type),
+                                Ok(SchemaType::Option { .. })
+                            ) {
                                 return Err(format!(
                                     "missing required static config '{}'",
                                     field.path.join(".")
