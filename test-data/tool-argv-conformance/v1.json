@@ -1,0 +1,364 @@
+{
+  "version": "1.0.0",
+  "purpose": "Command-line parsing of schema-described tools. Every SDK that reads a command line against tool metadata runs these cases: golem-schema's tool::argv is the reference, and each other parser must give the same results. Each SDK builds the named fixtures from its own tool model, as described in fixtures. An invoke result is the selected command's canonical path and its input record as canonical JSON. A help result is the exact help text. An error is the exact diagnostic, or its prefix where the rest is the text of the SDK's own value decoder.",
+  "fixtures": {
+    "deploy": "Root command deploy, summary \"Deploy an artifact\", with a body. Positionals: target (string, required, \"Where to deploy\"), artifact (string, optional with no default, \"Artifact to deploy\"). Options: profile (-p, enum [debug, release], default debug, \"Build profile\"), retries (u32, optional, \"Retry count\"), offset (s64, optional, \"Start offset\"), color (optional-scalar string, value name WHEN, default and bare value \"always\", \"Colour output\"), output (-o, alias out, string, optional, \"Output file\"). Flags: force (-f, bool, \"Overwrite\"), cache (bool, default true, negatable, \"Use the cache\"), verbose (-v, count, max 3, \"More output\").",
+    "vcs": "Root command vcs, summary \"Version control\", with no body. Globals: option cwd (string, default \"/\", \"Working directory\"), flag quiet (-q, \"Less output\"). Subcommand commit (alias ci, summary \"Record changes\"): option message (-m, string, required, \"Commit message\"), flag amend (\"Amend the last commit\"). Subcommand status (summary \"Show the working tree state\"): flag short (-s, \"Short format\").",
+    "exec": "Root command exec, summary \"Run a command\", with a body. No fixed positionals. Tail command (string items, separator \"--\", verbatim, \"Command and its arguments\"). Option cwd (string, optional, \"Working directory\"). Flag dry-run (-n, \"Print only\").",
+    "run": "Root command run, summary \"Run a program\", with a body. Positional program (string, required, \"Program\"). Tail args (string items, separator \"--\", not verbatim, max 2, \"Arguments\").",
+    "collect": "Root command collect, summary \"Collect values\", with a body. Options: include (-I, list of string, repeated, \"Include path\"), tag (list of string, delimited by ',', \"Tag\"), env (-e, map string to string, repeated, duplicate keys rejected, \"Variable\"), label (map string to string, repeated or delimited by ',', last key wins, \"Label\").",
+    "report": "Root command report, summary \"Write a report\", with a body. Options: user (string, optional, \"User\"), password (string, optional, \"Password\"), mode (enum [live, dry], default live, \"Mode\"). Flags: json (\"JSON output\"), text (\"Text output\"). Constraints, in order: 0 mutex groups [[present json], [present text]]; 1 implies all [present user] then all [present password]; 2 forbids all [mode is dry] with any [present json].",
+    "env": "Root command env, summary \"Read variables\", with a body. Options: token (string, required, variable TOKEN, \"Token\"), port (u32, default 80, variable PORT, \"Port\"), path (list of string, delimited by ':', variable PATHS, \"Search path\"). Flags: debug (bool, variable DEBUG, \"Debug output\"), level (count, max 2, variable LEVEL, \"Log level\").",
+    "numbers": "Root command numbers, summary \"Read a number\", with a body. Positional value (s32, required, \"Value\"). Flag one (-1, \"Use one\")."
+  },
+  "cases": [
+    {
+      "id": "deploy-defaults",
+      "fixture": "deploy",
+      "args": ["prod"],
+      "expected": {"invoke": {"path": [], "input": {"target": "prod", "artifact": null, "profile": "debug", "retries": null, "offset": null, "color": "always", "output": null, "force": false, "cache": true, "verbose": 0}}}
+    },
+    {
+      "id": "deploy-every-surface",
+      "fixture": "deploy",
+      "args": ["prod", "app.tar", "-p", "RELEASE", "--retries=3", "--offset", "-5", "--color=never", "--out", "log.txt", "-fvv", "--no-cache"],
+      "expected": {"invoke": {"path": [], "input": {"target": "prod", "artifact": "app.tar", "profile": "release", "retries": 3, "offset": "-5", "color": "never", "output": "log.txt", "force": true, "cache": false, "verbose": 2}}}
+    },
+    {
+      "id": "deploy-bare-optional-value-does-not-take-the-next-word",
+      "fixture": "deploy",
+      "args": ["prod", "--color", "x"],
+      "expected": {"invoke": {"path": [], "input": {"target": "prod", "artifact": "x", "profile": "debug", "retries": null, "offset": null, "color": "always", "output": null, "force": false, "cache": true, "verbose": 0}}}
+    },
+    {
+      "id": "deploy-short-cluster-ends-at-an-option-that-takes-the-rest",
+      "fixture": "deploy",
+      "args": ["prod", "-vfpRelease", "-oout.txt"],
+      "expected": {"invoke": {"path": [], "input": {"target": "prod", "artifact": null, "profile": "release", "retries": null, "offset": null, "color": "always", "output": "out.txt", "force": true, "cache": true, "verbose": 1}}}
+    },
+    {
+      "id": "deploy-sixty-four-bit-integer-keeps-its-digits",
+      "fixture": "deploy",
+      "args": ["prod", "--offset=9007199254740993"],
+      "expected": {"invoke": {"path": [], "input": {"target": "prod", "artifact": null, "profile": "debug", "retries": null, "offset": "9007199254740993", "color": "always", "output": null, "force": false, "cache": true, "verbose": 0}}}
+    },
+    {
+      "id": "deploy-negative-number-is-a-positional",
+      "fixture": "deploy",
+      "args": ["-5"],
+      "expected": {"invoke": {"path": [], "input": {"target": "-5", "artifact": null, "profile": "debug", "retries": null, "offset": null, "color": "always", "output": null, "force": false, "cache": true, "verbose": 0}}}
+    },
+    {
+      "id": "deploy-end-of-options-makes-help-a-positional",
+      "fixture": "deploy",
+      "args": ["--", "-h"],
+      "expected": {"invoke": {"path": [], "input": {"target": "-h", "artifact": null, "profile": "debug", "retries": null, "offset": null, "color": "always", "output": null, "force": false, "cache": true, "verbose": 0}}}
+    },
+    {
+      "id": "deploy-missing-positional",
+      "fixture": "deploy",
+      "args": [],
+      "expected": {"error": "missing required positional target"}
+    },
+    {
+      "id": "deploy-extra-positional",
+      "fixture": "deploy",
+      "args": ["prod", "a", "b"],
+      "expected": {"error": "unexpected argument \"b\""}
+    },
+    {
+      "id": "deploy-undecodable-value",
+      "fixture": "deploy",
+      "args": ["prod", "--retries", "x"],
+      "expected": {"errorPrefix": "invalid value \"x\": "}
+    },
+    {
+      "id": "deploy-count-above-maximum",
+      "fixture": "deploy",
+      "args": ["prod", "-vvvv"],
+      "expected": {"error": "--verbose exceeds maximum count"}
+    },
+    {
+      "id": "deploy-flag-with-a-value",
+      "fixture": "deploy",
+      "args": ["prod", "--force=yes"],
+      "expected": {"error": "flag --force does not take a value"}
+    },
+    {
+      "id": "deploy-unknown-long-option",
+      "fixture": "deploy",
+      "args": ["prod", "--bogus=1"],
+      "expected": {"error": "unknown option --bogus"}
+    },
+    {
+      "id": "deploy-unknown-short-option",
+      "fixture": "deploy",
+      "args": ["prod", "-z"],
+      "expected": {"error": "unknown short option -z"}
+    },
+    {
+      "id": "deploy-scalar-repeated",
+      "fixture": "deploy",
+      "args": ["prod", "--retries", "1", "--retries", "2"],
+      "expected": {"error": "--retries cannot be repeated"}
+    },
+    {
+      "id": "deploy-option-without-value",
+      "fixture": "deploy",
+      "args": ["prod", "--output"],
+      "expected": {"error": "--output requires a value"}
+    },
+    {
+      "id": "deploy-help",
+      "fixture": "deploy",
+      "args": ["prod", "-h"],
+      "expected": {"help": "Usage: deploy [OPTIONS] <target> [artifact]\n\nDeploy an artifact\n\nArguments:\n  <target>         Where to deploy\n  [artifact]       Artifact to deploy\n\nOptions:\n  -p, --profile <VALUE>  Build profile [has default] [possible values: debug, release]\n  --retries <VALUE>  Retry count\n  --offset <VALUE>  Start offset\n  --color[=WHEN]  Colour output [has default]\n  -o, --output <VALUE>  Output file [aliases: out]\n  -f, --force  Overwrite\n  --cache  Use the cache [--no-cache]\n  -v, --verbose  More output\n  -h, --help      Print help (reserved only when undeclared)\n"}
+    },
+    {
+      "id": "vcs-subcommand",
+      "fixture": "vcs",
+      "args": ["commit", "-m", "fix"],
+      "expected": {"invoke": {"path": ["commit"], "input": {"cwd": "/", "quiet": false, "message": "fix", "amend": false}}}
+    },
+    {
+      "id": "vcs-globals-before-an-alias",
+      "fixture": "vcs",
+      "args": ["-q", "--cwd", "/src", "ci", "--message=x", "--amend"],
+      "expected": {"invoke": {"path": ["commit"], "input": {"cwd": "/src", "quiet": true, "message": "x", "amend": true}}}
+    },
+    {
+      "id": "vcs-global-after-the-subcommand",
+      "fixture": "vcs",
+      "args": ["status", "-sq"],
+      "expected": {"invoke": {"path": ["status"], "input": {"cwd": "/", "quiet": true, "short": true}}}
+    },
+    {
+      "id": "vcs-no-subcommand",
+      "fixture": "vcs",
+      "args": [],
+      "expected": {"error": "a subcommand is required"}
+    },
+    {
+      "id": "vcs-unknown-subcommand",
+      "fixture": "vcs",
+      "args": ["push"],
+      "expected": {"error": "expected a subcommand, found \"push\""}
+    },
+    {
+      "id": "vcs-missing-required-option",
+      "fixture": "vcs",
+      "args": ["commit"],
+      "expected": {"error": "missing required option --message"}
+    },
+    {
+      "id": "vcs-subcommand-name-after-the-body-started",
+      "fixture": "vcs",
+      "args": ["commit", "-m", "x", "status"],
+      "expected": {"error": "unexpected argument \"status\""}
+    },
+    {
+      "id": "vcs-root-help",
+      "fixture": "vcs",
+      "args": ["--help"],
+      "expected": {"help": "Usage: vcs [OPTIONS] [COMMAND]\n\nVersion control\n\nCommands:\n  commit           Record changes\n  status           Show the working tree state\n\nOptions:\n  --cwd <VALUE>  Working directory [has default]\n  -q, --quiet  Less output\n  -h, --help      Print help (reserved only when undeclared)\n"}
+    },
+    {
+      "id": "vcs-subcommand-help",
+      "fixture": "vcs",
+      "args": ["ci", "--help"],
+      "expected": {"help": "Usage: vcs commit [OPTIONS]\n\nRecord changes\n\nOptions:\n  --cwd <VALUE>  Working directory [has default]\n  -q, --quiet  Less output\n  -m, --message <VALUE>  Commit message [required]\n  --amend  Amend the last commit\n  -h, --help      Print help (reserved only when undeclared)\n"}
+    },
+    {
+      "id": "exec-tail-starts-without-its-separator",
+      "fixture": "exec",
+      "args": ["ls", "-la"],
+      "expected": {"invoke": {"path": [], "input": {"command": ["ls", "-la"], "cwd": null, "dry-run": false}}}
+    },
+    {
+      "id": "exec-options-before-the-tail",
+      "fixture": "exec",
+      "args": ["-n", "--cwd", "/tmp", "git", "status", "--short"],
+      "expected": {"invoke": {"path": [], "input": {"command": ["git", "status", "--short"], "cwd": "/tmp", "dry-run": true}}}
+    },
+    {
+      "id": "exec-separator-passes-an-option-to-the-tail",
+      "fixture": "exec",
+      "args": ["--", "-n"],
+      "expected": {"invoke": {"path": [], "input": {"command": ["-n"], "cwd": null, "dry-run": false}}}
+    },
+    {
+      "id": "exec-cluster-with-a-foreign-character-starts-the-tail",
+      "fixture": "exec",
+      "args": ["-nx"],
+      "expected": {"invoke": {"path": [], "input": {"command": ["-nx"], "cwd": null, "dry-run": false}}}
+    },
+    {
+      "id": "exec-unknown-option-starts-the-tail",
+      "fixture": "exec",
+      "args": ["--bogus", "x"],
+      "expected": {"invoke": {"path": [], "input": {"command": ["--bogus", "x"], "cwd": null, "dry-run": false}}}
+    },
+    {
+      "id": "exec-help",
+      "fixture": "exec",
+      "args": ["-h"],
+      "expected": {"help": "Usage: exec [OPTIONS] [--] [command]...\n\nRun a command\n\nArguments:\n  [command]...     Command and its arguments [starts at the first argument that is not an option of this command, or after --]\n\nOptions:\n  --cwd <VALUE>  Working directory\n  -n, --dry-run  Print only\n  -h, --help      Print help (reserved only when undeclared)\n"}
+    },
+    {
+      "id": "run-tail-after-the-separator",
+      "fixture": "run",
+      "args": ["cc", "--", "a", "b"],
+      "expected": {"invoke": {"path": [], "input": {"program": "cc", "args": ["a", "b"]}}}
+    },
+    {
+      "id": "run-end-of-options-before-a-required-positional",
+      "fixture": "run",
+      "args": ["--", "cc"],
+      "expected": {"invoke": {"path": [], "input": {"program": "cc", "args": []}}}
+    },
+    {
+      "id": "run-tail-that-is-not-verbatim-still-reads-options",
+      "fixture": "run",
+      "args": ["cc", "--", "-O2", "x.c"],
+      "expected": {"error": "unknown short option -O"}
+    },
+    {
+      "id": "run-tail-without-its-separator",
+      "fixture": "run",
+      "args": ["cc", "a"],
+      "expected": {"error": "expected tail separator \"--\""}
+    },
+    {
+      "id": "run-tail-above-its-maximum",
+      "fixture": "run",
+      "args": ["cc", "--", "a", "b", "c"],
+      "expected": {"error": "tail args has invalid cardinality"}
+    },
+    {
+      "id": "collect-lists-and-maps",
+      "fixture": "collect",
+      "args": ["-I", "a", "-Ib", "--tag", "x,y", "-e", "K=V", "--env", "A=B=C", "--label", "p=1,q=2", "--label", "p=3"],
+      "expected": {"invoke": {"path": [], "input": {"include": ["a", "b"], "tag": ["x", "y"], "env": [["K", "V"], ["A", "B=C"]], "label": [["p", "3"], ["q", "2"]]}}}
+    },
+    {
+      "id": "collect-empty",
+      "fixture": "collect",
+      "args": [],
+      "expected": {"invoke": {"path": [], "input": {"include": [], "tag": [], "env": [], "label": []}}}
+    },
+    {
+      "id": "collect-delimited-option-repeated",
+      "fixture": "collect",
+      "args": ["--tag", "a", "--tag", "b"],
+      "expected": {"error": "--tag cannot be repeated"}
+    },
+    {
+      "id": "collect-duplicate-key",
+      "fixture": "collect",
+      "args": ["-e", "K=1", "-e", "K=2"],
+      "expected": {"error": "duplicate key for --env"}
+    },
+    {
+      "id": "collect-map-item-without-a-value",
+      "fixture": "collect",
+      "args": ["-e", "K"],
+      "expected": {"error": "--env expects KEY=VALUE"}
+    },
+    {
+      "id": "report-satisfied",
+      "fixture": "report",
+      "args": ["--json", "--user", "u", "--password", "p"],
+      "expected": {"invoke": {"path": [], "input": {"user": "u", "password": "p", "mode": "live", "json": true, "text": false}}}
+    },
+    {
+      "id": "report-mutex",
+      "fixture": "report",
+      "args": ["--json", "--text"],
+      "expected": {"error": "tool command constraint 0 is not satisfied"}
+    },
+    {
+      "id": "report-implies",
+      "fixture": "report",
+      "args": ["--user", "u"],
+      "expected": {"error": "tool command constraint 1 is not satisfied"}
+    },
+    {
+      "id": "report-forbids-a-value",
+      "fixture": "report",
+      "args": ["--mode", "dry", "--json"],
+      "expected": {"error": "tool command constraint 2 is not satisfied"}
+    },
+    {
+      "id": "report-other-value-is-allowed",
+      "fixture": "report",
+      "args": ["--mode", "dry", "--text"],
+      "expected": {"invoke": {"path": [], "input": {"user": null, "password": null, "mode": "dry", "json": false, "text": true}}}
+    },
+    {
+      "id": "env-every-variable",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "PORT": "8080", "PATHS": "/a:/b", "DEBUG": "yes", "LEVEL": "2"},
+      "expected": {"invoke": {"path": [], "input": {"token": "t", "port": 8080, "path": ["/a", "/b"], "debug": true, "level": 2}}}
+    },
+    {
+      "id": "env-command-line-wins",
+      "fixture": "env",
+      "args": ["--token", "cli", "--port", "1"],
+      "variables": {"TOKEN": "v", "PORT": "2"},
+      "expected": {"invoke": {"path": [], "input": {"token": "cli", "port": 1, "path": [], "debug": false, "level": 0}}}
+    },
+    {
+      "id": "env-empty-variable-is-used",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": ""},
+      "expected": {"invoke": {"path": [], "input": {"token": "", "port": 80, "path": [], "debug": false, "level": 0}}}
+    },
+    {
+      "id": "env-required-option-without-a-variable",
+      "fixture": "env",
+      "args": [],
+      "expected": {"error": "missing required option --token"}
+    },
+    {
+      "id": "env-undecodable-variable",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "PORT": "x"},
+      "expected": {"errorPrefix": "--port from variable PORT: invalid value \"x\": "}
+    },
+    {
+      "id": "env-unknown-bool-word",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "DEBUG": "maybe"},
+      "expected": {"error": "--debug from variable DEBUG: invalid value \"maybe\": expected true, yes, on, y, t or 1, or false, no, off, n, f or 0"}
+    },
+    {
+      "id": "env-count-above-maximum",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "LEVEL": "3"},
+      "expected": {"error": "--level from variable LEVEL: invalid value \"3\": exceeds maximum count"}
+    },
+    {
+      "id": "numbers-declared-digit-flag-and-negative-value",
+      "fixture": "numbers",
+      "args": ["-1", "-5"],
+      "expected": {"invoke": {"path": [], "input": {"value": -5, "one": true}}}
+    },
+    {
+      "id": "numbers-negative-value",
+      "fixture": "numbers",
+      "args": ["-5"],
+      "expected": {"invoke": {"path": [], "input": {"value": -5, "one": false}}}
+    },
+    {
+      "id": "numbers-cluster-with-an-undeclared-digit",
+      "fixture": "numbers",
+      "args": ["-15"],
+      "expected": {"error": "unknown short option -5"}
+    }
+  ]
+}

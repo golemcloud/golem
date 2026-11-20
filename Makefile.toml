@@ -63,6 +63,8 @@ condition = { env_not_set = ["TEST_R_FLAKY_OPTS"] }
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
+# Main validation and release preparation build, test and publish every built-in, including optional ones.
+GOLEM_OPTIONAL_BUILTINS = "all"
 #CARGO_PROFILE_dev_STRIP = "debuginfo"
 #CARGO_PROFILE_test_STRIP = "debuginfo"
 JUNIT_OPTS = "${TEST_R_REPORT_OPTS}"
@@ -2273,6 +2275,9 @@ release = get_env GOLEM_BUILTIN_RELEASE
 if not is_empty ${release}
     exit 1
 end
+optional_selection = get_env GOLEM_OPTIONAL_BUILTINS
+optional_selection = trim ${optional_selection}
+optional_ids = split ${optional_selection} ,
 inventory = readfile builtin-artifacts.json
 artifacts = json_parse --collection ${inventory}
 ids = map_keys ${artifacts}
@@ -2287,6 +2292,21 @@ for id in ${ids}
             matches = set true
         elif equals ${id} typescript_tools
             matches = set true
+        end
+    end
+    # An optional built-in builds when GOLEM_OPTIONAL_BUILTINS selects it or its own task is run.
+    optional = map_get ${entry} optional
+    if ${matches}
+        if ${optional}
+            if not equals ${CARGO_MAKE_TASK} ${CARGO_MAKE_CURRENT_TASK_NAME}
+                matches = equals ${optional_selection} all
+                for optional_id in ${optional_ids}
+                    optional_id = trim ${optional_id}
+                    if equals ${optional_id} ${id}
+                        matches = set true
+                    end
+                end
+            end
         end
     end
     if ${matches}
@@ -2568,14 +2588,30 @@ release = get_env GOLEM_BUILTIN_RELEASE
 if not is_empty ${release}
     exit 0
 end
+optional_selection = get_env GOLEM_OPTIONAL_BUILTINS
+optional_selection = trim ${optional_selection}
+optional_ids = split ${optional_selection} ,
 inventory = readfile builtin-artifacts.json
 artifacts = json_parse --collection ${inventory}
 ids = map_keys ${artifacts}
 for id in ${ids}
     entry = map_get ${artifacts} ${id}
     output = map_get ${entry} path
-    if not is_path_exists ${output}
-        trigger_error "Missing built-in artifact: ${output}"
+    required = set true
+    optional = map_get ${entry} optional
+    if ${optional}
+        required = equals ${optional_selection} all
+        for optional_id in ${optional_ids}
+            optional_id = trim ${optional_id}
+            if equals ${optional_id} ${id}
+                required = set true
+            end
+        end
+    end
+    if ${required}
+        if not is_path_exists ${output}
+            trigger_error "Missing built-in artifact: ${output}"
+        end
     end
 end
 '''

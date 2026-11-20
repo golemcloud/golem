@@ -12,6 +12,10 @@ fn main() -> anyhow::Result<()> {
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     println!("cargo:rustc-check-cfg=cfg(golem_builtin_release)");
     println!("cargo:rerun-if-env-changed=GOLEM_BUILTIN_RELEASE");
+    println!(
+        "cargo:rerun-if-env-changed={}",
+        builtin_manifest::OPTIONAL_BUILTINS_ENV
+    );
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/builtin_manifest.rs");
     println!(
@@ -32,11 +36,19 @@ fn main() -> anyhow::Result<()> {
         Vec::new()
     };
     fs::write(out.join("builtin-artifacts.release.json"), contents)?;
+    // Validates the optional built-in selection, also when nothing is embedded.
+    let development = builtin_manifest::development_inventory(
+        env::var(builtin_manifest::OPTIONAL_BUILTINS_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+    #[cfg(not(feature = "embed-builtin-artifacts"))]
+    let _ = development;
     #[cfg(feature = "embed-builtin-artifacts")]
     {
         use std::io::Write;
         let mut generated = String::from("[\n");
-        for (id, entry) in builtin_manifest::inventory()? {
+        for (id, entry) in development {
             let path = root.join(entry.path);
             println!("cargo:rerun-if-changed={}", path.display());
             let bytes = fs::read(&path).map_err(|error| {

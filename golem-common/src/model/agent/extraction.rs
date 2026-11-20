@@ -195,7 +195,9 @@ async fn extract_component_metadata_impl(
         builder.inherit_stderr();
     }
 
-    let (wasi, io) = builder.env("RUST_BACKTRACE", "1").build();
+    // Language runtimes read the program name while they initialize, as in an executor Store;
+    // extraction only has the component bytes, so it uses a fixed name.
+    let (wasi, io) = builder.arg("component").env("RUST_BACKTRACE", "1").build();
 
     let host = Host {
         table: Arc::new(Mutex::new(ResourceTable::new())),

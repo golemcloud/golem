@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::app::build::go_inputs;
-use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
+use crate::app::build::go_toolchain::{
+    GoToolchain, componentize_go_adapter_position, ensure_go_adapter, ensure_go_toolchain,
+};
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
     GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonSyncDepsMarkerHash,
@@ -422,8 +424,18 @@ pub async fn execute_external_command(
 
                 let mut process = match &go_toolchain {
                     Some(toolchain) => {
+                        let mut args: Vec<std::ffi::OsString> =
+                            command_tokens[1..].iter().map(Into::into).collect();
+                        // componentize-go wraps the module with Golem's adapter,
+                        // not the one it embeds.
+                        if let Some(position) =
+                            componentize_go_adapter_position(&command_tokens[1..])
+                        {
+                            let adapter = ensure_go_adapter(ctx.application_config()).await?;
+                            args.splice(position..position, ["--adapt".into(), adapter.into()]);
+                        }
                         let mut process = Command::new(&toolchain.go);
-                        process.args(command_tokens.iter().skip(1));
+                        process.args(args);
                         process
                     }
                     None => {

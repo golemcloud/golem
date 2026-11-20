@@ -4583,9 +4583,9 @@ async fn manual_update_on_idle_without_save_snapshot(
     // Explanation: We are trying to update v1 to v3 using snapshots, but v1 does not
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
-    // f3 returns args.len() + env_vars.len(): no args, PORT, and the GOLEM_AGENT_ID,
+    // f3 returns args.len() + env_vars.len(): the program name, PORT, and the GOLEM_AGENT_ID,
     // GOLEM_AGENT_KEY, GOLEM_AGENT_TYPE and GOLEM_COMPONENT_REVISION that Golem sets
-    assert_eq!(result.into_typed::<u64>()?, 5);
+    assert_eq!(result.into_typed::<u64>()?, 6);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
@@ -4746,9 +4746,9 @@ async fn manual_update_on_idle_with_failing_load(
 
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
-    // f3 returns args.len() + env_vars.len(): no args, PORT, and the GOLEM_AGENT_ID,
+    // f3 returns args.len() + env_vars.len(): the program name, PORT, and the GOLEM_AGENT_ID,
     // GOLEM_AGENT_KEY, GOLEM_AGENT_TYPE and GOLEM_COMPONENT_REVISION that Golem sets
-    assert_eq!(result.into_typed::<u64>()?, 5);
+    assert_eq!(result.into_typed::<u64>()?, 6);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
