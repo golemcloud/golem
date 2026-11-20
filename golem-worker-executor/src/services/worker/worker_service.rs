@@ -568,9 +568,9 @@ impl WorkerService for DefaultWorkerService {
                 Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
             let status_generation = status.invocation_results.revert_generation();
             // The index covers the retained oplog: the entries before its start are gone.
-            let retained_start = self
+            let retention = self
                 .oplog_service
-                .first_retained_index(owned_agent_id, agent_mode)
+                .retention(owned_agent_id, agent_mode)
                 .await?;
             'reload: loop {
                 let observed_metadata = self
@@ -675,9 +675,17 @@ impl WorkerService for DefaultWorkerService {
                 };
 
                 while metadata.covered_through < status.oplog_idx {
-                    let start = metadata.covered_through.next().max(retained_start);
-                    let remaining = (status.oplog_idx.as_u64() + 1).saturating_sub(start.as_u64());
-                    let count = remaining
+                    let Some(range) =
+                        retention.range(metadata.covered_through.next(), status.oplog_idx)
+                    else {
+                        return Err(WorkerExecutorError::runtime(format!(
+                            "failed to advance invocation result index for {owned_agent_id}: no retained oplog entry after {}",
+                            metadata.covered_through
+                        )));
+                    };
+                    let start = range.start;
+                    let count = range
+                        .count
                         .min(
                             self.config
                                 .invocation_results

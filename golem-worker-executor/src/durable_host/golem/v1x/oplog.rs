@@ -251,6 +251,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         GUEST_CLAIM_VISIBILITY,
     )
     .await
+    .map_err(|error| error.to_string())
 }
 
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
@@ -272,10 +273,10 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         let start = ctx
             .state
             .oplog_service()
-            .first_retained_index(&entry.owned_agent_id, agent_mode)
+            .retention(&entry.owned_agent_id, agent_mode)
             .await
             .map_err(|error| error.to_string())?
-            .max(entry.next_oplog_index);
+            .clamp(entry.next_oplog_index);
         let revision = find_component_revision_at(
             ctx.state.oplog_service(),
             &entry.owned_agent_id,
@@ -310,6 +311,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         GUEST_CLAIM_VISIBILITY,
     )
     .await
+    .map_err(|error| error.to_string())
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {

@@ -1279,3 +1279,49 @@ async fn merge_named_retry_policy_tiers_precedence_removal_and_sorting() {
     let shared = merged.iter().find(|p| p.name == "shared").unwrap();
     assert_eq!(shared.policy, RetryPolicy::Never);
 }
+
+#[test]
+async fn the_error_count_reads_from_the_retry_point_or_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, idx, jump};
+    use golem_common::model::oplog::AgentError;
+
+    let error = |index: u64, retry_from: u64| OplogEntry::Error {
+        timestamp: Timestamp::from(index),
+        entity_parent_start_index: None,
+        kind: OplogErrorKind::Invocation,
+        invocation_id: None,
+        error: AgentError::Unknown(index.to_string()),
+        retry_from: idx(retry_from),
+        retry_policy_state: None,
+        retry_at: None,
+        retrying_start_index: None,
+    };
+    let oplog = RetainedOplog::new().await;
+    oplog
+        .add((1..=10).map(|index| match index {
+            3 | 5 | 9 => error(index, 2),
+            7 => error(index, 6),
+            _ => jump(index),
+        }))
+        .await;
+
+    let oplog = &oplog;
+    let count = |retry_point: u64| async move {
+        count_oplog_errors_for(&oplog.open().await, idx(retry_point))
+            .await
+            .map_err(|unreadable| unreadable.error)
+    };
+    assert_eq!(count(2).await, Ok(3));
+    assert_eq!(count(6).await, Ok(1));
+    oplog.advance(5).await;
+    assert_eq!(
+        count(2).await,
+        Ok(2),
+        "the errors before the start are gone"
+    );
+    oplog.advance(6).await;
+    assert_eq!(count(2).await, Ok(1));
+    assert_eq!(count(6).await, Ok(1));
+    oplog.advance(11).await;
+    assert_eq!(count(2).await, Ok(0), "no retained entry is left");
+}

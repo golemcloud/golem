@@ -710,8 +710,9 @@ pub(crate) async fn skipped_regions_at(
     // depends on, so the read leaves them out.
     let first = this
         .oplog_service()
-        .first_retained_index(owned_agent_id, AgentMode::Durable)
-        .await?;
+        .retention(owned_agent_id, AgentMode::Durable)
+        .await?
+        .start();
     let entries = read_region_entries(&reader, first, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;

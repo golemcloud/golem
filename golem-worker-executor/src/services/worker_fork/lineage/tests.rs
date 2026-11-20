@@ -797,3 +797,47 @@ fn through_preserves_marker_and_deletion_boundaries() {
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }
+
+#[test]
+async fn a_fork_cut_search_reads_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, idx, jump};
+
+    let revert = |index: u64| OplogEntry::Revert {
+        timestamp: Timestamp::from(index),
+        dropped_region: OplogRegion {
+            start: idx(index - 1),
+            end: idx(index - 1),
+        },
+    };
+    let oplog = RetainedOplog::new().await;
+    oplog
+        .add((1..=10).map(|index| {
+            if index == 3 {
+                revert(index)
+            } else {
+                jump(index)
+            }
+        }))
+        .await;
+    let search = || {
+        StreamForkLineage::suffix_contains_fork_cut(
+            oplog.service.as_ref(),
+            &oplog.owned_agent_id,
+            AgentMode::Durable,
+            OplogIndex::INITIAL,
+            idx(10),
+        )
+    };
+
+    assert_eq!(search().await, Ok(true));
+    oplog.advance(3).await;
+    assert_eq!(search().await, Ok(true), "the revert is at the start");
+    oplog.advance(4).await;
+    assert_eq!(
+        search().await,
+        Ok(false),
+        "the revert is before the start, and the search does not read it"
+    );
+    oplog.advance(11).await;
+    assert_eq!(search().await, Ok(false));
+}

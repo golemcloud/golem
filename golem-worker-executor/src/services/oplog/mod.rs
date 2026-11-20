@@ -315,13 +315,14 @@ pub trait OplogService: Debug + Send + Sync {
             .map_err(|error| error.to_string())?)
     }
 
-    /// The first index that the oplog of the agent keeps; see [`Oplog::first_retained_index`].
-    /// Required, so that a wrapper cannot answer index 1 for an oplog whose start moved.
-    async fn first_retained_index(
+    /// The retention of the oplog of the agent: where its retained entries start; see
+    /// [`Oplog::retention`]. Required, so that a wrapper cannot answer index 1 for an oplog whose
+    /// start moved.
+    async fn retention(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog>;
+    ) -> Result<retention::OplogRetention, UnreadableOplog>;
 
     /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
@@ -1017,12 +1018,13 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.inner().and_then(|inner| inner.fence())
     }
 
-    /// The first index that this oplog keeps. A read below it fails as expired, except a read
-    /// of the `Create` entry alone at index 1. Only the retention layer knows it, so a wrapper
-    /// answers from the oplog it wraps, and an oplog without the layer keeps every entry.
-    fn first_retained_index(&self) -> OplogIndex {
+    /// The retention of this oplog: where its retained entries start. A read below the start
+    /// fails as expired, except a read of the `Create` entry alone at index 1. Only the retention
+    /// layer knows it, so a wrapper answers from the oplog it wraps, and an oplog without the layer
+    /// keeps every entry.
+    fn retention(&self) -> retention::OplogRetention {
         self.inner()
-            .map_or(OplogIndex::INITIAL, |inner| inner.first_retained_index())
+            .map_or(retention::OplogRetention::FULL, |inner| inner.retention())
     }
 
     /// Returns the inner oplog wrapped by this implementation, if any.

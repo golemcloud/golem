@@ -868,12 +868,15 @@ impl StreamSessionIndexService {
             }
             // The index covers the retained oplog: the entries before its start are gone. The
             // `Create` entry is kept below the start, and names the producer.
-            let retained_start = oplog.first_retained_index(id, mode).await?;
-            let start = metadata.covered_through.next().max(retained_start);
-            let count = (horizon.as_u64() + 1)
-                .saturating_sub(start.as_u64())
-                .min(1024);
-            let mut entries = oplog.read_exact(id, mode, start, count).await?;
+            let retention = oplog.retention(id, mode).await?;
+            let Some(range) = retention.range(metadata.covered_through.next(), horizon) else {
+                return Err(
+                    format!("empty oplog range while indexing stream sessions for {id}").into(),
+                );
+            };
+            let mut entries = oplog
+                .read_exact(id, mode, range.start, range.count.min(1024))
+                .await?;
             if entries.is_empty() {
                 return Err(
                     format!("empty oplog range while indexing stream sessions for {id}").into(),
@@ -881,10 +884,13 @@ impl StreamSessionIndexService {
             }
             let previously_discovered = metadata.lineage_discovered_through;
             if metadata.producer_fingerprint.is_none() {
-                let create = if start > OplogIndex::INITIAL {
-                    oplog.read_exact(id, mode, OplogIndex::INITIAL, 1).await?
-                } else {
-                    Default::default()
+                let create = match retention.create_read() {
+                    Some(create) => {
+                        oplog
+                            .read_exact(id, mode, create.start, create.count)
+                            .await?
+                    }
+                    None => Default::default(),
                 };
                 metadata.producer_fingerprint =
                     create

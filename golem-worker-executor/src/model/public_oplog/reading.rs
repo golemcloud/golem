@@ -14,9 +14,58 @@
 
 use super::*;
 use crate::services::golem_config::ScanBudget;
+use crate::services::oplog::{OplogReadError, UnreadableOplog};
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
+use std::fmt::{Display, Formatter};
 use std::time::{Duration, Instant};
+
+/// Why a read of public oplog entries failed.
+#[derive(Debug)]
+pub enum PublicOplogReadError {
+    /// The oplog did not give the entries, for example because the read reaches below the
+    /// retained start.
+    Unreadable(UnreadableOplog),
+    /// An entry or the query could not be read into its public form.
+    Invalid(String),
+}
+
+impl Display for PublicOplogReadError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(error) => write!(f, "{error}"),
+            Self::Invalid(details) => write!(f, "{details}"),
+        }
+    }
+}
+
+impl From<UnreadableOplog> for PublicOplogReadError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+impl From<String> for PublicOplogReadError {
+    fn from(details: String) -> Self {
+        Self::Invalid(details)
+    }
+}
+
+/// A read below the retained start keeps its expired error, which names the start. Every other
+/// failure is an unknown error with the text of the failure.
+impl From<PublicOplogReadError> for WorkerExecutorError {
+    fn from(error: PublicOplogReadError) -> Self {
+        match error {
+            PublicOplogReadError::Unreadable(
+                unreadable @ UnreadableOplog {
+                    error: OplogReadError::Expired { .. },
+                    ..
+                },
+            ) => unreadable.into(),
+            other => WorkerExecutorError::unknown(other.to_string()),
+        }
+    }
+}
 
 /// Collects the entries of an oplog chunk in the form that its reader gets.
 trait ChunkBuilder {
@@ -120,7 +169,7 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk, String> {
+) -> Result<PublicOplogChunk, PublicOplogReadError> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -156,7 +205,10 @@ pub async fn get_public_oplog_page(
     initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+) -> Result<
+    PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+    PublicOplogReadError,
+> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -199,15 +251,11 @@ pub async fn get_public_oplog_entry(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
         )));
     }
-    let first = oplog_service
-        .first_retained_index(owned_agent_id, agent_mode)
-        .await?;
-    if oplog_index < first {
-        return Err(WorkerExecutorError::oplog_expired(
-            owned_agent_id.agent_id.clone(),
-            first,
-        ));
-    }
+    oplog_service
+        .retention(owned_agent_id, agent_mode)
+        .await?
+        .check_read(oplog_index, 1)
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
     let component_revision = match component_revision {
         Some(component_revision) => component_revision,
         None => {
@@ -233,8 +281,7 @@ pub async fn get_public_oplog_entry(
         1,
         claims,
     )
-    .await
-    .map_err(WorkerExecutorError::unknown)?;
+    .await?;
     chunk.entries.into_iter().next().ok_or_else(|| {
         WorkerExecutorError::unknown(format!(
             "agent {owned_agent_id} has no oplog entry at index {oplog_index}"
@@ -261,12 +308,11 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     filter: Option<&Query>,
     claims: ClaimVisibility,
     builder: &mut B,
-) -> Result<(PublicOplogChunk<B::Entry>, bool), String> {
+) -> Result<(PublicOplogChunk<B::Entry>, bool), PublicOplogReadError> {
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
     let available = if initial_oplog_index <= last_index {
         last_index.as_u64() - initial_oplog_index.as_u64() + 1
     } else {
@@ -279,8 +325,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
             initial_oplog_index,
             (count as u64).min(available),
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -288,8 +333,13 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     let mut first_index_in_chunk = None;
     let mut page_full = false;
 
-    let mut attribution_resolver =
-        PublicOplogAttributionResolver::new(oplog_service.clone(), owned_agent_id, agent_mode);
+    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
+    let mut attribution_resolver = PublicOplogAttributionResolver::new(
+        oplog_service.clone(),
+        owned_agent_id,
+        agent_mode,
+        retention,
+    );
     for (index, raw_entry) in &raw_entries {
         attribution_resolver.cache_entry(*index, raw_entry);
     }
@@ -368,7 +418,7 @@ pub async fn search_public_oplog(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult, String> {
+) -> Result<PublicOplogSearchResult, PublicOplogReadError> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -406,7 +456,10 @@ pub async fn search_public_oplog_page(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+) -> Result<
+    PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+    PublicOplogReadError,
+> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -450,7 +503,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     budget: ScanBudget,
     claims: ClaimVisibility,
     mut builder: B,
-) -> Result<PublicOplogSearchResult<B::Entry>, String> {
+) -> Result<PublicOplogSearchResult<B::Entry>, PublicOplogReadError> {
     let started = Instant::now();
     let mut scanned = 0u64;
     let mut results = Vec::new();
@@ -540,29 +593,31 @@ async fn scan_component_revision(
         .get_last_index(owned_agent_id, agent_mode)
         .await?;
     const BATCH_SIZE: u64 = 256;
-    let end = start.min(last_oplog_index.next());
-    // The scan starts at the retained start of the oplog. Below it only the `Create` entry is
-    // kept, which gives the revision that the agent started with.
-    let mut current = oplog_service
-        .first_retained_index(owned_agent_id, agent_mode)
-        .await?;
-    if current > OplogIndex::INITIAL && end > OplogIndex::INITIAL {
+    let last = OplogIndex::from_u64(start.as_u64().saturating_sub(1)).min(last_oplog_index);
+    // The scan reads the retained entries before `start`. When the `Create` entry is below the
+    // retained start, the scan reads it alone first: it gives the revision that the agent started
+    // with.
+    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
+    if let Some(create) = retention.create_read().filter(|_| last.is_defined()) {
+        if scan.is_spent() {
+            return Ok(None);
+        }
         initial_component_revision = oplog_service
-            .read_exact(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
+            .read_exact(owned_agent_id, agent_mode, create.start, create.count)
             .await?
             .values()
             .find_map(OplogEntry::specifies_component_revision)
             .unwrap_or(initial_component_revision);
+        scan.charge(create.count);
     }
-    while current < end {
+    let mut current = OplogIndex::INITIAL;
+    while let Some(range) = retention.range(current, last) {
         if scan.is_spent() {
             return Ok(None);
         }
-        let count = (end.as_u64() - current.as_u64())
-            .min(BATCH_SIZE)
-            .min(scan.remaining_entries());
+        let count = range.count.min(BATCH_SIZE).min(scan.remaining_entries());
         let entries = oplog_service
-            .read_exact(owned_agent_id, agent_mode, current, count)
+            .read_exact(owned_agent_id, agent_mode, range.start, count)
             .await?;
         for entry in entries.into_values() {
             if let Some(revision) = entry.specifies_component_revision() {
@@ -570,7 +625,7 @@ async fn scan_component_revision(
             }
         }
         scan.charge(count);
-        current = OplogIndex::from_u64(current.as_u64() + count);
+        current = OplogIndex::from_u64(range.start.as_u64() + count);
     }
 
     Ok(Some(initial_component_revision))
@@ -841,19 +896,14 @@ pub async fn oplog_page_start(
     cursor: Option<OplogCursor>,
     from: Option<OplogIndex>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
-    let first = oplog_service
-        .first_retained_index(owned_agent_id, agent_mode)
-        .await?;
+    let retention = oplog_service.retention(owned_agent_id, agent_mode).await?;
     let start = cursor.as_ref().map_or_else(
-        || from.map_or(first, |from| from.max(OplogIndex::INITIAL)),
+        || from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL)),
         |cursor| OplogIndex::from_u64(cursor.next_oplog_index),
     );
-    if start < first {
-        return Err(WorkerExecutorError::oplog_expired(
-            owned_agent_id.agent_id.clone(),
-            first,
-        ));
-    }
+    retention
+        .check_from(start)
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?;
     match cursor {
         Some(cursor) => {
             let last_index = oplog_service

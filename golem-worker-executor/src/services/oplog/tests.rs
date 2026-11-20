@@ -47,7 +47,7 @@ use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -9122,7 +9122,7 @@ fn assert_oplog_failed(
     needles: &[&str],
 ) {
     assert!(
-        matches!(error, WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
+        matches!(error, WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Unreadable { details } }
             if agent_id == &owned_agent_id.agent_id
                 && needles.iter().all(|needle| details.contains(needle))),
         "{error:?}"

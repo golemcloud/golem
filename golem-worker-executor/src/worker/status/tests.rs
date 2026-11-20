@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::retention::OplogRetention;
 use golem_common::model::InvocationId;
 use golem_common::model::caller::Caller;
 
@@ -71,7 +72,7 @@ use golem_common::read_only_lock;
 use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 use uuid::Uuid;
 
 fn test_invocation_wallet_pin() -> golem_common::model::card::InvocationWalletPin {
@@ -5836,7 +5837,7 @@ async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
         let error = WorkerExecutorError::from(OplogError::from(refusal));
         assert!(matches!(
             error,
-            WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
+            WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Unreadable { details } }
                 if agent_id == test_case.owned_agent_id.agent_id
                     && details.contains("empty status baseline")
         ));
@@ -6917,12 +6918,12 @@ impl OplogService for TestCase {
         Ok(())
     }
 
-    async fn first_retained_index(
+    async fn retention(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog> {
-        Ok(OplogIndex::INITIAL)
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(
@@ -7232,8 +7233,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
             (
                 WorkerExecutorError::OplogFailed {
                     agent_id,
-                    failure:
-                        golem_service_base::error::worker_executor::OplogFailure::Unreadable { details },
+                    failure: OplogFailure::Unreadable { details },
                 },
                 "corrupt" | "missing",
             ) => {

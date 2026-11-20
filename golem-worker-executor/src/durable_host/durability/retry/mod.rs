@@ -981,14 +981,13 @@ pub async fn count_oplog_errors_for(
     oplog: &Arc<dyn crate::services::oplog::Oplog>,
     retry_point: OplogIndex,
 ) -> Result<u32, crate::services::oplog::UnreadableOplog> {
-    let first = retry_point.max(oplog.first_retained_index());
-    let last = oplog.current_oplog_index().await;
-    if last < first {
+    let Some(range) = oplog
+        .retention()
+        .range(retry_point, oplog.current_oplog_index().await)
+    else {
         return Ok(0);
-    }
-    let entries = oplog
-        .read_exact(first, last.as_u64() - first.as_u64() + 1)
-        .await?;
+    };
+    let entries = oplog.read_exact(range.start, range.count).await?;
     Ok(entries
         .values()
         .filter(|entry| {

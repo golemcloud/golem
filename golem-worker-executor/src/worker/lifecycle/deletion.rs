@@ -460,13 +460,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         producer: &DurableStreamStore,
     ) -> Result<(), WorkerExecutorError> {
         let current = self.oplog.current_oplog_index().await;
-        let first = self.oplog.first_retained_index();
         let mut deleting_recorded = false;
         let mut dependencies = HashMap::new();
-        if current >= first {
+        if let Some(retained) = self.oplog.retention().range(OplogIndex::INITIAL, current) {
             for (_, entry) in self
                 .oplog
-                .read_exact(first, current.as_u64() + 1 - first.as_u64())
+                .read_exact(retained.start, retained.count)
                 .await?
             {
                 let OplogEntry::StreamSession { record, .. } = entry else {

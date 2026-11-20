@@ -182,6 +182,7 @@ impl Oplog for RetentionOplog {
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
         self.checked(oplog_index, n)
             .map_err(|error| error.to_string())?;
+        // The inner read gives the part of the range that its layer holds, so it reports no gap.
         self.inner.try_read_source(oplog_index, n).await
     }
 
@@ -246,8 +247,8 @@ impl Oplog for RetentionOplog {
         self.inner.enqueue_add_pair(start, make_second)
     }
 
-    fn first_retained_index(&self) -> OplogIndex {
-        self.retention.first_index()
+    fn retention(&self) -> OplogRetention {
+        self.retention
     }
 
     fn inner(&self) -> Option<Arc<dyn Oplog>> {
@@ -257,7 +258,8 @@ impl Oplog for RetentionOplog {
 
 /// The [`OplogService`] that reads the retention record of each agent oplog and keeps every read
 /// at or after the retained start. A new oplog keeps every entry. Deleting an oplog removes its
-/// record first, so a re-created agent never starts with the start of the deleted one.
+/// record only after the delete of the oplog succeeds, so a delete that is refused or that fails
+/// keeps the start of the oplog that stays.
 pub struct RetentionOplogService {
     inner: Arc<dyn OplogService>,
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
@@ -272,19 +274,6 @@ impl RetentionOplogService {
             inner,
             key_value_storage,
         }
-    }
-
-    async fn retention(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<OplogRetention, UnreadableOplog> {
-        read_oplog_retention(
-            self.key_value_storage.as_ref(),
-            &owned_agent_id.agent_id,
-            agent_mode,
-        )
-        .await
     }
 
     /// Reads through `read` with the retention rules. A read of the `Create` entry alone needs
@@ -302,7 +291,7 @@ impl RetentionOplogService {
         Fut: Future<Output = Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog>>,
     {
         let agent_id = &owned_agent_id.agent_id;
-        if !(idx == OplogIndex::INITIAL && n == 1) {
+        if OplogRetention::read_needs_start(idx, n) {
             self.retention(owned_agent_id, agent_mode)
                 .await?
                 .check_read(idx, n)
@@ -504,15 +493,17 @@ impl OplogService for RetentionOplogService {
             .await
     }
 
-    async fn first_retained_index(
+    async fn retention(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog> {
-        Ok(self
-            .retention(owned_agent_id, agent_mode)
-            .await?
-            .first_index())
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        read_oplog_retention(
+            self.key_value_storage.as_ref(),
+            &owned_agent_id.agent_id,
+            agent_mode,
+        )
+        .await
     }
 
     async fn assert_owning_epoch(
@@ -533,16 +524,16 @@ impl OplogService for RetentionOplogService {
         agent_mode: AgentMode,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
+        self.inner
+            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+            .await?;
         remove_oplog_retention(
             self.key_value_storage.as_ref(),
             &owned_agent_id.agent_id,
             agent_mode,
         )
         .await
-        .map_err(OplogError::Maintenance)?;
-        self.inner
-            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
-            .await
+        .map_err(OplogError::Maintenance)
     }
 
     async fn read_exact(
@@ -640,186 +631,36 @@ impl OplogService for RetentionOplogService {
 mod tests {
     use super::*;
     use crate::services::oplog::OplogReadError;
-    use crate::services::oplog::PrimaryOplogService;
-    use crate::services::oplog::retention::advance_oplog_retention;
-    use crate::storage::indexed::memory::InMemoryIndexedStorage;
-    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
-    use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::OwnerKind;
-    use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
-    use golem_common::model::regions::OplogRegion;
-    use golem_common::model::{AgentFingerprint, Timestamp};
-    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::sync::RwLock;
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, expired, idx, jump};
     use test_r::test;
-
-    struct Fixture {
-        service: RetentionOplogService,
-        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-        owned_agent_id: OwnedAgentId,
-    }
-
-    fn idx(value: u64) -> OplogIndex {
-        OplogIndex::from_u64(value)
-    }
-
-    async fn fixture() -> Fixture {
-        let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-            Arc::new(InMemoryKeyValueStorage::new());
-        let primary = PrimaryOplogService::new(
-            Arc::new(InMemoryIndexedStorage::new()),
-            Arc::new(InMemoryBlobStorage::new()),
-            1,
-            1,
-            4096,
-            32,
-            golem_common::model::RetryConfig::default(),
-        )
-        .await;
-        let agent_id = AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "retention".to_string(),
-        };
-        Fixture {
-            service: RetentionOplogService::new(Arc::new(primary), key_value_storage.clone()),
-            key_value_storage,
-            owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent_id),
-        }
-    }
-
-    impl Fixture {
-        async fn open(&self) -> Arc<dyn Oplog> {
-            let agent_id = self.owned_agent_id.agent_id.clone();
-            let metadata = AgentMetadata {
-                component_id: agent_id.component_id,
-                agent_type_name: None,
-                canonical_key: None,
-                agent_id: agent_id.clone(),
-                owner_kind: OwnerKind::ComponentAgent,
-                env: vec![],
-                environment_id: self.owned_agent_id.environment_id,
-                created_by: AccountId::new(),
-                created_by_email: AccountEmail::new("test@golem"),
-                config: Vec::new(),
-                created_at: Timestamp::now_utc(),
-                parent: None,
-                last_known_status: AgentStatusRecord::default(),
-                original_phantom_id: None,
-                fingerprint: AgentFingerprint::new(),
-                agent_mode: AgentMode::Durable,
-                create_request: CreateRequest::new(
-                    CreateRequestKind::GetOrCreate,
-                    None,
-                    golem_common::model::agent::Principal::anonymous(),
-                    &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
-                    ),
-                ),
-            };
-            self.service
-                .open(
-                    &mut self.service.lock_lifecycle(&agent_id).await,
-                    &self.owned_agent_id,
-                    AgentMode::Durable,
-                    None,
-                    metadata,
-                    read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
-                        arc_swap::ArcSwap::from_pointee(AgentStatusRecord::default()),
-                    )),
-                    read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(
-                        ExecutionStatus::Suspended {
-                            agent_mode: AgentMode::Durable,
-                            timestamp: Timestamp::now_utc(),
-                        },
-                    ))),
-                    None,
-                )
-                .await
-                .unwrap()
-        }
-
-        /// An oplog with the entries 1 to `last`, each a jump that names its own index.
-        async fn with_entries(&self, last: u64) {
-            let oplog = self.open().await;
-            for index in 1..=last {
-                oplog.add(entry(index)).await.unwrap();
-            }
-            oplog.commit(CommitLevel::Always).await.unwrap();
-        }
-
-        async fn advance(&self, to: u64) -> OplogRetention {
-            advance_oplog_retention(
-                self.key_value_storage.as_ref(),
-                &self.owned_agent_id.agent_id,
-                AgentMode::Durable,
-                idx(to),
-            )
-            .await
-            .unwrap()
-        }
-
-        async fn service_read(
-            &self,
-            start: u64,
-            n: u64,
-        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogReadError> {
-            self.service
-                .read_exact(&self.owned_agent_id, AgentMode::Durable, idx(start), n)
-                .await
-                .map_err(|unreadable| unreadable.error)
-        }
-    }
-
-    /// An entry with a fixed timestamp, because the oplog stores timestamps in milliseconds.
-    fn entry(index: u64) -> OplogEntry {
-        OplogEntry::Jump {
-            timestamp: golem_common::model::Timestamp::from(index),
-            entity_parent_start_index: None,
-            jump: OplogRegion {
-                start: idx(index),
-                end: idx(index),
-            },
-        }
-    }
-
-    fn expired(start: u64) -> OplogReadError {
-        OplogReadError::Expired {
-            retained_start: idx(start),
-        }
-    }
 
     #[test]
     async fn the_retained_start_survives_a_reopen_and_never_moves_back() {
-        let fixture = fixture().await;
-        fixture.with_entries(10).await;
-        assert_eq!(fixture.open().await.first_retained_index(), idx(1));
+        let oplog = RetainedOplog::new().await;
+        oplog.with_jumps(10).await;
+        assert_eq!(oplog.open().await.retention(), OplogRetention::FULL);
 
-        assert_eq!(fixture.advance(5).await.first_index(), idx(5));
-        assert_eq!(fixture.advance(3).await.first_index(), idx(5));
+        assert_eq!(oplog.advance(5).await.start(), idx(5));
+        assert_eq!(oplog.advance(3).await.start(), idx(5));
 
-        assert_eq!(fixture.open().await.first_retained_index(), idx(5));
-        assert_eq!(
-            fixture
-                .service
-                .first_retained_index(&fixture.owned_agent_id, AgentMode::Durable)
-                .await
-                .unwrap(),
-            idx(5)
-        );
+        assert_eq!(oplog.open().await.retention().start(), idx(5));
+        assert_eq!(oplog.start().await, idx(5));
     }
 
     #[test]
     async fn the_length_counts_the_retained_entries_and_the_last_index_stays() {
-        let fixture = fixture().await;
-        fixture.with_entries(10).await;
-        fixture.advance(4).await;
+        let oplog = RetainedOplog::new().await;
+        oplog.with_jumps(10).await;
+        oplog.advance(4).await;
 
-        let oplog = fixture.open().await;
-        assert_eq!(oplog.length().await.unwrap(), 7);
-        assert_eq!(oplog.current_oplog_index().await, idx(10));
+        let handle = oplog.open().await;
+        assert_eq!(handle.length().await.unwrap(), 7);
+        assert_eq!(handle.try_length().await.unwrap(), 7);
+        assert_eq!(handle.current_oplog_index().await, idx(10));
         assert_eq!(
-            fixture
+            oplog
                 .service
-                .get_last_index(&fixture.owned_agent_id, AgentMode::Durable)
+                .get_last_index(&oplog.owned_agent_id, AgentMode::Durable)
                 .await
                 .unwrap(),
             idx(10)
@@ -828,86 +669,110 @@ mod tests {
 
     #[test]
     async fn a_read_below_the_start_is_expired_and_the_create_entry_stays_readable() {
-        let fixture = fixture().await;
-        fixture.with_entries(10).await;
-        fixture.advance(4).await;
-        let oplog = fixture.open().await;
+        let oplog = RetainedOplog::new().await;
+        oplog.with_jumps(10).await;
+        oplog.advance(4).await;
+        let handle = oplog.open().await;
 
         assert_eq!(
-            oplog.read_exact(idx(3), 2).await.unwrap_err().error,
+            handle.read_exact(idx(3), 2).await.unwrap_err().error,
             expired(4)
         );
         assert_eq!(
-            oplog.read_source(idx(2), 5).await.unwrap_err().error,
+            handle.read_source(idx(2), 5).await.unwrap_err().error,
             expired(4)
         );
-        assert_eq!(fixture.service_read(1, 4).await.unwrap_err(), expired(4));
+        let refused = handle.try_read_source(idx(3), 2).await.unwrap_err();
+        assert!(refused.contains(&expired(4).to_string()), "{refused}");
+        assert_eq!(oplog.read(1, 4).await.unwrap_err(), expired(4));
+        assert_eq!(oplog.read(3, 1).await.unwrap_err(), expired(4));
         assert_eq!(
-            oplog
+            handle
                 .read_exact(idx(4), 7)
                 .await
                 .unwrap()
                 .into_iter()
                 .collect::<Vec<_>>(),
             (4..=10)
-                .map(|index| (idx(index), entry(index)))
+                .map(|index| (idx(index), jump(index)))
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            oplog.read(idx(1)).await.unwrap(),
-            entry(1),
+            handle
+                .try_read_source(idx(4), 1)
+                .await
+                .unwrap()
+                .get(&idx(4)),
+            Some(&jump(4))
+        );
+        assert_eq!(
+            handle.read(idx(1)).await.unwrap(),
+            jump(1),
             "the entry at index 1 is kept below the start"
         );
-        assert_eq!(
-            fixture.service_read(1, 1).await.unwrap().get(&idx(1)),
-            Some(&entry(1))
-        );
+        assert_eq!(oplog.read(1, 1).await.unwrap().get(&idx(1)), Some(&jump(1)));
     }
 
     #[test]
-    async fn only_a_gap_below_the_start_is_expired() {
-        let fixture = fixture().await;
-        fixture.with_entries(10).await;
-        fixture.open().await.drop_prefix(idx(5)).await;
-        fixture.advance(4).await;
+    async fn only_a_gap_that_ends_below_the_start_is_expired() {
+        let oplog = RetainedOplog::new().await;
+        oplog.with_jumps(10).await;
+        oplog.open().await.drop_prefix(idx(5)).await;
+        oplog.advance(4).await;
 
-        let gap = fixture.service_read(4, 3).await.unwrap_err();
+        let gap = oplog.read(4, 3).await.unwrap_err();
         assert!(
-            matches!(gap, OplogReadError::Gap { start, .. } if start == idx(4)),
+            matches!(gap, OplogReadError::Gap { start, end } if start == idx(4) && end == idx(5)),
             "{gap:?}"
         );
+        let gap = oplog
+            .open()
+            .await
+            .read_exact(idx(4), 3)
+            .await
+            .unwrap_err()
+            .error;
+        assert!(matches!(gap, OplogReadError::Gap { .. }), "{gap:?}");
 
-        fixture.advance(6).await;
-        assert_eq!(fixture.service_read(1, 1).await.unwrap_err(), expired(6));
+        oplog.advance(6).await;
+        assert_eq!(oplog.read(1, 1).await.unwrap_err(), expired(6));
+        assert_eq!(
+            oplog.open().await.read(idx(1)).await.unwrap_err().error,
+            expired(6)
+        );
     }
 
     #[test]
-    async fn deleting_the_oplog_removes_its_retained_start() {
-        let fixture = fixture().await;
-        fixture.with_entries(3).await;
-        fixture.advance(2).await;
+    async fn a_refused_delete_keeps_the_retained_start_and_a_delete_removes_it() {
+        let oplog = RetainedOplog::new().await;
+        let handle = oplog.create(jump(1), ShardEpoch(5)).await;
+        handle.add_and_commit(jump(2)).await.unwrap();
+        drop(handle);
+        oplog.advance(2).await;
 
-        fixture
-            .service
-            .delete(
-                &mut fixture
-                    .service
-                    .lock_lifecycle(&fixture.owned_agent_id.agent_id)
-                    .await,
-                &fixture.owned_agent_id,
-                AgentMode::Durable,
-                None,
-            )
-            .await
-            .unwrap();
-
+        let refused = oplog.delete(Some(ShardEpoch(4))).await;
+        assert!(matches!(refused, Err(OplogError::Fenced(_))), "{refused:?}");
         assert_eq!(
-            fixture
+            oplog.start().await,
+            idx(2),
+            "a refused delete keeps the start"
+        );
+        assert!(
+            oplog
                 .service
-                .first_retained_index(&fixture.owned_agent_id, AgentMode::Durable)
+                .exists(&oplog.owned_agent_id, AgentMode::Durable)
                 .await
-                .unwrap(),
-            idx(1)
+                .unwrap()
+        );
+
+        oplog.delete(Some(ShardEpoch(5))).await.unwrap();
+        assert_eq!(oplog.start().await, OplogIndex::INITIAL);
+        assert!(
+            !oplog
+                .service
+                .exists(&oplog.owned_agent_id, AgentMode::Durable)
+                .await
+                .unwrap()
         );
     }
 }

@@ -21,6 +21,7 @@
 //! Outcomes beyond the cut do not constrain these calls. Remote transactions still require a
 //! cut that preserves their committed/rolled-back outcome.
 
+use crate::services::oplog::retention::OplogRetention;
 use crate::worker::status::update_queue::UpdateQueue;
 use golem_common::base_model::OplogIndex;
 use golem_common::model::PendingUpdateKind;
@@ -171,11 +172,11 @@ impl Display for SpanningConstruct {
 /// entry is at `last_index`: the index just before the `number_of_invocations`-th
 /// `AgentInvocationStarted`, counted back from `last_index`. Invocations in the region that a
 /// `Revert` entry dropped are not counted: the walk continues before that region. The walk reads
-/// no entry before `first_retained`: `None` when the oplog holds fewer invocations from
-/// `first_retained`. A failed `read` ends the walk with its error.
+/// only the entries that `retention` keeps: `None` when the retained oplog holds fewer
+/// invocations. A failed `read` ends the walk with its error.
 pub async fn cut_before_last_invocations<Read, ReadFut, E>(
     read: Read,
-    first_retained: OplogIndex,
+    retention: OplogRetention,
     last_index: OplogIndex,
     number_of_invocations: u64,
 ) -> Result<Option<OplogIndex>, E>
@@ -197,7 +198,10 @@ where
             OplogEntry::Revert { dropped_region, .. } => dropped_region.start.min(current),
             _ => current,
         };
-        if continue_before <= first_retained {
+        if retention
+            .range(OplogIndex::INITIAL, continue_before.previous())
+            .is_none()
+        {
             return Ok(None);
         }
         current = continue_before.previous();

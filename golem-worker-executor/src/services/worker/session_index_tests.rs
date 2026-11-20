@@ -55,6 +55,7 @@ use golem_common::model::{
     AgentFingerprint, AgentMetadata, DurableStreamPublicBinding, DurableStreamSessionIndex,
 };
 use golem_common::read_only_lock;
+use golem_service_base::error::worker_executor::OplogFailure;
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use nonempty_collections::nev;
@@ -5045,7 +5046,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
     assert!(
         matches!(
             WorkerExecutorError::from(unreadable.clone()),
-            WorkerExecutorError::OplogFailed { failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details }, .. }
+            WorkerExecutorError::OplogFailed { failure: OplogFailure::Unreadable { details }, .. }
                 if details.contains("archive layer 1") && details.contains("ending at 3")
         ),
         "{error}"
@@ -5084,7 +5085,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
         .expect("the producer load over an undecodable chunk must fail")
         .into_worker_executor_error(WorkerExecutorError::runtime);
     assert!(
-        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
+        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Unreadable { details } }
             if agent_id == &id.agent_id && details.contains("archive layer 1")),
         "{producer:?}"
     );
@@ -5197,7 +5198,7 @@ async fn a_cached_status_write_over_an_undecodable_chunk_keeps_the_oplog_failure
             .await
             .expect_err("the catch-up over an undecodable chunk must fail");
         assert!(
-            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, failure: OplogFailure::Unreadable { details } }
                 if agent_id == &id.agent_id && details.contains("archive layer 1")),
             "stream history {has_durable_stream_history}: {error:?}"
         );
@@ -5281,4 +5282,93 @@ async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
 
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
+}
+
+#[test]
+async fn a_catch_up_over_a_retained_oplog_keeps_the_original_offsets() {
+    use crate::services::oplog::retention::{RetentionOplogService, advance_oplog_retention};
+
+    let kv = Arc::new(InMemoryKeyValueStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let oplog_service: Arc<dyn OplogService> =
+        Arc::new(RetentionOplogService::new(primary, kv.clone()));
+    let service = DefaultWorkerService::new(
+        kv.clone(),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let id = owned_agent("retained-start", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let before_the_start = test_invocation_id("before-the-start".into());
+    append_session(oplog.as_ref(), prepared_record(&id, &before_the_start)).await;
+    let retained_start = append_memory_hint(oplog.as_ref()).await;
+    let key = test_invocation_id("after-the-start".into());
+    let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+    let finished = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+            format_version: 1,
+            session_key: StreamRegistrationInvocation::Local(key),
+            result: Ok(()),
+        }),
+    )
+    .await;
+    oplog
+        .commit(CommitLevel::Always)
+        .await
+        .expect("oplog write");
+    let horizon = oplog.current_oplog_index().await;
+    drop(oplog);
+    advance_oplog_retention(
+        kv.as_ref(),
+        &id.agent_id,
+        AgentMode::Durable,
+        retained_start,
+    )
+    .await
+    .unwrap();
+    // The bounded index holds another session, so the lookups read the physical index.
+    let mut bounded = DurableStreamSessionIndex::default();
+    bounded.insert(test_invocation_id("recent".into()), completed(1, 1));
+    let status = AgentStatusRecord {
+        oplog_idx: horizon,
+        durable_stream_sessions: bounded,
+        ..AgentStatusRecord::default()
+    };
+
+    let actual = service
+        .lookup_durable_stream_session(&id, AgentMode::Durable, test_fingerprint(), &status, &key)
+        .await
+        .unwrap()
+        .expect("the session after the start is indexed");
+    assert_eq!(actual.first_prepared, Some(prepared));
+    assert_eq!(actual.prepared, Some(prepared));
+    assert_eq!(actual.finished, Some(finished));
+    assert_eq!(
+        service
+            .lookup_durable_stream_session(
+                &id,
+                AgentMode::Durable,
+                test_fingerprint(),
+                &status,
+                &before_the_start
+            )
+            .await
+            .unwrap(),
+        None,
+        "the index covers only the retained oplog"
+    );
 }

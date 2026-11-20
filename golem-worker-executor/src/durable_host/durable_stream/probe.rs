@@ -376,20 +376,20 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 )
             })
             .collect::<HashMap<_, _>>();
-        let first = self
+        let retained = match self
             .oplog_service
-            .first_retained_index(&consumer, agent_mode)
-            .await?;
-        for (index, entry) in self
-            .oplog_service
-            .read_exact(
-                &consumer,
-                agent_mode,
-                first,
-                (current.as_u64() + 1).saturating_sub(first.as_u64()),
-            )
+            .retention(&consumer, agent_mode)
             .await?
+            .range(OplogIndex::INITIAL, current)
         {
+            Some(range) => {
+                self.oplog_service
+                    .read_exact(&consumer, agent_mode, range.start, range.count)
+                    .await?
+            }
+            None => BTreeMap::new(),
+        };
+        for (index, entry) in retained {
             if lineage.deleted_regions().is_in_deleted_region(index) {
                 continue;
             }

@@ -14,6 +14,7 @@
 
 use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
     OplogCloseCompletion, OplogError, OplogLifecycleGuard, OplogService, OrderedOplogStart,
@@ -618,14 +619,12 @@ impl OplogService for RateLimitedOplogService {
             .await
     }
 
-    async fn first_retained_index(
+    async fn retention(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog> {
-        self.inner
-            .first_retained_index(owned_agent_id, agent_mode)
-            .await
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        self.inner.retention(owned_agent_id, agent_mode).await
     }
 
     async fn delete(

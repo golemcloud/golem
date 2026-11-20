@@ -132,8 +132,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             limits,
             claims,
         )
-        .await
-        .map_err(WorkerExecutorError::unknown)?;
+        .await?;
 
         let next = oplog_page_cursor(
             chunk.next_oplog_index,
@@ -259,8 +258,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ClaimVisibility::from_protobuf(request.claims)
                 .map_err(WorkerExecutorError::invalid_request)?,
         )
-        .await
-        .map_err(WorkerExecutorError::unknown)?;
+        .await?;
 
         let next = oplog_page_cursor(
             chunk.next_oplog_index,

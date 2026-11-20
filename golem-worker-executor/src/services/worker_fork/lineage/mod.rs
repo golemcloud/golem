@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
@@ -41,15 +42,15 @@ enum LineageSource<'a> {
 }
 
 impl LineageSource<'_> {
-    async fn first_retained_index(&self) -> Result<OplogIndex, String> {
+    async fn retention(&self) -> Result<OplogRetention, String> {
         match self {
-            Self::Open(oplog) => Ok(oplog.first_retained_index()),
+            Self::Open(oplog) => Ok(oplog.retention()),
             Self::Service {
                 service,
                 owner,
                 mode,
             } => service
-                .first_retained_index(owner, *mode)
+                .retention(owner, *mode)
                 .await
                 .map_err(|error| error.to_string()),
         }
@@ -118,7 +119,7 @@ impl StreamForkLineage {
             owner,
             mode,
         };
-        let from = from.max(source.first_retained_index().await?);
+        let from = source.retention().await?.clamp(from);
         if from > horizon {
             return Ok(false);
         }
@@ -205,7 +206,7 @@ impl StreamForkLineage {
         // Both passes start at the retained start of the oplog: the history before it is gone.
         // The first bounded pass reads no external payloads. It builds the complete deletion mask
         // used by the second pass, so payloads in deleted regions are never downloaded.
-        let retained_start = source.first_retained_index().await?;
+        let retained_start = source.retention().await?.start();
         let mut reverts = Vec::new();
         let mut first_stream_entry = None;
         let mut covered = retained_start.previous();

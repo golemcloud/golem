@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::OplogRetention;
 
 impl ForwardingOplogState {
     async fn while_forwarding<F: std::future::Future>(&self, future: F) -> Option<F::Output> {
@@ -235,20 +236,12 @@ impl ForwardingOplogState {
             }
         };
 
-        let batch = if live.sending_up_to > live.confirmed_up_to {
-            // RETRY: exact same range — never widen
-            Some((live.confirmed_up_to.next(), live.sending_up_to, true))
-        } else if live.confirmed_up_to < committed_tail {
-            // NEW BATCH: from confirmed+1, or from the retained start of the oplog when the
-            // entries after the confirmed index are gone, to committed tail
-            let batch_start = live
-                .confirmed_up_to
-                .next()
-                .max(self.inner.first_retained_index());
-            (batch_start <= committed_tail).then_some((batch_start, committed_tail, false))
-        } else {
-            None
-        };
+        let batch = next_batch(
+            live.confirmed_up_to,
+            live.sending_up_to,
+            committed_tail,
+            self.inner.retention(),
+        );
 
         let (batch_start, batch_end, is_retry) = match batch {
             Some(b) => b,
@@ -961,5 +954,82 @@ impl ForwardingOplogState {
                 "Locality recovery: migrated plugin to new local target"
             );
         }
+    }
+}
+
+/// The next batch for a plugin: its first and last index, and whether it repeats a batch that was
+/// sent and not confirmed. A repeated batch has the exact range that was sent, never a wider one.
+/// A new batch goes from the entry after the confirmed index to the committed tail; when the
+/// entries after the confirmed index are gone, it starts at the retained start instead. `None`
+/// when no entry waits.
+fn next_batch(
+    confirmed_up_to: OplogIndex,
+    sending_up_to: OplogIndex,
+    committed_tail: OplogIndex,
+    retention: OplogRetention,
+) -> Option<(OplogIndex, OplogIndex, bool)> {
+    if sending_up_to > confirmed_up_to {
+        Some((confirmed_up_to.next(), sending_up_to, true))
+    } else {
+        retention
+            .range(confirmed_up_to.next(), committed_tail)
+            .map(|range| (range.start, committed_tail, false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn idx(value: u64) -> OplogIndex {
+        OplogIndex::from_u64(value)
+    }
+
+    #[test]
+    fn a_repeated_batch_keeps_the_range_that_was_sent() {
+        let retention = OplogRetention::FULL.advanced_to(idx(8));
+        assert_eq!(
+            next_batch(idx(3), idx(5), idx(10), retention),
+            Some((idx(4), idx(5), true))
+        );
+        assert_eq!(
+            next_batch(idx(3), idx(4), idx(10), OplogRetention::FULL),
+            Some((idx(4), idx(4), true))
+        );
+    }
+
+    #[test]
+    fn a_new_batch_starts_after_the_confirmed_index_or_at_the_retained_start() {
+        let at = |start| OplogRetention::FULL.advanced_to(idx(start));
+        assert_eq!(
+            next_batch(idx(3), idx(3), idx(10), OplogRetention::FULL),
+            Some((idx(4), idx(10), false))
+        );
+        assert_eq!(
+            next_batch(idx(3), idx(3), idx(10), at(4)),
+            Some((idx(4), idx(10), false))
+        );
+        assert_eq!(
+            next_batch(idx(3), idx(3), idx(10), at(5)),
+            Some((idx(5), idx(10), false))
+        );
+        assert_eq!(
+            next_batch(idx(3), idx(3), idx(10), at(10)),
+            Some((idx(10), idx(10), false))
+        );
+        assert_eq!(next_batch(idx(3), idx(3), idx(10), at(11)), None);
+        assert_eq!(
+            next_batch(idx(9), idx(9), idx(10), OplogRetention::FULL),
+            Some((idx(10), idx(10), false))
+        );
+        assert_eq!(
+            next_batch(idx(10), idx(10), idx(10), OplogRetention::FULL),
+            None
+        );
+        assert_eq!(
+            next_batch(idx(11), idx(11), idx(10), OplogRetention::FULL),
+            None
+        );
     }
 }

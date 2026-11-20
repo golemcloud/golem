@@ -114,10 +114,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Forks retain invocation keys from their source. Find the initialization by its
         // operation, not by interpreting a caller-controlled idempotency-key prefix.
         let status = self.try_get_last_known_status().await?;
-        let mut first = self.oplog.first_retained_index();
-        while first <= status.oplog_idx {
-            let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(256);
-            let entries = self.oplog.read_exact(first, count).await?;
+        let retention = self.oplog.retention();
+        let mut next = OplogIndex::INITIAL;
+        while let Some(range) = retention.range(next, status.oplog_idx) {
+            let count = range.count.min(256);
+            let entries = self.oplog.read_exact(range.start, count).await?;
             for (index, entry) in entries {
                 if status.deleted_regions.is_in_deleted_region(index) {
                     continue;
@@ -137,7 +138,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     return Ok(invocation_id);
                 }
             }
-            first = OplogIndex::from_u64(first.as_u64() + count);
+            next = OplogIndex::from_u64(range.start.as_u64() + count);
         }
         Err(self.missing_initialization())
     }

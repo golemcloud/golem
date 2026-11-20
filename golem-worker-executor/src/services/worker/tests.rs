@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::retention::OplogRetention;
 use golem_common::model::InvocationId;
 
 use super::*;
@@ -182,12 +183,12 @@ impl OplogService for IndexTestOplogService {
         Ok(())
     }
 
-    async fn first_retained_index(
+    async fn retention(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog> {
-        Ok(OplogIndex::INITIAL)
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(
@@ -2413,12 +2414,12 @@ impl OplogService for FakeOplogService {
         Ok(())
     }
 
-    async fn first_retained_index(
+    async fn retention(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog> {
-        Ok(OplogIndex::INITIAL)
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::retention::OplogRetention;
 
 impl MultiLayerOplogService {
     pub fn new(
@@ -494,12 +495,12 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
-    async fn first_retained_index(
+    async fn retention(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) -> Result<OplogIndex, UnreadableOplog> {
-        Ok(OplogIndex::INITIAL)
+    ) -> Result<OplogRetention, UnreadableOplog> {
+        Ok(OplogRetention::FULL)
     }
 
     async fn delete(
