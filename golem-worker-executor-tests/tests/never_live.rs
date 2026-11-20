@@ -673,8 +673,9 @@ async fn a_divergence_after_a_replayed_directory_listing_of_a_never_live_fork_is
     Ok(())
 }
 
-/// A quota service whose every reservation is throttled, with a refill far in the future.
-struct ThrottlingQuotaService;
+/// A quota service whose every reservation is throttled, with the estimated wait it holds:
+/// a refill far in the future, or `None` as for a capacity resource.
+struct ThrottlingQuotaService(Option<u64>);
 
 #[async_trait::async_trait]
 impl golem_worker_executor::services::quota::QuotaService for ThrottlingQuotaService {
@@ -704,7 +705,7 @@ impl golem_worker_executor::services::quota::QuotaService for ThrottlingQuotaSer
     ) -> golem_common::model::quota::ReserveResult {
         golem_common::model::quota::ReserveResult::InsufficientAllocation {
             enforcement_action: golem_common::model::quota::EnforcementAction::Throttle,
-            estimated_wait_nanos: Some(3_600_000_000_000),
+            estimated_wait_nanos: self.0,
         }
     }
 
@@ -794,11 +795,11 @@ impl golem_worker_executor::storage::scheduler::SchedulerStorage for RecordingRe
     }
 }
 
-/// A source agent is throttled by a quota reservation: the recorded result makes it schedule a
-/// `Resume` and suspend. A never-live fork of it replays that recorded throttle on each automatic
-/// update, also after a cold restart of the executor. The fork refuses the scheduler write, so
-/// the scheduler stores no `Resume` for it, and each update ends with one `NotReplayable`
-/// failure and appends only its update entries.
+/// A source agent is throttled by a quota reservation with a wait estimate: the recorded result
+/// makes it schedule a `Resume` and suspend. A never-live fork of it replays that recorded
+/// throttle on each automatic update, also after a cold restart of the executor. The fork refuses
+/// the throttle, so the scheduler stores no `Resume` for it, and each update ends with one
+/// `NotReplayable` failure and appends only its update entries.
 #[test]
 #[timeout("4m")]
 async fn a_replayed_quota_throttle_of_a_never_live_fork_schedules_no_resume(
@@ -807,10 +808,40 @@ async fn a_replayed_quota_throttle_of_a_never_live_fork_schedules_no_resume(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    replay_a_quota_throttle_on_a_never_live_fork(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        Some(3_600_000_000_000),
+    )
+    .await
+}
+
+/// A throttle without a wait estimate, as for a capacity resource, suspends the source without a
+/// `Resume`. A never-live fork refuses it too, so the replayed throttle does not suspend the fork
+/// in the middle of its update: each update ends with one `NotReplayable` failure, also after a
+/// cold restart of the executor.
+#[test]
+#[timeout("4m")]
+async fn a_replayed_quota_throttle_without_a_wait_does_not_suspend_a_never_live_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    replay_a_quota_throttle_on_a_never_live_fork(last_unique_id, deps, host_api_tests, None).await
+}
+
+async fn replay_a_quota_throttle_on_a_never_live_fork(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    estimated_wait_nanos: Option<u64>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let resumed = Arc::new(std::sync::Mutex::new(Vec::<AgentId>::new()));
     let overrides = TestExecutorOverrides {
-        quota_service: Some(Arc::new(ThrottlingQuotaService)),
+        quota_service: Some(Arc::new(ThrottlingQuotaService(estimated_wait_nanos))),
         wrap_scheduler_storage: Some(Arc::new({
             let resumed = resumed.clone();
             move |inner| {
@@ -847,8 +878,8 @@ async fn a_replayed_quota_throttle_of_a_never_live_fork_schedules_no_resume(
             .iter()
             .filter(|agent| **agent == source_id)
             .count(),
-        1,
-        "the source did not schedule its resume"
+        usize::from(estimated_wait_nanos.is_some()),
+        "the source scheduled its resume only with a wait estimate"
     );
     let cut = tip(&executor, &source_id).await?;
 

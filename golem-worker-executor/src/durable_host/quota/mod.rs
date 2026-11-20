@@ -251,6 +251,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         }))
                     }
                     EnforcementAction::Throttle => {
+                        // A recorded throttle replays into this arm too. A never-live owner
+                        // refuses it before it schedules a `Resume` or suspends, either of which
+                        // would leave its update without an outcome.
+                        self.state
+                            .refuse_native_peer_effect("quota::throttle-resume")?;
                         let agent_created_by = self.created_by();
                         let owned_agent_id = self.owned_agent_id().clone();
                         let target_worker_fingerprint = self
@@ -274,10 +279,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         if agent_mode == AgentMode::Durable
                             && let Some(estimated_wait_nanos) = estimated_wait_nanos
                         {
-                            // A recorded throttle replays into this branch too, so a never-live
-                            // owner refuses the scheduler write here.
-                            self.state
-                                .refuse_native_peer_effect("quota::throttle-resume")?;
                             // schedule a continuation for when we expect the quota to be ready to serve us. If it still doesn't have capacity
                             // we will just end up suspending again.
                             let estimated_wait_nanos_i64 = if estimated_wait_nanos > i64::MAX as u64
