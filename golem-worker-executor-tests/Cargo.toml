@@ -41,6 +41,7 @@ bit-vec = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 desert_rust = { workspace = true }
+fred = { workspace = true }
 futures = { workspace = true }
 goldenfile = { workspace = true }
 half = { workspace = true }
@@ -51,6 +52,7 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
+openidconnect = { workspace = true }
 pgvector = { workspace = true }
 poem = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }

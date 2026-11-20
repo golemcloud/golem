@@ -49,7 +49,7 @@ pub struct Limits {
     /// Bounds the work of one oplog search or agent listing call. An advanced setting.
     pub scan_budget: ScanBudget,
     /// The number of keys that an agent listing asks one storage scan for. The storage takes it as
-    /// a hint and can return more or fewer keys (Redis `SCAN COUNT`), so a batch is not truncated:
+    /// a hint and can return more or fewer keys, so a batch is not truncated:
     /// the listing charges the keys the scan examined and checks its scan budget between scans.
     /// The budget can therefore overshoot by one batch, in keys and in time. An advanced setting.
     pub agent_scan_batch_size: NonZeroU64,
@@ -171,7 +171,7 @@ impl SafeDisplay for Limits {
 ///
 /// The bound is soft: a call checks the budget between chunks and does not cut a chunk, so it can
 /// scan one chunk more than the budget. An agent listing asks the storage for at most the
-/// remaining budget, but the storage can return more keys (Redis `SCAN COUNT` is a hint).
+/// remaining budget, but the storage can return more keys.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ScanBudget {
     /// The number of oplog entries, or of agent keys, after which a call stops scanning. A call
