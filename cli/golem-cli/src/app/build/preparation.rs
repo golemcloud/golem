@@ -664,11 +664,13 @@ mcp:
         let definition = |name: &str| golem_common::schema::tool::Tool {
             version: "1.0.0".into(),
             requires_filesystem: false,
+            http_mount: None,
             commands: golem_common::schema::tool::CommandTree {
                 nodes: vec![golem_common::schema::tool::CommandNode {
                     name: name.into(),
                     aliases: vec![],
                     doc: Default::default(),
+                    http: None,
                     globals: Default::default(),
                     subcommands: vec![],
                     body: None,

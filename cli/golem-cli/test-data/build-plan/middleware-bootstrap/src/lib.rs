@@ -1,6 +1,6 @@
 use golem_rust::TypedSchemaValue;
 use golem_rust::tool::{
-    InputStream, OutputStream, Principal, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture,
+    InputStream, InvocationContext, OutputStream, Tool, ToolMiddleware, ToolMiddlewareInvokeFuture,
     ToolMiddlewareScope, UnderlyingTool,
 };
 
@@ -46,7 +46,7 @@ fn invoke(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture {
     Box::pin(async move {

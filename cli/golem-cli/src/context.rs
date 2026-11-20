@@ -583,9 +583,7 @@ impl Context {
         };
         state.app_source_mode = Some(preloaded.source_mode);
         state.app_context = None;
-        state
-            .init(&Some(reloaded_config), &self.file_download_client)
-            .await?;
+        state.init(&Some(reloaded_config), &self.config_dir).await?;
         state.some_or_err_mut()?.select_components(
             &crate::model::app::ApplicationComponentSelectMode::Explicit(
                 selected.into_iter().collect(),
