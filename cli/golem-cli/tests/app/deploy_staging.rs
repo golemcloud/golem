@@ -75,6 +75,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         package: { name: package-deploy, version: 1.0.0 }
         tools:
           echo-tool: {}
+          alternate-tool: {}
     "#};
     let tool_component = "  package-deploy:tool:\n    dir: tool\n    templates: rust\n";
     fs::write_str(
@@ -83,7 +84,25 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
     )?;
     fs::write_str(
         ctx.cwd_path_join("tool/src/counter_agent.rs"),
-        include_str!("../../../../test-components/size-analysis/fixtures/tool/src/lib.rs"),
+        format!(
+            "{}\n{}",
+            include_str!("../../../../test-components/size-analysis/fixtures/tool/src/lib.rs"),
+            indoc::indoc! {r#"
+                #[tool_definition(version = "1.0.0")]
+                trait AlternateTool {
+                    fn echo(&self, value: String) -> String;
+                }
+
+                struct AlternateToolImpl;
+
+                #[tool_implementation]
+                impl AlternateTool for AlternateToolImpl {
+                    fn echo(&self, value: String) -> String {
+                        format!("Alternate: {value}")
+                    }
+                }
+            "#},
+        ),
     )?;
     assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
     assert!(ctx.cli(["package", "pack"]).await.success_or_dump());
@@ -117,6 +136,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
     };
     let mut previous_revision = None;
     let mut local_result = None;
+    let mut tool_component_id = None;
     // The invocation owner is part of the consuming app, not the package.
     let owner = indoc::indoc! {r#"
         components:
@@ -195,6 +215,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         );
         let view: serde_json::Value = serde_json::from_slice(component.stdout())?;
         let id = serde_json::from_value(view["componentId"].clone())?;
+        tool_component_id = Some(id);
         let component = registry.get_component(&id).await?;
         let uploaded = registry
             .get_component_wasm(&id, component.revision.into())
@@ -258,6 +279,209 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
             local_result = Some(result);
         }
     }
+
+    let installed = fs::read_to_string(&manifest_path)?;
+    let lock = std::fs::read(ctx.cwd_path_join("golem.lock"))?;
+    let tool_component_id = tool_component_id.unwrap();
+    for (selected, excluded, expected) in [
+        ("alternate-tool", "echo-tool", "Alternate: selection"),
+        ("echo-tool", "alternate-tool", "selection"),
+    ] {
+        let mut configured: serde_yaml::Value = serde_yaml::from_str(&installed)?;
+        configured["tools"] = serde_yaml::from_str(&format!(
+            "{selected}: {{ package: package-deploy, tool: {selected} }}"
+        ))?;
+        configured["components"]["package-deploy:owner"]["tools"] =
+            serde_yaml::from_str(&format!("{selected}: {{}}"))?;
+        fs::write_str(&manifest_path, serde_yaml::to_string(&configured)?)?;
+        assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+        assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+        let deployed = registry.get_component(&tool_component_id).await?;
+        assert_eq!(
+            deployed
+                .metadata
+                .tools
+                .keys()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>(),
+            [selected]
+        );
+        let invocation = ctx
+            .cli_with_input(
+                [
+                    "--format",
+                    "json",
+                    cmd::TOOL,
+                    cmd::INVOKE,
+                    "--component",
+                    "package-deploy:owner",
+                    selected,
+                    "--",
+                    "echo",
+                    "selection",
+                ],
+                &[],
+            )
+            .await;
+        assert!(
+            invocation.success(),
+            "{}",
+            String::from_utf8_lossy(&invocation.stderr)
+        );
+        let response: Value = serde_json::from_slice(invocation.stdout())?;
+        let result = &response["response"]["result"];
+        assert_eq!(result["type"], "Success", "{response:#}");
+        let typed: ExternalTypedSchemaValue = serde_json::from_value(result["result"].clone())?;
+        let typed = typed.as_inner();
+        assert_eq!(
+            to_json_value(typed.graph(), &typed.graph().root, typed.value())?,
+            expected
+        );
+        let invocation = ctx
+            .cli_with_input(
+                [
+                    "--format",
+                    "json",
+                    cmd::TOOL,
+                    cmd::INVOKE,
+                    "--component",
+                    "package-deploy:owner",
+                    excluded,
+                    "--",
+                    "echo",
+                    "selection",
+                ],
+                &[],
+            )
+            .await;
+        assert!(
+            !invocation.success(),
+            "Unselected tool {excluded} was callable"
+        );
+        assert_eq!(std::fs::read(ctx.cwd_path_join("golem.lock"))?, lock);
+    }
+
+    let mut configured: serde_yaml::Value = serde_yaml::from_str(&installed)?;
+    configured["tools"] = serde_yaml::from_str(
+        "local-echo: { package: package-deploy, tool: alternate-tool }\nplain-echo: { package: package-deploy, tool: echo-tool }",
+    )?;
+    configured["components"]["package-deploy:owner"]["tools"] =
+        serde_yaml::from_str("local-echo: {}\nplain-echo: {}")?;
+    fs::write_str(&manifest_path, serde_yaml::to_string(&configured)?)?;
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    let deployed = registry.get_component(&tool_component_id).await?;
+    assert_eq!(
+        deployed
+            .metadata
+            .tools
+            .keys()
+            .map(|name| name.as_str())
+            .collect::<Vec<_>>(),
+        ["local-echo", "plain-echo"]
+    );
+    let invoke = |tool| {
+        ctx.cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "package-deploy:owner",
+                tool,
+                "--",
+                "echo",
+                "alias",
+            ],
+            &[],
+        )
+    };
+    for (name, expected) in [("local-echo", "Alternate: alias"), ("plain-echo", "alias")] {
+        let invocation = invoke(name).await;
+        assert!(
+            invocation.success(),
+            "{}",
+            String::from_utf8_lossy(&invocation.stderr)
+        );
+        let response: Value = serde_json::from_slice(invocation.stdout())?;
+        let result = &response["response"]["result"];
+        assert_eq!(result["type"], "Success", "{response:#}");
+        let typed: ExternalTypedSchemaValue = serde_json::from_value(result["result"].clone())?;
+        let typed = typed.as_inner();
+        assert_eq!(
+            to_json_value(typed.graph(), &typed.graph().root, typed.value())?,
+            expected
+        );
+    }
+    assert!(!invoke("alternate-tool").await.success());
+    assert!(!invoke("echo-tool").await.success());
+    assert_eq!(std::fs::read(ctx.cwd_path_join("golem.lock"))?, lock);
+    let pack = ctx.cli_with_input(["package", "pack"], &[]).await;
+    assert!(
+        !pack.success()
+            && pack
+                .stderr_text()
+                .contains("Cannot pack a component with renamed installed tools"),
+        "{}",
+        pack.stderr_text()
+    );
+
+    let development = ctx.cwd_path_join("development");
+    fs::create_dir_all(&development)?;
+    std::fs::write(development.join("guest.wasm"), layer)?;
+    fs::write_str(
+        development.join("golem.yaml"),
+        format!(
+            "{manifest}{publisher}components:\n  {component_name}:\n    componentWasm: guest.wasm\n"
+        ),
+    )?;
+    std::fs::remove_file(ctx.cwd_path_join("golem.lock"))?;
+    fs::write_str(
+        &manifest_path,
+        format!("{manifest}{owner}packages:\n  package-deploy:\n    path: development\n"),
+    )?;
+    assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+    assert!(
+        registry
+            .get_component(&tool_component_id)
+            .await?
+            .package_metadata
+            .is_none()
+    );
+    let invocation = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "package-deploy:owner",
+                "echo-tool",
+                "--",
+                "echo",
+                "development package",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        invocation.success(),
+        "{}",
+        String::from_utf8_lossy(&invocation.stderr)
+    );
+    let response: Value = serde_json::from_slice(invocation.stdout())?;
+    let result = &response["response"]["result"];
+    assert_eq!(result["type"], "Success", "{response:#}");
+    let typed: ExternalTypedSchemaValue = serde_json::from_value(result["result"].clone())?;
+    let typed = typed.as_inner();
+    assert_eq!(
+        to_json_value(typed.graph(), &typed.graph().root, typed.value())?,
+        "development package"
+    );
+    assert!(!ctx.cwd_path_join("golem.lock").exists());
     Ok(())
 }
 

@@ -26,4 +26,12 @@ message Component {
   string application_name = 19;
   string environment_name = 20;
   string account_email = 21;
+  ComponentPackageMetadata package_metadata = 22;
+}
+
+message ComponentPackageMetadata {
+  string source = 1;
+  string package_digest = 2;
+  string layer_digest = 3;
+  map<string, string> tool_guest_names = 4;
 }

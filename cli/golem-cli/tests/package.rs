@@ -111,6 +111,69 @@ async fn assert_cli_error(dir: &Path, args: &[&str], expected: &str) {
     );
 }
 
+#[test]
+#[timeout("45s")]
+async fn development_package_build_reads_its_current_component_without_a_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let dev = root.join("dev");
+    fs::create_dir(&dev).unwrap();
+    let version = versions::sdk::MANIFEST;
+    fs::write(
+        root.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: consumer\nenvironments:\n  local: {{server: local}}\npackages:\n  editable: {{path: ./dev}}\n"),
+    ).unwrap();
+    let copy = if cfg!(windows) {
+        "cmd /C copy /Y source.wasm guest.wasm"
+    } else {
+        "cp source.wasm guest.wasm"
+    };
+    fs::write(
+        dev.join("golem.yaml"),
+        format!("manifestVersion: {version}\napp: producer\npackage: {{name: editable, version: 1.0.0}}\ncomponents:\n  editable:guest:\n    componentWasm: guest.wasm\n    build:\n      - command: {copy}\n        sources: [source.wasm]\n        targets: [guest.wasm]\n"),
+    ).unwrap();
+    for source in ["(component)", "(component (core module))"] {
+        let wasm = wat::parse_str(source).unwrap();
+        fs::write(dev.join("source.wasm"), &wasm).unwrap();
+        assert_eq!(cli(root, &["build"]).await["built"], true);
+        assert_eq!(fs::read(dev.join("guest.wasm")).unwrap(), wasm);
+        assert!(!root.join("golem.lock").exists());
+    }
+    fs::write(
+        root.join("golem.lock"),
+        format!("packages:\n  editable:\n    source: old.tar\n    version: 1.0.0\n    digest: sha256:{}\n", "a".repeat(64)),
+    ).unwrap();
+    assert_cli_error(root, &["build"], "remove packages.editable from golem.lock").await;
+
+    fs::remove_file(root.join("golem.lock")).unwrap();
+    write_install_fixture(
+        &root.join("other.tar"),
+        "other",
+        wat::parse_str("(component)").unwrap(),
+    );
+    let result = run_cli(root, &["install", "./other.tar"]).await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let manifest = dev.join("golem.yaml");
+    fs::write(
+        &manifest,
+        format!(
+            "{}\ntools:\n  borrowed: {{package: other, tool: echo}}\n",
+            fs::read_to_string(&manifest).unwrap()
+        ),
+    )
+    .unwrap();
+    assert_cli_error(
+        root,
+        &["build"],
+        "Development package tool borrowed cannot select a file package",
+    )
+    .await;
+}
+
 // Assemble a package without a publisher-side build, which cannot extract these components.
 fn write_install_fixture(path: &Path, name: &str, wasm: Vec<u8>) -> String {
     use sha2::{Digest, Sha256};
@@ -269,10 +332,8 @@ tools:
             panic!("Only the declared File should be captured")
         };
         assert_eq!(file.path, ["file"]);
-        assert_eq!(
-            package.blob(&file.digest),
-            Some(&b"from the declaring manifest\n"[..])
-        );
+        let default = package.blob(&file.digest).unwrap();
+        assert_eq!(default, b"from the declaring manifest\n");
         assert!(
             component
                 .metadata

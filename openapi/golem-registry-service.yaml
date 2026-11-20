@@ -14353,6 +14353,10 @@ components:
           type: string
         layerDigest:
           type: string
+        toolGuestNames:
+          type: object
+          additionalProperties:
+            type: string
     ComponentProvisionConfig:
       type: object
       title: ComponentProvisionConfig

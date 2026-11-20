@@ -113,7 +113,7 @@ pub struct Application {
         skip_serializing_if = "BTreeMap::is_empty",
         deserialize_with = "crate::package::deserialize_pins"
     )]
-    pub packages: golem_package::Pins,
+    pub packages: BTreeMap<String, crate::package::PackageEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -167,6 +167,14 @@ impl ToolDeclarations {
         self.0.into_iter()
     }
 
+    pub(crate) fn extract_package_tools(
+        &mut self,
+    ) -> impl Iterator<Item = (String, serde_json::Value)> + '_ {
+        self.0.extract_if(.., |name, value| {
+            name != "middleware" && value.get("package").is_some()
+        })
+    }
+
     pub fn into_tools_and_middleware(
         mut self,
     ) -> (
@@ -187,6 +195,7 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
         if let Some(serde_json::Value::Object(value)) = declarations.get("middleware")
             && [
                 "component",
+                "package",
                 "release",
                 "templates",
                 "config",

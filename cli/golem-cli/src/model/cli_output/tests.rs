@@ -6663,6 +6663,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                         source: "./fixture.tar".into(),
                         package_digest: format!("sha256:{}", "12".repeat(32)),
                         layer_digest: format!("sha256:{}", "34".repeat(32)),
+                        tool_guest_names: BTreeMap::new(),
                     }),
                     agent_types: BTreeMap::from_iter([
                         (
