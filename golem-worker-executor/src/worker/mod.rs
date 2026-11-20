@@ -167,8 +167,7 @@ use crate::worker::lifecycle::state::{
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
 use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
-    InvocationRequests, calculate_last_known_status_with_checkpoint,
-    fold_invocation_result_entries, request_operation, revert_validation_regions,
+    calculate_last_known_status_with_checkpoint, revert_validation_regions,
     update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
@@ -218,9 +217,10 @@ use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationResultPosition,
-    OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState,
-    ShardAssignment, ShardEpoch, ShardId, Timestamp,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, InvocationRequestOperation,
+    InvocationResultPosition, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, RetryPolicyState, ShardAssignment, ShardEpoch, ShardId,
+    StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -829,7 +829,8 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
 /// unchanged for Started; lowering may transform only a separate invocation clone.
 pub struct HydratedInvocation {
     pub(crate) invocation: AgentInvocation,
-    pub(crate) payload: OplogPayload<AgentInvocationPayload>,
+    pub(crate) operation: InvocationRequestOperation,
+    pub(crate) payload: OplogPayload<StoredAgentInvocationPayload>,
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -1487,7 +1488,10 @@ enum StopResult {
 mod resource_release_tests;
 
 pub use acquisition::merge_agent_env_with_default_env;
-pub(crate) use ingress::{await_scalar_invocation, require_expected_tool_deployment_revision};
+pub(crate) use ingress::{
+    await_scalar_invocation, require_canonical_command_path,
+    require_expected_tool_deployment_revision,
+};
 use ingress::{
     inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
 };

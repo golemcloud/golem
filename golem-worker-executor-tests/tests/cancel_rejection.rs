@@ -20,6 +20,8 @@
 
 use crate::Tracing;
 use chrono::Utc;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::TraceId;
@@ -27,8 +29,7 @@ use golem_common::model::oplog::{
     AgentError, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
 };
 use golem_common::model::{
-    AgentInvocation, AgentInvocationPayload, IdempotencyKey, InvocationId, InvocationOperation,
-    Timestamp,
+    AgentInvocation, IdempotencyKey, InvocationId, InvocationOperation, Timestamp,
 };
 use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -451,8 +452,10 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         .add_to_oplog(OplogEntry::pending_agent_invocation(
             Some(Timestamp::from(due.timestamp_millis() as u64)),
             finished,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            Box::new(InvocationRequestOperation::AgentMethod {
                 method_name: "inc_global_by".to_string(),
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
                 input: data_value!(1u64).into_parts().1,
                 caller: caller.clone(),
                 scope_card: None,

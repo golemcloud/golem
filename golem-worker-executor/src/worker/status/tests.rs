@@ -156,6 +156,8 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
         );
     }
 }
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_service_base::model::component::Component;
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -1490,12 +1492,16 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: idempotency_key,
-                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                operation: Box::new(InvocationRequestOperation::AgentMethod {
                     method_name: "a".to_string(),
-                    input: SchemaValue::Record { fields: Vec::new() },
-                    caller: Caller::anonymous(),
-                    scope_card: None,
-                })),
+                }),
+                payload: OplogPayload::Inline(Box::new(
+                    StoredAgentInvocationPayload::AgentMethod {
+                        input: SchemaValue::Record { fields: Vec::new() },
+                        caller: Caller::anonymous(),
+                        scope_card: None,
+                    },
+                )),
                 trace_id: TraceId::generate(),
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
@@ -1998,12 +2004,16 @@ fn recovery_errors_are_not_invocation_results() {
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: key,
-                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                operation: Box::new(InvocationRequestOperation::AgentMethod {
                     method_name: "agent:method".to_string(),
-                    input: SchemaValue::Record { fields: Vec::new() },
-                    caller: Caller::anonymous(),
-                    scope_card: None,
-                })),
+                }),
+                payload: OplogPayload::Inline(Box::new(
+                    StoredAgentInvocationPayload::AgentMethod {
+                        input: SchemaValue::Record { fields: Vec::new() },
+                        caller: Caller::anonymous(),
+                        scope_card: None,
+                    },
+                )),
                 trace_id: TraceId::generate(),
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
@@ -2031,7 +2041,6 @@ fn recovery_errors_are_not_invocation_results() {
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |_, entry| crate::worker::status::request_operation(entry),
         |key, position| results.push((*key, position)),
     );
 
@@ -2045,8 +2054,10 @@ fn started_invocation(key: &InvocationId) -> OplogEntry {
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id: *key,
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        operation: Box::new(InvocationRequestOperation::AgentMethod {
             method_name: "agent:method".to_string(),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
             input: SchemaValue::Record { fields: Vec::new() },
             caller: Caller::anonymous(),
             scope_card: None,
@@ -2086,7 +2097,6 @@ fn fold_results(
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |_, entry| crate::worker::status::request_operation(entry),
         |key, position| results.push((*key, (position.terminal, position.request))),
     );
     (results, requests.current.map(|running| running.key))
@@ -2103,8 +2113,10 @@ fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
     OplogEntry::pending_agent_invocation(
         None,
         *key,
-        OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        Box::new(InvocationRequestOperation::AgentMethod {
             method_name: "agent:method".to_string(),
+        }),
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
             input: SchemaValue::Record { fields: Vec::new() },
             caller: Caller::anonymous(),
             scope_card: None,
@@ -5110,7 +5122,8 @@ impl TestCaseBuilder {
             OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: idempotency_key,
-                payload: OplogPayload::Inline(Box::new(payload)),
+                operation: Box::new(payload.request_operation()),
+                payload: OplogPayload::Inline(Box::new(payload.into_stored().1)),
                 trace_id: TraceId::generate(),
                 trace_states: vec![],
                 invocation_context: vec![],
@@ -5367,10 +5380,12 @@ impl TestCaseBuilder {
     pub fn pending_invocation(self, invocation: AgentInvocation) -> Self {
         let (idempotency_key, invocation_payload, invocation_context) =
             invocation.clone().into_parts();
+        let (operation, stored) = invocation_payload.into_stored();
         let entry = OplogEntry::pending_agent_invocation(
             None,
             idempotency_key,
-            OplogPayload::Inline(Box::new(invocation_payload)),
+            Box::new(operation),
+            OplogPayload::Inline(Box::new(stored)),
             invocation_context.trace_id.clone(),
             invocation_context.trace_states.clone(),
             invocation_context.to_oplog_data(),
@@ -8450,8 +8465,8 @@ mod region_fold {
     use super::fold_regions;
     use super::*;
     use crate::worker::status::update_queue::UpdateStep;
+    use golem_common::model::AssistedSelection;
     use golem_common::model::oplog::SnapshotFault;
-    use golem_common::model::{AgentInvocationPayload, AssistedSelection};
     use pretty_assertions::assert_eq;
     use test_r::test;
 
@@ -8507,9 +8522,10 @@ mod region_fold {
             timestamp: Timestamp::from(1_000),
             not_before: None,
             invocation_id: InvocationId(Uuid::new_v4()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+            operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: revision(target),
-            })),
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -9108,19 +9124,31 @@ mod region_fold {
     }
 }
 
-mod invocation_payload_decodes {
+mod invocation_payloads {
     use super::region_fold::{idx, manual_invocation, revision};
     use super::*;
-    use crate::worker::status::update_queue::INVOCATION_PAYLOAD_DECODES;
     use pretty_assertions::assert_eq;
     use test_r::test;
 
     fn serialized(entry: OplogEntry) -> OplogEntry {
+        with_payload(entry, |payload| OplogPayload::SerializedInline {
+            bytes: golem_common::serialization::serialize(&payload).unwrap(),
+            cached: None,
+        })
+    }
+
+    fn with_payload(
+        entry: OplogEntry,
+        payload_of: impl FnOnce(
+            StoredAgentInvocationPayload,
+        ) -> OplogPayload<StoredAgentInvocationPayload>,
+    ) -> OplogEntry {
         match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp,
                 not_before,
-                invocation_id: idempotency_key,
+                invocation_id,
+                operation,
                 payload: OplogPayload::Inline(payload),
                 trace_id,
                 trace_states,
@@ -9128,11 +9156,9 @@ mod invocation_payload_decodes {
             } => OplogEntry::PendingAgentInvocation {
                 timestamp,
                 not_before,
-                invocation_id: idempotency_key,
-                payload: OplogPayload::SerializedInline {
-                    bytes: golem_common::serialization::serialize(payload.as_ref()).unwrap(),
-                    cached: None,
-                },
+                invocation_id,
+                operation,
+                payload: payload_of(*payload),
                 trace_id,
                 trace_states,
                 invocation_context,
@@ -9141,13 +9167,33 @@ mod invocation_payload_decodes {
         }
     }
 
+    /// `entry` with a payload that does not decode and is not in the oplog.
+    fn unreadable(entry: OplogEntry, external: bool) -> OplogEntry {
+        with_payload(entry, |_| {
+            if external {
+                OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: vec![0; 16],
+                    cached: None,
+                }
+            } else {
+                OplogPayload::SerializedInline {
+                    bytes: vec![0xff, 0xff, 0xff],
+                    cached: None,
+                }
+            }
+        })
+    }
+
     fn method_invocation() -> OplogEntry {
-        serialized(OplogEntry::PendingAgentInvocation {
+        OplogEntry::PendingAgentInvocation {
             timestamp: Timestamp::from(1_000),
             not_before: None,
             invocation_id: InvocationId(Uuid::new_v4()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            operation: Box::new(InvocationRequestOperation::AgentMethod {
                 method_name: "a".to_string(),
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("input".to_string())],
                 },
@@ -9157,29 +9203,13 @@ mod invocation_payload_decodes {
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
-        })
-    }
-
-    /// Three uncached method invocations and one uncached manual update invocation.
-    fn history() -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::from([
-            (idx(2), method_invocation()),
-            (idx(3), method_invocation()),
-            (idx(4), serialized(manual_invocation(2))),
-            (idx(5), method_invocation()),
-        ])
-    }
-
-    fn decodes_of(fold: impl FnOnce()) -> usize {
-        INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(0));
-        fold();
-        INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.get())
+        }
     }
 
     #[test]
     fn pending_invocation_deadline_survives_serialization_and_incremental_status_fold() {
         let deadline = Timestamp::from(123_456);
-        let mut scheduled = method_invocation();
+        let mut scheduled = serialized(method_invocation());
         let OplogEntry::PendingAgentInvocation { not_before, .. } = &mut scheduled else {
             unreachable!()
         };
@@ -9188,7 +9218,10 @@ mod invocation_payload_decodes {
 
         let bytes = golem_common::serialization::serialize(&scheduled).unwrap();
         let scheduled: OplogEntry = golem_common::serialization::deserialize(&bytes).unwrap();
-        let entries = BTreeMap::from([(idx(2), scheduled), (idx(3), method_invocation())]);
+        let entries = BTreeMap::from([
+            (idx(2), scheduled),
+            (idx(3), serialized(method_invocation())),
+        ]);
         let fold = |initial, entries| {
             super::super::update_status_with_new_entries(
                 AgentMode::Durable,
@@ -9218,48 +9251,55 @@ mod invocation_payload_decodes {
     }
 
     #[test]
-    fn a_status_fold_decodes_each_uncached_invocation_payload_once() {
-        let mut status = None;
-        let decodes = decodes_of(|| {
-            status = super::super::update_status_with_new_entries(
-                AgentMode::Durable,
-                AgentStatusRecord::default(),
-                history(),
-                &RetryConfig::default(),
-            )
-            .unwrap();
-        });
-        let pending = status.unwrap().pending_invocations;
+    fn a_status_fold_takes_each_operation_from_its_entry_without_reading_the_payload() {
+        let history = BTreeMap::from([
+            (idx(2), unreadable(method_invocation(), false)),
+            (idx(3), unreadable(method_invocation(), true)),
+            (idx(4), unreadable(manual_invocation(2), true)),
+            (idx(5), unreadable(method_invocation(), false)),
+        ]);
+        let pending = super::super::update_status_with_new_entries(
+            AgentMode::Durable,
+            AgentStatusRecord::default(),
+            history,
+            &RetryConfig::default(),
+        )
+        .unwrap()
+        .unwrap()
+        .pending_invocations;
 
-        assert_eq!(decodes, 4);
         assert_eq!(
             pending
                 .iter()
                 .map(|invocation| (
                     invocation.oplog_index,
                     invocation.manual_update_target_revision,
-                    invocation.idempotency_key.is_some()
+                    invocation.idempotency_key.is_some(),
+                    invocation.operation.clone(),
                 ))
                 .collect::<Vec<_>>(),
             vec![
-                (idx(2), None, true),
-                (idx(3), None, true),
-                (idx(4), Some(revision(2)), false),
-                (idx(5), None, true),
+                (
+                    idx(2),
+                    None,
+                    true,
+                    Some(InvocationOperation::Method("a".to_string()))
+                ),
+                (
+                    idx(3),
+                    None,
+                    true,
+                    Some(InvocationOperation::Method("a".to_string()))
+                ),
+                (idx(4), Some(revision(2)), false, None),
+                (
+                    idx(5),
+                    None,
+                    true,
+                    Some(InvocationOperation::Method("a".to_string()))
+                ),
             ]
         );
-    }
-
-    #[test]
-    fn revert_validation_decodes_no_invocation_payload() {
-        let decodes = decodes_of(|| {
-            super::super::revert_validation_regions(
-                &history(),
-                &OplogRegion::from_index_range(idx(4)..=idx(5)),
-            );
-        });
-
-        assert_eq!(decodes, 0);
     }
 }
 
@@ -9273,7 +9313,7 @@ mod update_entry_sequences {
     use crate::services::worker_fork::ForkUpdates;
     use crate::worker::cut_point::validate_snapshot_update_boundaries;
     use crate::worker::status::skipped_regions;
-    use crate::worker::status::update_queue::{UpdateStep, manual_update_target_revision_of};
+    use crate::worker::status::update_queue::UpdateStep;
     use proptest::prelude::*;
     use test_r::test;
 
@@ -9475,8 +9515,8 @@ mod update_entry_sequences {
                 .iter()
                 .filter_map(|(index, entry)| {
                     let manual_update = match entry {
-                        OplogEntry::PendingAgentInvocation { payload, .. } => {
-                            manual_update_target_revision_of(payload)
+                        OplogEntry::PendingAgentInvocation { operation, .. } => {
+                            operation.manual_update_target()
                         }
                         _ => None,
                     };
@@ -9588,7 +9628,6 @@ fn rejection_after_a_user_cancellation_stays_cancelled_when_the_fold_splits_the_
             &mut requests,
             &DeletedRegions::default(),
             &BTreeMap::from([(index, entry)]),
-            |_, entry| crate::worker::status::request_operation(entry),
             |key, position| results.push((*key, position)),
         );
     }
@@ -9655,7 +9694,6 @@ fn withdrawing_a_queued_duplicate_keeps_the_finished_result() {
             results,
             requests,
             &DeletedRegions::default(),
-            &BTreeMap::new(),
             &BTreeMap::from([(index, entry)]),
         );
     }
@@ -9813,7 +9851,6 @@ fn fold_positions(
         &mut requests,
         &DeletedRegions::default(),
         &entries,
-        |_, entry| crate::worker::status::request_operation(entry),
         |key, position| results.push((*key, position)),
     );
     (results, requests.current)
@@ -9941,12 +9978,13 @@ fn a_retry_marker_a_suspension_and_a_resume_change_the_running_invocation_withou
 }
 
 #[test]
-fn an_external_payload_leaves_the_operation_unknown() {
+fn an_external_payload_keeps_the_operation_of_its_entry() {
     let key = InvocationId(Uuid::new_v4());
     let OplogEntry::PendingAgentInvocation {
         timestamp,
         not_before,
         invocation_id,
+        operation,
         trace_id,
         trace_states,
         invocation_context,
@@ -9959,6 +9997,7 @@ fn an_external_payload_leaves_the_operation_unknown() {
         timestamp,
         not_before,
         invocation_id,
+        operation,
         payload: OplogPayload::External {
             payload_id: golem_common::model::oplog::PayloadId(Uuid::new_v4()),
             md5_hash: Vec::new(),
@@ -9983,7 +10022,10 @@ fn an_external_payload_leaves_the_operation_unknown() {
     .unwrap();
 
     let position = status.invocation_results.position(&key).unwrap();
-    assert_eq!(position.operation, None);
+    assert_eq!(
+        position.operation,
+        Some(InvocationOperation::Method("agent:method".to_string()))
+    );
     assert_eq!(position.request, Some(OplogIndex::from_u64(1)));
     assert_eq!(position.accepted_at, Some(timestamp));
 }

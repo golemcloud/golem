@@ -653,6 +653,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> Result<bool, WorkerExecutorError> {
         let crate::worker::HydratedInvocation {
             invocation,
+            operation,
             payload,
         } = hydrated;
         if !self.state.durability_is_suppressed() {
@@ -706,6 +707,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .worker()
                 .start_pending_invocation(
                     idempotency_key,
+                    operation,
                     payload,
                     stack,
                     InvocationWalletPin {

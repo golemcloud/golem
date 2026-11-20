@@ -28,6 +28,8 @@ use crate::storage::keyvalue::fault_injecting::{
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::Timestamp;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
@@ -40,8 +42,8 @@ use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{OplogPayload, PayloadId, RawOplogPayload};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch,
+    AgentInvocationResult, AgentMetadata, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ScanCursor, ShardEpoch,
 };
 use golem_common::read_only_lock;
 use golem_service_base::model::component::Component;
@@ -329,9 +331,10 @@ fn invocation_pair(
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: *key,
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+            operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
-            })),
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
             invocation_context: Vec::new(),
@@ -3336,9 +3339,10 @@ async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its
         OplogEntry::pending_agent_invocation(
             None,
             key,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+            Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
-            })),
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),
@@ -3378,6 +3382,57 @@ async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its
 }
 
 #[test]
+async fn invocation_result_index_keeps_the_operation_of_a_request_with_an_external_payload() {
+    let key = idempotency_key("external");
+    let mut entries = invocation_entries(&[key]);
+    let Some(OplogEntry::AgentInvocationStarted {
+        operation, payload, ..
+    }) = entries.get_mut(&OplogIndex::from_u64(2))
+    else {
+        unreachable!("invocation_entries starts the invocation at index 2")
+    };
+    **operation = InvocationRequestOperation::AgentMethod {
+        method_name: "removed-method".to_string(),
+    };
+    *payload = OplogPayload::External {
+        payload_id: PayloadId::new(),
+        md5_hash: vec![0; 16],
+        cached: None,
+    };
+    let (service, _oplog, owned_agent_id) = index_test_service(entries);
+    let status = invocation_status(3, 0, &[], 0, DeletedRegions::new());
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    let InvocationResultIndexLookup::Found(position) = service
+        .lookup_invocation_result_index(
+            &owned_agent_id,
+            invocation_index_fingerprint(),
+            &status,
+            &key,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the caught-up index holds the result");
+    };
+    assert_eq!(
+        position.operation,
+        Some(golem_common::model::InvocationOperation::Method(
+            "removed-method".to_string()
+        ))
+    );
+}
+
+#[test]
 async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_miss() {
     let first = idempotency_key("bf-first");
     let second = idempotency_key("bf-second");
@@ -3389,9 +3444,10 @@ async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_m
         OplogEntry::pending_agent_invocation(
             None,
             cancelled,
-            OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+            Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
-            })),
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
             TraceId::generate(),
             Vec::new(),
             Vec::new(),

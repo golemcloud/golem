@@ -112,7 +112,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(key);
         }
         // Forks retain invocation keys from their source. Find the initialization by its
-        // payload, not by interpreting a caller-controlled idempotency-key prefix.
+        // operation, not by interpreting a caller-controlled idempotency-key prefix.
         let status = self.try_get_last_known_status().await?;
         let mut first = OplogIndex::INITIAL;
         while first <= status.oplog_idx {
@@ -124,26 +124,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 if let OplogEntry::PendingAgentInvocation {
                     invocation_id,
-                    payload,
+                    operation,
                     ..
                 }
                 | OplogEntry::AgentInvocationStarted {
                     invocation_id,
-                    payload,
+                    operation,
                     ..
                 } = entry
+                    && *operation == InvocationRequestOperation::AgentInitialization
                 {
-                    let invocation = self
-                        .oplog
-                        .download_payload_classified(payload)
-                        .await
-                        .map_err(|error| self.initialization_payload_error(error))?;
-                    if matches!(
-                        invocation,
-                        AgentInvocationPayload::AgentInitialization { .. }
-                    ) {
-                        return Ok(invocation_id);
-                    }
+                    return Ok(invocation_id);
                 }
             }
             first = OplogIndex::from_u64(first.as_u64() + count);
@@ -488,7 +479,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
     /// Whether the committed result of `key` is a cancellation, resolved like a lookup: from the
-    /// recent results, else from the persisted result index or the oplog.
+    /// recent results, else from the persisted result index.
     async fn has_committed_cancellation(
         &self,
         status: &AgentStatusRecord,
@@ -667,17 +658,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some(
                 OplogEntry::PendingAgentInvocation {
                     invocation_id,
+                    operation,
                     payload,
                     ..
                 }
                 | OplogEntry::AgentInvocationStarted {
                     invocation_id,
+                    operation,
                     payload,
                     ..
                 },
             ) if invocation_id == key => self
                 .oplog
-                .download_payload(payload.clone())
+                .download_request(operation.as_ref().clone(), payload.clone())
                 .await
                 .map(Some)
                 .map_err(WorkerExecutorError::runtime),
@@ -821,7 +814,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        if worker_service
+        // An index that is still incomplete after catch-up is an error, never a miss: a miss
+        // would run the invocation again.
+        let detail = match worker_service
             .catch_up_invocation_result_index(
                 &self.owned_agent_id,
                 self.agent_mode(),
@@ -829,9 +824,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 status,
             )
             .await
-            .is_ok()
         {
-            match worker_service
+            Ok(()) => match worker_service
                 .lookup_invocation_result_index(
                     &self.owned_agent_id,
                     self.initial_worker_metadata.fingerprint,
@@ -848,44 +842,33 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     crate::metrics::workers::record_invocation_result_resolution("physical_miss");
                     return Ok(None);
                 }
-                Ok(InvocationResultIndexLookup::Incomplete) | Err(_) => {}
-            }
-        }
-
-        crate::metrics::workers::record_invocation_result_resolution("oplog_fallback");
-        let mut requests = InvocationRequests::default();
-        let mut result = None;
-        let mut first = OplogIndex::INITIAL;
-        let chunk_size = self
-            .deps
-            .config()
-            .invocation_results
-            .physical_index_catch_up_chunk_size
-            .max(1);
-        while first <= status.oplog_idx {
-            let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(chunk_size);
-            let entries = self.oplog.read_exact(first, count).await?;
-            if entries.is_empty() {
-                break;
-            }
-            fold_invocation_result_entries(
-                &mut requests,
-                &status.deleted_regions,
-                &entries,
-                // The lookup answers with the outcome only, so it decodes no request.
-                |_, _| None,
-                |candidate, position| {
-                    if candidate == key
-                        && !(position.end == InvocationEnd::Cancelled && result.is_some())
-                    {
-                        result = Some(position);
-                    }
-                },
-            );
-            first = entries.keys().max().unwrap().next();
-        }
-        Ok(result)
+                Ok(InvocationResultIndexLookup::Incomplete) => {
+                    "the invocation result index is incomplete after catch-up".to_string()
+                }
+                Err(error) => error,
+            },
+            Err(error) => error.to_string(),
+        };
+        Err(invocation_result_index_unavailable(
+            &self.agent_id(),
+            detail,
+        ))
     }
+}
+
+/// The error for a persisted result index that catch-up could not complete. It is transient: a
+/// later catch-up can complete the index.
+pub(in crate::worker) fn invocation_result_index_unavailable(
+    agent_id: &AgentId,
+    detail: String,
+) -> UnreadableOplog {
+    UnreadableOplog::new(
+        agent_id,
+        crate::services::oplog::OplogReadError::SourceUnavailable {
+            source: crate::services::oplog::OplogReadSource::Other("invocation result index"),
+            detail,
+        },
+    )
 }
 
 pub(in crate::worker) fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {

@@ -39,9 +39,7 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
-use crate::worker::status::{
-    InvocationRequests, fold_invocation_result_entries, known_request_operations,
-};
+use crate::worker::status::{InvocationRequests, fold_invocation_result_entries};
 use async_trait::async_trait;
 use desert_rust::BinarySerializer;
 use futures::future::BoxFuture;

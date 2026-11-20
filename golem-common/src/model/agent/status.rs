@@ -236,9 +236,7 @@ impl Default for InvocationResultBloom {
 // switches; neither correctness nor the eventual memory bound depends on exact allocator sizing.
 const INVOCATION_RESULT_MAP_ENTRY_OVERHEAD_BYTES: usize = 64;
 
-/// The longest operation an invocation entry keeps. A longer one is read from the request entry
-/// when it is needed, so the entries of the status record stay small.
-pub const MAX_INVOCATION_OPERATION_BYTES: usize = 512;
+pub use golem_schema::schema::tool::MAX_INVOCATION_OPERATION_BYTES;
 
 /// What an invocation runs, from its accepted request.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec)]
@@ -261,7 +259,7 @@ impl InvocationOperation {
 
     /// The operation string that keyed invocation IDs of a tool invocation are derived from.
     pub fn tool_operation(tool_name: &impl std::fmt::Display, command_path: &[String]) -> String {
-        format!("tool:{tool_name}/{}", command_path.join("/"))
+        golem_schema::schema::tool::tool_operation(tool_name, command_path)
     }
 
     /// The operation that keyed invocation IDs are derived from: the method name or the tool
@@ -275,11 +273,6 @@ impl InvocationOperation {
 
     pub fn is_listed(&self) -> bool {
         !matches!(self, Self::Internal)
-    }
-
-    /// The operation to keep in an invocation entry, or `None` when it is too long to keep.
-    pub fn kept(self) -> Option<Self> {
-        (self.name().map_or(0, str::len) <= MAX_INVOCATION_OPERATION_BYTES).then_some(self)
     }
 
     fn kept_bytes(operation: &Option<Self>) -> usize {
@@ -313,8 +306,8 @@ pub struct InvocationResultPosition {
     /// when the fold that found the result did not see the request.
     pub request: Option<OplogIndex>,
     pub end: InvocationEnd,
-    /// `None` when the fold did not decode the request: an external payload, an operation longer
-    /// than [`MAX_INVOCATION_OPERATION_BYTES`], or a request the fold did not see.
+    /// `None` for a manual update, or a request the fold did not see. Deployment bounds the
+    /// operation by [`MAX_INVOCATION_OPERATION_BYTES`].
     pub operation: Option<InvocationOperation>,
     /// The timestamp of the acceptance entry, when the fold saw it.
     pub accepted_at: Option<Timestamp>,
@@ -332,7 +325,7 @@ pub struct InvocationRequestRef {
     /// The timestamp of the `PendingAgentInvocation` entry, or of the `AgentInvocationStarted`
     /// entry when the fold did not see the pending one.
     pub accepted_at: Timestamp,
-    /// `None` when the fold did not decode the request.
+    /// `None` for a manual update.
     pub operation: Option<InvocationOperation>,
 }
 

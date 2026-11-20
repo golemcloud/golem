@@ -138,24 +138,297 @@ pub enum AgentInvocationPayload {
     },
 }
 
-impl AgentInvocationPayload {
+/// What an accepted request runs. The request entries of the oplog hold it next to the
+/// [`StoredAgentInvocationPayload`], so a reader learns it without decoding or downloading the
+/// payload. Each variant names the [`AgentInvocationPayload`] variant it rebuilds.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum InvocationRequestOperation {
+    ManualUpdate {
+        target_revision: ComponentRevision,
+    },
+    AgentInitialization,
+    AgentMethod {
+        method_name: String,
+    },
+    ExternalTool {
+        tool_name: ToolName,
+        command_path: Vec<String>,
+    },
+    LoadSnapshot,
+    SaveSnapshot,
+    ProcessOplogEntries,
+}
+
+impl InvocationRequestOperation {
     /// What this invocation runs. `None` for a manual update, which is not an invocation of the
     /// agent.
     pub fn operation(&self) -> Option<InvocationOperation> {
         match self {
             Self::ManualUpdate { .. } => None,
-            Self::AgentInitialization { .. } => Some(InvocationOperation::Constructor),
-            Self::AgentMethod { method_name, .. } => {
+            Self::AgentInitialization => Some(InvocationOperation::Constructor),
+            Self::AgentMethod { method_name } => {
                 Some(InvocationOperation::Method(method_name.clone()))
             }
             Self::ExternalTool {
                 tool_name,
                 command_path,
-                ..
             } => Some(InvocationOperation::tool(tool_name, command_path)),
-            Self::LoadSnapshot { .. }
-            | Self::SaveSnapshot { .. }
-            | Self::ProcessOplogEntries { .. } => Some(InvocationOperation::Internal),
+            Self::LoadSnapshot | Self::SaveSnapshot | Self::ProcessOplogEntries => {
+                Some(InvocationOperation::Internal)
+            }
+        }
+    }
+
+    pub fn manual_update_target(&self) -> Option<ComponentRevision> {
+        match self {
+            Self::ManualUpdate { target_revision } => Some(*target_revision),
+            _ => None,
+        }
+    }
+}
+
+/// An [`AgentInvocationPayload`] without its [`InvocationRequestOperation`], as the request
+/// entries of the oplog store it.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum StoredAgentInvocationPayload {
+    ManualUpdate,
+    AgentInitialization {
+        input: SchemaValue,
+        caller: Caller,
+    },
+    AgentMethod {
+        input: SchemaValue,
+        caller: Caller,
+        scope_card: Option<ScopeCard>,
+    },
+    ExternalTool {
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        activation: Box<ToolActivationSnapshot>,
+        caller: Caller,
+        scope_card: Option<ScopeCard>,
+    },
+    LoadSnapshot {
+        snapshot: RawSnapshotData,
+        caller: Caller,
+    },
+    SaveSnapshot {
+        caller: Caller,
+    },
+    ProcessOplogEntries {
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: AgentMetadataForGuests,
+        first_entry_index: OplogIndex,
+        entries: Vec<crate::model::oplog::OplogEntry>,
+        caller: Caller,
+    },
+}
+
+impl StoredAgentInvocationPayload {
+    /// The full payload of the request whose entry holds `operation`.
+    pub fn with_operation(
+        self,
+        operation: InvocationRequestOperation,
+    ) -> Result<AgentInvocationPayload, String> {
+        type Op = InvocationRequestOperation;
+        Ok(match (self, operation) {
+            (Self::ManualUpdate, Op::ManualUpdate { target_revision }) => {
+                AgentInvocationPayload::ManualUpdate { target_revision }
+            }
+            (Self::AgentInitialization { input, caller }, Op::AgentInitialization) => {
+                AgentInvocationPayload::AgentInitialization { input, caller }
+            }
+            (
+                Self::AgentMethod {
+                    input,
+                    caller,
+                    scope_card,
+                },
+                Op::AgentMethod { method_name },
+            ) => AgentInvocationPayload::AgentMethod {
+                method_name,
+                input,
+                caller,
+                scope_card,
+            },
+            (
+                Self::ExternalTool {
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    activation,
+                    caller,
+                    scope_card,
+                },
+                Op::ExternalTool {
+                    tool_name,
+                    command_path,
+                },
+            ) => AgentInvocationPayload::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                activation,
+                caller,
+                scope_card,
+            },
+            (Self::LoadSnapshot { snapshot, caller }, Op::LoadSnapshot) => {
+                AgentInvocationPayload::LoadSnapshot { snapshot, caller }
+            }
+            (Self::SaveSnapshot { caller }, Op::SaveSnapshot) => {
+                AgentInvocationPayload::SaveSnapshot { caller }
+            }
+            (
+                Self::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                    caller,
+                },
+                Op::ProcessOplogEntries,
+            ) => AgentInvocationPayload::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                caller,
+            },
+            (payload, operation) => {
+                return Err(format!(
+                    "the stored invocation payload {} does not match the operation {operation:?}",
+                    payload.variant_name()
+                ));
+            }
+        })
+    }
+
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Self::ManualUpdate => "ManualUpdate",
+            Self::AgentInitialization { .. } => "AgentInitialization",
+            Self::AgentMethod { .. } => "AgentMethod",
+            Self::ExternalTool { .. } => "ExternalTool",
+            Self::LoadSnapshot { .. } => "LoadSnapshot",
+            Self::SaveSnapshot { .. } => "SaveSnapshot",
+            Self::ProcessOplogEntries { .. } => "ProcessOplogEntries",
+        }
+    }
+}
+
+impl AgentInvocationPayload {
+    /// What this invocation runs. `None` for a manual update, which is not an invocation of the
+    /// agent.
+    pub fn operation(&self) -> Option<InvocationOperation> {
+        self.request_operation().operation()
+    }
+
+    pub fn request_operation(&self) -> InvocationRequestOperation {
+        match self {
+            Self::ManualUpdate { target_revision } => InvocationRequestOperation::ManualUpdate {
+                target_revision: *target_revision,
+            },
+            Self::AgentInitialization { .. } => InvocationRequestOperation::AgentInitialization,
+            Self::AgentMethod { method_name, .. } => InvocationRequestOperation::AgentMethod {
+                method_name: method_name.clone(),
+            },
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => InvocationRequestOperation::ExternalTool {
+                tool_name: tool_name.clone(),
+                command_path: command_path.clone(),
+            },
+            Self::LoadSnapshot { .. } => InvocationRequestOperation::LoadSnapshot,
+            Self::SaveSnapshot { .. } => InvocationRequestOperation::SaveSnapshot,
+            Self::ProcessOplogEntries { .. } => InvocationRequestOperation::ProcessOplogEntries,
+        }
+    }
+
+    /// Splits the payload into the operation its request entry holds and the payload it stores.
+    pub fn into_stored(self) -> (InvocationRequestOperation, StoredAgentInvocationPayload) {
+        type Op = InvocationRequestOperation;
+        type Stored = StoredAgentInvocationPayload;
+        match self {
+            Self::ManualUpdate { target_revision } => {
+                (Op::ManualUpdate { target_revision }, Stored::ManualUpdate)
+            }
+            Self::AgentInitialization { input, caller } => (
+                Op::AgentInitialization,
+                Stored::AgentInitialization { input, caller },
+            ),
+            Self::AgentMethod {
+                method_name,
+                input,
+                caller,
+                scope_card,
+            } => (
+                Op::AgentMethod { method_name },
+                Stored::AgentMethod {
+                    input,
+                    caller,
+                    scope_card,
+                },
+            ),
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                activation,
+                caller,
+                scope_card,
+            } => (
+                Op::ExternalTool {
+                    tool_name,
+                    command_path,
+                },
+                Stored::ExternalTool {
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    activation,
+                    caller,
+                    scope_card,
+                },
+            ),
+            Self::LoadSnapshot { snapshot, caller } => {
+                (Op::LoadSnapshot, Stored::LoadSnapshot { snapshot, caller })
+            }
+            Self::SaveSnapshot { caller } => (Op::SaveSnapshot, Stored::SaveSnapshot { caller }),
+            Self::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                caller,
+            } => (
+                Op::ProcessOplogEntries,
+                Stored::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                    caller,
+                },
+            ),
         }
     }
 
@@ -793,8 +1066,7 @@ pub struct PendingInvocationRef {
     pub idempotency_key: Option<InvocationId>,
     /// Target revision of the manual update. `Some` only for manual update invocations.
     pub manual_update_target_revision: Option<ComponentRevision>,
-    /// What the invocation runs. `None` for a manual update, and when the fold did not decode
-    /// the payload: it is stored externally, or its operation is too long to keep.
+    /// What the invocation runs. `None` for a manual update.
     pub operation: Option<InvocationOperation>,
 }
 

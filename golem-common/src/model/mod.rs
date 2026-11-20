@@ -70,11 +70,12 @@ pub use agent::{
     DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY, DURABLE_STREAM_SESSION_RECENT_CAPACITY,
     DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
     EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions, ExportForkReservation,
-    FailedUpdateRecord, InvocationEnd, InvocationOperation, InvocationRequestRef,
-    InvocationResultBloom, InvocationResultMembership, InvocationResultPosition, InvocationStatus,
-    LogLevel, MAX_INVOCATION_OPERATION_BYTES, OpenEntityReplayScope, OplogProcessorCheckpointState,
-    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    RedactedAgentInvocationResult, RunningInvocation, ScheduleId, ScheduledAction, SnapshotFiles,
+    FailedUpdateRecord, InvocationEnd, InvocationOperation, InvocationRequestOperation,
+    InvocationRequestRef, InvocationResultBloom, InvocationResultMembership,
+    InvocationResultPosition, InvocationStatus, LogLevel, MAX_INVOCATION_OPERATION_BYTES,
+    OpenEntityReplayScope, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RedactedAgentInvocationResult,
+    RunningInvocation, ScheduleId, ScheduledAction, SnapshotFiles, StoredAgentInvocationPayload,
     SuccessfulUpdateRecord, TimestampedAgentInvocation, UsableAutomaticSnapshot,
 };
 pub use card::{

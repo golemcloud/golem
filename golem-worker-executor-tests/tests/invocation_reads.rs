@@ -28,11 +28,9 @@ use golem_common::{agent_key, data_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, callers, start, start_with_overrides,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, callers, start,
 };
 use pretty_assertions::assert_eq;
-use std::sync::Arc;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -361,7 +359,8 @@ async fn invocations_are_looked_up_by_the_callers_key(
     Ok(())
 }
 
-/// An ephemeral agent's finished invocation is read from its oplog after its instance is gone.
+/// An ephemeral agent's finished invocation is listed after its instance is gone: the agent is
+/// reconstructed from its oplog, and its few results stay in the exact recent results.
 #[test]
 #[timeout("4m")]
 async fn a_finished_ephemeral_invocation_is_listed_after_its_instance_is_gone(
@@ -369,21 +368,8 @@ async fn a_finished_ephemeral_invocation_is_listed_after_its_instance_is_gone(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    // With one recent result, the constructor run's result is older than the recent results.
-    // An ephemeral agent has no persisted result index, so it is read by scanning the oplog.
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.invocation_results.recent_capacity = 1;
-                config.invocation_results.bloom_bits = 8;
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let executor = start(deps, &context).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()

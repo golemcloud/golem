@@ -17,7 +17,10 @@ use uuid::Uuid;
 use golem_common::model::InvocationId;
 
 use super::*;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::oplog::FilesystemSnapshotName;
+use golem_common::model::oplog::OplogPayload;
 use golem_common::model::{AgentStatusRecord, AssistedSelection, UsableAutomaticSnapshot};
 use test_r::test;
 
@@ -58,9 +61,10 @@ fn manual_invocation(target: u64) -> OplogEntry {
         timestamp: Timestamp::from(1_000),
         not_before: None,
         invocation_id: InvocationId(Uuid::new_v4()),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+        operation: Box::new(InvocationRequestOperation::ManualUpdate {
             target_revision: revision(target),
-        })),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate)),
         trace_id: golem_common::model::invocation_context::TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),

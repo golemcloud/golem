@@ -22,12 +22,10 @@
 
 use golem_common::base_model::OplogIndex;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, UpdateDescription};
 use golem_common::model::{
-    AgentInvocationPayload, InvocationOperation, PendingInvocationRef, PendingUpdateKind,
-    PendingUpdateRef, Timestamp,
+    InvocationOperation, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
-use golem_common::serialization::deserialize;
 use std::collections::VecDeque;
 
 /// A manual update invocation (a `PendingAgentInvocation` entry) that no `PendingUpdate` entry
@@ -57,9 +55,7 @@ pub(crate) struct UpdateQueue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateStep {
     Unchanged,
-    /// An invocation other than a manual update was accepted. It carries the operation, so a
-    /// later reader of the step need not decode the invocation again; `None` when the payload is
-    /// stored externally or its operation is too long to keep.
+    /// An invocation other than a manual update was accepted, with its operation.
     InvocationAdmitted(Option<InvocationOperation>),
     /// A manual update invocation added a manual admission for this target revision.
     ManualAdmitted(ComponentRevision),
@@ -162,7 +158,7 @@ impl UpdateQueue {
     /// `entry` is in a deleted region: such an entry changes only the manual admissions.
     ///
     /// - A manual update invocation adds a manual admission, and its step carries the target
-    ///   revision, so a later reader of the step need not decode the invocation again.
+    ///   revision.
     /// - A `PendingUpdate` without an attempt index adds a queue element.
     /// - A `SnapshotBased` `PendingUpdate` with an attempt index adds a queue element and pairs
     ///   the manual admission with that index.
@@ -181,18 +177,16 @@ impl UpdateQueue {
     ) -> (Self, UpdateStep) {
         let step = match entry {
             OplogEntry::PendingAgentInvocation {
-                timestamp, payload, ..
-            } => match classify_invocation_payload(payload) {
-                InvocationPayloadClass::ManualUpdate(target_revision) => {
-                    self.admit(ManualAdmission {
-                        timestamp: *timestamp,
-                        index,
-                        target_revision,
-                    })
-                }
-                InvocationPayloadClass::Invocation(operation) => {
-                    UpdateStep::InvocationAdmitted(operation)
-                }
+                timestamp,
+                operation,
+                ..
+            } => match operation.manual_update_target() {
+                Some(target_revision) => self.admit(ManualAdmission {
+                    timestamp: *timestamp,
+                    index,
+                    target_revision,
+                }),
+                None => UpdateStep::InvocationAdmitted(operation.operation()),
             },
             OplogEntry::PendingUpdate {
                 update_attempt_index: Some(attempt_index),
@@ -325,86 +319,12 @@ impl UpdateQueue {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How many invocation payloads this thread decoded to classify them.
-    pub(crate) static INVOCATION_PAYLOAD_DECODES: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
-/// What a pending agent invocation payload holds, for the folds that need no more of it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum InvocationPayloadClass {
-    ManualUpdate(ComponentRevision),
-    /// Another invocation, with its operation when the payload is in the oplog, decodes, and
-    /// its operation is short enough to keep.
-    Invocation(Option<InvocationOperation>),
-}
-
-/// Decodes `payload` at most once to classify it.
-///
-/// The producer of a manual update invocation keeps its payload in the oplog whatever the payload
-/// limit, so this never needs to download an external payload: an `External` payload is not a
-/// manual update.
-pub(crate) fn classify_invocation_payload(
-    payload: &OplogPayload<AgentInvocationPayload>,
-) -> InvocationPayloadClass {
-    fn classify(payload: &AgentInvocationPayload) -> InvocationPayloadClass {
-        match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => {
-                InvocationPayloadClass::ManualUpdate(*target_revision)
-            }
-            other => InvocationPayloadClass::Invocation(
-                other.operation().and_then(InvocationOperation::kept),
-            ),
-        }
-    }
-
-    match payload {
-        OplogPayload::Inline(p) => classify(p),
-        OplogPayload::SerializedInline {
-            cached: Some(v), ..
-        } => classify(v),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            #[cfg(test)]
-            INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
-            deserialize::<AgentInvocationPayload>(bytes)
-                .map_err(|e| {
-                    tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
-                    e
-                })
-                .map_or(InvocationPayloadClass::Invocation(None), |payload| {
-                    classify(&payload)
-                })
-        }
-        OplogPayload::External {
-            cached: Some(v), ..
-        } => classify(v),
-        OplogPayload::External { .. } => InvocationPayloadClass::Invocation(None),
-    }
-}
-
-/// The target revision of a pending agent invocation payload when it is a manual update.
-pub(crate) fn manual_update_target_revision_of(
-    payload: &OplogPayload<AgentInvocationPayload>,
-) -> Option<ComponentRevision> {
-    match classify_invocation_payload(payload) {
-        InvocationPayloadClass::ManualUpdate(target_revision) => Some(target_revision),
-        InvocationPayloadClass::Invocation(_) => None,
-    }
-}
-
 /// The operation of the request in a `PendingAgentInvocation` or `AgentInvocationStarted` entry,
 /// for a fold that has no update step of the entry.
 pub(crate) fn request_operation(entry: &OplogEntry) -> Option<InvocationOperation> {
     match entry {
-        OplogEntry::PendingAgentInvocation { payload, .. }
-        | OplogEntry::AgentInvocationStarted { payload, .. } => {
-            match classify_invocation_payload(payload) {
-                InvocationPayloadClass::Invocation(operation) => operation,
-                InvocationPayloadClass::ManualUpdate(_) => None,
-            }
-        }
+        OplogEntry::PendingAgentInvocation { operation, .. }
+        | OplogEntry::AgentInvocationStarted { operation, .. } => operation.operation(),
         _ => None,
     }
 }

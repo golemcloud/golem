@@ -29,8 +29,8 @@ pub use resolved_names::{
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, PendingInvocationRef, RedactedAgentInvocationResult,
-    TimestampedAgentInvocation,
+    AgentInvocationResult, InvocationRequestOperation, PendingInvocationRef,
+    RedactedAgentInvocationResult, StoredAgentInvocationPayload, TimestampedAgentInvocation,
 };
 pub use status::{
     AgentMetadata, AgentStatusRecord, AssistedSelection, AuthoritativeSnapshot,

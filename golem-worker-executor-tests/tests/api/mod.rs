@@ -78,6 +78,8 @@ use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
 
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -5604,7 +5606,6 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
     _tracing: &Tracing,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_common::model::AgentInvocationPayload;
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_worker_executor::services::{HasOplog, UsesAllDeps};
@@ -5666,7 +5667,8 @@ async fn deletion_joins_removed_shell_status_actor_before_storage_removal(
                 old.add_and_commit_oplog(OplogEntry::pending_agent_invocation(
                     None,
                     golem_common::model::InvocationId(uuid::Uuid::new_v4()),
-                    OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+                    Box::new(InvocationRequestOperation::SaveSnapshot),
+                    OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
                         caller: callers::anonymous(),
                     })),
                     TraceId::generate(),

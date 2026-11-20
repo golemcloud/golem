@@ -311,6 +311,11 @@ where
                     .map_err(WorkerExecutorError::invalid_request)?,
                 activation.registered_tool.deployment_revision,
             )?;
+            crate::worker::require_canonical_command_path(
+                &activation,
+                &tool_name,
+                &tool.command_path,
+            )?;
             let at = DateTime::from_timestamp(
                 timestamp.seconds,
                 timestamp.nanos.try_into().map_err(|_| {

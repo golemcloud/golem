@@ -7832,17 +7832,10 @@ impl AdditionalTestDeps {
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
-            let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
-                return false;
-            };
-            let payload = match payload {
-                OplogPayload::Inline(payload) => Some(payload.as_ref()),
-                OplogPayload::SerializedInline { cached, .. }
-                | OplogPayload::External { cached, .. } => cached.as_deref(),
-            };
             matches!(
-                payload,
-                Some(golem_common::model::AgentInvocationPayload::AgentInitialization { .. })
+                entry,
+                OplogEntry::PendingAgentInvocation { operation, .. }
+                    if **operation == golem_common::model::InvocationRequestOperation::AgentInitialization
             )
         }
         self.gate_next_append(agent_id, is_initialization_enqueue)

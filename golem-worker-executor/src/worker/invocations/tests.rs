@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    InvocationFilter, InvocationKind, InvocationListEntry, InvocationPagePosition, InvocationState,
-    merge_invocations, page_invocations,
+    InvocationFilter, InvocationKind, InvocationListEntry, InvocationState, merge_invocations,
+    page_invocations,
 };
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, InvocationEnd, InvocationId, InvocationOperation,
@@ -79,7 +79,7 @@ fn states(
 ) -> Vec<(InvocationId, InvocationState, OplogIndex)> {
     merge_invocations(status, results, Timestamp::from(now))
         .into_iter()
-        .map(|(entry, _)| (entry.key, entry.state, entry.last_change))
+        .map(|entry| (entry.key, entry.state, entry.last_change))
         .collect()
 }
 
@@ -277,26 +277,6 @@ fn listed(
     }
 }
 
-/// One page of `entries`, whose operations are all known.
-fn page_of(
-    entries: Vec<InvocationListEntry>,
-    filter: &InvocationFilter,
-    after: Option<InvocationPagePosition>,
-    page_size: usize,
-) -> (Vec<InvocationListEntry>, Option<InvocationPagePosition>) {
-    let entries = entries.into_iter().map(|entry| (entry, None)).collect();
-    futures::executor::block_on(page_invocations(
-        entries,
-        filter,
-        after,
-        page_size,
-        |_| -> std::future::Ready<Result<Option<InvocationOperation>, ()>> {
-            panic!("no entry has a request to read")
-        },
-    ))
-    .unwrap()
-}
-
 fn keys(entries: &[InvocationListEntry]) -> Vec<u128> {
     entries.iter().map(|entry| entry.key.0.as_u128()).collect()
 }
@@ -311,7 +291,7 @@ fn all_pages(
     let mut pages = Vec::new();
     let mut after = None;
     loop {
-        let (page, next) = page_of(entries_at(pages.len()), filter, after, page_size);
+        let (page, next) = page_invocations(entries_at(pages.len()), filter, after, page_size);
         pages.push(keys(&page));
         match next {
             Some(next) => after = Some(next),
@@ -376,7 +356,7 @@ fn a_full_last_page_still_says_whether_more_follow() {
         listed(1, 2, InvocationState::Completed, method("a")),
     ];
 
-    let (page, next) = page_of(entries, &InvocationFilter::default(), None, 2);
+    let (page, next) = page_invocations(entries, &InvocationFilter::default(), None, 2);
     assert_eq!(keys(&page), vec![2, 1]);
     assert_eq!(next, None);
 }
@@ -397,7 +377,8 @@ fn every_filter_and_their_intersection() {
         ),
         listed(1, 10, InvocationState::Pending, None),
     ];
-    let page = |filter: InvocationFilter| keys(&page_of(entries.clone(), &filter, None, 100).0);
+    let page =
+        |filter: InvocationFilter| keys(&page_invocations(entries.clone(), &filter, None, 100).0);
 
     assert_eq!(
         page(InvocationFilter {
@@ -482,76 +463,7 @@ fn a_page_size_of_zero_gives_the_default_page() {
         .map(|value| listed(value, value as u64, InvocationState::Completed, method("a")))
         .collect();
 
-    let (page, next) = page_of(entries, &InvocationFilter::default(), None, 0);
+    let (page, next) = page_invocations(entries, &InvocationFilter::default(), None, 0);
     assert_eq!(page.len(), 100);
     assert!(next.is_some());
-}
-
-#[test]
-fn a_page_reads_only_the_requests_it_needs() {
-    // 200 entries whose operation is only in an external payload, the newest first. Entry `v`
-    // changed at index `2v` and has its request at `2v - 1`. A request at a multiple of 3 is an
-    // internal operation, which `list` does not show; the others are method `m0` for odd `v` and
-    // `m1` for even `v`.
-    let entries: Vec<(InvocationListEntry, Option<OplogIndex>)> = (1..=200u64)
-        .rev()
-        .map(|v| {
-            (
-                listed(v as u128, v * 2, InvocationState::Completed, None),
-                Some(index(v * 2 - 1)),
-            )
-        })
-        .collect();
-    let operation_at = |request: u64| {
-        if request.is_multiple_of(3) {
-            InvocationOperation::Internal
-        } else {
-            InvocationOperation::Method(format!("m{}", (request / 2) % 2))
-        }
-    };
-    let page =
-        |filter: &InvocationFilter, after: Option<InvocationPagePosition>, page_size: usize| {
-            let mut reads = Vec::new();
-            let (page, next) = futures::executor::block_on(page_invocations(
-                entries.clone(),
-                filter,
-                after,
-                page_size,
-                |request: OplogIndex| {
-                    reads.push(request.as_u64());
-                    std::future::ready(Ok::<_, ()>(Some(operation_at(request.as_u64()))))
-                },
-            ))
-            .unwrap();
-            (keys(&page), next, reads)
-        };
-
-    // 200 and 197 are internal; 195 says that more follow.
-    let (first, next, reads) = page(&InvocationFilter::default(), None, 3);
-    assert_eq!(first, vec![199, 198, 196]);
-    assert_eq!(reads, vec![399, 397, 395, 393, 391, 389]);
-
-    // 194 and 191 are internal; 190 says that more follow.
-    let (second, _, reads) = page(&InvocationFilter::default(), next, 3);
-    assert_eq!(second, vec![195, 193, 192]);
-    assert_eq!(reads, vec![389, 387, 385, 383, 381, 379]);
-
-    // An operation filter reads until the page and the next match: 199 and 195 are `m0`.
-    let only_m0 = InvocationFilter {
-        operation: Some("m0".to_string()),
-        ..Default::default()
-    };
-    let (filtered, next, reads) = page(&only_m0, None, 1);
-    assert_eq!(filtered, vec![199]);
-    assert!(next.is_some());
-    assert_eq!(reads, vec![399, 397, 395, 393, 391, 389]);
-
-    // The change-time bounds skip entries without reading their requests.
-    let recent = InvocationFilter {
-        since: Some(Timestamp::from(3_900)),
-        ..Default::default()
-    };
-    let (listed_recent, _, reads) = page(&recent, None, 100);
-    assert_eq!(listed_recent, vec![199, 198, 196, 195]);
-    assert_eq!(reads, vec![399, 397, 395, 393, 391, 389]);
 }

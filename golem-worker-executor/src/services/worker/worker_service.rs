@@ -667,7 +667,6 @@ impl WorkerService for DefaultWorkerService {
                     }
                 };
 
-                let known_operations = known_request_operations(status);
                 while metadata.covered_through < status.oplog_idx {
                     let remaining =
                         status.oplog_idx.as_u64() - metadata.covered_through.as_u64();
@@ -700,7 +699,6 @@ impl WorkerService for DefaultWorkerService {
                         &mut advanced.requests,
                         &status.deleted_regions,
                         &entries,
-                        |index, _| known_operations.get(&index).cloned(),
                         |key, position| {
                             if !(position.end == InvocationEnd::Cancelled
                                 && mappings.contains_key(key))

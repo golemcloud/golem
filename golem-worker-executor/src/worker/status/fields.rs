@@ -76,7 +76,7 @@ pub(super) fn calculate_pending_invocations(
                         oplog_index: *oplog_idx,
                         idempotency_key,
                         manual_update_target_revision,
-                        operation: admitted_operation(step, entry),
+                        operation: request_operation(entry),
                     });
                 }
                 OplogEntry::AgentInvocationStarted {
@@ -613,25 +613,10 @@ pub(super) fn calculate_update_fields(
         })
 }
 
-/// The operation of the request in `entry`, from its update step when the region fold decoded
-/// it already. A reconstruction folds its regions over the update entries only, so a pending
-/// invocation there has no step and is decoded here.
-fn admitted_operation(
-    step: Option<&UpdateStep>,
-    entry: &OplogEntry,
-) -> Option<InvocationOperation> {
-    match step {
-        Some(UpdateStep::InvocationAdmitted(operation)) => operation.clone(),
-        Some(UpdateStep::ManualAdmitted(_)) => None,
-        _ => request_operation(entry),
-    }
-}
-
 pub(super) fn calculate_invocation_results(
     invocation_results: InvocationResultMembership,
     requests: InvocationRequests,
     deleted_regions: &DeletedRegions,
-    steps: &BTreeMap<OplogIndex, UpdateStep>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (InvocationResultMembership, InvocationRequests) {
     let mut invocation_results = invocation_results;
@@ -646,33 +631,27 @@ pub(super) fn calculate_invocation_results(
     );
     let mut requests = requests;
 
-    fold_invocation_result_entries(
-        &mut requests,
-        deleted_regions,
-        entries,
-        |index, entry| admitted_operation(steps.get(&index), entry),
-        |key, position| {
-            // A withdrawal never replaces a result the membership holds. A key that only the
-            // Bloom filter may contain still records its withdrawal: the recent results must
-            // hold every result after the oldest one they keep, so the persisted index can
-            // answer a miss from them.
-            if position.end == InvocationEnd::Cancelled && invocation_results.contains_key(key) {
-                return;
-            }
-            // A rejection `Error` names its cancelled request only when the cancellation was
-            // folded with it; otherwise the earlier fold has recorded the request.
-            let position = match invocation_results.position(key) {
-                Some(known) if position.request.is_none() => InvocationResultPosition {
-                    request: known.request,
-                    operation: known.operation.clone(),
-                    accepted_at: known.accepted_at,
-                    ..position
-                },
-                _ => position,
-            };
-            invocation_results.insert(*key, position)
-        },
-    );
+    fold_invocation_result_entries(&mut requests, deleted_regions, entries, |key, position| {
+        // A withdrawal never replaces a result the membership holds. A key that only the
+        // Bloom filter may contain still records its withdrawal: the recent results must
+        // hold every result after the oldest one they keep, so the persisted index can
+        // answer a miss from them.
+        if position.end == InvocationEnd::Cancelled && invocation_results.contains_key(key) {
+            return;
+        }
+        // A rejection `Error` names its cancelled request only when the cancellation was
+        // folded with it; otherwise the earlier fold has recorded the request.
+        let position = match invocation_results.position(key) {
+            Some(known) if position.request.is_none() => InvocationResultPosition {
+                request: known.request,
+                operation: known.operation.clone(),
+                accepted_at: known.accepted_at,
+                ..position
+            },
+            _ => position,
+        };
+        invocation_results.insert(*key, position)
+    });
 
     (invocation_results, requests)
 }
@@ -738,27 +717,6 @@ impl InvocationRequests {
     }
 }
 
-/// The operations that `status` already knows, by the index of their request entry. Folds that
-/// read entries back from the oplog take the operation from here instead of decoding the payload
-/// again; an operation that is not here stays `None` and is filled at read time.
-pub(crate) fn known_request_operations(
-    status: &AgentStatusRecord,
-) -> HashMap<OplogIndex, InvocationOperation> {
-    let pending = status
-        .pending_invocations
-        .iter()
-        .filter_map(|pending| Some((pending.oplog_index, pending.operation.clone()?)));
-    let running = status
-        .running
-        .iter()
-        .filter_map(|running| Some((running.request.index, running.request.operation.clone()?)));
-    let finished = status
-        .invocation_results
-        .iter()
-        .filter_map(|(_, position)| Some((position.request?, position.operation.clone()?)));
-    pending.chain(running).chain(finished).collect()
-}
-
 /// Gives every invocation result in `entries` to `observe_result`, with the position of its
 /// request, and keeps `requests` as the running and pending invocations.
 ///
@@ -769,9 +727,6 @@ pub(crate) fn known_request_operations(
 /// its invocation, or of an entity body, therefore never replaces a finished result. `Exited`
 /// names no invocation and is attributed to the running one.
 ///
-/// `operation_of` gives the operation of a `PendingAgentInvocation` entry, and of an
-/// `AgentInvocationStarted` entry whose pending entry the fold did not see.
-///
 /// A withdrawal, a result whose end is [`InvocationEnd::Cancelled`], is the result of its
 /// invocation only when the invocation has no result yet: the invocation loop also withdraws a
 /// queued duplicate of an invocation that already has one. The fold does not know the results of
@@ -780,7 +735,6 @@ pub(crate) fn fold_invocation_result_entries(
     requests: &mut InvocationRequests,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-    operation_of: impl Fn(OplogIndex, &OplogEntry) -> Option<InvocationOperation>,
     mut observe_result: impl FnMut(&InvocationId, InvocationResultPosition),
 ) {
     for (oplog_idx, entry) in entries {
@@ -797,7 +751,7 @@ pub(crate) fn fold_invocation_result_entries(
                     InvocationRequestRef {
                         index: *oplog_idx,
                         accepted_at: *timestamp,
-                        operation: operation_of(*oplog_idx, entry),
+                        operation: request_operation(entry),
                     },
                 );
                 None
@@ -827,7 +781,7 @@ pub(crate) fn fold_invocation_result_entries(
             OplogEntry::AgentInvocationStarted { invocation_id, .. } => {
                 let (accepted_at, operation) = match pending_request {
                     Some(pending) => (pending.accepted_at, pending.operation),
-                    None => (changed_at, operation_of(*oplog_idx, entry)),
+                    None => (changed_at, request_operation(entry)),
                 };
                 requests.current = Some(RunningInvocation {
                     key: *invocation_id,

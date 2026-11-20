@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 use golem_common::base_model::oplog::{
     QueuedCardEvent, QueuedCardEventTransfer, QueuedCardEventTransferReceived,
 };
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{
     AccountCardHolder, ApplicationCardHolder, Card, CardHolder, CardId, InvocationWalletPin,
@@ -36,7 +38,7 @@ use golem_common::model::oplog::{
     SpanLink, SpanOutcome, SpanStarted, UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentInvocationPayload, OplogIndex, Timestamp};
+use golem_common::model::{OplogIndex, Timestamp};
 use golem_common::schema::SchemaValue;
 use golem_schema::Empty;
 use test_r::test;
@@ -64,9 +66,10 @@ fn pending_invocation_deadline_survives_raw_and_public_wit_conversion() {
             timestamp: Timestamp::from(1_000),
             not_before,
             invocation_id: uuid::Uuid::from_u128(1).into(),
+            operation: Box::new(InvocationRequestOperation::SaveSnapshot),
             payload: OplogPayload::SerializedInline {
                 bytes: golem_common::serialization::serialize(
-                    &AgentInvocationPayload::SaveSnapshot {
+                    &StoredAgentInvocationPayload::SaveSnapshot {
                         caller: golem_common::model::caller::Caller::anonymous(),
                     },
                 )
@@ -459,8 +462,10 @@ fn wit_projection_preserves_invocation_wallet_pins() {
     let raw_entry = OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc().rounded(),
         invocation_id: uuid::Uuid::from_u128(2).into(),
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        operation: Box::new(InvocationRequestOperation::AgentMethod {
             method_name: "test".to_string(),
+        }),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
             input: SchemaValue::Record { fields: Vec::new() },
             caller: Caller::anonymous(),
             scope_card: None,

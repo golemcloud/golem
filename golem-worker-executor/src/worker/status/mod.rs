@@ -15,12 +15,11 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
-    ExportForkAdmissions, FailedUpdateRecord, InvocationEnd, InvocationOperation,
-    InvocationRequestRef, InvocationResultMembership, InvocationResultPosition,
-    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    RetryConfig, RetryPolicyState, RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord,
-    Timestamp, UsableAutomaticSnapshot,
+    ExportForkAdmissions, FailedUpdateRecord, InvocationEnd, InvocationRequestRef,
+    InvocationResultMembership, InvocationResultPosition, OplogProcessorCheckpointState,
+    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
+    RunningInvocation, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -34,8 +33,8 @@ pub(crate) mod update_queue;
 pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
+use update_queue::UpdateStep;
 pub(crate) use update_queue::request_operation;
-use update_queue::{UpdateStep, manual_update_target_revision_of};
 
 #[cfg(test)]
 pub(crate) use entity_replay::calculate_entity_replay_progress;
@@ -53,9 +52,7 @@ use fields::calculate_source_card_transfers;
 use fields::calculate_total_linear_memory_size;
 use fields::calculate_update_fields;
 use fields::collect_resources;
-pub(crate) use fields::{
-    InvocationRequests, fold_invocation_result_entries, known_request_operations,
-};
+pub(crate) use fields::{InvocationRequests, fold_invocation_result_entries};
 pub use reconstruction::calculate_last_known_status;
 pub use reconstruction::calculate_last_known_status_for_existing_worker;
 pub use reconstruction::calculate_last_known_status_with_checkpoint;
@@ -404,7 +401,6 @@ fn update_status_with_precomputed_regions(
         last_known.invocation_results,
         requests,
         deleted_regions,
-        steps,
         &new_entries,
     );
 
