@@ -81,56 +81,66 @@ fn decode_cursor(
     })
 }
 
-fn state_to_proto(state: InvocationState) -> InvocationLifecycleState {
-    match state {
-        InvocationState::Pending => InvocationLifecycleState::Pending,
-        InvocationState::Scheduled => InvocationLifecycleState::Scheduled,
-        InvocationState::Running => InvocationLifecycleState::Running,
-        InvocationState::Waiting => InvocationLifecycleState::Waiting,
-        InvocationState::Retrying => InvocationLifecycleState::Retrying,
-        InvocationState::Interrupted => InvocationLifecycleState::Interrupted,
-        InvocationState::Completed => InvocationLifecycleState::Completed,
-        InvocationState::Failed => InvocationLifecycleState::Failed,
-        InvocationState::Cancelled => InvocationLifecycleState::Cancelled,
+impl From<InvocationState> for InvocationLifecycleState {
+    fn from(state: InvocationState) -> Self {
+        match state {
+            InvocationState::Pending => Self::Pending,
+            InvocationState::Scheduled => Self::Scheduled,
+            InvocationState::Running => Self::Running,
+            InvocationState::Waiting => Self::Waiting,
+            InvocationState::Retrying => Self::Retrying,
+            InvocationState::Interrupted => Self::Interrupted,
+            InvocationState::Completed => Self::Completed,
+            InvocationState::Failed => Self::Failed,
+            InvocationState::Cancelled => Self::Cancelled,
+        }
     }
 }
 
-fn state_from_proto(value: i32) -> Result<InvocationState, WorkerExecutorError> {
-    match InvocationLifecycleState::try_from(value) {
-        Ok(InvocationLifecycleState::Pending) => Ok(InvocationState::Pending),
-        Ok(InvocationLifecycleState::Scheduled) => Ok(InvocationState::Scheduled),
-        Ok(InvocationLifecycleState::Running) => Ok(InvocationState::Running),
-        Ok(InvocationLifecycleState::Waiting) => Ok(InvocationState::Waiting),
-        Ok(InvocationLifecycleState::Retrying) => Ok(InvocationState::Retrying),
-        Ok(InvocationLifecycleState::Interrupted) => Ok(InvocationState::Interrupted),
-        Ok(InvocationLifecycleState::Completed) => Ok(InvocationState::Completed),
-        Ok(InvocationLifecycleState::Failed) => Ok(InvocationState::Failed),
-        Ok(InvocationLifecycleState::Cancelled) => Ok(InvocationState::Cancelled),
-        Ok(InvocationLifecycleState::Unspecified) | Err(_) => Err(
-            WorkerExecutorError::invalid_request(format!("invalid invocation state {value}")),
-        ),
+impl TryFrom<i32> for InvocationState {
+    type Error = WorkerExecutorError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match InvocationLifecycleState::try_from(value) {
+            Ok(InvocationLifecycleState::Pending) => Ok(Self::Pending),
+            Ok(InvocationLifecycleState::Scheduled) => Ok(Self::Scheduled),
+            Ok(InvocationLifecycleState::Running) => Ok(Self::Running),
+            Ok(InvocationLifecycleState::Waiting) => Ok(Self::Waiting),
+            Ok(InvocationLifecycleState::Retrying) => Ok(Self::Retrying),
+            Ok(InvocationLifecycleState::Interrupted) => Ok(Self::Interrupted),
+            Ok(InvocationLifecycleState::Completed) => Ok(Self::Completed),
+            Ok(InvocationLifecycleState::Failed) => Ok(Self::Failed),
+            Ok(InvocationLifecycleState::Cancelled) => Ok(Self::Cancelled),
+            Ok(InvocationLifecycleState::Unspecified) | Err(_) => Err(
+                WorkerExecutorError::invalid_request(format!("invalid invocation state {value}")),
+            ),
+        }
     }
 }
 
-fn kind_to_proto(kind: Option<InvocationKind>) -> golem::workerexecutor::v1::InvocationKind {
-    use golem::workerexecutor::v1::InvocationKind as Proto;
-    match kind {
-        Some(InvocationKind::Method) => Proto::Method,
-        Some(InvocationKind::Constructor) => Proto::Constructor,
-        Some(InvocationKind::Tool) => Proto::Tool,
-        None => Proto::Unspecified,
+impl From<InvocationKind> for golem::workerexecutor::v1::InvocationKind {
+    fn from(kind: InvocationKind) -> Self {
+        match kind {
+            InvocationKind::Method => Self::Method,
+            InvocationKind::Constructor => Self::Constructor,
+            InvocationKind::Tool => Self::Tool,
+        }
     }
 }
 
-fn kind_from_proto(value: i32) -> Result<InvocationKind, WorkerExecutorError> {
-    use golem::workerexecutor::v1::InvocationKind as Proto;
-    match Proto::try_from(value) {
-        Ok(Proto::Method) => Ok(InvocationKind::Method),
-        Ok(Proto::Constructor) => Ok(InvocationKind::Constructor),
-        Ok(Proto::Tool) => Ok(InvocationKind::Tool),
-        Ok(Proto::Unspecified) | Err(_) => Err(WorkerExecutorError::invalid_request(format!(
-            "invalid invocation kind {value}"
-        ))),
+impl TryFrom<i32> for InvocationKind {
+    type Error = WorkerExecutorError;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        use golem::workerexecutor::v1::InvocationKind as Proto;
+        match Proto::try_from(value) {
+            Ok(Proto::Method) => Ok(Self::Method),
+            Ok(Proto::Constructor) => Ok(Self::Constructor),
+            Ok(Proto::Tool) => Ok(Self::Tool),
+            Ok(Proto::Unspecified) | Err(_) => Err(WorkerExecutorError::invalid_request(format!(
+                "invalid invocation kind {value}"
+            ))),
+        }
     }
 }
 
@@ -173,8 +183,11 @@ fn bound_from_proto(
 fn summary(entry: InvocationListEntry) -> InvocationSummary {
     InvocationSummary {
         invocation_id: Some(entry.key.into()),
-        state: state_to_proto(entry.state) as i32,
-        kind: kind_to_proto(entry.kind()) as i32,
+        state: InvocationLifecycleState::from(entry.state) as i32,
+        kind: entry.kind().map_or(
+            golem::workerexecutor::v1::InvocationKind::Unspecified,
+            Into::into,
+        ) as i32,
         operation: entry
             .operation
             .as_ref()
@@ -235,9 +248,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             states: request
                 .states
                 .iter()
-                .map(|state| state_from_proto(*state))
+                .map(|state| InvocationState::try_from(*state))
                 .collect::<Result<_, _>>()?,
-            kind: request.kind.map(kind_from_proto).transpose()?,
+            kind: request.kind.map(InvocationKind::try_from).transpose()?,
             since: request
                 .since
                 .map(|since| bound_from_proto("since", since, true))
