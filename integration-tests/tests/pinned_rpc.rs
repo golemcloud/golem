@@ -137,6 +137,57 @@ async fn kept_rpc_handle_never_reaches_a_deleted_or_recreated_remote_child(
             .await?
             .into_typed::<Result<Vec<u64>, String>>()?;
         assert_eq!(stream, Ok(vec![2]));
+        for (method, expected) in [
+            ("kept_agent_rpc_async_invoke_and_await_result", 3),
+            ("kept_agent_rpc_invoke_result", 4),
+        ] {
+            assert_remote(deps, &caller_id, &child_id).await?;
+            let result = user
+                .invoke_and_await_agent(
+                    &caller_component,
+                    &caller,
+                    method,
+                    data_value!("increment_scalar"),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            assert_eq!(result, Ok(()), "{method} must reach the live child");
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let value = user
+                        .invoke_and_await_agent(
+                            &child_component,
+                            &child,
+                            "scalar_value",
+                            data_value!(),
+                        )
+                        .await?
+                        .into_typed::<u64>()?;
+                    if value == expected {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .with_context(|| format!("{method} did not advance the live child's counter"))??;
+        }
+        let scheduled = user
+            .invoke_and_await_agent(
+                &caller_component,
+                &caller,
+                "kept_agent_rpc_schedule_result",
+                data_value!("increment_scalar"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(scheduled, Ok(()), "a live kept handle must schedule work");
+        assert_eq!(
+            user.get_worker_metadata(&child_id)
+                .await?
+                .pending_invocation_count,
+            1
+        );
         let original = user.get_worker_metadata(&child_id).await?.fingerprint;
         user.delete_worker(&child_id).await?;
         if recreate {
@@ -206,6 +257,42 @@ async fn kept_rpc_handle_never_reaches_a_deleted_or_recreated_remote_child(
                 .await?
                 .into_typed::<u64>()?;
             assert_eq!(fresh, 2);
+        }
+
+        assert_remote(deps, &caller_id, &child_id).await?;
+        let error = user
+            .invoke_and_await_agent(
+                &caller_component,
+                &caller,
+                "kept_agent_rpc_schedule_result",
+                data_value!("increment_scalar"),
+            )
+            .await
+            .expect_err("a stale schedule must fail the caller's invocation");
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("Not found: Worker"),
+            "stale schedule, recreate={recreate}: {error}"
+        );
+        assert_remote(deps, &caller_id, &child_id).await?;
+        if recreate {
+            assert_eq!(
+                user.get_worker_metadata(&child_id)
+                    .await?
+                    .pending_invocation_count,
+                0,
+                "a stale schedule must not queue work on the replacement"
+            );
+            let value = user
+                .invoke_and_await_agent(&child_component, &child, "scalar_value", data_value!())
+                .await?
+                .into_typed::<u64>()?;
+            assert_eq!(value, 2, "a stale schedule must not reach the replacement");
+        } else {
+            assert!(
+                user.get_worker_metadata_opt(&child_id).await?.is_none(),
+                "a stale schedule must not recreate the child"
+            );
         }
     }
     Ok(())
