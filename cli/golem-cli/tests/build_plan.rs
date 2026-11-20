@@ -1136,3 +1136,54 @@ fs.copyFileSync(`../inputs/${name}.wasm`, 'component.wasm');
         "transparent middleware placement must not change the generated APIs"
     );
 }
+
+#[test]
+fn check_rejects_duplicate_manifest_sources_without_filename_precedence_or_writes() {
+    for included in ["a.yaml", "z.yaml"] {
+        for (fragment, duplicate) in [
+            ("app: shadow\n", true),
+            ("environments:\n  local:\n    server: cloud\n", true),
+            ("environments:\n  remote:\n    server: cloud\n", false),
+        ] {
+            let project = tempfile::tempdir().unwrap();
+            let config = tempfile::tempdir().unwrap();
+            std::fs::write(project.path().join("golem.yaml"), format!(
+                "manifestVersion: {}\napp: primary\nincludes: [{included}]\nenvironments:\n  local:\n    server: local\ncomponents:\n  app:main:\n    componentWasm: seed.wasm\n",
+                golem_cli::versions::sdk::MANIFEST
+            )).unwrap();
+            std::fs::write(
+                project.path().join(included),
+                format!(
+                    "manifestVersion: {}\n{fragment}",
+                    golem_cli::versions::sdk::MANIFEST
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                project.path().join("seed.wasm"),
+                wat::parse_str("(component)").unwrap(),
+            )
+            .unwrap();
+            let before = snapshot(project.path());
+            let output = cli_command()
+                .current_dir(project.path())
+                .arg("--config-dir")
+                .arg(config.path())
+                .args(["--yes", "build", "--step", "check"])
+                .output()
+                .unwrap();
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.status.success(), !duplicate, "{fragment}: {text}");
+            if duplicate {
+                for expected in ["multiple sources", "golem.yaml", included] {
+                    assert!(text.contains(expected), "{text}");
+                }
+            }
+            assert_eq!(snapshot(project.path()), before, "{text}");
+        }
+    }
+}

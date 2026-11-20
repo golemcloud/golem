@@ -4737,6 +4737,8 @@ mod app_builder {
                 builder.add_raw_app_preload_only(&mut validation, app);
             }
 
+            builder.validate_unique_sources(&mut validation);
+
             if builder.default_environment_names.len() > 1 {
                 validation.add_error(format!(
                     "Only one environment can be marked as default! Environments marked as default: {}",
@@ -10840,6 +10842,84 @@ bridge:
         assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
         assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
         (app.unwrap(), tmp_dir)
+    }
+
+    fn assert_preload_rejects_duplicate_sources(declaration: &str, entity: &str) {
+        for included_name in ["a.yaml", "z.yaml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("golem.yaml");
+            let included = dir.path().join(included_name);
+            fs::write(
+                &root,
+                "app: primary\nenvironments:\n  local:\n    server: local\n",
+            )
+            .unwrap();
+            fs::write(&included, declaration).unwrap();
+            let sources = BTreeSet::from([root.clone(), included.clone()]);
+            let raw_apps = sources
+                .iter()
+                .map(|source| app_raw::ApplicationWithSource::from_yaml_file(source).unwrap())
+                .collect::<Vec<_>>();
+            let (preload, warnings, errors) =
+                Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(preload.is_none(), "Duplicate {entity} was accepted");
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            for expected in [
+                entity,
+                "multiple sources",
+                root.to_str().unwrap(),
+                included.to_str().unwrap(),
+            ] {
+                assert!(errors[0].contains(expected), "{errors:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn preload_rejects_duplicate_app_sources_in_either_filename_order() {
+        assert_preload_rejects_duplicate_sources("app: shadow\n", "app");
+    }
+
+    #[test]
+    fn preload_rejects_duplicate_environment_sources_in_either_filename_order() {
+        assert_preload_rejects_duplicate_sources(
+            "environments:\n  local:\n    server: cloud\n",
+            "Environment",
+        );
+    }
+
+    #[test]
+    fn preload_merges_distinct_environment_sources_in_either_filename_order() {
+        for included_name in ["a.yaml", "z.yaml"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("golem.yaml");
+            let included = dir.path().join(included_name);
+            fs::write(
+                &root,
+                "app: primary\nenvironments:\n  local:\n    server: local\n",
+            )
+            .unwrap();
+            fs::write(&included, "environments:\n  remote:\n    server: cloud\n").unwrap();
+            let raw_apps = BTreeSet::from([root, included])
+                .iter()
+                .map(|source| app_raw::ApplicationWithSource::from_yaml_file(source).unwrap())
+                .collect::<Vec<_>>();
+            let (preload, warnings, errors) =
+                Application::preload_from_raw_apps(&raw_apps).into_product();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert!(errors.is_empty(), "{errors:?}");
+            let preload = preload.unwrap();
+            assert_eq!(preload.application_name.value.0, "primary");
+            assert_eq!(
+                preload
+                    .environments
+                    .keys()
+                    .map(|name| name.0.as_str())
+                    .collect::<Vec<_>>(),
+                ["local", "remote"]
+            );
+        }
     }
 
     #[test]
