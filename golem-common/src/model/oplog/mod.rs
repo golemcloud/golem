@@ -28,7 +28,7 @@ pub use crate::base_model::oplog::{
 };
 pub use payload::*;
 pub use public_types::*;
-pub use range::{OplogRange, OplogRangeEndsBeforeStart};
+pub use range::{OplogCursorOutsideRange, OplogRange, OplogRangeEndsBeforeStart};
 pub use raw_types::*;
 
 use crate::model::component::ComponentRevision;

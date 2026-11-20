@@ -3080,6 +3080,33 @@ pub async fn agent_oplog_length(
         .await?)
 }
 
+/// How many oplog entries the blob archive `level` holds for the durable agent, read without going
+/// through any executor, from the blob storage and the indexed storage of executors started with
+/// the SQLite storage config.
+pub async fn blob_archived_oplog_length(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    level: usize,
+) -> anyhow::Result<u64> {
+    use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
+
+    let blob_storage = FileSystemBlobStorage::new(&deps.data_dir.path().join("blobs"))
+        .await
+        .map_err(|err| anyhow!(err))?;
+    let service = BlobOplogArchiveService::new(
+        Arc::new(blob_storage),
+        Arc::new(sqlite_indexed_storage(deps, context).await?),
+        level,
+        RetryConfig::default(),
+    );
+    let archive = service
+        .open(owned_agent_id, AgentMode::Durable, None)
+        .await
+        .map_err(|err| anyhow!(err))?;
+    archive.length().await.map_err(|err| anyhow!(err))
+}
+
 /// Calls `check` every 200 ms until it gives `true`. After `timeout`, the wait fails with an
 /// error that names `what`.
 pub async fn wait_until<F, Fut>(

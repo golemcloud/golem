@@ -1482,7 +1482,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 Box::pin(
                     worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
                         agent_id: Some(agent_id.into()),
-                        from_oplog_index: range.start().into(),
+                        from_oplog_index: Some(range.start().into()),
                         to_oplog_index: range.end().map(Into::into),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,

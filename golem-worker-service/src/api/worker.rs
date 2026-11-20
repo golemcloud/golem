@@ -673,7 +673,12 @@ impl WorkerApi {
         query: Option<String>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
-        let range = oplog_range(from, to)?;
+        let range = OplogRange::from_indices(from, to).map_err(|error| {
+            ApiEndpointError::bad_request(
+                api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+                golem_common::safe(format!("Invalid oplog range: {error}")),
+            )
+        })?;
         let mut response = match query {
             Some(query) => {
                 self.worker_service
@@ -1286,20 +1291,9 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
     })
 }
 
-/// The `from` and `to` parameters of an oplog read as an oplog range. A range that ends before
-/// its start is a bad request.
-fn oplog_range(from: Option<u64>, to: Option<u64>) -> Result<OplogRange> {
-    OplogRange::new(from.map(OplogIndex::from_u64), to.map(OplogIndex::from_u64)).map_err(|error| {
-        ApiEndpointError::bad_request(
-            api::error_code::INVALID_OPLOG_QUERY_PARAMS,
-            golem_common::safe(format!("Invalid oplog range: {error}")),
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{WorkerApi, normalize_agent_name_with_latest_component, oplog_range};
+    use super::{WorkerApi, normalize_agent_name_with_latest_component};
     use crate::mcp::OplogRead;
     use chrono::Utc;
     use golem_common::base_model::component_metadata::KnownExports;
@@ -1416,18 +1410,6 @@ mod tests {
                 .unwrap();
 
         assert_eq!(agent_id.agent_id, "custom-worker");
-    }
-
-    #[test]
-    fn an_oplog_range_that_ends_before_its_start_is_a_bad_request() {
-        let index = golem_common::model::oplog::OplogIndex::from_u64;
-        assert!(oplog_range(Some(5), Some(4)).is_err());
-        assert!(oplog_range(None, Some(0)).is_err());
-        assert_eq!(
-            oplog_range(Some(5), Some(5)).unwrap(),
-            OplogRange::new(Some(index(5)), Some(index(5))).unwrap()
-        );
-        assert_eq!(oplog_range(None, None).unwrap(), OplogRange::ALL);
     }
 
     #[test]

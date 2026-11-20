@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::services::golem_config::ScanBudget;
-use golem_common::model::oplog::OplogCursor;
+use golem_common::model::oplog::{OplogCursor, OplogRange};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::time::Instant;
 
@@ -140,8 +140,9 @@ pub async fn get_public_oplog_chunk(
 
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
-/// `limits.max_bytes`. The page reads no entry after `last_oplog_index`. Its `last_index` is the
-/// end of the read: the last index of the oplog, or `last_oplog_index` when that is earlier.
+/// `limits.max_bytes`. The page reads from the start of `range`, and reads no entry after its end.
+/// Its `last_index` is the last index of the range in the oplog: the last index of the oplog, or the
+/// end of the range when that is earlier.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -151,13 +152,12 @@ pub async fn get_public_oplog_page(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
-    initial_oplog_index: OplogIndex,
-    last_oplog_index: Option<OplogIndex>,
+    range: OplogRange,
     limits: PublicOplogPageLimits,
 ) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
-    let count = limits.count.min(
-        usize::try_from(entries_up_to(initial_oplog_index, last_oplog_index)).unwrap_or(usize::MAX),
-    );
+    let count = limits
+        .count
+        .min(usize::try_from(range.entries_from(range.start())).unwrap_or(usize::MAX));
     let (mut chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -167,31 +167,14 @@ pub async fn get_public_oplog_page(
         owner_kind,
         agent_type_name,
         initial_component_revision,
-        initial_oplog_index,
+        range.start(),
         count,
         None,
         &mut RemotePage::new(limits),
     )
     .await?;
-    chunk.last_index = read_end(chunk.last_index, last_oplog_index);
+    chunk.last_index = range.last_index_in(chunk.last_index);
     Ok(chunk)
-}
-
-/// The count of the oplog entries from `index` to `end`, including both. It is 0 when `end` is
-/// before `index`, and `u64::MAX` when there is no `end`. The count saturates, so an `end` at
-/// `u64::MAX` does not overflow.
-fn entries_up_to(index: OplogIndex, end: Option<OplogIndex>) -> u64 {
-    end.map_or(u64::MAX, |end| {
-        end.as_u64()
-            .checked_sub(index.as_u64())
-            .map_or(0, |distance| distance.saturating_add(1))
-    })
-}
-
-/// The last index of a read that ends at `end`, in an oplog whose last index is `oplog_last`:
-/// `end`, or the end of the oplog when `end` is after it or when there is no `end`.
-fn read_end(oplog_last: OplogIndex, end: Option<OplogIndex>) -> OplogIndex {
-    end.map_or(oplog_last, |end| end.min(oplog_last))
 }
 
 /// Reads one oplog entry in full. `component_revision` is the revision to decode the entry with,
@@ -357,7 +340,8 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 
 /// Searches the oplog for a guest. The search reads no entry after `last_oplog_index`; the guest
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
-/// do not move the end of the search.
+/// do not move the end of the search. A search from after `last_oplog_index` reads no entry and
+/// gives an empty result, which tells the guest that the search is at its end.
 pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -373,6 +357,17 @@ pub async fn search_public_oplog(
     query: &str,
     budget: ScanBudget,
 ) -> Result<PublicOplogSearchResult, String> {
+    let range = match OplogRange::new(Some(initial_oplog_index), last_oplog_index) {
+        Ok(range) => range,
+        Err(past_the_end) => {
+            return Ok(PublicOplogSearchResult {
+                entries: Vec::new(),
+                next_oplog_index: initial_oplog_index,
+                current_component_revision: initial_component_revision,
+                last_index: past_the_end.end,
+            });
+        }
+    };
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -382,8 +377,7 @@ pub async fn search_public_oplog(
         owner_kind,
         agent_type_name,
         initial_component_revision,
-        initial_oplog_index,
-        last_oplog_index,
+        range,
         count,
         query,
         budget,
@@ -394,7 +388,8 @@ pub async fn search_public_oplog(
 
 /// Searches the oplog for a remote reader. The result is an oplog page with the limits of
 /// `get_public_oplog_page`; only the matching entries count against the limits. The search
-/// reads no entry after `last_oplog_index`, and stops early when `budget` is spent.
+/// reads from the start of `range`, reads no entry after its end, and stops early when `budget` is
+/// spent.
 pub async fn search_public_oplog_page(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -404,8 +399,7 @@ pub async fn search_public_oplog_page(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
-    initial_oplog_index: OplogIndex,
-    last_oplog_index: Option<OplogIndex>,
+    range: OplogRange,
     limits: PublicOplogPageLimits,
     query: &str,
     budget: ScanBudget,
@@ -419,8 +413,7 @@ pub async fn search_public_oplog_page(
         owner_kind,
         agent_type_name,
         initial_component_revision,
-        initial_oplog_index,
-        last_oplog_index,
+        range,
         limits.count,
         query,
         budget,
@@ -429,8 +422,8 @@ pub async fn search_public_oplog_page(
     .await
 }
 
-/// Searches the oplog from `initial_oplog_index` until the result holds `count` matches, the page
-/// is full, the oplog or `last_oplog_index` ends the search, or `budget` is spent. The budget
+/// Searches the oplog from the start of `range` until the result holds `count` matches, the page
+/// is full, the oplog or the end of `range` ends the search, or `budget` is spent. The budget
 /// counts the oplog entries that the search reads, matching or not, and the time since the call
 /// started. Each chunk reads at most as many entries as the result still needs matches, so the
 /// result never holds more than `count` matches. A search always reads at least one chunk, and
@@ -445,8 +438,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
-    initial_oplog_index: OplogIndex,
-    last_oplog_index: Option<OplogIndex>,
+    range: OplogRange,
     count: usize,
     query: &str,
     budget: ScanBudget,
@@ -456,7 +448,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     let mut scanned = 0u64;
     let mut results = Vec::new();
     let mut last_index;
-    let mut current_index = initial_oplog_index;
+    let mut current_index = range.start();
     let mut current_component_revision = initial_component_revision;
 
     let query = Query::parse(query)?;
@@ -464,7 +456,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     loop {
         let chunk_size = (count.saturating_sub(results.len()) as u64)
             .min(budget.remaining_entries(scanned))
-            .min(entries_up_to(current_index, last_oplog_index)) as usize;
+            .min(range.entries_from(current_index)) as usize;
         let (chunk, page_full) = read_public_oplog_chunk(
             component_service.clone(),
             oplog_service.clone(),
@@ -484,7 +476,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
         results.extend(chunk.entries);
 
         scanned += chunk.next_oplog_index.as_u64() - current_index.as_u64();
-        last_index = read_end(chunk.last_index, last_oplog_index);
+        last_index = range.last_index_in(chunk.last_index);
         current_index = chunk.next_oplog_index;
         current_component_revision = chunk.current_component_revision;
 
@@ -535,8 +527,8 @@ pub async fn find_component_revision_at(
 }
 
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has
-/// a cursor if and only if the oplog has entries after the page, also when the page itself is
-/// empty because a search spent its scan budget before any match.
+/// a cursor if and only if the oplog has entries after the page within its range, also when the
+/// page itself is empty because a search spent its scan budget before any match.
 pub fn oplog_page_cursor(
     next_oplog_index: OplogIndex,
     current_component_revision: ComponentRevision,
@@ -571,9 +563,11 @@ pub fn check_oplog_cursor_query(
     }
 }
 
-/// Where a paged oplog read starts, and the component revision to decode its first entry with:
-/// the cursor of the previous page, or else `from` with the revision in effect there. The caller
-/// checks the query of the cursor first, with [`check_oplog_cursor_query`].
+/// The range that a paged oplog read of `range` reads, and the component revision to decode its
+/// first entry with: the rest of `range` from the cursor of the previous page, or else `range`
+/// with the revision in effect at its start. The caller checks the query of the cursor first,
+/// with [`check_oplog_cursor_query`]. A cursor outside `range` came from a read of another range,
+/// and is an invalid request.
 ///
 /// A page hands out a cursor only while the oplog has entries after it, and the oplog only grows,
 /// so a cursor that points past the last entry did not come from a page of this oplog: the agent
@@ -585,10 +579,13 @@ pub async fn oplog_page_start(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     cursor: Option<OplogCursor>,
-    from: OplogIndex,
-) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
+    range: OplogRange,
+) -> Result<(OplogRange, ComponentRevision), WorkerExecutorError> {
     match cursor {
         Some(cursor) => {
+            let resumed = range
+                .resume(OplogIndex::from_u64(cursor.next_oplog_index))
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
             let last_index = oplog_service
                 .get_last_index(owned_agent_id, agent_mode)
                 .await?;
@@ -606,62 +603,17 @@ pub async fn oplog_page_start(
                     "the oplog cursor {cursor} has an invalid component revision: {e}"
                 ))
             })?;
-            Ok((OplogIndex::from_u64(cursor.next_oplog_index), revision))
+            Ok((resumed, revision))
         }
         None => {
-            let revision =
-                find_component_revision_at(oplog_service, owned_agent_id, agent_mode, from).await?;
-            Ok((from, revision))
+            let revision = find_component_revision_at(
+                oplog_service,
+                owned_agent_id,
+                agent_mode,
+                range.start(),
+            )
+            .await?;
+            Ok((range, revision))
         }
-    }
-}
-
-#[cfg(test)]
-mod range_tests {
-    use super::{entries_up_to, read_end};
-    use golem_common::model::oplog::OplogIndex;
-    use test_r::test;
-
-    #[test]
-    fn a_read_counts_the_entries_up_to_its_end_without_overflow() {
-        let index = OplogIndex::from_u64;
-        [
-            ((1, None), u64::MAX),
-            ((1, Some(1)), 1),
-            ((3, Some(7)), 5),
-            ((8, Some(7)), 0),
-            ((9, Some(7)), 0),
-            ((1, Some(u64::MAX)), u64::MAX),
-            ((2, Some(u64::MAX)), u64::MAX - 1),
-            ((u64::MAX, Some(u64::MAX)), 1),
-        ]
-        .into_iter()
-        .for_each(|((from, end), expected)| {
-            assert_eq!(
-                entries_up_to(index(from), end.map(index)),
-                expected,
-                "from {from} to {end:?}"
-            )
-        });
-    }
-
-    #[test]
-    fn a_read_ends_at_its_end_or_at_the_end_of_the_oplog() {
-        let index = OplogIndex::from_u64;
-        [
-            ((10, None), 10),
-            ((10, Some(4)), 4),
-            ((10, Some(10)), 10),
-            ((10, Some(11)), 10),
-            ((10, Some(u64::MAX)), 10),
-        ]
-        .into_iter()
-        .for_each(|((oplog_last, end), expected)| {
-            assert_eq!(
-                read_end(index(oplog_last), end.map(index)),
-                index(expected),
-                "oplog last {oplog_last}, end {end:?}"
-            )
-        });
     }
 }

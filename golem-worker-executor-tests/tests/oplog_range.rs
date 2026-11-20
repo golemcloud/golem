@@ -35,8 +35,9 @@ use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, agent_oplog_length, scheduler_sqlite_storage_config,
-    start_with_oplog_config, start_with_overrides, wait_until, wait_until_archived,
+    WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
+    blob_archived_oplog_length, scheduler_sqlite_storage_config, start_with_oplog_config,
+    start_with_overrides, wait_until, wait_until_archived,
 };
 use pretty_assertions::assert_eq;
 use std::num::NonZeroU64;
@@ -87,7 +88,7 @@ async fn get_page(
         .get_oplog(GetOplogRequest {
             agent_id: Some(agent_id.clone().into()),
             environment_id: Some(executor.context.default_environment_id.into()),
-            from_oplog_index: from,
+            from_oplog_index: Some(from),
             to_oplog_index: to,
             cursor,
             count,
@@ -193,10 +194,12 @@ async fn wait_until_archived_and_idle(
     .await
 }
 
-/// The history of the agent moves to the archive layers: the compressed layer, which passes its
-/// entries on to the blob layer. After a real restart with an executor that does not archive,
-/// the later entries stay in the primary oplog. Every range read, across the layers and across
-/// pages, returns each index of the range once, in order, with the entries of a full read.
+/// The history of the agent moves through the compressed layer to the blob layer: when the primary
+/// oplog of an idle agent is empty, the archive moves the whole compressed layer to the blob
+/// layer, so the compressed layer is empty when the agent is archived. After a real restart with
+/// an executor that does not archive, the later entries stay in the primary oplog. Every range
+/// read, across the blob layer, the primary oplog and the pages, returns each index of the range
+/// once, in order, with the entries of a full read.
 #[test]
 #[timeout("4m")]
 async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
@@ -224,6 +227,14 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
     increment(&archiving, &component, &agent, 6).await?;
     wait_until_archived_and_idle(deps, &context, &owned_agent_id).await?;
     let archived_last = archiving.get_oplog_last_index(&agent_id).await?;
+    let compressed = archived_oplog_chunks(deps, &context, &owned_agent_id, 1).await?;
+    let blob = blob_archived_oplog_length(deps, &context, &owned_agent_id, 0).await?;
+    anyhow::ensure!(
+        compressed.is_empty() && blob > 0,
+        "expected the history in the blob layer only, got {} compressed chunks and a blob layer \
+         of length {blob}",
+        compressed.len()
+    );
     archiving.shutdown_and_wait_for_invocation_loops().await?;
     drop(archiving);
 
@@ -240,7 +251,7 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
     let last = executor.get_oplog_last_index(&agent_id).await?;
     let primary = agent_oplog_length(deps, &context, &owned_agent_id).await?;
     anyhow::ensure!(
-        primary > 0 && primary < last - archived_last + 1,
+        primary > 0 && primary <= last - archived_last,
         "expected only the entries after the archive in the primary oplog, got {primary} of {last}"
     );
 

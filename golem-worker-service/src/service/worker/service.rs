@@ -74,7 +74,7 @@ use golem_common::model::invocation_session_public::{
     InvocationSelector, PublicConfigEntry, PublicErrorCode, PublicNativeToolTarget,
     PublicTypedValue,
 };
-use golem_common::model::oplog::{OplogCursor, OplogRange};
+use golem_common::model::oplog::{OplogCursor, OplogCursorOutsideRange, OplogRange};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::{
@@ -583,27 +583,25 @@ fn authorize_oplog_permission(
     Ok(())
 }
 
-/// The oplog resource that a read of `range` needs. The read starts at the cursor, or at the
-/// start of the range when there is no cursor. A page reads at most `page_count` entries, so it
-/// needs the oplog only up to its last entry or the end of the range, when that is earlier. A
-/// search has no `page_count`, because its count limits the matches and not the entries that it
-/// reads, so it needs the oplog up to the end of the range. The first page of a search of the
-/// whole oplog needs every oplog index.
+/// The oplog resource that a read of `range` needs. The read resumes `range` at the cursor, and a
+/// cursor outside `range` is an error. A page reads at most `page_count` entries, so it needs the
+/// oplog only up to its last entry or the end of the range, when that is earlier. A search has
+/// no `page_count`, because its count limits the matches and not the entries that it reads, so it
+/// needs the oplog up to the end of the range. The first page of a search of the whole oplog
+/// needs every oplog index.
 fn oplog_read_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
     page_count: Option<u64>,
-) -> OplogResourcePattern {
-    let start = cursor.map_or(range.start().as_u64(), |cursor| cursor.next_oplog_index);
-    let page_end = page_count.and_then(|count| start.checked_add(count.saturating_sub(1)));
-    let end = match (page_end, range.end().map(u64::from)) {
-        (Some(page_end), Some(range_end)) => Some(page_end.min(range_end)),
-        (page_end, range_end) => page_end.or(range_end),
-    };
-    match (page_count, cursor, range == OplogRange::ALL) {
+) -> Result<OplogResourcePattern, OplogCursorOutsideRange> {
+    let resumed = cursor.map_or(Ok(range), |cursor| {
+        range.resume(OplogIndex::from_u64(cursor.next_oplog_index))
+    })?;
+    let read = page_count.map_or(resumed, |count| resumed.page(count));
+    Ok(match (page_count, cursor, range == OplogRange::ALL) {
         (None, None, true) => OplogResourcePattern::Any,
-        _ => OplogResourcePattern::range(Some(start), end),
-    }
+        _ => OplogResourcePattern::range(Some(read.start().as_u64()), read.end().map(u64::from)),
+    })
 }
 
 fn authorize_filesystem_permission(
@@ -1256,7 +1254,8 @@ impl WorkerService {
             &auth_ctx,
             &component,
             agent_id,
-            oplog_read_resource(range, cursor.as_ref(), Some(count)),
+            oplog_read_resource(range, cursor.as_ref(), Some(count))
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
         )?;
 
         let result = self
@@ -1325,7 +1324,8 @@ impl WorkerService {
             &auth_ctx,
             &component,
             agent_id,
-            oplog_read_resource(range, cursor.as_ref(), None),
+            oplog_read_resource(range, cursor.as_ref(), None)
+                .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
         )?;
 
         let result = self
@@ -3963,7 +3963,9 @@ mod tests {
     use golem_common::model::golem_issuer::GolemIssuer;
     use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
     use golem_common::model::json::NormalizedJsonValue;
-    use golem_common::model::oplog::{OplogCursor, OplogIndex, OplogRange};
+    use golem_common::model::oplog::{
+        OplogCursor, OplogCursorOutsideRange, OplogIndex, OplogRange,
+    };
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, InvocationRequestKey,
@@ -6116,6 +6118,33 @@ mod tests {
             "a search from index 5 without an end reads past the permitted index 7"
         );
         assert!(search_oplog(Some(8)).await.is_err());
+
+        // A cursor before the start of the range is an invalid request, also where the
+        // permission covers the index of the cursor.
+        let cursor_before_the_range = harness
+            .worker_service
+            .get_oplog(
+                &agent_id,
+                OplogRange::new(Some(OplogIndex::from_u64(6)), Some(OplogIndex::from_u64(7)))
+                    .unwrap(),
+                Some(OplogCursor {
+                    next_oplog_index: 5,
+                    current_component_revision: 0,
+                    query_hash: String::new(),
+                }),
+                50,
+                auth_ctx.clone(),
+            )
+            .await;
+        assert!(
+            matches!(
+                cursor_before_the_range,
+                Err(WorkerServiceError::GolemError(
+                    WorkerExecutorError::InvalidRequest { .. }
+                ))
+            ),
+            "{cursor_before_the_range:?}"
+        );
     }
 
     #[test]
@@ -6129,51 +6158,54 @@ mod tests {
             current_component_revision: 0,
             query_hash: String::new(),
         };
-        let pattern = OplogResourcePattern::range;
+        let pattern =
+            |start: u64, end: Option<u64>| Ok(OplogResourcePattern::range(Some(start), end));
+        let outside = |range: OplogRange, next: u64| {
+            Err(OplogCursorOutsideRange {
+                next: index(next),
+                range,
+            })
+        };
         [
             // Pages: from the start, or the cursor, to the last entry of the page or the range.
-            (
-                (range(None, None), None, Some(50)),
-                pattern(Some(1), Some(50)),
-            ),
-            (
-                (range(Some(5), None), None, Some(3)),
-                pattern(Some(5), Some(7)),
-            ),
+            ((range(None, None), None, Some(50)), pattern(1, Some(50))),
+            ((range(Some(5), None), None, Some(3)), pattern(5, Some(7))),
             (
                 (range(Some(5), Some(6)), None, Some(3)),
-                pattern(Some(5), Some(6)),
+                pattern(5, Some(6)),
             ),
             (
                 (range(Some(5), Some(9)), Some(cursor(8)), Some(3)),
-                pattern(Some(8), Some(9)),
-            ),
-            (
-                (range(Some(5), None), None, Some(0)),
-                pattern(Some(5), Some(5)),
+                pattern(8, Some(9)),
             ),
             (
                 (range(Some(5), None), Some(cursor(u64::MAX)), Some(3)),
-                pattern(Some(u64::MAX), None),
+                pattern(u64::MAX, None),
             ),
+            // A cursor outside the range came from a read of another range.
             (
                 (range(Some(5), Some(9)), Some(cursor(u64::MAX)), Some(3)),
-                pattern(Some(u64::MAX), Some(9)),
+                outside(range(Some(5), Some(9)), u64::MAX),
+            ),
+            (
+                (range(Some(5), Some(9)), Some(cursor(4)), Some(3)),
+                outside(range(Some(5), Some(9)), 4),
             ),
             // Searches: from the start, or the cursor, to the end of the range.
-            ((range(None, None), None, None), OplogResourcePattern::Any),
             (
-                (range(None, None), Some(cursor(8)), None),
-                pattern(Some(8), None),
+                (range(None, None), None, None),
+                Ok(OplogResourcePattern::Any),
             ),
-            ((range(Some(5), None), None, None), pattern(Some(5), None)),
-            (
-                (range(None, Some(9)), None, None),
-                pattern(Some(1), Some(9)),
-            ),
+            ((range(None, None), Some(cursor(8)), None), pattern(8, None)),
+            ((range(Some(5), None), None, None), pattern(5, None)),
+            ((range(None, Some(9)), None, None), pattern(1, Some(9))),
             (
                 (range(Some(5), Some(9)), Some(cursor(8)), None),
-                pattern(Some(8), Some(9)),
+                pattern(8, Some(9)),
+            ),
+            (
+                (range(Some(5), None), Some(cursor(2)), None),
+                outside(range(Some(5), None), 2),
             ),
         ]
         .into_iter()
