@@ -97,31 +97,49 @@ test "native config accepts large integers without a JSON round trip" {
 ///|
 test "agent snapshot accessors return defensive nested copies" {
   let agent_type = configured_reflected_type()
+  agent_type.config[0] = {
+    ..agent_type.config[0],
+    default_value: Some(@model.Record([@model.String("original")])),
+  }
   let declarations = agent_type.config()
   let path = declarations[0].path()
   path[0] = "mutated"
+  guard declarations[0].default_value() is Some(@model.Record(fields)) else {
+    fail("expected a record default")
+  }
+  fields[0] = @model.String("mutated")
   declarations[0] = declarations[1]
   let graph = agent_type.constructor_input().graph()
   graph.root.metadata.aliases.push("mutated")
 
   assert_eq(agent_type.config()[0].path(), ["greeting"])
+  assert_eq(
+    agent_type.config()[0].default_value(),
+    Some(@model.Record([@model.String("original")])),
+  )
   assert_eq(agent_type.constructor_input().root().metadata.aliases, [])
 }
 
 ///|
-test "reflected config preserves absent, null, and canonical JSON defaults" {
+test "reflected config preserves absent and native option defaults" {
   let graph = @model.schema_graph_to_wit({
     defs: [],
     root: @model.schema_type(Option(@model.schema_type(String))),
   })
-  let defaults : Array[String?] = [None, Some("null"), Some("\"árvíz\\n\"")]
+  let defaults : Array[@model.SchemaValue?] = [
+    None,
+    Some(Option(None)),
+    Some(Option(Some(String("árvíz\n")))),
+  ]
   let config : Array[@common.AgentConfigDeclaration] = []
   for i, default_value in defaults {
     config.push({
       source: @common.AgentConfigSource::LOCAL,
       path: ["nested", "field\{i}"],
       value_type: graph.root,
-      default_value,
+      default_value: default_value.map(value => {
+        @model.schema_value_to_wit(value)
+      }),
     })
   }
   let reflected = decode_agent_type({
@@ -144,7 +162,6 @@ test "reflected config preserves absent, null, and canonical JSON defaults" {
       snapshotting: @common.Snapshotting::Disabled,
       config,
     },
-    implemented_by: { uuid: { high_bits: 0UL, low_bits: 1UL, }, },
   })
   let declarations = reflected.config()
   for i, expected in defaults {

@@ -21,9 +21,11 @@ import (
 	"strings"
 	"testing"
 
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -106,11 +108,18 @@ func TestConfigDefaultsInMetadata(t *testing.T) {
 	}
 	withDefs(t, func(d *definitions) {
 		cfgConfiguredAgent[cfg](d)
-		want := map[string]witTypes.Option[string]{
-			"unset":    witTypes.None[string](),
-			"null":     witTypes.Some("null"),
-			"greeting": witTypes.Some(`"hello"`),
-			"password": witTypes.None[string](),
+		toTree := func(value core.SchemaValue) types.SchemaValueTree {
+			tree, err := witschema.ValueToWit(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return tree
+		}
+		want := map[string]witTypes.Option[types.SchemaValueTree]{
+			"unset":    witTypes.None[types.SchemaValueTree](),
+			"null":     witTypes.Some(toTree(core.OptionValue{})),
+			"greeting": witTypes.Some(toTree(core.StringValue{Value: "hello"})),
+			"password": witTypes.None[types.SchemaValueTree](),
 		}
 		for i := range d.agents["Cfg"].configs {
 			cd := &d.agents["Cfg"].configs[i]
@@ -128,7 +137,7 @@ func TestConfigDefaultsInMetadata(t *testing.T) {
 			key := strings.Join(decl.Path, "/")
 			expected, ok := want[key]
 			if !ok || decl.DefaultValue.IsSome() != expected.IsSome() ||
-				(expected.IsSome() && decl.DefaultValue.Some() != expected.Some()) {
+				(expected.IsSome() && !reflect.DeepEqual(decl.DefaultValue.Some(), expected.Some())) {
 				t.Errorf("%s: default = %v, want %v", key, decl.DefaultValue, expected)
 			}
 		}

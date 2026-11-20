@@ -75,7 +75,7 @@ pub(all) struct AgentConfigDef {
   source : @common.AgentConfigSource
   path : Array[String]
   value_type : @schema_model.SchemaGraph
-  default_value : String?
+  default_value : @schema_model.SchemaValue?
 }
 
 pub(all) struct AgentConstructorDef {

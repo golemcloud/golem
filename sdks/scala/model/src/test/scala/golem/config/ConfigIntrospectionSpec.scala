@@ -74,13 +74,13 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
             AgentConfigSource.Local,
             List("db", "host"),
             IntoSchema[String].graph,
-            Some("\"db.example\"")
+            Some(golem.schema.SchemaValue.StringValue("db.example"))
           ),
           AgentConfigDeclaration(
             AgentConfigSource.Local,
             List("optional"),
             IntoSchema[Option[String]].graph,
-            Some("null")
+            Some(golem.schema.SchemaValue.OptionValue(None))
           ),
           AgentConfigDeclaration(AgentConfigSource.Secret, List("db", "password"), secretGraph[String])
         )
@@ -95,7 +95,11 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
         )
         val wire = WireAgentMetadata.fromModel(metadata)
         assertTrue(
-          wire.config.map(_.defaultValue) == List(Some("\"db.example\""), Some("null"), None),
+          wire.config.map(_.defaultValue) == List(
+            Some(golem.schema.SchemaValue.StringValue("db.example")),
+            Some(golem.schema.SchemaValue.OptionValue(None)),
+            None
+          ),
           wire.reflected.config == declarations
         )
       },
