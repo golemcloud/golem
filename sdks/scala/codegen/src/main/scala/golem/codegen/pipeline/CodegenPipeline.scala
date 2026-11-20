@@ -153,7 +153,7 @@ object CodegenPipeline {
             name = m.name,
             params = m.params.map(p => AgentSurfaceIR.ParamSurface(p.name, p.typeExpr)),
             returnTypeExpr = m.returnTypeExpr,
-            principalParams = m.principalParams
+            contextParams = m.contextParams
           )
         ),
         configFields =

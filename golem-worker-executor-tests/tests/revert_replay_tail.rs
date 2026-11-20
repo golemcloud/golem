@@ -20,7 +20,7 @@ use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::oplog::payload::HostRequestGolemApiRevertAgent;
 use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::schema::FromSchema;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::card::{CardService, CardState};
@@ -86,7 +86,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let target = agent_id!("GolemHostApi", "revert-index-target");
+    let target = agent_key!("GolemHostApi", "revert-index-target");
     let target_id = executor.start_agent(&component.id, target.clone()).await?;
     executor
         .invoke_and_await_agent(
@@ -127,7 +127,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
         })
         .store()
         .await?;
-    let caller = agent_id!("GolemHostApi", "revert-index-caller");
+    let caller = agent_key!("GolemHostApi", "revert-index-caller");
     let card = component
         .metadata
         .agent_type_provision_configs
@@ -142,7 +142,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
             &component,
             &caller,
             "revert_last_invocations_result",
-            data_value!(target_id.clone(), 1u64),
+            data_value!(target_id.agent_id, 1u64),
         )
         .await?
         .into_typed::<Result<(), String>>()?;
@@ -224,20 +224,20 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
             .component_dep(&context.default_environment_id, host_api_tests)
             .store()
             .await?;
-        let target = agent_id!("GolemHostApi", format!("resolution-target-{missing}"));
+        let target = agent_key!("GolemHostApi", format!("resolution-target-{missing}"));
         let target_id = executor.start_agent(&component.id, target.clone()).await?;
         if missing {
             executor.delete_worker(&target_id).await?;
         }
         let count = if missing { 1u64 } else { 4u64 };
-        let caller = agent_id!("GolemHostApi", format!("resolution-caller-{missing}"));
+        let caller = agent_key!("GolemHostApi", format!("resolution-caller-{missing}"));
         let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
         let error = executor
             .invoke_and_await_agent(
                 &component,
                 &caller,
                 "revert_last_invocations_result",
-                data_value!(target_id.clone(), count),
+                data_value!(target_id.agent_id, count),
             )
             .await?
             .into_typed::<Result<(), String>>()?

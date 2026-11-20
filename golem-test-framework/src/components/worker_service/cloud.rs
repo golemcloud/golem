@@ -28,7 +28,7 @@ use url::Url;
 /// are reachable behind a single Gateway API hostname
 /// (e.g. `https://release.dev-api.golem.cloud`). This struct holds that shared
 /// `api_url`; routing to worker-service is done by the Gateway based on URL
-/// path (`/v1/components/*/workers/**`, `/v1/agents/**`).
+/// path (`/v1/runtime/**`).
 pub struct CloudWorkerService {
     api_url: Url,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,

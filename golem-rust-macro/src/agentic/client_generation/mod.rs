@@ -16,7 +16,7 @@ use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_r
 use crate::rpc_client_common::{
     FunctionOutputInfo, collect_kept_args, collect_typed_params, decode_result_value,
     encode_value_only_carrier, find_generic_param_in_inputs, find_generic_param_in_return,
-    is_principal_param, is_static_method, positional_record_schema_value,
+    is_invocation_context_param, is_static_method, positional_record_schema_value,
 };
 use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet};
@@ -26,7 +26,7 @@ pub fn get_remote_client(
     item_trait: &ItemTrait,
     constructor_data_value_param_defs: &[proc_macro2::TokenStream],
     constructor_data_value_param_idents: &[proc_macro2::Ident],
-    constructor_agent_config_param_defs: &[proc_macro2::TokenStream],
+    constructor_agent_config_param_types: &[proc_macro2::TokenStream],
     constructor_agent_config_param_idents: &[proc_macro2::Ident],
     agent_type_parameter_names: &[String],
     agent_is_durable: bool,
@@ -36,7 +36,7 @@ pub fn get_remote_client(
         &item_trait.ident.to_string(),
         constructor_data_value_param_defs,
         constructor_data_value_param_idents,
-        constructor_agent_config_param_defs,
+        constructor_agent_config_param_types,
         constructor_agent_config_param_idents,
         agent_type_parameter_names,
         agent_is_durable,
@@ -49,14 +49,13 @@ pub fn get_remote_client_for_type(
     type_name: &str,
     constructor_data_value_param_defs: &[proc_macro2::TokenStream],
     constructor_data_value_param_idents: &[proc_macro2::Ident],
-    constructor_agent_config_param_defs: &[proc_macro2::TokenStream],
+    constructor_agent_config_param_types: &[proc_macro2::TokenStream],
     constructor_agent_config_param_idents: &[proc_macro2::Ident],
     agent_type_parameter_names: &[String],
     agent_is_durable: bool,
     construction_fallible: bool,
 ) -> proc_macro2::TokenStream {
     let remote_client_type_name = format_ident!("{}Client", item_trait.ident);
-    let constructor_schema_type_name = format_ident!("__{}Constructor", item_trait.ident);
 
     let remote_client_with_scope_card_type_name =
         format_ident!("{}ClientWithScopeCard", item_trait.ident);
@@ -71,28 +70,10 @@ pub fn get_remote_client_for_type(
         construction_fallible,
     );
 
-    let get_method_ident = agent_is_durable.then(|| {
-        if method_names.contains("get") {
-            method_names.fresh_ident("get_")
-        } else {
-            method_names.fresh_ident("get")
-        }
-    });
-    let new_phantom_method_ident = method_names.fresh_ident("new_phantom");
-    let get_phantom_method_ident = method_names.fresh_ident("get_phantom");
-    let get_with_config_method_ident = (agent_is_durable
-        && !constructor_agent_config_param_defs.is_empty())
-    .then(|| method_names.fresh_ident("get_with_config"));
-    let new_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
-        .then(|| method_names.fresh_ident("new_phantom_with_config"));
-    let get_phantom_with_config_method_ident = (!constructor_agent_config_param_defs.is_empty())
-        .then(|| method_names.fresh_ident("get_phantom_with_config"));
-    let phantom_id_accessor_ident =
-        agent_is_durable.then(|| method_names.fresh_ident("phantom_id"));
-    let get_agent_id_accessor_ident =
-        agent_is_durable.then(|| method_names.fresh_ident("get_agent_id"));
-    let agent_id_helper_ident = method_names.fresh_ident("agent_id");
-    let bind_helper_ident = agent_is_durable.then(|| method_names.fresh_ident("bind"));
+    let upsert_method_ident = method_names.fresh_ident("upsert");
+    let create_method_ident = agent_is_durable.then(|| method_names.fresh_ident("create"));
+    let get_by_id_method_ident = agent_is_durable.then(|| method_names.fresh_ident("get_by_id"));
+    let agent_id_accessor_ident = agent_is_durable.then(|| method_names.fresh_ident("agent_id"));
     let bind_self_ident = agent_is_durable.then(|| method_names.fresh_ident("bind_self"));
     let with_scope_card_ident = method_names.fresh_ident("with_scope_card");
     let set_default_scope_card_ident = method_names.fresh_ident("set_default_scope_card");
@@ -102,308 +83,121 @@ pub fn get_remote_client_for_type(
         .chain(constructor_agent_config_param_idents)
         .cloned()
         .collect::<Vec<_>>();
-    let phantom_id_param_ident = fresh_param_ident(&constructor_param_idents, "phantom_id");
-    let rpc_config_params_ident =
-        fresh_param_ident(&constructor_param_idents, "__golem_rpc_config_params");
-    let phantom_uuid_ident = fresh_param_ident(&constructor_param_idents, "phantom_uuid");
+    let options_ident = fresh_param_ident(&constructor_param_idents, "options");
     let constructor_value_ident = fresh_param_ident(&constructor_param_idents, "constructor_value");
-    let agent_id_ident = fresh_param_ident(&constructor_param_idents, "agent_id");
     let encode_constructor = generate_constructor_data_value_params_encoding(
         constructor_data_value_param_idents,
         &constructor_value_ident,
         construction_fallible,
     );
-    let constructor_schema_fields = constructor_data_value_param_defs;
-    let constructor_schema_definition =
-        (construction_fallible && agent_type_parameter_names.is_empty()).then(|| {
-            quote! {
-                #[doc(hidden)]
-                #[derive(golem_rust::IntoSchema)]
-                struct #constructor_schema_type_name {
-                    #(#constructor_schema_fields,)*
-                }
-            }
-        });
-    let agent_id_body = quote! {{
-        #encode_constructor
-        #constructor_value_ident
-    }};
-
-    let agent_config_params_as_rpc_param = {
-        let add_rpc_params_entries = constructor_agent_config_param_idents.iter().map(|param_ident|
-            quote! { #rpc_config_params_ident.append(&mut ::golem_rust::agentic::IntoRpcConfigParam::into_rpc_param(#param_ident, &[])); }
-        );
-
+    // The wire `schema-value-tree` can carry an owned `quota-token` handle, so it is an
+    // affine, one-shot transfer envelope that is encoded right before the host call.
+    let constructor_tree = if construction_fallible {
         quote! {
-            {
-                let mut #rpc_config_params_ident = Vec::new();
-                #(#add_rpc_params_entries)*
-                #rpc_config_params_ident
-            }
+            golem_rust::encode_schema_value(&#constructor_value_ident)
+                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?
+        }
+    } else {
+        quote! { #constructor_value_ident }
+    };
+    let new_client = quote! {
+        #remote_client_type_name {
+            wasm_rpc,
+            __golem_default_scope_card: ::core::default::Default::default(),
         }
     };
 
-    // Builds the shared body of a remote-client constructor. Because the wire
-    // `schema-value-tree` now carries an owned `quota-token` handle, it is an
-    // affine, one-shot transfer envelope: it cannot be stored and reused.
-    // The constructor value is therefore encoded freshly for each host call
-    // (`make-agent-id` and the `wasm-rpc` constructor), the agent-id is computed
-    // eagerly, and only the resulting `String` is kept in the client struct.
-    let constructor_return_type = if construction_fallible {
-        quote! { Result<#remote_client_type_name, golem_rust::GolemReflectError> }
+    let upsert_doc = if agent_is_durable {
+        "Connects to the keyed agent of the constructor parameters, and creates it when it is missing. An initialized agent is reused without rerunning its constructor."
     } else {
-        quote! { #remote_client_type_name }
+        "Connects to the agent type; each invocation runs on a new one-shot instance."
     };
-    let build_constructor_body =
-        |prelude: proc_macro2::TokenStream,
-         phantom_wire: proc_macro2::TokenStream,
-         phantom_struct: proc_macro2::TokenStream,
-         config: proc_macro2::TokenStream| {
-            if construction_fallible {
-                quote! {
-                    #encode_constructor
-
-                    #prelude
-
-                    let (#agent_id_ident, wasm_rpc) = golem_rust::agentic::__connect_agent(
-                        #type_name,
-                        || golem_rust::encode_schema_value(&#constructor_value_ident)
-                            .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string())),
-                        #phantom_wire,
-                        || #config,
-                    )?;
-
-                    Ok(#remote_client_type_name {
-                        agent_id: #agent_id_ident,
-                        phantom_id: #phantom_struct,
-                        wasm_rpc,
-                        __golem_default_scope_card: ::core::default::Default::default(),
-                    })
-                }
-            } else {
-                quote! {
-                    #encode_constructor
-
-                    #prelude
-
-                    let (#agent_id_ident, wasm_rpc) = golem_rust::agentic::__connect_agent_or_panic(
-                        #type_name,
-                        #constructor_value_ident,
-                        #phantom_wire,
-                        || #config,
-                    );
-
-                    #remote_client_type_name {
-                        agent_id: #agent_id_ident,
-                        phantom_id: #phantom_struct,
-                        wasm_rpc,
-                        __golem_default_scope_card: ::core::default::Default::default(),
-                    }
-                }
-            }
-        };
-
-    let optional_get_with_config_impl = if agent_is_durable
-        && !constructor_agent_config_param_defs.is_empty()
-    {
-        let get_with_config_method_ident = get_with_config_method_ident
-            .as_ref()
-            .expect("durable agents with config allocate get_with_config");
-        let body = build_constructor_body(
-            quote! {},
-            quote! { None },
-            quote! { None },
-            agent_config_params_as_rpc_param.clone(),
-        );
+    let upsert_impl = if construction_fallible {
         quote! {
-            pub fn #get_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #constructor_return_type {
-                #body
+            #[doc = #upsert_doc]
+            pub fn #upsert_method_ident(#(#constructor_data_value_param_defs,)*) -> Result<Self, golem_rust::GolemReflectError> {
+                #encode_constructor
+                let wasm_rpc = golem_rust::agentic::__upsert_agent(#type_name, #constructor_tree)?;
+                Ok(#new_client)
             }
         }
     } else {
-        quote! {}
-    };
-
-    let new_phantom_doc = if agent_is_durable {
-        "Creates a new agent instance with a fresh random phantom id."
-    } else {
-        "Creates a local logical proxy; each invocation receives a fresh final identity."
-    };
-
-    let optional_new_phantom_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
-        let new_phantom_with_config_method_ident = new_phantom_with_config_method_ident
-            .as_ref()
-            .expect("agents with config allocate new_phantom_with_config");
-        let body = if agent_is_durable {
-            build_constructor_body(
-                quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
-                quote! { Some(#phantom_uuid_ident.into()) },
-                quote! { Some(#phantom_uuid_ident) },
-                agent_config_params_as_rpc_param.clone(),
-            )
-        } else {
-            build_ephemeral_constructor_body(
-                &remote_client_type_name,
-                type_name,
-                &encode_constructor,
-                &constructor_value_ident,
-                quote! { None },
-                agent_config_params_as_rpc_param.clone(),
-                construction_fallible,
-            )
-        };
         quote! {
-            #[doc = #new_phantom_doc]
-            pub fn #new_phantom_with_config_method_ident(#(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #constructor_return_type {
-                #body
+            #[doc = #upsert_doc]
+            pub fn #upsert_method_ident(#(#constructor_data_value_param_defs,)*) -> Self {
+                #encode_constructor
+                let wasm_rpc = golem_rust::agentic::__upsert_agent_or_panic(#type_name, #constructor_tree);
+                #new_client
             }
         }
-    } else {
-        quote! {}
     };
 
-    let optional_get_phantom_with_config_impl = if !constructor_agent_config_param_defs.is_empty() {
-        let get_phantom_with_config_method_ident = get_phantom_with_config_method_ident
-            .as_ref()
-            .expect("agents with config allocate get_phantom_with_config");
-        let body = if agent_is_durable {
-            build_constructor_body(
-                quote! {},
-                quote! { Some(#phantom_id_param_ident.into()) },
-                quote! { Some(#phantom_id_param_ident) },
-                agent_config_params_as_rpc_param.clone(),
-            )
-        } else {
-            build_ephemeral_constructor_body(
-                &remote_client_type_name,
-                type_name,
-                &encode_constructor,
-                &constructor_value_ident,
-                quote! { Some(#phantom_id_param_ident.into()) },
-                agent_config_params_as_rpc_param.clone(),
-                construction_fallible,
-            )
-        };
-        quote! {
-            pub fn #get_phantom_with_config_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)* #(#constructor_agent_config_param_defs,)*) -> #constructor_return_type {
-                #body
-            }
+    let config_type = match constructor_agent_config_param_types {
+        [] => quote! { () },
+        [config_type] => quote! { #config_type },
+        config_types => quote! { (#(#config_types),*) },
+    };
+    let config_entries = match constructor_agent_config_param_types.len() {
+        0 => quote! { ::std::vec::Vec::new() },
+        1 => quote! {
+            ::golem_rust::agentic::IntoRpcConfigParam::into_rpc_param(#options_ident.config, &[])
+        },
+        count => {
+            let locals = (0..count)
+                .map(|index| format_ident!("__golem_config_{}", index))
+                .collect::<Vec<_>>();
+            quote! {{
+                let (#(#locals),*) = #options_ident.config;
+                let mut __golem_rpc_config = ::std::vec::Vec::new();
+                #(__golem_rpc_config.append(&mut ::golem_rust::agentic::IntoRpcConfigParam::into_rpc_param(#locals, &[]));)*
+                __golem_rpc_config
+            }}
         }
-    } else {
-        quote! {}
     };
-
-    let get_impl = if agent_is_durable {
-        let get_method_ident = get_method_ident
-            .as_ref()
-            .expect("durable agents allocate get");
-        let body = build_constructor_body(
-            quote! {},
-            quote! { None },
-            quote! { None },
-            quote! { Vec::new() },
-        );
+    let create_impl = create_method_ident.as_ref().map(|create_method_ident| {
         quote! {
-            pub fn #get_method_ident(#(#constructor_data_value_param_defs,)*) -> #constructor_return_type {
-                #body
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    let new_phantom_body = if agent_is_durable {
-        build_constructor_body(
-            quote! { let #phantom_uuid_ident = golem_rust::Uuid::new_v4(); },
-            quote! { Some(#phantom_uuid_ident.into()) },
-            quote! { Some(#phantom_uuid_ident) },
-            quote! { Vec::new() },
-        )
-    } else {
-        build_ephemeral_constructor_body(
-            &remote_client_type_name,
-            type_name,
-            &encode_constructor,
-            &constructor_value_ident,
-            quote! { None },
-            quote! { Vec::new() },
-            construction_fallible,
-        )
-    };
-
-    let get_phantom_body = if agent_is_durable {
-        build_constructor_body(
-            quote! {},
-            quote! { Some(#phantom_id_param_ident.into()) },
-            quote! { Some(#phantom_id_param_ident) },
-            quote! { Vec::new() },
-        )
-    } else {
-        build_ephemeral_constructor_body(
-            &remote_client_type_name,
-            type_name,
-            &encode_constructor,
-            &constructor_value_ident,
-            quote! { Some(#phantom_id_param_ident.into()) },
-            quote! { Vec::new() },
-            construction_fallible,
-        )
-    };
-
-    let durable_fields = agent_is_durable.then(|| {
-        quote! {
-            agent_id: String,
-            phantom_id: Option<golem_rust::Uuid>,
-        }
-    });
-    let get_phantom_impl = quote! {
-        pub fn #get_phantom_method_ident(#phantom_id_param_ident: golem_rust::Uuid, #(#constructor_data_value_param_defs,)*) -> #constructor_return_type { #get_phantom_body }
-    };
-    let accessors = agent_is_durable.then(|| {
-        quote! {
-            pub fn #phantom_id_accessor_ident(&self) -> Option<golem_rust::Uuid> { self.phantom_id }
-            pub fn #get_agent_id_accessor_ident(&self) -> String { self.agent_id.clone() }
-        }
-    });
-    let create_bound_transport = quote! {
-        let wasm_rpc = golem_rust::agentic::__agent_proxy(
-            #type_name,
-            || golem_rust::encode_schema_value(&parts.constructor_value)
-                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string())),
-            parts.phantom_id.map(Into::into),
-            Vec::new,
-        )?;
-    };
-    let bind_impl = (construction_fallible
-        && agent_is_durable
-        && agent_type_parameter_names.is_empty())
-        .then(|| {
-        quote! {
-            pub fn #bind_helper_ident(agent_id: &golem_rust::ParsedAgentId)
-                -> Result<Self, golem_rust::GolemReflectError>
-            {
-                let parts = agent_id.parts()?;
-                if parts.type_name != #type_name {
-                    return Err(golem_rust::GolemReflectError::InvalidType(format!(
-                        "full client expects `{}`, identity is `{}`",
-                        #type_name,
-                        parts.type_name,
-                    )));
-                }
-                let expected = golem_rust::schema::try_into_schema_graph::<#constructor_schema_type_name>()
-                    .map_err(|error| golem_rust::GolemReflectError::InvalidType(error.to_string()))?;
-                golem_rust::SchemaRef::new(expected).validate_value(&parts.constructor_value)?;
-                #create_bound_transport
-                Ok(Self {
-                    agent_id: agent_id.as_str().to_string(),
-                    phantom_id: parts.phantom_id,
-                    wasm_rpc,
-                    __golem_default_scope_card: ::core::default::Default::default(),
-                })
+            /// Creates a durable agent, and returns after its successful initialization.
+            ///
+            /// With `keyed`, it creates the keyed agent of the constructor parameters and fails
+            /// with [`golem_rust::GolemReflectError::Conflict`] when it already exists. Otherwise
+            /// the new agent has no key and a new ID. `config` overrides the agent's local
+            /// configuration, and `env` adds environment variables to the ones the manifest defines.
+            pub async fn #create_method_ident(
+                #(#constructor_data_value_param_defs,)*
+                #options_ident: golem_rust::CreateOptions<#config_type>,
+            ) -> Result<Self, golem_rust::GolemReflectError> {
+                #encode_constructor
+                let #options_ident = golem_rust::CreateOptions {
+                    keyed: #options_ident.keyed,
+                    config: #config_entries,
+                    env: #options_ident.env,
+                };
+                let wasm_rpc = golem_rust::agentic::__create_agent(#type_name, #constructor_tree, #options_ident).await?;
+                Ok(#new_client)
             }
         }
     });
-    let bind_self_impl = agent_is_durable.then(|| {
+    let get_by_id_impl = get_by_id_method_ident.as_ref().map(|get_by_id_method_ident| {
+        quote! {
+            /// Connects to the existing agent of this type with the given ID. Never creates the
+            /// agent: an unknown ID, or the ID of an agent of another type, is
+            /// [`golem_rust::GolemReflectError::RemoteNotFound`].
+            pub fn #get_by_id_method_ident(agent_id: &golem_rust::AgentId) -> Result<Self, golem_rust::GolemReflectError> {
+                let wasm_rpc = golem_rust::agentic::__get_agent_by_id(#type_name, agent_id)?;
+                Ok(#new_client)
+            }
+        }
+    });
+    let agent_id_impl = agent_id_accessor_ident.as_ref().map(|agent_id_accessor_ident| {
+        quote! {
+            /// The ID of the agent this client connects to. On a client of `upsert` it creates
+            /// the agent when it is missing, without invoking a method.
+            pub async fn #agent_id_accessor_ident(&self) -> Result<golem_rust::AgentId, golem_rust::GolemReflectError> {
+                golem_rust::agentic::__agent_id(&self.wasm_rpc).await
+            }
+        }
+    });
+    let bind_self_impl = bind_self_ident.as_ref().map(|bind_self_ident| {
         quote! {
             /// Binds the current durable incarnation without creating it or waiting for initialization.
             ///
@@ -416,54 +210,27 @@ pub fn get_remote_client_for_type(
             /// self-calls reentrant or bypass method permissions. A different client type
             /// returns an error. Replay preserves the recorded incarnation.
             pub fn #bind_self_ident() -> Result<Self, golem_rust::GolemReflectError> {
-                let (agent_id, phantom_id, wasm_rpc) = golem_rust::agentic::__bind_self(#type_name)?;
-                Ok(Self {
-                    agent_id, phantom_id, wasm_rpc,
-                    __golem_default_scope_card: ::core::default::Default::default(),
-                })
+                let wasm_rpc = golem_rust::agentic::__bind_self(#type_name)?;
+                Ok(#new_client)
             }
         }
     });
-    let agent_id_helper_impl = construction_fallible.then(|| quote! {
-        pub fn #agent_id_helper_ident(
-            #(#constructor_data_value_param_defs,)*
-            #phantom_id_param_ident: Option<golem_rust::Uuid>,
-        ) -> Result<golem_rust::ParsedAgentId, golem_rust::GolemReflectError> {
-            let constructor = #agent_id_body;
-            golem_rust::ParsedAgentId::from_value(#type_name, constructor, #phantom_id_param_ident)
-        }
-    });
     quote! {
-        #constructor_schema_definition
-
         pub struct #remote_client_type_name {
-            #durable_fields
             wasm_rpc: golem_rust::golem_agentic::golem::agent::host::WasmRpc,
             __golem_default_scope_card: golem_rust::permissions::__DefaultScopeCard,
         }
 
         impl #remote_client_type_name {
-            #agent_id_helper_impl
+            #upsert_impl
 
-            #bind_impl
+            #create_impl
+
+            #get_by_id_impl
+
             #bind_self_impl
 
-            #get_impl
-
-            #optional_get_with_config_impl
-
-            #[doc = #new_phantom_doc]
-            pub fn #new_phantom_method_ident(#(#constructor_data_value_param_defs,)*) -> #constructor_return_type {
-                #new_phantom_body
-            }
-
-            #optional_new_phantom_with_config_impl
-
-            #get_phantom_impl
-
-            #optional_get_phantom_with_config_impl
-
-            #accessors
+            #agent_id_impl
 
             /// Returns a view of this client whose awaited method calls lend
             /// `scope_card` to the callee for the duration of each invocation.
@@ -517,41 +284,6 @@ pub fn get_remote_client_for_type(
     }
 }
 
-fn build_ephemeral_constructor_body(
-    client: &syn::Ident,
-    type_name: &str,
-    encode_constructor: &proc_macro2::TokenStream,
-    constructor_value: &syn::Ident,
-    phantom_id: proc_macro2::TokenStream,
-    config: proc_macro2::TokenStream,
-    fallible: bool,
-) -> proc_macro2::TokenStream {
-    if fallible {
-        quote! {
-            #encode_constructor
-            let wasm_rpc = golem_rust::agentic::__agent_proxy(
-                #type_name,
-                || golem_rust::encode_schema_value(&#constructor_value)
-                    .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string())),
-                #phantom_id,
-                || #config,
-            )?;
-            Ok(#client { wasm_rpc, __golem_default_scope_card: ::core::default::Default::default() })
-        }
-    } else {
-        quote! {
-            #encode_constructor
-            let wasm_rpc = golem_rust::agentic::__agent_proxy_or_panic(
-                #type_name,
-                #constructor_value,
-                #phantom_id,
-                || #config,
-            );
-            #client { wasm_rpc, __golem_default_scope_card: ::core::default::Default::default() }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -563,7 +295,7 @@ fn generate_constructor_data_value_params_encoding(
     if !fallible {
         let constructor_record = encode_parameters(param_idents, false, true);
         return quote! {
-            let #constructor_value_ident = || #constructor_record;
+            let #constructor_value_ident = #constructor_record;
         };
     }
 
@@ -657,7 +389,7 @@ fn get_remote_agent_methods_info(
                 )));
             }
 
-            let keep = |pat_type: &syn::PatType| !is_principal_param(pat_type);
+            let keep = |pat_type: &syn::PatType| !is_invocation_context_param(pat_type);
             let input_defs = collect_kept_args(&method.sig, keep);
             let input_idents: Vec<syn::Ident> = collect_typed_params(&method.sig, keep)
                 .into_iter()
@@ -1445,9 +1177,5 @@ impl AgentClientMethodNames {
         };
 
         format_ident!("{}", name)
-    }
-
-    fn contains(&self, name: &str) -> bool {
-        self.method_names.contains(name)
     }
 }

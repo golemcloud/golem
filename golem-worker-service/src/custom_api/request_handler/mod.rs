@@ -247,9 +247,9 @@ impl RequestHandler {
                 })
             }
 
-            RichRouteBehaviour::WebhookCallback(behaviour) => {
+            RichRouteBehaviour::WebhookCallback(_) => {
                 self.webhook_callback_handler
-                    .handle_webhook_callback_behaviour(request, resolved_route, behaviour)
+                    .handle_webhook_callback_behaviour(request, resolved_route)
                     .await
             }
             RichRouteBehaviour::Mount(_) => {

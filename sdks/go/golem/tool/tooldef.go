@@ -451,7 +451,6 @@ type commandLayout struct {
 	// (options before flags per node), positionals, the tail, options, flags.
 	fields      []boundArg
 	stdin       *stdinBinding
-	principal   []int
 	defaults    reflect.Value
 	constraints []toolCommon.Constraint
 	formatters  []toolCommon.Formatter
@@ -611,7 +610,6 @@ func (ce *commandEntry) resolve() (*commandLayout, bool) {
 	if l.stdin != nil {
 		bound[pathString(l.stdin.path)] = true
 	}
-	principalType := reflect.TypeFor[golem.Principal]()
 	var walk func(t reflect.Type, prefix []int)
 	walk = func(t reflect.Type, prefix []int) {
 		for i := range t.NumField() {
@@ -624,11 +622,8 @@ func (ce *commandEntry) resolve() (*commandLayout, bool) {
 					walk(f.Type, path)
 				}
 			case !f.IsExported():
-			case f.Type == principalType:
-				if l.principal != nil {
-					fail("has more than one golem.Principal field")
-				}
-				l.principal = path
+			case isLiveValue(f.Type):
+				fail("field %s: %s", f.Name, misplacedCaller)
 			default:
 				fail("field %s is not bound; bind it in the spec, or unexport it", f.Name)
 			}
@@ -1127,7 +1122,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) (input types.
 // handler, and package the result as a self-contained typed value.
 func (d *definitions) invokeCommand(
 	e *toolEntry, commandPath []string, input types.TypedSchemaValue,
-	stdin *byteReader, outs hostOutputs, principal golem.Principal,
+	stdin *byteReader, outs hostOutputs, caller func() golem.Caller,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
 	defer stdin.closeAfterHandler()
@@ -1143,7 +1138,7 @@ func (d *definitions) invokeCommand(
 	}
 	var args reflect.Value
 	if terr == nil {
-		args, terr = ce.decodeArgs(d, input, stdin, principal)
+		args, terr = ce.decodeArgs(d, input, stdin)
 	}
 	if terr != nil {
 		refused := OutputFailed(fmt.Sprintf("command %s was refused before it ran", ce.label()))
@@ -1152,7 +1147,7 @@ func (d *definitions) invokeCommand(
 		return fail(*terr)
 	}
 	ctx := &OutputContext{
-		Context: Context{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout, stderr: stderr,
+		Context: Context{tool: e.name, path: slices.Clone(commandPath), caller: caller}, stdout: stdout, stderr: stderr,
 	}
 	out, err := runWithOutputs(ce.label(), []*Output{stdout, stderr},
 		func() (reflect.Value, error) {
@@ -1194,9 +1189,9 @@ func (ce *commandEntry) outputsFor(outs hostOutputs) (stdout, stderr *Output, te
 }
 
 // decodeArgs fills a command's argument struct from an invocation: the
-// canonical input record, the principal and standard input.
+// canonical input record and standard input.
 func (ce *commandEntry) decodeArgs(
-	d *definitions, input types.TypedSchemaValue, stdin *byteReader, principal golem.Principal,
+	d *definitions, input types.TypedSchemaValue, stdin *byteReader,
 ) (reflect.Value, *types.ToolError) {
 	l, ok := ce.resolve()
 	if !ok {
@@ -1213,9 +1208,6 @@ func (ce *commandEntry) decodeArgs(
 	if err := l.decode(input.Value, args); err != nil {
 		e := types.MakeToolErrorInvalidInput(err.Error())
 		return reflect.Value{}, &e
-	}
-	if l.principal != nil && principal != nil {
-		args.FieldByIndex(l.principal).Set(reflect.ValueOf(&principal).Elem())
 	}
 	if l.stdin != nil && stdin.present() {
 		args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))

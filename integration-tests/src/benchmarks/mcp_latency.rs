@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use crate::benchmarks::{
-    cleanup_user_state, delete_workers, deployment_base_url, deployment_domain,
+    cleanup_user_state, delete_workers, deployment_base_url, deployment_domain, lookup_keyed_agents,
 };
 use crate::mcp_client::McpClient;
 use async_trait::async_trait;
 use futures::{TryStreamExt, stream};
 use futures_concurrency::future::Join;
 use golem_client::api::RegistryServiceClient;
-use golem_common::agent_id;
-use golem_common::model::AgentId;
+use golem_common::agent_key;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -167,15 +166,11 @@ impl Benchmark for McpLatency {
         context: Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        let durable_agents: Vec<AgentId> = (0..context.sessions)
-            .filter_map(|index| {
-                AgentId::from_agent_id(
-                    context.component.id,
-                    &agent_id!(AgentKind::Durable.agent_type(), agent_name(index)),
-                )
-                .ok()
-            })
-            .collect();
+        let durable_keys = (0..context.sessions)
+            .map(|index| agent_key!(AgentKind::Durable.agent_type(), agent_name(index)))
+            .collect::<Vec<_>>();
+        let durable_agents =
+            lookup_keyed_agents(&context.user, &context.component, &durable_keys).await;
         delete_workers(&context.user, &durable_agents, &recorder).await;
         cleanup_user_state(&context.user, &context.env_id, &recorder).await;
         Ok(())

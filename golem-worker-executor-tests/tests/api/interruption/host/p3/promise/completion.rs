@@ -36,11 +36,11 @@ async fn durable_p3_promise_completion_before_quota_stop(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("GolemHostApi", "p3-promise-completion");
+    let name = agent_key!("GolemHostApi", "p3-promise-completion");
     let id = executor.start_agent(&component.id, name.clone()).await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -51,7 +51,9 @@ async fn durable_p3_promise_completion_before_quota_stop(
     })
     .await?;
     let key = IdempotencyKey::fresh();
-    let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;
+    let stored_key = executor
+        .external_invocation_key(&id.agent_id, &key, METHOD)
+        .await?;
     let mut invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
@@ -66,9 +68,9 @@ async fn durable_p3_promise_completion_before_quota_stop(
     let result = async {
         let original = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                executor.commit_oplog(&id).await?;
+                executor.commit_oplog(&id.agent_id).await?;
                 let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-                if let Some(record) = history::promise_record(&entries, &stored_key, &id, false, 0)? {
+                if let Some(record) = history::promise_record(&entries, &stored_key, &id.agent_id, false, 0)? {
                     return Ok::<_, anyhow::Error>(record);
                 }
                 ensure!(!invocation.is_finished());
@@ -76,17 +78,17 @@ async fn durable_p3_promise_completion_before_quota_stop(
             }
         }).await??;
         let promises = worker.all().promise_service();
-        let pending = promises.poll(original.promise.clone()).await?;
+        let pending = promises.poll(context.default_environment_id, original.promise.clone()).await?;
         ensure!(!pending.is_ready().await && pending.get().await.is_none());
         ensure!(worker.is_loaded().await);
         ensure!(count_agent_invocation_pair_since(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, OplogIndex::INITIAL) == (2, 1));
         ensure!(!invocation.is_finished());
-        let (selected, release) = executor.gate_next_invocation_outcome_append(&id).await;
-        ensure!(promises.complete(original.promise.clone(), PAYLOAD.to_vec()).await?);
+        let (selected, release) = executor.gate_next_invocation_outcome_append(&id.agent_id).await;
+        ensure!(promises.complete(context.default_environment_id, original.promise.clone(), PAYLOAD.to_vec()).await?);
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
-        executor.commit_oplog(&id).await?;
-        ensure!(history::promise_record(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &stored_key, &id, true, 0)? == Some(original.clone()));
+        executor.commit_oplog(&id.agent_id).await?;
+        ensure!(history::promise_record(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, &stored_key, &id.agent_id, true, 0)? == Some(original.clone()));
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -116,13 +118,13 @@ async fn durable_p3_promise_completion_before_quota_stop(
         refresh.await?;
         ensure!(!worker.is_loaded().await);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(history::promise_record(&completed, &stored_key, &id, true, 1)? == Some(original.clone()));
+        ensure!(history::promise_record(&completed, &stored_key, &id.agent_id, true, 1)? == Some(original.clone()));
         history::settled(&completed)?;
         history::invocation(&completed, &stored_key, 1)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
         let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!()).await?;
         ensure!(cached.into_typed::<Vec<u8>>()? == PAYLOAD);
-        ensure!(!promises.complete(original.promise.clone(), vec![99]).await?, "duplicate completion must not replace payload");
+        ensure!(!promises.complete(context.default_environment_id, original.promise.clone(), vec![99]).await?, "duplicate completion must not replace payload");
         ensure!(pending.get().await == Some(PAYLOAD.to_vec()));
         info!(%key, ?original,
             "Committed promise result survived later monthly exhaustion with one invocation result");

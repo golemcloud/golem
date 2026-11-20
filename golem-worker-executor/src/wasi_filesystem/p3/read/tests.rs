@@ -40,11 +40,10 @@ impl ReadProducerFixture {
         use crate::services::linear_memory::LinearMemoryTracker;
         use crate::services::resource_limits::AtomicResourceEntry;
         use crate::services::resource_usage_metering::ResourceUsageAccount;
+        use golem_common::model::OwnedAgentId;
         use golem_common::model::account::AccountId;
         use golem_common::model::agent::AgentMode;
-        use golem_common::model::component::ComponentId;
         use golem_common::model::environment::EnvironmentId;
-        use golem_common::model::{AgentId, OwnedAgentId};
         use std::sync::Arc;
         use std::time::Instant;
         use uuid::Uuid;
@@ -56,10 +55,7 @@ impl ReadProducerFixture {
             },
             ..FilesystemStorageConfig::default()
         };
-        let agent = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId::from_agent_name_string(ComponentId::new(), "p3-pull-read").unwrap(),
-        );
+        let agent = OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id("p3-pull-read"));
         let provisioning =
             SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
                 .unwrap();

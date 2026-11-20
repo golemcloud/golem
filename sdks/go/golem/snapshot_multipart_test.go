@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -63,9 +62,9 @@ func allBytes() []byte {
 	return b
 }
 
-func TestMultipartSnapshotRoundTripsStatePartsAndPrincipal(t *testing.T) {
+func TestMultipartSnapshotRoundTripsStateAndParts(t *testing.T) {
 	src := &multipartIndex{revision: 13, index: allBytes()}
-	snap, err := saveState(src, snapPrincipal)
+	snap, err := saveState(src)
 	if err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -73,10 +72,7 @@ func TestMultipartSnapshotRoundTripsStatePartsAndPrincipal(t *testing.T) {
 		t.Fatalf("mime %q", snap.MimeType)
 	}
 	dst := &multipartIndex{}
-	principal := restore(t, dst, snap)
-	if fmt.Sprint(principal) != fmt.Sprint(snapPrincipal) {
-		t.Errorf("principal %v, want %v", principal, snapPrincipal)
-	}
+	restore(t, dst, snap)
 	if dst.revision != 13 || !bytes.Equal(dst.index, src.index) || !dst.restored {
 		t.Errorf("restored %+v", dst)
 	}
@@ -92,16 +88,16 @@ func TestMultipartSnapshotKeepsDynamicOpaqueParts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, mime, err := encodeMultipart(snap, []byte("{}"))
+	data, mime, err := encodeMultipart(snap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	principal, decoded, err := decodeMultipart(data, mime)
+	decoded, err := decodeMultipart(data, mime)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(principal) != "{}" || string(decoded.State) != string(snap.State) || len(decoded.Parts) != 3 {
-		t.Fatalf("decoded %s %s %d", principal, decoded.State, len(decoded.Parts))
+	if string(decoded.State) != string(snap.State) || len(decoded.Parts) != 3 {
+		t.Fatalf("decoded %s %d", decoded.State, len(decoded.Parts))
 	}
 	for name, part := range parts {
 		got, err := decoded.RequirePart(name, "APPLICATION/OCTET-STREAM")
@@ -120,11 +116,11 @@ func TestMultipartSnapshotKeepsDynamicOpaqueParts(t *testing.T) {
 	}
 
 	empty := MultipartSnapshot{State: json.RawMessage("null")}
-	data, mime, err = encodeMultipart(empty, []byte("{}"))
+	data, mime, err = encodeMultipart(empty)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err := decodeMultipart(data, mime); err != nil || string(got.State) != "null" || len(got.Parts) != 0 {
+	if got, err := decodeMultipart(data, mime); err != nil || string(got.State) != "null" || len(got.Parts) != 0 {
 		t.Errorf("empty snapshot: %v %+v", err, got)
 	}
 }
@@ -167,14 +163,14 @@ func TestMultipartBoundaryAvoidsCollisions(t *testing.T) {
 		State: json.RawMessage("null"),
 		Parts: map[string]SnapshotPart{"index": {Bytes: body, ContentType: "application/octet-stream"}},
 	}
-	data, mime, err := encodeMultipart(snap, []byte("{}"))
+	data, mime, err := encodeMultipart(snap)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := extractBoundary(mime); b != "golem-snapshot-2" {
 		t.Errorf("boundary %q", b)
 	}
-	_, decoded, err := decodeMultipart(data, mime)
+	decoded, err := decodeMultipart(data, mime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,10 +186,16 @@ func TestMultipartRejectsMalformedFramingEnvelopesAndNames(t *testing.T) {
 		return []byte("--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n" + state + "\r\n" + extra + "--b--\r\n")
 	}
 	valid := string(wrap(envelope, ""))
-	if _, _, err := decodeMultipart([]byte(valid), mime); err != nil {
+	if _, err := decodeMultipart([]byte(valid), mime); err != nil {
 		t.Fatalf("valid: %v", err)
 	}
-	if _, _, err := decodeMultipart(wrap(strings.Replace(envelope, "null", "[17,null]", 1), ""), mime); err != nil {
+	if _, err := decodeMultipart(wrap(`{"version":2,"state":null}`, ""), mime); err != nil {
+		t.Fatalf("2.0 envelope: %v", err)
+	}
+	if _, err := decodeMultipart(wrap(`{"version":3,"state":null}`, ""), mime); err == nil {
+		t.Error("version 3 was accepted")
+	}
+	if _, err := decodeMultipart(wrap(strings.Replace(envelope, "null", "[17,null]", 1), ""), mime); err != nil {
 		t.Errorf("array state: %v", err)
 	}
 	for _, state := range []string{
@@ -205,13 +207,13 @@ func TestMultipartRejectsMalformedFramingEnvelopesAndNames(t *testing.T) {
 		strings.Replace(envelope, `"principal":{}`, `"principal":{"agent":{},"agent":{}}`, 1),
 		`{"version":1,"principal":{}}`,
 	} {
-		if _, _, err := decodeMultipart(wrap(state, ""), mime); err == nil {
+		if _, err := decodeMultipart(wrap(state, ""), mime); err == nil {
 			t.Errorf("accepted envelope %s", state)
 		}
 	}
 	for _, name := range []string{"part:", "part:a/b", "db:main", "unknown:x"} {
 		extra := "--b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; name=\"" + name + "\"\r\n\r\nx\r\n"
-		if _, _, err := decodeMultipart(wrap(envelope, extra), mime); err == nil {
+		if _, err := decodeMultipart(wrap(envelope, extra), mime); err == nil {
 			t.Errorf("accepted part name %q", name)
 		}
 	}
@@ -221,7 +223,7 @@ func TestMultipartRejectsMalformedFramingEnvelopesAndNames(t *testing.T) {
 		strings.Replace(valid, "Content-Type: application/json", "Content-Type: application/json\r\nContent-Type: application/json", 1),
 		strings.Replace(valid, "Content-Type: application/json", "Content-Type: application/json\r\nUnknown: x", 1),
 	} {
-		if _, _, err := decodeMultipart([]byte(data), mime); err == nil {
+		if _, err := decodeMultipart([]byte(data), mime); err == nil {
 			t.Errorf("accepted framing %q", data)
 		}
 	}
@@ -231,23 +233,23 @@ func TestMultipartRejectsMalformedFramingEnvelopesAndNames(t *testing.T) {
 		{"index", "text/plain\r\nHeader: injected"},
 	} {
 		snap := MultipartSnapshot{State: json.RawMessage("null"), Parts: map[string]SnapshotPart{c.name: {ContentType: c.contentType}}}
-		if _, _, err := encodeMultipart(snap, []byte("{}")); err == nil {
+		if _, _, err := encodeMultipart(snap); err == nil {
 			t.Errorf("encoded part %q with %q", c.name, c.contentType)
 		}
 	}
 	notUTF8 := []byte(valid)
 	notUTF8[bytes.Index(notUTF8, []byte("null"))] = 255
-	if _, _, err := decodeMultipart(notUTF8, mime); err == nil {
+	if _, err := decodeMultipart(notUTF8, mime); err == nil {
 		t.Error("accepted a non-UTF-8 envelope")
 	}
 }
 
 func TestMultipartAndSimpleModesDoNotMix(t *testing.T) {
-	multipart, err := saveState(&multipartIndex{index: []byte{1}}, snapPrincipal)
+	multipart, err := saveState(&multipartIndex{index: []byte{1}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, state, err := splitSnapshot(multipart)
+	state, err := splitSnapshot(multipart)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,18 +259,18 @@ func TestMultipartAndSimpleModesDoNotMix(t *testing.T) {
 	if err := loadState(&struct{ Count int }{}, state); err == nil {
 		t.Error("a JSON state loaded a multipart snapshot and dropped its parts")
 	}
-	plain, err := saveState(&snapCustomState{count: 1}, snapPrincipal)
+	plain, err := saveState(&snapCustomState{count: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, state, err = splitSnapshot(plain)
+	state, err = splitSnapshot(plain)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := loadState(&multipartIndex{}, state); err == nil {
 		t.Error("a MultipartSnapshotter state loaded a raw snapshot")
 	}
-	if _, _, err := splitSnapshot(host.Snapshot{Payload: []byte("x"), MimeType: "multipart/mixed; boundary=b"}); err == nil {
+	if _, err := splitSnapshot(host.Snapshot{Payload: []byte("x"), MimeType: "multipart/mixed; boundary=b"}); err == nil {
 		t.Error("split a malformed multipart snapshot")
 	}
 }

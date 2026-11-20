@@ -155,7 +155,7 @@ test "ordinary registry keeps private invokers hidden and releases rejected stdi
           Some(stdin),
           None,
           None,
-          Principal::Anonymous,
+          InvocationContext::anonymous(),
         )
         is Err(@types.ToolError::InvalidToolName(_)),
       )
@@ -170,7 +170,7 @@ test "ordinary registry keeps private invokers hidden and releases rejected stdi
         None,
         None,
         None,
-        Principal::Anonymous,
+        InvocationContext::anonymous(),
       )
       is Ok(_),
     )

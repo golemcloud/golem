@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use futures_concurrency::future::Join;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::IdempotencyKey;
+use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
 use golem_test_framework::config::dsl_impl::TestUserContext;
@@ -47,6 +47,7 @@ pub mod streaming_recovery;
 pub mod throughput;
 pub mod throughput_effect;
 
+pub use crate::agents::{lookup_keyed_agent, lookup_keyed_agents};
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
 pub use cleanup::{cleanup_account, cleanup_env_and_app, cleanup_user_state};
 
@@ -92,7 +93,7 @@ pub fn deployment_base_url(deps: &BenchmarkTestDependencies, domain: &Domain) ->
 
 pub async fn delete_workers(
     user: &TestUserContext<BenchmarkTestDependencies>,
-    agent_ids: &[AgentId],
+    agent_ids: &[OwnedAgentId],
     recorder: &BenchmarkRecorder,
 ) {
     info!("Deleting {} workers...", agent_ids.len());
@@ -133,7 +134,7 @@ fn failure_message(message: String) -> String {
 #[derive(Debug)]
 pub struct InvokeResult {
     pub value: Vec<SchemaValue>,
-    pub agent_id: Option<AgentId>,
+    pub agent_id: Option<OwnedAgentId>,
     pub retries: usize,
     pub timeouts: usize,
     pub accumulated_time: Duration,

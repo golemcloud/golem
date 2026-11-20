@@ -431,6 +431,28 @@ pub struct OplogExportHeader {
     pub generated_at: String,
 }
 
+/// The header of a bounded report: the fields of the export header and the selected range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OplogReportHeader {
+    #[serde(flatten)]
+    pub export: OplogExportHeader,
+    /// The first oplog index of the range, inclusive.
+    pub from: u64,
+    /// The last oplog index of the range, inclusive.
+    pub to: u64,
+}
+
+/// One complete obfuscated report of a closed range of the oplog: the header, every entry of the
+/// range in index order, and the coverage of the whole range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OplogExportReport {
+    pub header: OplogReportHeader,
+    pub entries: Vec<ReportEntry>,
+    pub coverage: OplogExportCoverage,
+}
+
 /// The number of items each coverage list shows; `discovered` counts every item.
 pub const COVERAGE_LIST_CAP: usize = 100;
 

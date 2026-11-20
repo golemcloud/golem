@@ -36,7 +36,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         response_lease: ResponseLease,
         scope: &crate::worker::tasks::TaskScope,
     ) {
-        let rejection_identity = (resume.idempotency_key, resume.agent_id.clone());
+        let rejection_identity = (resume.idempotency_key, resume.agent_id);
         let result = async {
             Self::validate_auth_ctx(&resume.auth_ctx)?;
             let attempt = build_resume_attempt(
@@ -48,18 +48,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .get(),
             )?;
             let lookup = InvocationStart {
-                agent_id: resume.agent_id.clone(),
+                target: resume.agent_id.map(|agent_id| {
+                    golem_api_grpc::proto::golem::worker::AgentTarget {
+                        target: Some(
+                            golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
+                                agent_id,
+                            ),
+                        ),
+                    }
+                }),
                 idempotency_key: resume.idempotency_key.map(|key| {
                     golem_common::model::IdempotencyKey::from_uuid(uuid::Uuid::from(key)).into()
                 }),
                 auth_ctx: resume.auth_ctx.clone(),
-                principal: resume.principal.clone(),
+                caller: resume.caller.clone(),
                 environment_id: resume.environment_id,
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 ..Default::default()
             };
+            let resolved = self.resolve_request_target(&lookup).await?;
             let (worker, _response_lease) = self
-                .get_or_create_pending_for_lookup(&lookup, None)
+                .get_or_create_pending_for_lookup(&lookup, &resolved, None)
                 .await?
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(
@@ -215,7 +224,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .send(InvocationResponse {
                 response: Some(invocation_response::Response::Accepted(
                     InvocationAccepted {
-                        agent_id: resume.agent_id.clone(),
+                        agent_id: resume.agent_id,
                         idempotency_key: resume.idempotency_key,
                         component_revision: Some(
                             acceptance
@@ -374,7 +383,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     .target_component_revision
                                     .get(),
                             ),
-                            agent_id: resume.agent_id.clone(),
+                            agent_id: resume.agent_id,
                             idempotency_key: resume.idempotency_key,
                             fuel_consumed: None,
                             status: None,

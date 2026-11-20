@@ -555,13 +555,7 @@ mod tests {
 
     #[test]
     fn shared_context_drops_before_its_registration() {
-        let owner = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".into(),
-            },
-        );
+        let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
         let activation = Arc::new(
             EntityActivation::new(
                 ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),
@@ -587,11 +581,7 @@ mod tests {
             EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
             OplogIndex::from_u64(1),
             activation,
-            golem_common::model::agent::Principal::Agent(
-                golem_common::model::agent::AgentPrincipal {
-                    agent_id: owner.agent_id,
-                },
-            ),
+            crate::test_callers::agent_principal(owner.agent_id),
             InvocationExecutionMode::Live,
             uuid::Uuid::new_v4().into(),
             false,

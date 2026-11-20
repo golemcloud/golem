@@ -40,7 +40,7 @@ use crate::model::oplog::raw_types::{
 };
 use crate::model::oplog::{
     AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails, LogLevel,
-    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails,
+    OplogEntry, PublicOplogEntry, SnapshotAssistedUpdateDetails, UpdateFailureClass,
 };
 use crate::resource_runtime::ResourceTypeId;
 
@@ -448,6 +448,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     component_id,
                     agent_type_name,
                     canonical_key,
+                    constructor_parameters,
                     agent_id,
                     owner_kind,
                     agent_mode,
@@ -460,14 +461,15 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
                     component_id: Some(component_id.into()),
                     agent_type_name: agent_type_name.map(|name| name.0),
                     canonical_key,
+                    constructor_parameters,
                     agent_id: Some(agent_id.into()),
                     owner_kind: owner_kind.into(),
                     agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
@@ -490,9 +492,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         .into_iter()
                         .map(|e| crate::serialization::serialize(&e))
                         .collect::<Result<Vec<_>, _>>()?,
-                    original_phantom_id: original_phantom_id.map(Into::into),
                     instance_id: Some(instance_id.into()),
                     create_request: Some(create_request_to_proto(create_request)),
+                    never_live,
                 })
             }
             OplogEntry::Start {
@@ -678,6 +680,8 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 snapshot_assisted_details,
                 update_attempt_index,
                 snapshot_fault,
+                failure_class,
+                divergence,
                 ..
             } => Entry::FailedUpdate(RawFailedUpdateParameters {
                 target_revision: target_revision.into(),
@@ -693,6 +697,10 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 update_attempt_index: update_attempt_index.map(Into::into),
                 snapshot_fault: snapshot_fault
                     .map(|fault| raw_snapshot_fault_to_proto(fault) as i32),
+                failure_class: failure_class.proto_number(),
+                divergence: divergence
+                    .map(|divergence| (*divergence).try_into())
+                    .transpose()?,
             }),
             OplogEntry::GrowMemory { delta, .. } => {
                 Entry::GrowMemory(RawGrowMemoryParameters { delta })
@@ -1114,10 +1122,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .into_iter()
                     .map(|bytes| crate::serialization::deserialize(&bytes))
                     .collect::<Result<Vec<_>, _>>()?;
-                let original_phantom_id: Option<uuid::Uuid> = p.original_phantom_id.map(|u| {
-                    let proto_uuid: golem_schema::proto::golem::common::Uuid = u;
-                    uuid::Uuid::from(proto_uuid)
-                });
                 let instance_id = p.instance_id.ok_or("Missing instance_id")?.into();
 
                 Ok(OplogEntry::Create {
@@ -1126,6 +1130,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         component_id: p.component_id.ok_or("Missing component_id")?.try_into()?,
                         agent_type_name: p.agent_type_name.map(crate::model::agent::AgentTypeName),
                         canonical_key: p.canonical_key,
+                        constructor_parameters: p.constructor_parameters,
                         agent_id,
                         owner_kind,
                         agent_mode,
@@ -1138,11 +1143,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         initial_total_linear_memory_size: p.initial_total_linear_memory_size,
                         initial_active_plugins,
                         local_agent_config,
-                        original_phantom_id,
                         instance_id,
                         create_request: create_request_from_proto(
                             p.create_request.ok_or("Missing create_request")?,
                         )?,
+                        never_live: p.never_live,
                     }),
                 })
             }
@@ -1382,6 +1387,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     snapshot_fault: p
                         .snapshot_fault
                         .map(raw_snapshot_fault_from_proto)
+                        .transpose()?,
+                    failure_class: UpdateFailureClass::from_proto_number(p.failure_class)?,
+                    divergence: p
+                        .divergence
+                        .map(|divergence| {
+                            crate::model::oplog::ReplayDivergence::try_from(divergence)
+                                .map(Box::new)
+                        })
                         .transpose()?,
                 })
             }
@@ -1745,7 +1758,7 @@ fn create_request_to_proto(
     let CreateRequest {
         kind,
         idempotency_key,
-        principal,
+        caller,
         trace_id,
         trace_states,
         invocation_context,
@@ -1754,11 +1767,11 @@ fn create_request_to_proto(
         kind: match kind {
             CreateRequestKind::GetOrCreate => RawCreateRequestKind::GetOrCreate,
             CreateRequestKind::Exclusive => RawCreateRequestKind::Exclusive,
-            CreateRequestKind::Phantom => RawCreateRequestKind::Phantom,
+            CreateRequestKind::Unkeyed => RawCreateRequestKind::Unkeyed,
             CreateRequestKind::Fork => RawCreateRequestKind::Fork,
         } as i32,
         idempotency_key: idempotency_key.map(Into::into),
-        principal: Some(principal.into()),
+        caller: Some(caller.into()),
         trace_id: trace_id.to_string(),
         trace_states,
         invocation_context: invocation_context
@@ -1778,15 +1791,15 @@ fn create_request_from_proto(
     {
         RawCreateRequestKind::GetOrCreate => CreateRequestKind::GetOrCreate,
         RawCreateRequestKind::Exclusive => CreateRequestKind::Exclusive,
-        RawCreateRequestKind::Phantom => CreateRequestKind::Phantom,
+        RawCreateRequestKind::Unkeyed => CreateRequestKind::Unkeyed,
         RawCreateRequestKind::Fork => CreateRequestKind::Fork,
     };
     Ok(CreateRequest {
         kind,
         idempotency_key: value.idempotency_key.map(Into::into),
-        principal: value
-            .principal
-            .ok_or("Missing create request principal")?
+        caller: value
+            .caller
+            .ok_or("Missing create request caller")?
             .try_into()?,
         trace_id: TraceId::from_string(value.trace_id)?,
         trace_states: value.trace_states,

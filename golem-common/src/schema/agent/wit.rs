@@ -28,16 +28,21 @@
 
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::agent::{
-    AgentConfigSource, AgentHttpAuthDetails, AgentMode, AgentPrincipal, CachePolicy,
-    CachePolicyTtl, CorsOptions, GolemUserPrincipal, HttpEndpointDetails, HttpMethod,
-    HttpMountDetails, OidcPrincipal, PathSegment, PhantomIdBinding, PhantomIdBindingDetails,
-    Principal, ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
+    AgentConfigSource, AgentHttpAuthDetails, AgentMode, CachePolicy, CachePolicyTtl, CorsOptions,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
+    PhantomIdBindingDetails, ReadOnlyConfig, Snapshotting, SnapshottingConfig,
+    SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
+use crate::base_model::caller::{
+    AccountAuthentication, AccountPrincipal, AgentPrincipal, Caller, Claims, GolemSubject, Pair,
+    Principal, PrincipalRef, TokenProvenance, ToolPrincipal, UserPrincipal, agent_subject_uuid,
+};
+use crate::base_model::environment::EnvironmentId;
+use crate::base_model::tool::ToolName;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField,
-    OutputSchema, RegisteredAgentTypeSchema,
+    AgentTypeKind, AgentTypeSchema, FieldSource, InputSchema, NamedField, OutputSchema,
+    RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use golem_schema::Empty;
@@ -59,7 +64,8 @@ pub use super::bindings::golem::agent::common as wire;
 
 use crate::base_model::account::AccountId;
 use crate::base_model::component::ComponentId;
-use crate::base_model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
+use crate::base_model::{AgentFingerprint, AgentId, OplogIndex, PromiseId, Timestamp};
+use std::str::FromStr;
 
 fn uuid_to_core2(value: uuid::Uuid) -> golem_schema::schema::wit::wire::Uuid {
     let (high_bits, low_bits) = value.as_u64_pair();
@@ -104,18 +110,14 @@ impl From<golem_schema::schema::wit::wire::AccountId> for AccountId {
 impl From<AgentId> for golem_schema::schema::wit::wire::AgentId {
     fn from(value: AgentId) -> Self {
         Self {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
+            uuid: uuid_to_core2(value.0),
         }
     }
 }
 
 impl From<golem_schema::schema::wit::wire::AgentId> for AgentId {
     fn from(value: golem_schema::schema::wit::wire::AgentId) -> Self {
-        AgentId {
-            component_id: value.component_id.into(),
-            agent_id: value.agent_id,
-        }
+        AgentId(uuid_from_core2(value.uuid))
     }
 }
 
@@ -258,15 +260,13 @@ pub fn decode_agent_type(w: &wire::AgentType) -> Result<AgentTypeSchema, AgentWi
     })
 }
 
-/// Encode a [`RegisteredAgentTypeSchema`] into the wire form. The wire type
-/// carries only the implementer's `component-id`; the component revision is
+/// Encode a [`RegisteredAgentTypeSchema`] into the wire form. The implementer is
 /// host-side metadata that does not cross this interface.
 pub fn encode_registered_agent_type(
     rt: &RegisteredAgentTypeSchema,
 ) -> Result<wire::RegisteredAgentType, AgentWitError> {
     Ok(wire::RegisteredAgentType {
         agent_type: encode_agent_type(&rt.agent_type)?,
-        implemented_by: rt.implemented_by.component_id.into(),
     })
 }
 
@@ -441,26 +441,12 @@ fn decode_output_schema(
 fn encode_field_source(s: &FieldSource) -> wire::FieldSource {
     match s {
         FieldSource::UserSupplied => wire::FieldSource::UserSupplied,
-        FieldSource::AutoInjected(k) => wire::FieldSource::AutoInjected(encode_auto_injected(k)),
     }
 }
 
 fn decode_field_source(s: &wire::FieldSource) -> FieldSource {
     match s {
         wire::FieldSource::UserSupplied => FieldSource::UserSupplied,
-        wire::FieldSource::AutoInjected(k) => FieldSource::AutoInjected(decode_auto_injected(k)),
-    }
-}
-
-fn encode_auto_injected(k: &AutoInjectedKind) -> wire::AutoInjectedKind {
-    match k {
-        AutoInjectedKind::Principal => wire::AutoInjectedKind::Principal,
-    }
-}
-
-fn decode_auto_injected(k: &wire::AutoInjectedKind) -> AutoInjectedKind {
-    match k {
-        wire::AutoInjectedKind::Principal => AutoInjectedKind::Principal,
     }
 }
 
@@ -586,7 +572,6 @@ impl From<wire::ReadOnlyConfig> for ReadOnlyConfig {
     fn from(value: wire::ReadOnlyConfig) -> Self {
         Self {
             cache_policy: value.cache_policy.into(),
-            uses_principal: value.uses_principal,
         }
     }
 }
@@ -595,7 +580,6 @@ impl From<ReadOnlyConfig> for wire::ReadOnlyConfig {
     fn from(value: ReadOnlyConfig) -> Self {
         Self {
             cache_policy: value.cache_policy.into(),
-            uses_principal: value.uses_principal,
         }
     }
 }
@@ -822,91 +806,221 @@ impl From<wire::AuthDetails> for AgentHttpAuthDetails {
     }
 }
 
+fn environment_id_to_core2(value: EnvironmentId) -> golem_schema::schema::wit::wire::EnvironmentId {
+    golem_schema::schema::wit::wire::EnvironmentId {
+        uuid: uuid_to_core2(value.0),
+    }
+}
+
+fn environment_id_from_core2(
+    value: golem_schema::schema::wit::wire::EnvironmentId,
+) -> EnvironmentId {
+    EnvironmentId(uuid_from_core2(value.uuid))
+}
+
+fn timestamp_to_core2(value: Timestamp) -> golem_schema::schema::wit::wire::Datetime {
+    let value = prost_types::Timestamp::from(value);
+    golem_schema::schema::wit::wire::Datetime {
+        seconds: value.seconds,
+        nanoseconds: value.nanos as u32,
+    }
+}
+
+fn timestamp_from_core2(
+    value: golem_schema::schema::wit::wire::Datetime,
+) -> Result<Timestamp, String> {
+    let seconds = u64::try_from(value.seconds)
+        .map_err(|_| "Invalid field: authenticated-at: negative seconds".to_string())?;
+    if value.nanoseconds >= 1_000_000_000 {
+        return Err("Invalid field: authenticated-at: nanoseconds out of range".to_string());
+    }
+    Ok(Timestamp::from(prost_types::Timestamp {
+        seconds: seconds as i64,
+        nanos: value.nanoseconds as i32,
+    }))
+}
+
+impl From<Pair> for wire::PrincipalRef {
+    fn from(value: Pair) -> Self {
+        Self {
+            issuer: value.issuer,
+            subject: value.subject,
+        }
+    }
+}
+
+impl From<wire::PrincipalRef> for Pair {
+    fn from(value: wire::PrincipalRef) -> Self {
+        Pair::new(value.issuer, value.subject)
+    }
+}
+
+impl From<AccountAuthentication> for wire::AccountAuthentication {
+    fn from(value: AccountAuthentication) -> Self {
+        match value {
+            AccountAuthentication::ApiToken => Self::ApiToken,
+            AccountAuthentication::BootstrapToken => Self::BootstrapToken,
+            AccountAuthentication::SignIn => Self::SignIn,
+        }
+    }
+}
+
+impl From<wire::AccountAuthentication> for AccountAuthentication {
+    fn from(value: wire::AccountAuthentication) -> Self {
+        match value {
+            wire::AccountAuthentication::ApiToken => Self::ApiToken,
+            wire::AccountAuthentication::BootstrapToken => Self::BootstrapToken,
+            wire::AccountAuthentication::SignIn => Self::SignIn,
+        }
+    }
+}
+
 impl From<Principal> for wire::Principal {
     fn from(value: Principal) -> Self {
+        let pair = value.pair().map(wire::PrincipalRef::from);
+        match (value, pair) {
+            (Principal::User(user), Some(pair)) => Self::User(wire::UserPrincipal {
+                pair,
+                claims: user.claims.as_json().to_string(),
+                authenticated_at: timestamp_to_core2(user.authenticated_at),
+            }),
+            (Principal::Account(account), Some(pair)) => Self::Account(wire::AccountPrincipal {
+                pair,
+                account_id: account.account_id.into(),
+                authentication: account.authentication.into(),
+            }),
+            (Principal::Agent(agent), Some(pair)) => Self::Agent(wire::AgentPrincipal {
+                pair,
+                agent_id: agent.address.into(),
+                agent_type: agent.agent_type.0,
+                environment_id: environment_id_to_core2(agent.environment_id),
+            }),
+            (Principal::Tool(tool), Some(pair)) => Self::Tool(wire::ToolPrincipal {
+                pair,
+                environment_id: environment_id_to_core2(tool.environment_id),
+                tool_name: tool.tool_name.to_string(),
+            }),
+            _ => Self::Anonymous,
+        }
+    }
+}
+
+impl TryFrom<wire::Principal> for Principal {
+    type Error = String;
+
+    /// Decodes a principal and checks that the pair it carries is the pair of its details, so a
+    /// guest cannot present a pair that names another principal.
+    fn try_from(value: wire::Principal) -> Result<Self, Self::Error> {
+        fn check(principal: Principal, pair: Pair) -> Result<Principal, String> {
+            if principal.pair().as_ref() == Some(&pair) {
+                Ok(principal)
+            } else {
+                Err(format!(
+                    "The pair {pair} does not belong to the principal's details"
+                ))
+            }
+        }
+
         match value {
-            Principal::Oidc(inner) => Self::Oidc(inner.into()),
-            Principal::Agent(inner) => Self::Agent(inner.into()),
-            Principal::GolemUser(inner) => Self::GolemUser(inner.into()),
-            Principal::Anonymous(_) => Self::Anonymous,
+            wire::Principal::User(user) => Ok(Principal::User(UserPrincipal {
+                pair: user.pair.into(),
+                claims: Claims::from_json(user.claims)
+                    .map_err(|error| format!("Invalid field: claims: {error}"))?,
+                authenticated_at: timestamp_from_core2(user.authenticated_at)?,
+            })),
+            wire::Principal::Account(account) => {
+                let pair = Pair::from(account.pair);
+                check(
+                    Principal::Account(AccountPrincipal {
+                        issuer: pair.issuer.clone(),
+                        account_id: account.account_id.into(),
+                        authentication: account.authentication.into(),
+                    }),
+                    pair,
+                )
+            }
+            wire::Principal::Agent(agent) => {
+                let pair = Pair::from(agent.pair);
+                let subject = GolemSubject::from_str(&pair.subject)
+                    .map_err(|error| format!("Invalid agent subject: {error}"))?;
+                let GolemSubject::Agent {
+                    agent_id,
+                    fingerprint,
+                } = subject
+                else {
+                    return Err(
+                        "The subject of an agent principal must be an agent subject".to_string()
+                    );
+                };
+                let address = AgentId::from(agent.agent_id);
+                if agent_id != agent_subject_uuid(&address) {
+                    return Err("The agent subject does not belong to the agent ID".to_string());
+                }
+                check(
+                    Principal::Agent(AgentPrincipal {
+                        issuer: pair.issuer.clone(),
+                        agent_id,
+                        address,
+                        fingerprint,
+                        agent_type: AgentTypeName(agent.agent_type),
+                        environment_id: environment_id_from_core2(agent.environment_id),
+                    }),
+                    pair,
+                )
+            }
+            wire::Principal::Tool(tool) => {
+                let pair = Pair::from(tool.pair);
+                check(
+                    Principal::Tool(ToolPrincipal {
+                        issuer: pair.issuer.clone(),
+                        environment_id: environment_id_from_core2(tool.environment_id),
+                        tool_name: ToolName::try_from(tool.tool_name)?,
+                    }),
+                    pair,
+                )
+            }
+            wire::Principal::Anonymous => Ok(Principal::Anonymous),
         }
     }
 }
 
-impl From<wire::Principal> for Principal {
-    fn from(value: wire::Principal) -> Self {
-        match value {
-            wire::Principal::Oidc(inner) => Self::Oidc(inner.into()),
-            wire::Principal::Agent(inner) => Self::Agent(inner.into()),
-            wire::Principal::GolemUser(inner) => Self::GolemUser(inner.into()),
-            wire::Principal::Anonymous => Self::Anonymous(Empty {}),
-        }
-    }
-}
-
-impl From<OidcPrincipal> for wire::OidcPrincipal {
-    fn from(value: OidcPrincipal) -> Self {
+impl From<TokenProvenance> for wire::TokenProvenance {
+    fn from(value: TokenProvenance) -> Self {
         Self {
-            sub: value.sub,
-            issuer: value.issuer,
-            email: value.email,
-            name: value.name,
-            email_verified: value.email_verified,
-            given_name: value.given_name,
-            family_name: value.family_name,
-            picture: value.picture,
-            preferred_username: value.preferred_username,
-            claims: value.claims,
+            id: uuid_to_core2(value.id),
+            maker: value.maker.map(|maker| maker.into_pair().into()),
         }
     }
 }
 
-impl From<wire::OidcPrincipal> for OidcPrincipal {
-    fn from(value: wire::OidcPrincipal) -> Self {
+impl From<wire::TokenProvenance> for TokenProvenance {
+    fn from(value: wire::TokenProvenance) -> Self {
         Self {
-            sub: value.sub,
-            issuer: value.issuer,
-            email: value.email,
-            name: value.name,
-            email_verified: value.email_verified,
-            given_name: value.given_name,
-            family_name: value.family_name,
-            picture: value.picture,
-            preferred_username: value.preferred_username,
-            claims: value.claims,
+            id: uuid_from_core2(value.id),
+            maker: value.maker.map(|maker| PrincipalRef::new(maker.into())),
         }
     }
 }
 
-impl From<AgentPrincipal> for wire::AgentPrincipal {
-    fn from(value: AgentPrincipal) -> Self {
+impl From<Caller> for wire::Caller {
+    fn from(value: Caller) -> Self {
         Self {
-            agent_id: value.agent_id.into(),
+            original: value.original.into(),
+            immediate: value.immediate.into(),
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<wire::AgentPrincipal> for AgentPrincipal {
-    fn from(value: wire::AgentPrincipal) -> Self {
-        Self {
-            agent_id: value.agent_id.into(),
-        }
-    }
-}
+impl TryFrom<wire::Caller> for Caller {
+    type Error = String;
 
-impl From<GolemUserPrincipal> for wire::GolemUserPrincipal {
-    fn from(value: GolemUserPrincipal) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-        }
-    }
-}
-
-impl From<wire::GolemUserPrincipal> for GolemUserPrincipal {
-    fn from(value: wire::GolemUserPrincipal) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-        }
+    fn try_from(value: wire::Caller) -> Result<Self, Self::Error> {
+        Ok(Self {
+            original: value.original.try_into()?,
+            immediate: value.immediate.try_into()?,
+            tokens: value.tokens.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -1024,11 +1138,7 @@ mod tests {
             prompt_hint: None,
             input_schema: InputSchema::parameters(vec![
                 NamedField::user_supplied("origin", point_ref()),
-                NamedField::auto_injected(
-                    "caller",
-                    AutoInjectedKind::Principal,
-                    SchemaType::string(),
-                ),
+                NamedField::user_supplied("label", SchemaType::string()),
             ]),
         };
 
@@ -1332,5 +1442,65 @@ mod tests {
             let decoded = decode_agent_error(wire).expect("decode");
             assert_eq!(format!("{decoded}"), format!("{original}"));
         }
+    }
+
+    #[test]
+    fn caller_wit_round_trips_every_kind() {
+        use crate::base_model::caller::Caller;
+        use crate::base_model::caller::test_support::{every_principal, sample_caller};
+
+        let mut callers = vec![sample_caller()];
+        for original in every_principal() {
+            for immediate in every_principal() {
+                callers.push(Caller {
+                    original: original.clone(),
+                    immediate,
+                    tokens: sample_caller().tokens,
+                });
+            }
+        }
+        for caller in callers {
+            let wire = wire::Caller::from(caller.clone());
+            let back = Caller::try_from(wire).expect("decode");
+            assert_eq!(back, caller);
+        }
+    }
+
+    #[test]
+    fn caller_wit_refuses_a_pair_that_does_not_belong_to_the_principal() {
+        use crate::base_model::caller::Principal;
+        use crate::base_model::caller::test_support::{
+            account_principal, agent_principal, tool_principal,
+        };
+
+        let mut account = wire::Principal::from(account_principal());
+        let wire::Principal::Account(details) = &mut account else {
+            unreachable!()
+        };
+        details.account_id = AccountId(uuid::Uuid::from_u128(0xbad)).into();
+        assert!(Principal::try_from(account).is_err());
+
+        let mut tool = wire::Principal::from(tool_principal());
+        let wire::Principal::Tool(details) = &mut tool else {
+            unreachable!()
+        };
+        details.tool_name = "other".to_string();
+        assert!(Principal::try_from(tool).is_err());
+
+        // The subject of an agent must belong to the agent ID that the principal carries.
+        let mut agent = wire::Principal::from(agent_principal());
+        let wire::Principal::Agent(details) = &mut agent else {
+            unreachable!()
+        };
+        details.agent_id = AgentId::from_parts(7, 0xbad).into();
+        assert!(Principal::try_from(agent).is_err());
+
+        // A subject of another kind is refused.
+        let mut agent = wire::Principal::from(agent_principal());
+        let wire::Principal::Agent(details) = &mut agent else {
+            unreachable!()
+        };
+        details.pair.subject = "account:00000000-0000-0000-0000-000000000bad".to_string();
+        assert!(Principal::try_from(agent).is_err());
     }
 }

@@ -138,13 +138,13 @@ func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationMetadata
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	m.refuseStreams("Trigger")
-	tree, err := m.encodeInput(c.agentID, in)
+	tree, err := m.encodeInput(c.target(), in)
 	if err != nil {
 		return InvocationMetadata{}, err
 	}
 	res := c.rpc.Invoke(m.name, tree, noScopeCard())
 	if res.IsErr() {
-		return InvocationMetadata{}, rpcErrorToGo(c.agentID, m.name, res.Err())
+		return InvocationMetadata{}, rpcErrorToGo(c.target(), m.name, res.Err())
 	}
 	return invocationMetadataFrom(res.Ok()), nil
 }
@@ -166,13 +166,13 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*Sc
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	m.refuseStreams("Schedule")
-	tree, err := m.encodeInput(c.agentID, in)
+	tree, err := m.encodeInput(c.target(), in)
 	if err != nil {
 		return nil, err
 	}
 	res := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree, noScopeCard())
 	if res.IsErr() {
-		return nil, rpcErrorToGo(c.agentID, m.name, res.Err())
+		return nil, rpcErrorToGo(c.target(), m.name, res.Err())
 	}
 	receipt := res.Ok()
 	return &ScheduledInvocation{
@@ -215,14 +215,14 @@ func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) 
 	}
 	tree, card, err := m.awaitedCallArgs(c, in, scope)
 	if err != nil {
-		return &Future[Out]{method: m.name, target: c.agentID, done: true, err: err}
+		return &Future[Out]{method: m.name, target: c.target(), done: true, err: err}
 	}
 	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
 	return &Future[Out]{
 		Metadata: asyncInvocationMetadata(inv.Metadata),
 		fut:      inv.Future,
 		method:   m.name,
-		target:   c.agentID,
+		target:   c.target(),
 	}
 }
 
@@ -239,7 +239,7 @@ func (m MethodDef[Id, In, Out]) awaitedCallArgs(c Client[Id], in In, scope Scope
 		scope = c.scopeCard
 	}
 	card := scopeCardHandle(scope)
-	tree, err := m.encodeInput(c.agentID, in)
+	tree, err := m.encodeInput(c.target(), in)
 	return tree, card, err
 }
 
@@ -299,55 +299,51 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 // invocation identity and scheduling
 // ---------------------------------------------------------------------------
 
-// InvocationID identifies one invocation: the agent that runs it, in the text
-// form of an agent ID, and a UUID. Its text form, from String, is
-// <agent-id>.<uuid>.
+// InvocationID identifies one invocation: the agent that runs it and a UUID.
+// Its text form, from String, is <agent-id>.<uuid>, where both parts are
+// UUIDs.
 type InvocationID struct {
-	AgentID string
+	AgentID AgentID
 	UUID    UUID
 }
 
 // String returns the text form <agent-id>.<uuid>.
-func (id InvocationID) String() string { return id.AgentID + "." + id.UUID.String() }
+func (id InvocationID) String() string { return id.AgentID.String() + "." + id.UUID.String() }
 
-// invocationIDSuffixLen is the length of the "." and the hyphenated UUID at the
-// end of an invocation ID's text form.
-const invocationIDSuffixLen = 1 + 36
-
-// ParseInvocationID reads the text form of an [InvocationID]. The UUID is the
-// last 36 characters, after a ".", so an agent ID that contains "." is read
-// back unchanged. It is an error when the "." is missing, the UUID is not
-// valid, or the agent ID is empty.
+// ParseInvocationID reads the text form of an [InvocationID]: two hyphenated
+// UUIDs separated by a ".".
 func ParseInvocationID(s string) (InvocationID, error) {
 	invalid := func(reason string) (InvocationID, error) {
 		return InvocationID{}, fmt.Errorf("golem: invalid invocation id %q: %s", s, reason)
 	}
-	if len(s) < invocationIDSuffixLen || s[len(s)-invocationIDSuffixLen] != '.' {
+	const uuidLen = 36
+	if len(s) != 2*uuidLen+1 || s[uuidLen] != '.' {
 		return invalid("expected <agent-id>.<uuid>")
 	}
-	agentID := s[:len(s)-invocationIDSuffixLen]
-	if agentID == "" {
-		return invalid("the agent id is empty")
-	}
-	uuid, err := ParseUUID(s[len(s)-invocationIDSuffixLen+1:])
+	agent, err := ParseUUID(s[:uuidLen])
 	if err != nil {
 		return invalid(err.Error())
 	}
-	return InvocationID{AgentID: agentID, UUID: uuid}, nil
+	uuid, err := ParseUUID(s[uuidLen+1:])
+	if err != nil {
+		return invalid(err.Error())
+	}
+	return InvocationID{AgentID: AgentIDFromUUID(agent), UUID: uuid}, nil
 }
 
 // InvocationMetadata is the identity the host allocated for one remote
-// invocation. For an ephemeral target, AgentID is the generated one-shot
-// phantom ID.
+// invocation. For an ephemeral target, AgentID is the ID of the one-shot
+// instance that ran it.
 type InvocationMetadata struct {
-	AgentID      string
+	AgentID      AgentID
 	InvocationID InvocationID
 }
 
 func invocationMetadataFrom(m host.InvocationMetadata) InvocationMetadata {
+	agentID := agentIDFromWit(m.AgentId)
 	return InvocationMetadata{
-		AgentID:      m.AgentId,
-		InvocationID: InvocationID{AgentID: m.AgentId, UUID: uuidFromWit(m.InvocationId.Id)},
+		AgentID:      agentID,
+		InvocationID: InvocationID{AgentID: agentID, UUID: uuidFromWit(m.InvocationId.Id)},
 	}
 }
 
@@ -401,12 +397,16 @@ const (
 	RemoteProtocolError RemoteCallErrorKind = iota
 	// RemoteDenied means the caller is not permitted to make this call.
 	RemoteDenied
-	// RemoteNotFound means the target agent or method does not exist.
+	// RemoteNotFound means the target agent or method does not exist: an
+	// unknown agent ID, or the ID of an agent of another type, is not found.
 	RemoteNotFound
 	// RemoteInternalError is an unexpected failure on the remote side.
 	RemoteInternalError
 	// RemoteAgentError means the remote returned a domain error; see Cause.
 	RemoteAgentError
+	// RemoteConflict means a keyed create found an agent that already has the
+	// key, or the agent at the ID that a key derives has another key.
+	RemoteConflict
 )
 
 func (k RemoteCallErrorKind) String() string {
@@ -419,12 +419,16 @@ func (k RemoteCallErrorKind) String() string {
 		return "remote internal error"
 	case RemoteAgentError:
 		return "remote agent error"
+	case RemoteConflict:
+		return "conflict"
 	default:
 		return "protocol error"
 	}
 }
 
-// RemoteCallError is returned by every cross-agent call that fails.
+// RemoteCallError is returned by every cross-agent call that fails, and by
+// the client constructors when the host refuses them. Target is the agent's ID
+// when the client knows it, and otherwise the name of its agent type.
 //
 // A remote domain error keeps its Cause rather than being flattened into a
 // string, so a remote custom-error stays inspectable by the caller.
@@ -462,6 +466,8 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 		err.Kind = RemoteAgentError
 		err.Cause = agentErrorToGo(remote)
 		err.Message = err.Cause.Error()
+	case host.RpcErrorConflict:
+		err.Kind, err.Message = RemoteConflict, e.Conflict()
 	default:
 		panic(fmt.Sprintf("golem: unhandled rpc-error case %d", e.Tag()))
 	}

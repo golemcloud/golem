@@ -603,8 +603,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         } = entry
         else {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("Start with request at {}", self.start_idx),
+                self.start_idx,
                 format!("{entry:?}"),
+                format!("Start with request at {}", self.start_idx),
             ));
         };
         let request = ctx
@@ -619,7 +620,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             })?;
         Pair::Req::try_from(request).map_err(|actual| {
-            WorkerExecutorError::unexpected_oplog_entry(Pair::FQFN.to_string(), actual)
+            WorkerExecutorError::unexpected_oplog_entry(
+                self.start_idx,
+                Pair::FQFN.to_string(),
+                actual,
+            )
         })
     }
 
@@ -633,8 +638,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         match ctx.state.oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("Start at {}", self.start_idx),
+                self.start_idx,
                 format!("{entry:?}"),
+                format!("Start at {}", self.start_idx),
             )),
         }
     }
@@ -653,8 +659,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         match oplog.read(self.start_idx).await? {
             OplogEntry::Start { span_started, .. } => Ok(span_started.map(|span| *span)),
             entry => Err(WorkerExecutorError::unexpected_oplog_entry(
-                format!("Start at {}", self.start_idx),
+                self.start_idx,
                 format!("{entry:?}"),
+                format!("Start at {}", self.start_idx),
             )),
         }
     }

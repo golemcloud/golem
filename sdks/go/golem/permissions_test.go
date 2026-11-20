@@ -352,7 +352,7 @@ func TestRevokeAndInstallMoveTheCardEvenWhenRefused(t *testing.T) {
 	f.fail(perm.MakePermissionErrorInstallRecipientMismatch("no recipient matches"))
 	card = f.card(1, 2)
 	h := card.st.h
-	target := AgentID{ComponentID: UUID{15: 8}, AgentID: "target(\"x\")"}
+	target := AgentIDFromUUID(UUID{15: 8})
 	err := card.Install(AgentHolder(target))
 	var pe *PermissionError
 	if !errors.As(err, &pe) || pe.Kind != PermissionInstallRecipientMismatch {
@@ -361,7 +361,7 @@ func TestRevokeAndInstallMoveTheCardEvenWhenRefused(t *testing.T) {
 	if f.consumed[len(f.consumed)-1] != h {
 		t.Error("the host did not receive the card's handle")
 	}
-	if f.target.Tag() != perm.HolderAgent || f.target.Agent().AgentId != target.AgentID || f.target.Agent().ComponentId.Uuid.LowBits != 8 {
+	if f.target.Tag() != perm.HolderAgent || f.target.Agent().Uuid.LowBits != 8 {
 		t.Errorf("the target reached the host as %+v", f.target)
 	}
 	mustPanicMoved(t, "Inspect", func() { _, _ = card.Inspect() })
@@ -694,7 +694,7 @@ func TestCardManagementValuesHaveNoSchema(t *testing.T) {
 	}
 	for name, v := range map[string]any{
 		"CardID":         struct{ ID CardID }{},
-		"Holder":         struct{ H Holder }{AgentHolder(AgentID{AgentID: "a"})},
+		"Holder":         struct{ H Holder }{AgentHolder(AgentIDFromUUID(UUID{1}))},
 		"Lifespan":       struct{ L Lifespan }{LifespanOf(time.Hour)},
 		"WalletCard":     struct{ W WalletCard }{WalletCard{kind: WalletCardConcrete, wst: &permissionCardState{h: &types.PermissionCard{}}}},
 		"PersistentCard": struct{ C PersistentCard }{},
@@ -974,7 +974,7 @@ func TestDecodingParametersReleasesTheCardsItDoesNotKeep(t *testing.T) {
 		f := newFakeCards(t)
 		first, extra := &types.PermissionCard{}, &types.PermissionCard{}
 		dst := reflect.New(reflect.TypeFor[oneParam]()).Elem()
-		err := decodeParams(types.SchemaValueTree{ValueNodes: tc.nodes(first, extra), Root: tc.root}, fields, dst, nil)
+		err := decodeParams(types.SchemaValueTree{ValueNodes: tc.nodes(first, extra), Root: tc.root}, fields, dst)
 		if (err == nil) != tc.decodes || len(f.released) != tc.want {
 			t.Errorf("%s: %v, released %v", name, err, f.released)
 			continue

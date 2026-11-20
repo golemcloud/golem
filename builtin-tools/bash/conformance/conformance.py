@@ -54,8 +54,6 @@ TIERS = ("pr", "sweep")
 # GNU bash must find the tools and our shell always uses UTF-8; cases that print them are fixtures.
 GOLEM_ENV = {
     "GOLEM_AGENT_ID": "conformance-agent",
-    "GOLEM_WORKER_NAME": "conformance-agent",
-    "GOLEM_COMPONENT_ID": "00000000-0000-0000-0000-000000000000",
     "GOLEM_COMPONENT_REVISION": "0",
     "GOLEM_AGENT_TYPE": "Conformance",
 }

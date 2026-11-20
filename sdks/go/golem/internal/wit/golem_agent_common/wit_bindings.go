@@ -45,7 +45,9 @@ type TypedSchemaValue = golem_core_types.TypedSchemaValue
 type MetadataEnvelope = golem_core_types.MetadataEnvelope
 type AgentId = golem_core_types.AgentId
 type AccountId = golem_core_types.AccountId
-type ComponentId = golem_core_types.ComponentId
+type EnvironmentId = golem_core_types.EnvironmentId
+type Uuid = golem_core_types.Uuid
+type Datetime = golem_core_types.Datetime
 type HttpRouteMode = golem_core_http.HttpRouteMode
 type DurableStreamRouteOptions = golem_core_http.DurableStreamRouteOptions
 type ConcreteHttpMethod = golem_core_http.HttpMethod
@@ -71,14 +73,7 @@ const (
 type AgentTypeKind = uint8
 
 const (
-	AutoInjectedKindPrincipal uint8 = 0
-)
-
-type AutoInjectedKind = uint8
-
-const (
 	FieldSourceUserSupplied uint8 = 0
-	FieldSourceAutoInjected uint8 = 1
 )
 
 type FieldSource struct {
@@ -90,18 +85,8 @@ func (self FieldSource) Tag() uint8 {
 	return self.tag
 }
 
-func (self FieldSource) AutoInjected() AutoInjectedKind {
-	if self.tag != FieldSourceAutoInjected {
-		panic("tag mismatch")
-	}
-	return self.value.(AutoInjectedKind)
-}
-
 func MakeFieldSourceUserSupplied() FieldSource {
 	return FieldSource{FieldSourceUserSupplied, nil}
-}
-func MakeFieldSourceAutoInjected(value AutoInjectedKind) FieldSource {
-	return FieldSource{FieldSourceAutoInjected, value}
 }
 
 type NamedField struct {
@@ -200,8 +185,7 @@ func MakeCachePolicyTtl(value uint64) CachePolicy {
 }
 
 type ReadOnlyConfig struct {
-	CachePolicy   CachePolicy
-	UsesPrincipal bool
+	CachePolicy CachePolicy
 }
 
 type PhantomIdBindingDetails struct {
@@ -356,34 +340,61 @@ type AgentMethod struct {
 	ReadOnly     witTypes.Option[ReadOnlyConfig]
 }
 
-type OidcPrincipal struct {
-	Sub               string
-	Issuer            string
-	Email             witTypes.Option[string]
-	Name              witTypes.Option[string]
-	EmailVerified     witTypes.Option[bool]
-	GivenName         witTypes.Option[string]
-	FamilyName        witTypes.Option[string]
-	Picture           witTypes.Option[string]
-	PreferredUsername witTypes.Option[string]
-	Claims            string
+// The (issuer, subject) pair of one principal. A reference is data: holding one grants
+// nothing. Two references name the same principal exactly when both strings are equal,
+// byte for byte.
+type PrincipalRef struct {
+	Issuer  string
+	Subject string
 }
 
-type AgentPrincipal struct {
-	AgentId golem_core_types.AgentId
-}
-
-type GolemUserPrincipal struct {
-	AccountId golem_core_types.AccountId
+// A user, authenticated by a sign-in provider: the provider's pair.
+type UserPrincipal struct {
+	Pair PrincipalRef
+	// The verified claims, as the JSON object that Golem received.
+	Claims          string
+	AuthenticatedAt golem_core_types.Datetime
 }
 
 const (
-	PrincipalOidc      uint8 = 0
-	PrincipalAgent     uint8 = 1
-	PrincipalGolemUser uint8 = 2
-	PrincipalAnonymous uint8 = 3
+	AccountAuthenticationApiToken       uint8 = 0
+	AccountAuthenticationBootstrapToken uint8 = 1
+	AccountAuthenticationSignIn         uint8 = 2
 )
 
+type AccountAuthentication = uint8
+
+// An account: (Golem issuer, "account:<account-id>").
+type AccountPrincipal struct {
+	Pair           PrincipalRef
+	AccountId      golem_core_types.AccountId
+	Authentication AccountAuthentication
+}
+
+// An agent: (Golem issuer, "agent:<agent-id>/<fingerprint>").
+type AgentPrincipal struct {
+	Pair          PrincipalRef
+	AgentId       golem_core_types.AgentId
+	AgentType     string
+	EnvironmentId golem_core_types.EnvironmentId
+}
+
+// A tool: (Golem issuer, "tool:<environment-id>/<tool-name>").
+type ToolPrincipal struct {
+	Pair          PrincipalRef
+	EnvironmentId golem_core_types.EnvironmentId
+	ToolName      string
+}
+
+const (
+	PrincipalUser      uint8 = 0
+	PrincipalAccount   uint8 = 1
+	PrincipalAgent     uint8 = 2
+	PrincipalTool      uint8 = 3
+	PrincipalAnonymous uint8 = 4
+)
+
+// One identity, as Golem verified it. Every kind except anonymous has a pair.
 type Principal struct {
 	tag   uint8
 	value any
@@ -393,11 +404,17 @@ func (self Principal) Tag() uint8 {
 	return self.tag
 }
 
-func (self Principal) Oidc() OidcPrincipal {
-	if self.tag != PrincipalOidc {
+func (self Principal) User() UserPrincipal {
+	if self.tag != PrincipalUser {
 		panic("tag mismatch")
 	}
-	return self.value.(OidcPrincipal)
+	return self.value.(UserPrincipal)
+}
+func (self Principal) Account() AccountPrincipal {
+	if self.tag != PrincipalAccount {
+		panic("tag mismatch")
+	}
+	return self.value.(AccountPrincipal)
 }
 func (self Principal) Agent() AgentPrincipal {
 	if self.tag != PrincipalAgent {
@@ -405,32 +422,43 @@ func (self Principal) Agent() AgentPrincipal {
 	}
 	return self.value.(AgentPrincipal)
 }
-func (self Principal) GolemUser() GolemUserPrincipal {
-	if self.tag != PrincipalGolemUser {
+func (self Principal) Tool() ToolPrincipal {
+	if self.tag != PrincipalTool {
 		panic("tag mismatch")
 	}
-	return self.value.(GolemUserPrincipal)
+	return self.value.(ToolPrincipal)
 }
 
-func MakePrincipalOidc(value OidcPrincipal) Principal {
-	return Principal{PrincipalOidc, value}
+func MakePrincipalUser(value UserPrincipal) Principal {
+	return Principal{PrincipalUser, value}
+}
+func MakePrincipalAccount(value AccountPrincipal) Principal {
+	return Principal{PrincipalAccount, value}
 }
 func MakePrincipalAgent(value AgentPrincipal) Principal {
 	return Principal{PrincipalAgent, value}
 }
-func MakePrincipalGolemUser(value GolemUserPrincipal) Principal {
-	return Principal{PrincipalGolemUser, value}
+func MakePrincipalTool(value ToolPrincipal) Principal {
+	return Principal{PrincipalTool, value}
 }
 func MakePrincipalAnonymous() Principal {
 	return Principal{PrincipalAnonymous, nil}
 }
 
-// The principals that caused an invocation.
+// A token that the request presented, and the reference of its maker. It never holds the
+// token's value.
+type TokenProvenance struct {
+	Id    golem_core_types.Uuid
+	Maker witTypes.Option[PrincipalRef]
+}
+
+// The principals that caused an invocation, and the tokens presented at the entry point.
 type Caller struct {
 	// The principal at the root of the call tree.
 	Original Principal
 	// The principal that made this call.
 	Immediate Principal
+	Tokens    []TokenProvenance
 }
 
 type AgentConstructor struct {
@@ -552,10 +580,9 @@ type AgentType struct {
 	Config         []AgentConfigDeclaration
 }
 
-// Associates an agent type with a component that implements it
+// An agent type deployed in the current environment
 type RegisteredAgentType struct {
-	AgentType     AgentType
-	ImplementedBy golem_core_types.ComponentId
+	AgentType AgentType
 }
 
 type TypedAgentConfigValue struct {

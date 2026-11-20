@@ -21,15 +21,16 @@
 //! with one of the causes below starts its details with a stable code.
 
 use crate::durable_host::revision_update::UpdateStateError;
-use crate::model::SnapshotReplayPurpose;
+use crate::model::{FailureProvenance, SnapshotReplayPurpose};
 use crate::services::agent_filesystem::{Error as FilesystemError, RestoreClass};
 use crate::services::agent_filesystem_snapshots::SnapshotsDisabled;
 use crate::worker::RetryDecision;
+use crate::worker::instance::{InstanceCreationFailure, InstanceCreationStage};
 use crate::worker::snapshot_selection::SourceFound;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
-    AgentError, FailedSnapshotAssistedUpdateDetails, OplogEntry, OplogIndex,
-    SnapshotAssistedUpdateDetails, SnapshotFault,
+    AgentError, FailedSnapshotAssistedUpdateDetails, OplogEntry, OplogIndex, ReplayDivergence,
+    SnapshotAssistedUpdateDetails, SnapshotFault, UpdateFailureClass,
 };
 use golem_common::model::{AgentId, PendingUpdateKind, PendingUpdateRef, Timestamp};
 use golem_service_base::error::worker_executor::{
@@ -105,8 +106,11 @@ impl BaselineRole {
 pub(crate) enum SnapshotRecoveryResult {
     Success,
     NotAttempted,
-    Failed(WorkerExecutorError),
-    Unavailable(WorkerExecutorError),
+    /// The load failed with the error; the provenance tells where the failure came from.
+    Failed(WorkerExecutorError, FailureProvenance),
+    /// The load could not run or did not finish with the error; the provenance tells where the
+    /// failure came from.
+    Unavailable(WorkerExecutorError, FailureProvenance),
     /// The payload of the application snapshot of the selected record of a snapshot-assisted
     /// update is missing or does not decode: the record is lost.
     Lost(WorkerExecutorError),
@@ -142,16 +146,18 @@ pub(crate) enum RawStartError<'a> {
     /// The baseline did not materialize.
     Filesystem(&'a FilesystemError),
     /// The instance did not instantiate.
-    Instantiation(&'a WorkerExecutorError),
+    Instantiation(&'a InstanceCreationFailure),
     /// The application snapshot of the baseline did not load.
     Load(&'a SnapshotRecoveryResult),
     /// The application snapshot of a pending manual update did not load.
     ManualLoad(&'a ManualLoadResult),
     /// The replay failed. `diverged` tells whether the replay after an application snapshot
-    /// diverged from the oplog with a typed divergence.
+    /// diverged from the oplog with a typed divergence, and `provenance` where the failure of a
+    /// replayed invocation came from.
     Replay {
         error: &'a WorkerExecutorError,
         diverged: bool,
+        provenance: Option<FailureProvenance>,
     },
     /// The update of the instance to the target revision failed.
     UpdateState(&'a UpdateStateError),
@@ -213,6 +219,10 @@ pub(crate) fn decide(
                     head,
                     details(failure.code, &cause(column, head, &error)),
                     failure.fault,
+                    // No source records an unrecorded observation of the guest yet, so every
+                    // generation is untainted.
+                    failure_class(problem, &error, false),
+                    error.divergence(),
                 ),
                 reject: failure
                     .reject_selected
@@ -222,7 +232,7 @@ pub(crate) fn decide(
             (_, None) => StartAction::Error(error.passed_through()),
         },
         Cell::Visible => StartAction::Error(WorkerExecutorError::failed_to_resume_worker(
-            agent_id.clone(),
+            *agent_id,
             WorkerExecutorError::invalid_request(raw_text(&error)),
         )),
         Cell::VisibleInvocation => StartAction::Error(WorkerExecutorError::InvocationFailed {
@@ -240,11 +250,13 @@ pub(crate) fn decide(
 }
 
 /// The failed update of the manual update invocation at `admission_index`, which no
-/// `PendingUpdate` entry paired.
+/// `PendingUpdate` entry paired. The update failed before any replay, so its class is `Other`,
+/// or `Interrupted` when the save of the snapshot exited or was interrupted.
 pub(crate) fn failed_admission_of(
     target_revision: ComponentRevision,
     admission_index: OplogIndex,
     details: String,
+    failure_class: UpdateFailureClass,
 ) -> OplogEntry {
     OplogEntry::failed_update(
         target_revision,
@@ -252,13 +264,16 @@ pub(crate) fn failed_admission_of(
         None,
         Some(admission_index),
         None,
+        failure_class,
+        None,
     )
 }
 
 /// The failed update that ends `head` without an error, such as a cancellation: it carries the
-/// attempt index and the snapshot-assisted details of `head`, and no snapshot fault.
+/// attempt index and the snapshot-assisted details of `head`, no snapshot fault, and the class
+/// `Other`.
 pub(crate) fn cancelled_update_of(head: &PendingUpdateRef, details: String) -> OplogEntry {
-    failed_update_of(head, details, None)
+    failed_update_of(head, details, None, UpdateFailureClass::Other, None)
 }
 
 /// The details of a successful update of `head`: its snapshot-assisted details, or `None` for
@@ -433,8 +448,11 @@ enum StartProblem {
     RestoreConflict,
     Quota,
     Reconstruction,
+    /// The instance did not instantiate. `target_trap` tells that the core initializer of the
+    /// target hit a Wasm instruction trap.
     Instantiation {
         interrupted: bool,
+        target_trap: bool,
     },
     LoadRetry,
     LoadUnavailable,
@@ -502,18 +520,20 @@ impl StartProblem {
                 | FilesystemError::RuntimeInvalidated => Self::Reconstruction,
             },
             RawStartError::Finish(_) => Self::AfterReplay,
-            RawStartError::Instantiation(error) => Self::Instantiation {
-                interrupted: matches!(error, WorkerExecutorError::Interrupted { .. }),
+            RawStartError::Instantiation(failure) => Self::Instantiation {
+                interrupted: matches!(failure.error, WorkerExecutorError::Interrupted { .. }),
+                target_trap: failure.stage == InstanceCreationStage::Initializer
+                    && failure.provenance == FailureProvenance::TargetInstruction,
             },
             RawStartError::Load(result) => match result {
                 SnapshotRecoveryResult::Retry(_) => Self::LoadRetry,
-                SnapshotRecoveryResult::Unavailable(error) => match error {
+                SnapshotRecoveryResult::Unavailable(error, _) => match error {
                     WorkerExecutorError::RecoveryRequired { .. } => Self::RecoveryRequired,
                     WorkerExecutorError::Interrupted { .. } => Self::Interrupted,
                     _ => Self::LoadUnavailable,
                 },
                 SnapshotRecoveryResult::Lost(_) => Self::LoadLost,
-                SnapshotRecoveryResult::Failed(_) => Self::LoadFailed,
+                SnapshotRecoveryResult::Failed(_, _) => Self::LoadFailed,
                 SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                     Self::ReplayError
                 }
@@ -523,7 +543,9 @@ impl StartProblem {
                 Self::ManualLoadInterrupted
             }
             RawStartError::ManualLoad(ManualLoadResult::Exited) => Self::ManualLoadExited,
-            RawStartError::Replay { error, diverged } => match error {
+            RawStartError::Replay {
+                error, diverged, ..
+            } => match error {
                 WorkerExecutorError::UnexpectedOplogEntry { .. } => Self::Divergence,
                 _ if *diverged => Self::Divergence,
                 WorkerExecutorError::RecoveryRequired { .. } => Self::RecoveryRequired,
@@ -761,12 +783,17 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             | Problem::Reconstruction
             | Problem::InitialFileRefused(_) => cell(base.column(), problem),
             Problem::LoadRetry => Cell::Retry,
+            // A trap of the core initializer of the target repeats on every start. Every other
+            // failed instantiation passes, so a host failure retries the start.
             Problem::LoadUnavailable
             | Problem::LoadFailed
             | Problem::Interrupted
             | Problem::AgentFailed
             | Problem::Divergence
-            | Problem::ReplayError => replay_failed,
+            | Problem::ReplayError
+            | Problem::Instantiation {
+                target_trap: true, ..
+            } => replay_failed,
             _ => Cell::Pass,
         },
         Column::AssistedPending => match problem {
@@ -776,7 +803,9 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             Problem::StaleSource
             | Problem::ModeChange
             | Problem::RestoreConflict
-            | Problem::Instantiation { interrupted: false }
+            | Problem::Instantiation {
+                interrupted: false, ..
+            }
             | Problem::LoadUnavailable
             | Problem::AgentFailed
             | Problem::ReplayError => fail,
@@ -833,6 +862,8 @@ fn failed_update_of(
     head: &PendingUpdateRef,
     details: String,
     snapshot_fault: Option<SnapshotFault>,
+    failure_class: UpdateFailureClass,
+    divergence: Option<ReplayDivergence>,
 ) -> OplogEntry {
     OplogEntry::failed_update(
         head.target_revision,
@@ -840,7 +871,97 @@ fn failed_update_of(
         failed_details_of(head),
         Some(head.admission_index),
         snapshot_fault,
+        failure_class,
+        divergence.map(Box::new),
     )
+}
+
+/// The class of a failed update for `problem`, which `error` raised, in a generation that
+/// `tainted` says observed a result that the oplog does not record. The rules apply in order: an
+/// explicit divergence; the stage of a failed instance creation before its initializer; an
+/// interruption or an exit; a host failure; a failure of the target code; then the class of the
+/// problem, where an inferred divergence is `Divergence`. A load hook that returns an error keeps
+/// the class of its problem. In a tainted generation, a divergence and a failure of the target
+/// code prove no incompatibility, so they are operational failures.
+fn failure_class(
+    problem: StartProblem,
+    error: &RawStartError<'_>,
+    tainted: bool,
+) -> UpdateFailureClass {
+    use FailureProvenance as Provenance;
+    use UpdateFailureClass as Class;
+    let class = match (error, error.provenance()) {
+        (
+            RawStartError::Replay {
+                error: WorkerExecutorError::UnexpectedOplogEntry { .. },
+                ..
+            },
+            _,
+        ) => Class::Divergence,
+        (RawStartError::Instantiation(failure), _)
+            if failure.stage == InstanceCreationStage::Link =>
+        {
+            Class::TargetRejected
+        }
+        (RawStartError::Instantiation(failure), _)
+            if failure.stage == InstanceCreationStage::Storage =>
+        {
+            Class::Operational
+        }
+        (_, Some(Provenance::Lifecycle)) => Class::Interrupted,
+        (_, Some(Provenance::Host)) => Class::Operational,
+        (RawStartError::Load(_), Some(Provenance::TargetReturned)) => problem_class(problem),
+        (_, Some(Provenance::TargetInstruction | Provenance::TargetReturned)) => Class::TargetTrap,
+        (_, None) => problem_class(problem),
+    };
+    match class {
+        Class::Divergence | Class::TargetTrap if tainted => Class::Operational,
+        class => class,
+    }
+}
+
+/// The class of `problem` when the provenance of its failure decides none.
+fn problem_class(problem: StartProblem) -> UpdateFailureClass {
+    use StartProblem as Problem;
+    use UpdateFailureClass as Class;
+    match problem {
+        Problem::Divergence => Class::Divergence,
+        Problem::Target(FetchProblem::NotFound | FetchProblem::Refused(_))
+        | Problem::UpdateState(FetchProblem::NotFound | FetchProblem::Refused(_))
+        | Problem::TargetUnsupported
+        | Problem::ModeChange
+        | Problem::BlobStorageRefused(_)
+        | Problem::InitialFileRefused(_) => Class::TargetRejected,
+        Problem::Interrupted
+        | Problem::ManualLoadInterrupted
+        | Problem::Instantiation {
+            interrupted: true, ..
+        } => Class::Interrupted,
+        Problem::Target(FetchProblem::Unavailable | FetchProblem::Other)
+        | Problem::UpdateState(FetchProblem::Unavailable)
+        | Problem::TargetExecutor
+        | Problem::Quota
+        | Problem::Reconstruction
+        | Problem::Instantiation {
+            interrupted: false, ..
+        }
+        | Problem::LoadRetry
+        | Problem::LoadUnavailable
+        | Problem::RecoveryRequired
+        | Problem::AgentFailed
+        | Problem::ReplayError
+        | Problem::AfterReplay
+        | Problem::OplogFailed => Class::Operational,
+        Problem::StaleSource
+        | Problem::Disabled
+        | Problem::Restore(_)
+        | Problem::RestoreConflict
+        | Problem::LoadLost
+        | Problem::LoadFailed
+        | Problem::ManualLoadFailed
+        | Problem::ManualLoadExited
+        | Problem::UpdateState(FetchProblem::Other) => Class::Other,
+    }
 }
 
 /// The snapshot-assisted details of a failed update of `head`.
@@ -888,8 +1009,9 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
             }
         },
         RawStartError::ModeChange(text) => text.to_string(),
-        RawStartError::Instantiation(error) => format!(
-            "Snapshot-assisted automatic update failed while instantiating the target: {error}"
+        RawStartError::Instantiation(failure) => format!(
+            "Snapshot-assisted automatic update failed while instantiating the target: {}",
+            failure.error
         ),
         RawStartError::ManualLoad(ManualLoadResult::Failed(text)) => text.clone(),
         RawStartError::ManualLoad(ManualLoadResult::Exited) => {
@@ -924,15 +1046,15 @@ fn raw_text(error: &RawStartError<'_>) -> String {
         ),
         RawStartError::TargetFetch(error)
         | RawStartError::TargetLoad(error)
-        | RawStartError::Instantiation(error)
         | RawStartError::Replay { error, .. } => error.to_string(),
+        RawStartError::Instantiation(failure) => failure.error.to_string(),
         RawStartError::TargetUnsupported(reason) => reason.to_string(),
         RawStartError::ModeChange(text) => text.to_string(),
         RawStartError::Disabled => SnapshotsDisabled.to_string(),
         RawStartError::Filesystem(error) | RawStartError::Finish(error) => error.to_string(),
         RawStartError::Load(result) => match result {
-            SnapshotRecoveryResult::Failed(error)
-            | SnapshotRecoveryResult::Unavailable(error)
+            SnapshotRecoveryResult::Failed(error, _)
+            | SnapshotRecoveryResult::Unavailable(error, _)
             | SnapshotRecoveryResult::Lost(error) => error.to_string(),
             SnapshotRecoveryResult::NotAttempted => {
                 "the update did not attempt its required snapshot".to_string()
@@ -960,13 +1082,41 @@ impl RawStartError<'_> {
         match self {
             RawStartError::TargetFetch(error)
             | RawStartError::TargetLoad(error)
-            | RawStartError::Instantiation(error)
             | RawStartError::Replay { error, .. } => Some(*error),
+            RawStartError::Instantiation(failure) => Some(&failure.error),
             RawStartError::Load(
-                SnapshotRecoveryResult::Failed(error)
-                | SnapshotRecoveryResult::Unavailable(error)
+                SnapshotRecoveryResult::Failed(error, _)
+                | SnapshotRecoveryResult::Unavailable(error, _)
                 | SnapshotRecoveryResult::Lost(error),
             ) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// Where the failure came from, for a failed replay, instance creation or snapshot load.
+    fn provenance(&self) -> Option<FailureProvenance> {
+        match self {
+            RawStartError::Replay { provenance, .. } => *provenance,
+            RawStartError::Instantiation(failure) => Some(failure.provenance),
+            RawStartError::Load(
+                SnapshotRecoveryResult::Failed(_, provenance)
+                | SnapshotRecoveryResult::Unavailable(_, provenance),
+            ) => Some(*provenance),
+            RawStartError::ManualLoad(ManualLoadResult::Exited) => {
+                Some(FailureProvenance::Lifecycle)
+            }
+            _ => None,
+        }
+    }
+
+    /// The divergence of a replay that failed at a recorded entry, without the request of the
+    /// expected call: the public oplog reads it from the `Start` at the index.
+    fn divergence(&self) -> Option<ReplayDivergence> {
+        match self {
+            RawStartError::Replay {
+                error: WorkerExecutorError::UnexpectedOplogEntry { divergence },
+                ..
+            } => Some(divergence.as_ref().clone().without_expected_request()),
             _ => None,
         }
     }

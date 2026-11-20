@@ -3,6 +3,7 @@ use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::UsesAllDeps;
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::AsyncReadExt;
@@ -48,34 +49,33 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
             .store()
             .await?;
         let seed_id = executor
-            .start_agent(&component.id, agent_id!("Networking", "policy-health-seed"))
+            .start_agent(
+                &component.id,
+                agent_key!("Networking", "policy-health-seed"),
+            )
             .await?;
         let seed = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+            .production_active_agent(&seed_id.clone())
             .await
             .unwrap()
             .primary();
-        wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
         let name = if ephemeral {
-            agent_id!("EphemeralNetworking", "policy-health")
+            agent_key!("EphemeralNetworking", "policy-health")
         } else {
-            agent_id!("Networking", "policy-health")
+            agent_key!("Networking", "policy-health")
         };
         let key = IdempotencyKey::fresh();
-        let physical = if ephemeral {
-            name.clone()
-                .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                    &executor,
-                    &key,
-                    "tcp_collect_p3",
-                ))
-                .unwrap()
-        } else {
-            name.clone()
-        };
-        let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+        let id = invocation_agent_id(
+            &executor,
+            component.environment_id,
+            &name,
+            !ephemeral,
+            &key,
+            "tcp_collect_p3",
+        );
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
-        let worker = Worker::get_or_create_suspended(
+        let worker = Worker::get_or_create_suspended_with_freshness(
             seed.all(),
             &owned,
             None,
@@ -83,7 +83,16 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
+            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+            invocation_create_intent(
+                &executor,
+                component.id,
+                &name,
+                !ephemeral,
+                &key,
+                "tcp_collect_p3",
+            ),
         )
         .await?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -129,7 +138,7 @@ async fn unavailable_registry_policy_stops_pending_tcp_as_infrastructure_failure
             })
             .await??;
             assert_eq!(
-                executor.get_worker_metadata(&id).await?.status,
+                executor.get_worker_metadata(&owned).await?.status,
                 AgentStatus::Failed
             );
         } else {
@@ -257,14 +266,14 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
             .store()
             .await?;
         let seed_id = executor
-            .start_agent(&component.id, agent_id!("Counter", "native-cleanup-seed"))
+            .start_agent(&component.id, agent_key!("Counter", "native-cleanup-seed"))
             .await?;
         let seed = executor
-            .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+            .production_active_agent(&seed_id.clone())
             .await
             .unwrap()
             .primary();
-        wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+        wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
         let entry = limits.initialize_account(context.account_id).await?;
         assert_eq!(entry.max_concurrent_agents_per_executor(), 1);
         let account = seed
@@ -273,12 +282,13 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
             .await;
         // A real account lease proves the seed has released capacity before the target starts.
         let seed_permit =
-            tokio::time::timeout(Duration::from_secs(10), account.acquire(seed_id.clone())).await?;
+            tokio::time::timeout(Duration::from_secs(10), account.acquire(seed_id.agent_id))
+                .await?;
         drop(seed_permit);
-        let name = agent_id!("Counter", format!("native-cleanup-{later}"));
-        let id = AgentId::from_agent_id(component.id, &name).unwrap();
+        let name = agent_key!("Counter", format!("native-cleanup-{later}"));
+        let id = crate::agent::keyed_agent_id(component.environment_id, &name).agent_id;
         let owned = OwnedAgentId::new(context.default_environment_id, &id);
-        let worker = Worker::get_or_create_suspended(
+        let worker = Worker::get_or_create_suspended_with_freshness(
             seed.all(),
             &owned,
             None,
@@ -286,7 +296,12 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
             None,
             None,
             &InvocationContextStack::fresh(),
-            Principal::anonymous(),
+            callers::anonymous(),
+            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+            golem_worker_executor::worker::CreateIntent::Invocation {
+                owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
+                idempotency_key: None,
+            },
         )
         .await?;
         if later {
@@ -316,14 +331,14 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
         .await?;
         let directory = storage_root
             .join(context.default_environment_id.to_string())
-            .join(component.id.to_string())
+            .join(format!("{:08x}", id.type_tag()))
             .join(golem_service_base::storage::blob::agent_path_segment(&id));
         assert!(directory.is_dir());
-        let contender_id = AgentId::from_agent_id(
-            component.id,
-            &agent_id!("Counter", format!("native-cleanup-contender-{later}")),
+        let contender_id = crate::agent::keyed_agent_id(
+            component.environment_id,
+            &agent_key!("Counter", format!("native-cleanup-contender-{later}")),
         )
-        .unwrap();
+        .agent_id;
         assert_ne!(contender_id, id);
         let mut contender = Box::pin(account.acquire(contender_id));
         assert!(
@@ -417,7 +432,7 @@ async fn native_failed_cleanup_releases_execution_refuses_startup_and_repairs(
         )));
         assert!(directory.exists());
         drop(permissions);
-        tokio::time::timeout(Duration::from_secs(30), executor.delete_worker(&id)).await??;
+        tokio::time::timeout(Duration::from_secs(30), executor.delete_worker(&owned)).await??;
         worker.retained_cleanup_for_test().await?;
         worker.join_accepted_stops_for_test().await?;
         assert!(!directory.exists());

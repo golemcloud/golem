@@ -159,14 +159,14 @@ async fn test_go_tools_e2e() {
         outputs.stdout_text()
     };
 
-    // The tool sees the principal the calling agent's invocation runs on
+    // The tool sees the caller the calling agent's invocation runs on
     // behalf of: the CLI's user, not the agent itself.
     let own = run("VcsSelfCaller").await;
-    assert!(own.contains("ok:.|self|anonymous|golem-user:1"), "{own}");
+    assert!(own.contains("ok:.|self|anonymous|account:1"), "{own}");
 
     let generated = run("VcsUser").await;
     assert!(
-        generated.contains("ok:.|checked:fix|ada|golem-user:protected forbidden"),
+        generated.contains("ok:.|checked:fix|ada|account:protected forbidden"),
         "{generated}"
     );
 }

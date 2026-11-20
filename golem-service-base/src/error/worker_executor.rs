@@ -18,7 +18,7 @@ use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::AgentError;
+use golem_common::model::oplog::{AgentError, ReplayDivergence};
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
@@ -39,6 +39,11 @@ pub enum WorkerExecutorError {
     },
     CreateIdempotencyKeyConflict {
         agent_id: AgentId,
+    },
+    /// The agent at the ID that a key derives has another key. The request did not act on it.
+    AgentKeyCollision {
+        agent_id: AgentId,
+        requested_key: String,
     },
     AgentNotFound {
         agent_id: AgentId,
@@ -88,8 +93,7 @@ pub enum WorkerExecutorError {
         details: String,
     },
     UnexpectedOplogEntry {
-        expected: String,
-        got: String,
+        divergence: Box<ReplayDivergence>,
     },
     /// The golem runtime encountered an error while exeucting the user error. Difference to ComponentTrapped is that the user component did not directly error here.
     Runtime {
@@ -349,10 +353,18 @@ impl WorkerExecutorError {
         }
     }
 
-    pub fn unexpected_oplog_entry(expected: impl Into<String>, got: impl Into<String>) -> Self {
+    /// A replay divergence at `oplog_index` between two steps that only a text describes.
+    pub fn unexpected_oplog_entry(
+        oplog_index: OplogIndex,
+        expected: impl Into<String>,
+        got: impl Into<String>,
+    ) -> Self {
+        Self::replay_divergence(ReplayDivergence::described(oplog_index, expected, got))
+    }
+
+    pub fn replay_divergence(divergence: ReplayDivergence) -> Self {
         Self::UnexpectedOplogEntry {
-            expected: expected.into(),
-            got: got.into(),
+            divergence: Box::new(divergence),
         }
     }
 
@@ -376,6 +388,15 @@ impl Display for WorkerExecutorError {
                 write!(
                     f,
                     "Create idempotency key conflicts with the stored request for {agent_id}"
+                )
+            }
+            Self::AgentKeyCollision {
+                agent_id,
+                requested_key,
+            } => {
+                write!(
+                    f,
+                    "Agent {agent_id} has another key than the requested {requested_key}"
                 )
             }
             Self::AgentNotFound { agent_id } => {
@@ -440,8 +461,8 @@ impl Display for WorkerExecutorError {
             Self::ValueMismatch { details } => {
                 write!(f, "Value mismatch: {details}")
             }
-            Self::UnexpectedOplogEntry { expected, got } => {
-                write!(f, "Unexpected oplog entry: expected {expected}, got {got}")
+            Self::UnexpectedOplogEntry { divergence } => {
+                write!(f, "{divergence}")
             }
             Self::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
@@ -563,6 +584,7 @@ impl Error for WorkerExecutorError {
             Self::InvalidRequest { .. } => "Invalid request",
             Self::AgentAlreadyExists { .. } => "Worker already exists",
             Self::CreateIdempotencyKeyConflict { .. } => "Create idempotency key conflict",
+            Self::AgentKeyCollision { .. } => "Agent key collision",
             Self::AgentNotFound { .. } => "Worker not found",
             Self::AgentCreationFailed { .. } => "Failed to create worker",
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
@@ -607,6 +629,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::InvalidRequest { .. } => "InvalidRequest",
             Self::AgentAlreadyExists { .. } => "AgentAlreadyExists",
             Self::CreateIdempotencyKeyConflict { .. } => "CreateIdempotencyKeyConflict",
+            Self::AgentKeyCollision { .. } => "AgentKeyCollision",
             Self::AgentNotFound { .. } => "AgentNotFound",
             Self::AgentCreationFailed { .. } => "AgentCreationFailed",
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
@@ -646,6 +669,7 @@ impl ApiErrorDetails for WorkerExecutorError {
         match self {
             Self::AgentAlreadyExists { .. }
             | Self::CreateIdempotencyKeyConflict { .. }
+            | Self::AgentKeyCollision { .. }
             | Self::AgentNotFound { .. }
             | Self::PromiseNotFound { .. }
             | Self::PromiseDropped { .. }
@@ -738,6 +762,7 @@ impl From<WorkerExecutorError> for Status {
         match value {
             error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::AgentKeyCollision { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }) => {
                 let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
                     tonic::Code::AlreadyExists
@@ -809,6 +834,19 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::CreateIdempotencyKeyConflict(
                         golem::worker::v1::CreateIdempotencyKeyConflict {
                             agent_id: Some(agent_id.into()),
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::AgentKeyCollision {
+                agent_id,
+                requested_key,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::AgentKeyCollision(
+                        golem::worker::v1::AgentKeyCollision {
+                            agent_id: Some(agent_id.into()),
+                            requested_key,
                         },
                     ),
                 ),
@@ -950,13 +988,18 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::ValueMismatch { details },
                 )),
             },
-            WorkerExecutorError::UnexpectedOplogEntry { expected, got } => Self {
+            WorkerExecutorError::UnexpectedOplogEntry { divergence } => {
+                let divergence = divergence.into_proto_keeping_structure();
+                Self {
                     error: Some(
                         golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(
-                            golem::worker::v1::UnexpectedOplogEntry { expected, got },
+                            golem::worker::v1::UnexpectedOplogEntry {
+                                divergence: Some(divergence),
+                            },
                         ),
                     ),
-                },
+                }
+            }
             WorkerExecutorError::Runtime { details } => Self {
                 error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
                     golem::worker::v1::RuntimeError { details },
@@ -1162,6 +1205,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             )) => Ok(Self::CreateIdempotencyKeyConflict {
                 agent_id: conflict.agent_id.ok_or("Missing agent_id")?.try_into()?,
             }),
+            Some(golem::worker::v1::worker_execution_error::Error::AgentKeyCollision(
+                collision,
+            )) => Ok(Self::AgentKeyCollision {
+                agent_id: collision.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                requested_key: collision.requested_key,
+            }),
             Some(golem::worker::v1::worker_execution_error::Error::AgentNotFound(
                 worker_not_found,
             )) => Ok(Self::AgentNotFound {
@@ -1306,10 +1355,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             }),
             Some(golem::worker::v1::worker_execution_error::Error::UnexpectedOplogEntry(
                 unexpected_oplog_entry,
-            )) => Ok(Self::UnexpectedOplogEntry {
-                expected: unexpected_oplog_entry.expected,
-                got: unexpected_oplog_entry.got,
-            }),
+            )) => Ok(Self::replay_divergence(
+                unexpected_oplog_entry
+                    .divergence
+                    .ok_or("Missing field: divergence")?
+                    .try_into()?,
+            )),
             Some(golem::worker::v1::worker_execution_error::Error::InvalidShardId(
                 invalid_shard_id,
             )) => Ok(Self::InvalidShardId {
@@ -1532,10 +1583,11 @@ mod read_only_violation_trap_tests {
                 stderr: "guest stderr".to_string(),
             },
             WorkerExecutorError::CreateIdempotencyKeyConflict {
-                agent_id: AgentId {
-                    component_id: ComponentId(uuid::Uuid::nil()),
-                    agent_id: "Counter(17)".to_string(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
+            },
+            WorkerExecutorError::AgentKeyCollision {
+                agent_id: golem_common::model::AgentId::from_parts(7, 3),
+                requested_key: "Cart(\"a\")".to_string(),
             },
         ] {
             let status: Status = expected.clone().into();
@@ -1545,10 +1597,9 @@ mod read_only_violation_trap_tests {
                 Some(expected)
             );
         }
-        let expected = WorkerExecutorError::worker_already_exists(AgentId {
-            component_id: ComponentId(uuid::Uuid::nil()),
-            agent_id: "Counter(23)".to_string(),
-        });
+        let expected = WorkerExecutorError::worker_already_exists(
+            golem_common::model::AgentId::from_parts(7, 2),
+        );
         let status: Status = expected.clone().into();
         assert_eq!(status.code(), tonic::Code::AlreadyExists);
         assert_eq!(
@@ -1569,10 +1620,7 @@ mod read_only_violation_trap_tests {
             StaleCursorReason::QueryMismatch,
         ] {
             let expected = WorkerExecutorError::StaleCursor {
-                agent_id: AgentId {
-                    component_id: ComponentId(uuid::Uuid::nil()),
-                    agent_id: "Counter(\"a\")".to_string(),
-                },
+                agent_id: AgentId::from_parts(7, 3),
                 next_oplog_index: OplogIndex::from_u64(42),
                 reason,
             };

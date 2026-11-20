@@ -8,17 +8,18 @@ import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-
 import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from '../src/host/hostapi';
+import { getSelfAgentId } from '../src/host/hostapi';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
+import { anonymousContext } from './callerTestSupport';
 
 describe('prepared runtime codecs', () => {
-  it('keeps field order and principal injection separate from wire field count', () => {
+  it('keeps the field order of the wire record', () => {
     const agent = registerAgentType(
       'prepared-input',
       {},
       {
         read: {
-          input: { before: z.string(), principal: s.principal(), after: s.u8() },
+          input: { before: z.string(), after: s.u8() },
           returns: z.void(),
         },
       },
@@ -26,15 +27,14 @@ describe('prepared runtime codecs', () => {
     const runtime = agent.runtimeMethods.get('read')!;
     for (const n of [7, 31]) {
       const wire = schemaValueToWit(v.record([v.string('first'), v.u8(n)]));
-      expect(runtime.read(wire, { tag: 'anonymous' })).toMatchObject({
+      expect(runtime.read(wire)).toMatchObject({
         before: 'first',
-        principal: { tag: 'anonymous' },
         after: n,
       });
     }
-    expect(() =>
-      runtime.read(schemaValueToWit(v.record([v.string('first')])), { tag: 'anonymous' }),
-    ).toThrow(/2 user-supplied fields/);
+    expect(() => runtime.read(schemaValueToWit(v.record([v.string('first')])))).toThrow(
+      /2 user-supplied fields/,
+    );
   });
 
   it('retains generic output semantics rather than revalidating or reapplying source transforms', async () => {
@@ -100,8 +100,8 @@ describe('prepared runtime codecs', () => {
 
   it('reads self identity within a method after a host transition and after snapshot restoration', async () => {
     const input = schemaValueToWit(v.record([]));
-    const parent = `FreshIdentity(${JSON.stringify(input)})[1-2]`;
-    const child = `FreshIdentity(${JSON.stringify(input)})[3-5]`;
+    const parent = '00000007-0000-8000-8000-000000000002';
+    const child = '00000007-0000-8000-8000-000000000005';
     const previous = (globalThis as any).currentAgentId;
     try {
       (globalThis as any).currentAgentId = parent;
@@ -111,26 +111,25 @@ describe('prepared runtime codecs', () => {
         snapshotting: { state: z.object({ saved: z.string() }) },
         methods: { read: method({ input: {}, returns: z.string() }) },
       }).implement({
-        init: () => ({ saved: getRawSelfAgentId().value }),
+        init: () => ({ saved: getSelfAgentId().toString() }),
         methods: {
           async read() {
-            const before = this.getId().value;
+            const before = this.getId().toString();
             (globalThis as any).currentAgentId = child;
             await Promise.resolve();
             return JSON.stringify({
               saved: this.saved,
               before,
-              after: this.getId().value,
-              phantom: this.getPhantomId()?.lowBits.toString(),
+              after: this.getId().toString(),
             });
           },
         },
       });
       const initiator = AgentInitiatorRegistry.lookup('FreshIdentity')!;
-      const initialized = await initiator.initiate(input, { tag: 'anonymous' });
+      const initialized = await initiator.initiate(input, anonymousContext);
       if (initialized.tag !== 'ok') throw new Error('initialization failed');
       const agent = initialized.val as ResolvedAgent;
-      const result = await agent.invoke('read', input, { tag: 'anonymous' });
+      const result = await agent.invoke('read', input, anonymousContext);
       if (result.tag !== 'ok' || !result.val) throw new Error('invocation failed');
       const decoded = schemaValueFromWit(result.val);
       if (decoded.tag !== 'string') throw new Error('expected string');
@@ -138,20 +137,19 @@ describe('prepared runtime codecs', () => {
         saved: parent,
         before: parent,
         after: child,
-        phantom: '5',
       });
-      expect(agent.getId().value).toBe(child);
+      expect(agent.getId().toString()).toBe(child);
       const snapshot = await agent.saveSnapshot();
       expect(JSON.parse(new TextDecoder().decode(snapshot.data))).toEqual({ saved: parent });
       const restored = await initiator.loadSnapshot(
         input,
-        { tag: 'anonymous' },
+        anonymousContext,
         snapshot.data,
         'application/json',
         { inMemory: [], fileDatabases: {} },
       );
       if (restored.tag !== 'ok') throw new Error('restoration failed');
-      expect(restored.val.getId().value).toBe(child);
+      expect(restored.val.getId().toString()).toBe(child);
       expect(
         JSON.parse(new TextDecoder().decode((await restored.val.saveSnapshot()).data)),
       ).toEqual({ saved: parent });

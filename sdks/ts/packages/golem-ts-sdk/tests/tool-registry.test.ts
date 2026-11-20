@@ -124,7 +124,7 @@ describe('tool registration', () => {
   });
 
   it('keeps grafted child ownership separate and forwards through its independent registration', async () => {
-    const context = { principal: 'caller' };
+    const context = { caller: 'caller' };
     let received: { input: unknown; context: unknown } | undefined;
     const remote = toolDefinition('remote')
       .aliases('rmt')
@@ -833,13 +833,13 @@ describe('tool guest exports', () => {
     });
   });
 
-  it('decodes canonical input, injects the principal, and encodes a local result', async () => {
-    let received: { input: unknown; principalTag: string } | undefined;
+  it('decodes canonical input, injects the caller, and encodes a local result', async () => {
+    let received: { input: unknown; callerKind: string } | undefined;
     toolDefinition('echo')
       .body((body) => body.positional('message', z.string()).returns(z.string()))
       .implement({
         echo: async (input, context) => {
-          received = { input, principalTag: context.principal.tag };
+          received = { input, callerKind: context.caller.immediate.kind };
           return ok(input.message.toUpperCase());
         },
       });
@@ -859,7 +859,7 @@ describe('tool guest exports', () => {
       undefined,
     );
 
-    expect(received).toEqual({ input: { message: 'hello' }, principalTag: 'anonymous' });
+    expect(received).toEqual({ input: { message: 'hello' }, callerKind: 'anonymous' });
     expect(result.stdout).toBeUndefined();
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);

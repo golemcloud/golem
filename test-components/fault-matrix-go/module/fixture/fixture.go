@@ -12,15 +12,10 @@ import (
 
 type ID struct{ Name string }
 
-// GateComponentID, GateAgentID and Gate have the schema shape of the WIT promise-id record,
-// which nests the component id as a record. golem.PromiseID flattens the component id to a
-// UUID, so another SDK's promise id does not decode into it.
-type GateComponentID struct{ UUID golem.UUID }
-
-type GateAgentID struct {
-	ComponentID GateComponentID
-	AgentID     string
-}
+// GateAgentID and Gate have the schema shape of the WIT promise-id record, which nests the
+// agent id as a { uuid } record. golem.AgentID is an opaque UUID whose schema is not that
+// record, so another SDK's promise id does not decode into golem.PromiseID.
+type GateAgentID struct{ UUID golem.UUID }
 
 type Gate struct {
 	AgentID     GateAgentID
@@ -30,7 +25,7 @@ type Gate struct {
 
 func gateOf(id golem.PromiseID) Gate {
 	return Gate{
-		AgentID:     GateAgentID{ComponentID: GateComponentID{UUID: id.AgentID.ComponentID}, AgentID: id.AgentID.AgentID},
+		AgentID:     GateAgentID{UUID: id.AgentID.UUID()},
 		Fingerprint: id.Fingerprint,
 		OplogIdx:    id.OplogIndex,
 	}
@@ -38,7 +33,7 @@ func gateOf(id golem.PromiseID) Gate {
 
 func (g Gate) promiseID() golem.PromiseID {
 	return golem.PromiseID{
-		AgentID:     golem.AgentID{ComponentID: g.AgentID.ComponentID.UUID, AgentID: g.AgentID.AgentID},
+		AgentID:     golem.AgentIDFromUUID(g.AgentID.UUID),
 		Fingerprint: g.Fingerprint,
 		OplogIndex:  g.OplogIdx,
 	}
@@ -146,14 +141,14 @@ func init() {
 		for i := range records {
 			records[i] = record(in.Run, uint32(i)+1)
 		}
-		target := Fixture.Get(ID{Name: in.Target})
+		target := Fixture.Upsert(ID{Name: in.Target})
 		if in.Keep >= in.Count {
 			return consume.MustCall(target, ConsumeIn{Input: golem.StreamOf(records...)})
 		}
 		return consumeThenDrop.MustCall(target, DropIn{Input: golem.StreamOf(records...), Keep: in.Keep})
 	})
 	fixture.Handle(readRemote, func(_ *golem.Context[state], in ReadRemoteIn) []uint32 {
-		output := produce.MustCall(Fixture.Get(ID{Name: in.Target}), ProduceIn{
+		output := produce.MustCall(Fixture.Upsert(ID{Name: in.Target}), ProduceIn{
 			Run: in.Run, Count: in.Count, PauseAfter: in.PauseAfter, Gate: in.Gate,
 		})
 		return golem.Must(output.Collect())

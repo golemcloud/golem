@@ -286,6 +286,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component::ComponentDto",
             ),
             (
+                "ComponentPackageMetadata",
+                "golem_common::model::component::ComponentPackageMetadata",
+            ),
+            (
                 "ComponentUpdate",
                 "golem_common::model::component::ComponentUpdate",
             ),
@@ -587,10 +591,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::base_model::worker::RevertWorkerTarget",
             ),
             (
-                "AgentCreationRequest",
-                "golem_common::base_model::worker::AgentCreationRequest",
-            ),
-            (
                 "AgentConfigEntryDto",
                 "golem_common::base_model::worker::AgentConfigEntryDto",
             ),
@@ -612,6 +612,11 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
+            ("OplogScan", "golem_common::model::oplog::OplogScan"),
+            (
+                "OplogScanAllowance",
+                "golem_common::model::oplog::OplogScanAllowance",
+            ),
             (
                 "PublicOplogEntry",
                 "golem_common::model::oplog::PublicOplogEntry",
@@ -687,7 +692,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("OutputSchema", "golem_common::schema::OutputSchema"),
             ("NamedField", "golem_common::schema::NamedField"),
             ("FieldSource", "golem_common::schema::FieldSource"),
-            ("AutoInjectedKind", "golem_common::schema::AutoInjectedKind"),
             ("SchemaGraph", "golem_common::schema::SchemaGraph"),
             ("SchemaTypeDef", "golem_common::schema::SchemaTypeDef"),
             ("TypedSchemaValue", "golem_common::schema::TypedSchemaValue"),
@@ -725,7 +729,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("Tool", "golem_common::schema::tool::Tool"),
         ],
         &[
-            "/v1/components/{component_id}/workers/{agent_name}/connect",
+            "/v1/runtime/envs/{environment_id}/agents/{agent_id}/connect",
             "/v1/login/oauth2/web/callback",
         ],
     )

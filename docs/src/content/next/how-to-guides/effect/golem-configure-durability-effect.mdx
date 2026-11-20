@@ -98,8 +98,8 @@ export const StatelessHandler = defineAgent({
 }).implement({ init: () => Effect.void, methods: () => ({}) });
 ```
 
-Ephemeral agents are not addressable by agent id fields alone through the Effect SDK's
-generated client: their client exposes `getPhantom` and `newPhantom`, but not `get`. Do not depend
+Ephemeral agents are not addressable by agent ID through the Effect SDK's generated client: their
+client exposes only `upsert`, and each invocation runs on a new one-shot instance. Do not depend
 on in-memory state surviving failures or restarts.
 
 ## Switching an Existing Agent

@@ -82,10 +82,10 @@ state pattern instead.
   Promise-returning handlers from the non-Effect TypeScript SDK.
 - Method names use TypeScript casing. For the example above, invoke `toUpper` and `toLower`, not
   snake_case names.
-- Effect components report TypeScript as their source language, so CLI agent IDs and method
-  arguments use TypeScript value syntax.
-- Constructor parameters remain part of the CLI agent ID. The example is addressed as
-  `TextProcessorAgent("processor-1")`.
+- Effect components report TypeScript as their source language, so constructor values in CLI agent
+  keys and method arguments use TypeScript value syntax.
+- Constructor parameters remain part of the CLI address. The example is addressed by its key
+  `TextProcessorAgent("processor-1")`; each invocation runs on a new one-shot instance.
 - Ephemeral agents can still expose HTTP routes, call other agents, and use Golem host APIs;
   ephemeral mode changes instance lifetime and recovery, not the available capabilities.
 - Do not call a runner or registration helper. The top-level `.implement({ ... })` call plus the

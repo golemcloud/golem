@@ -16,8 +16,9 @@ use super::{
     AccountId, ActivatePluginRequest, AgentInvocation, AgentMetadataDto, AgentMetadataForGuests,
     AuthCtx, DeactivatePluginRequest, HasAll, OplogIndex, PluginPriority,
     ProcessOplogEntriesRequest, TypedAgentConfigEntry, UsesAllDeps, Worker, WorkerCtx,
-    WorkerExecutorError, WorkerExecutorImpl, extract_owned_agent_id, extract_principal,
+    WorkerExecutorError, WorkerExecutorImpl, extract_caller, extract_owned_agent_id,
 };
+use golem_common::model::caller::Caller;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -32,11 +33,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
-        Worker::<Ctx>::activate_plugin(self, &owned_agent_id, plugin_priority, principal).await
+        Worker::<Ctx>::activate_plugin(
+            self,
+            &owned_agent_id,
+            plugin_priority,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn deactivate_plugin_internal(
@@ -48,11 +58,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
-        Worker::<Ctx>::deactivate_plugin(self, &owned_agent_id, plugin_priority, principal).await
+        Worker::<Ctx>::deactivate_plugin(
+            self,
+            &owned_agent_id,
+            plugin_priority,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| golem_common::model::AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn process_oplog_entries_internal(
@@ -74,6 +93,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         auth_ctx
             .authorize_system_only("process oplog entries")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+
+        let component_id: golem_common::model::component::ComponentId = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
 
         let component_revision: golem_common::model::component::ComponentRevision =
             request.component_revision.try_into().map_err(|e| {
@@ -110,6 +137,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         env.sort();
         let metadata = AgentMetadataForGuests {
             agent_id: metadata_dto.agent_id,
+            agent_type_name: metadata_dto.agent_type_name,
+            fingerprint: metadata_dto.fingerprint,
             args: vec![],
             env,
             config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
@@ -131,6 +160,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::enqueue_oplog_processor(
             self,
             &owned_agent_id,
+            component_id,
             component_revision,
             AgentInvocation::ProcessOplogEntries {
                 idempotency_key,
@@ -139,6 +169,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 metadata,
                 first_entry_index,
                 entries,
+                // Replaced with the processor agent when the batch is enqueued.
+                caller: Caller::anonymous(),
             },
         )
         .await

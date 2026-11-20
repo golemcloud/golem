@@ -211,12 +211,12 @@ val appMode = env.getOrElse("APP_MODE", "default")
 When creating an agent instance directly (outside `golem deploy`), you can pass environment variables with the `--env` / `-e` flag:
 
 ```shell
-golem agent new 'MyAgent("my-agent-1")' \
+golem agent create --keyed 'MyAgent("my-agent-1")' \
   --env API_KEY=secret123 \
   --env LOG_LEVEL=debug
 ```
 
-Multiple `--env` flags can be provided, each in `KEY=VALUE` format. These are set only on that specific agent instance and do not affect the manifest or other instances.
+Multiple `--env` flags can be provided, each in `KEY=VALUE` format. These are set only on that specific agent instance and do not affect the manifest or other instances. With `--keyed`, the command creates the keyed agent of the constructor parameters, so later `golem agent invoke 'MyAgent("my-agent-1")' ...` calls reach it; it fails when that agent already exists. Without `--keyed`, it creates a new agent without a key, reachable only by the agent ID that the command prints. Agents created by invocation (`golem agent invoke`, `upsert`) get only the manifest environment.
 
 ## Summary of All Methods
 
@@ -228,4 +228,4 @@ Multiple `--env` flags can be provided, each in `KEY=VALUE` format. These are se
 | `*.presets.*.env` | Component or agent preset | `golem.yaml` |
 | `envMergeMode` | Controls merge at any level | `golem.yaml` |
 | `{{ VAR }}` substitution | Any env value | `golem.yaml` |
-| `golem agent new --env KEY=VAL` | Single agent instance | CLI |
+| `golem agent create --env KEY=VAL` | Single agent instance | CLI |

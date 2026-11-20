@@ -31,7 +31,7 @@ import (
 //	var Pinger = golem.DefineAgentClient[Pingable]()
 //	var Ping   = Pinger.Method[golem.Unit, string]("ping")
 //
-//	c, err := Pinger.Bind(agentID)
+//	c, err := Pinger.GetByID(agentID)
 //	reply, err := Ping.Call(c, golem.Unit{})
 //
 // A full client also declares the target type's name, constructor (Id) and
@@ -41,7 +41,7 @@ import (
 //	var Counter = golem.DefineFullAgentClient[CounterID]("CounterAgent", golem.AgentClientSpec{})
 //	var Add     = Counter.Method[AddIn, int64]("add")
 //
-//	c, err := Counter.Get(CounterID{Name: "c1"})
+//	c, err := Counter.Upsert(CounterID{Name: "c1"})
 //	total, err := Add.Call(c, AddIn{By: 3})
 //
 // Neither is published by the component: [DefineAgent] declares an agent the
@@ -50,7 +50,8 @@ import (
 // AgentClientSpec describes the target of a full agent client.
 type AgentClientSpec struct {
 	// Mode is the target's lifecycle. An ephemeral target has no durable
-	// identity, so its client offers NewPhantom only.
+	// identity: each invocation runs on a new one-shot instance, so its client
+	// is made with Upsert only.
 	Mode Mode
 }
 
@@ -66,12 +67,13 @@ func (a *AgentClient[Shape]) Method[In any, Out any](name string, opts ...Method
 	return newMethodDef[Shape, In, Out](name, opts)
 }
 
-// Bind addresses the existing agent agentID names, of any type. Binding checks
-// nothing about the target, which this definition does not describe; a
-// mismatch is reported by the host or when the result is decoded. Binding does
-// not create the agent, but the first call to a durable identity does.
-func (a *AgentClient[Shape]) Bind(agentID string) (Client[Shape], error) {
-	return bindClient[Shape](agentID)
+// GetByID addresses the existing agent with the ID, of the type its ID names.
+// It checks nothing else about the target, which this definition does not
+// describe; a mismatch is reported by the host or when the result is decoded.
+// It never creates the agent: an unknown ID is a [RemoteCallError] of kind
+// [RemoteNotFound].
+func (a *AgentClient[Shape]) GetByID(id AgentID) (Client[Shape], error) {
+	return getAnyClientByID[Shape](id)
 }
 
 // FullAgentClient is a full agent client definition: the target type's name,
@@ -88,8 +90,8 @@ func DefineFullAgentClient[Id any](name string, spec AgentClientSpec) *FullAgent
 }
 
 // DefineConfiguredFullAgentClient declares a full agent client whose target
-// takes configuration Cfg, so a caller can pass typed creation-time overrides
-// with [FullAgentClient.WithConfig].
+// takes configuration Cfg, so a caller can pass typed overrides to
+// [FullAgentClient.Create] with [FullAgentClient.WithConfig].
 func DefineConfiguredFullAgentClient[Id any, Cfg any](name string, spec AgentClientSpec) *FullAgentClient[Id, Cfg] {
 	return defineFullAgentClientInto[Id, Cfg](defs, name, spec)
 }
@@ -112,7 +114,7 @@ func defineFullAgentClientInto[Id any, Cfg any](d *definitions, name string, spe
 	if idType.Kind() != reflect.Struct {
 		d.RecordErr(name, "", "Id must be a struct, got %s", idType)
 	}
-	// Registered in d.agents so Get can resolve the id fields and config
+	// Registered in d.agents so Upsert and Create can resolve the id fields and config
 	// overrides, but deliberately NOT in d.order: that list is what discover()
 	// publishes, and this component does not implement this agent. The Id type
 	// is likewise not claimed in idToAgent — that guard exists so two *local*
@@ -140,54 +142,57 @@ func (a *FullAgentClient[Id, Cfg]) Method[In any, Out any](name string, opts ...
 	return newMethodDef[Id, In, Out](name, opts)
 }
 
-// Get returns a client for the agent with the given id, creating it if it does
-// not exist yet. Unlike [AgentDefinition.Get] it returns an error rather than
-// panicking when the host cannot resolve the target: the target is another
-// component's agent, which may not be deployed. Misuse — an override that does
-// not match the declared config — still panics.
-func (a *FullAgentClient[Id, Cfg]) Get(id Id, opts ...ClientOpt) (Client[Id], error) {
-	return getClient[Id](defs, a.name, id, opts)
+// Upsert returns a client for the keyed agent of the constructor parameters
+// id, which the host creates when it is missing. Unlike
+// [AgentDefinition.Upsert] it returns an error rather than panicking when the
+// host refuses it: the target is another component's agent, which may not be
+// deployed.
+func (a *FullAgentClient[Id, Cfg]) Upsert(id Id) (Client[Id], error) {
+	return upsertClient[Id](defs, a.name, id)
 }
 
-// MustGet is [FullAgentClient.Get] that panics when the host cannot resolve
-// the target.
-func (a *FullAgentClient[Id, Cfg]) MustGet(id Id, opts ...ClientOpt) Client[Id] {
-	return Must(a.Get(id, opts...))
+// MustUpsert is [FullAgentClient.Upsert] that panics when the host refuses it.
+func (a *FullAgentClient[Id, Cfg]) MustUpsert(id Id) Client[Id] {
+	return Must(a.Upsert(id))
 }
 
-// NewPhantom allocates a fresh phantom instance and returns a client for it,
-// with the error contract of [FullAgentClient.Get].
-func (a *FullAgentClient[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) (Client[Id], error) {
-	return newPhantomClient[Id](defs, a.name, id, opts)
+// Create creates an agent with the constructor parameters id, as
+// [AgentDefinition.Create] does for a local agent.
+func (a *FullAgentClient[Id, Cfg]) Create(id Id, opts ...CreateOpt) (Client[Id], error) {
+	return createClient[Id](defs, a.name, id, opts)
 }
 
-// MustNewPhantom is [FullAgentClient.NewPhantom] that panics when the host
-// cannot resolve the target.
-func (a *FullAgentClient[Id, Cfg]) MustNewPhantom(id Id, opts ...ClientOpt) Client[Id] {
-	return Must(a.NewPhantom(id, opts...))
+// MustCreate is [FullAgentClient.Create] that panics on a failure.
+func (a *FullAgentClient[Id, Cfg]) MustCreate(id Id, opts ...CreateOpt) Client[Id] {
+	return Must(a.Create(id, opts...))
 }
 
-// Bind addresses an existing agent by its id, which must name this client's
-// agent type and carry a constructor of shape Id.
-func (a *FullAgentClient[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
-	return bindTypedClient[Id](defs, a.name, agentID)
+// GetByID addresses the existing agent of this client's type with the ID, as
+// [AgentDefinition.GetByID] does for a local agent.
+func (a *FullAgentClient[Id, Cfg]) GetByID(id AgentID) (Client[Id], error) {
+	return getClientByID[Id](defs, a.name, id)
+}
+
+// MustGetByID is [FullAgentClient.GetByID] that panics on a failure.
+func (a *FullAgentClient[Id, Cfg]) MustGetByID(id AgentID) Client[Id] {
+	return Must(a.GetByID(id))
+}
+
+// LookupID returns the ID of the keyed agent of the constructor parameters id,
+// or None when no such agent exists. It never creates the agent.
+func (a *FullAgentClient[Id, Cfg]) LookupID(id Id) (Option[AgentID], error) {
+	return lookupID[Id](defs, a.name, id)
 }
 
 // BindSelf binds the current durable incarnation without creating it or waiting for initialization.
 //
-// Use this to schedule work on self from inside the constructor. Normal Get reuses an
+// Use this to schedule work on self from inside the constructor. Upsert reuses an
 // initialized agent without rerunning its constructor, but waits for an unfinished
-// constructor. Calling Get on self from that constructor would therefore deadlock.
+// constructor. Calling Upsert on self from that constructor would therefore deadlock.
 //
 // Scheduled work runs after construction finishes. This does not make awaited self-calls
 // reentrant or bypass method permissions. A different agent type or an ephemeral owner
 // returns an error. Replay preserves the recorded incarnation.
 func (a *FullAgentClient[Id, Cfg]) BindSelf() (Client[Id], error) {
 	return bindSelfClient[Id](a.name)
-}
-
-// AgentID renders the identity of the instance id (and phantom, if any)
-// names, without creating it.
-func (a *FullAgentClient[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) (string, error) {
-	return makeTypedAgentID[Id](defs, a.name, id, phantom)
 }

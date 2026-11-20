@@ -15,14 +15,15 @@
 use crate::Tracing;
 use anyhow::anyhow;
 use golem_client::api::RegistryServiceClient;
+use golem_common::model::AgentStatus;
 use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceDefinitionCreation, ResourceLimit,
     ResourceName, ResourceRateLimit, TimePeriod,
 };
-use golem_common::model::{AgentId, AgentStatus};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use integration_tests::agents::lookup_keyed_agent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -136,7 +137,7 @@ async fn reserve_and_commit_succeeds(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "reserve-and-commit-1");
+    let agent_id = agent_key!("QuotaApi", "reserve-and-commit-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -181,7 +182,7 @@ async fn partial_commit_returns_unused_capacity(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "partial-commit-1");
+    let agent_id = agent_key!("QuotaApi", "partial-commit-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -238,7 +239,7 @@ async fn drop_without_commit_is_zero_commit(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "drop-no-commit-1");
+    let agent_id = agent_key!("QuotaApi", "drop-no-commit-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let reserved = user
@@ -292,7 +293,7 @@ async fn reject_policy_returns_failed_reservation(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "reject-policy-1");
+    let agent_id = agent_key!("QuotaApi", "reject-policy-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -338,7 +339,7 @@ async fn split_tokens_are_independently_functional(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "split-and-reserve-1");
+    let agent_id = agent_key!("QuotaApi", "split-and-reserve-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -388,7 +389,7 @@ async fn merge_and_reserve_succeeds(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "merge-and-reserve-1");
+    let agent_id = agent_key!("QuotaApi", "merge-and-reserve-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let result = user
@@ -434,7 +435,7 @@ async fn acquire_and_drop_does_not_panic(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "acquire-and-drop-1");
+    let agent_id = agent_key!("QuotaApi", "acquire-and-drop-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -483,8 +484,8 @@ async fn shared_quota_across_two_agents(
         .store()
         .await?;
 
-    let agent_a = agent_id!("QuotaApi", "shared-quota-a");
-    let agent_b = agent_id!("QuotaApi", "shared-quota-b");
+    let agent_a = agent_key!("QuotaApi", "shared-quota-a");
+    let agent_b = agent_key!("QuotaApi", "shared-quota-b");
     user.start_agent(&component.id, agent_a.clone()).await?;
     user.start_agent(&component.id, agent_b.clone()).await?;
 
@@ -542,7 +543,7 @@ async fn terminate_enforcement_fails_agent(
         .store()
         .await?;
 
-    let agent_id = agent_id!("QuotaApi", "terminate-enforcement-1");
+    let agent_id = agent_key!("QuotaApi", "terminate-enforcement-1");
     let agent_system_id = user.start_agent(&component.id, agent_id.clone()).await?;
 
     let _ = user
@@ -618,7 +619,7 @@ async fn rate_limit_reject_stops_at_limit(
 
     let host = "localhost".to_string();
 
-    let agent_id = agent_id!("QuotaApi", "rate-reject-1");
+    let agent_id = agent_key!("QuotaApi", "rate-reject-1");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let calls_made = user
@@ -701,7 +702,7 @@ async fn quota_token_rpc_rust(
         .store()
         .await?;
 
-    let sender = agent_id!("QuotaRpcSender", "rpc-sender");
+    let sender = agent_key!("QuotaRpcSender", "rpc-sender");
     let sender_sys = user.start_agent(&component.id, sender.clone()).await?;
 
     user.invoke_agent(
@@ -729,10 +730,12 @@ async fn quota_token_rpc_rust(
     .await?;
 
     user.wait_for_statuses(
-        &AgentId {
-            component_id: component.id,
-            agent_id: "QuotaRpcReceiver(\"rpc-sender-receiver\")".to_string(),
-        },
+        &lookup_keyed_agent(
+            &user,
+            &component,
+            &agent_key!("QuotaRpcReceiver", "rpc-sender-receiver"),
+        )
+        .await?,
         &[AgentStatus::Idle, AgentStatus::Suspended],
         Duration::from_secs(60),
     )
@@ -796,7 +799,7 @@ async fn quota_token_rpc_ts(
         .store()
         .await?;
 
-    let sender = agent_id!("QuotaRpcSender", "rpc-sender-ts");
+    let sender = agent_key!("QuotaRpcSender", "rpc-sender-ts");
 
     tracing::warn!("here0");
     let sender_sys = user.start_agent(&component.id, sender.clone()).await?;
@@ -828,10 +831,12 @@ async fn quota_token_rpc_ts(
     .await?;
 
     user.wait_for_statuses(
-        &AgentId {
-            component_id: component.id,
-            agent_id: "QuotaRpcReceiver(\"rpc-sender-ts-receiver\")".to_string(),
-        },
+        &lookup_keyed_agent(
+            &user,
+            &component,
+            &agent_key!("QuotaRpcReceiver", "rpc-sender-ts-receiver"),
+        )
+        .await?,
         &[AgentStatus::Idle, AgentStatus::Suspended],
         Duration::from_secs(60),
     )
@@ -894,8 +899,8 @@ async fn rate_limit_throttle_two_agents(
 
     let host = "localhost".to_string();
 
-    let agent_a = agent_id!("QuotaApi", "rate-throttle-a");
-    let agent_b = agent_id!("QuotaApi", "rate-throttle-b");
+    let agent_a = agent_key!("QuotaApi", "rate-throttle-a");
+    let agent_b = agent_key!("QuotaApi", "rate-throttle-b");
     let agent_a_sys = user.start_agent(&component.id, agent_a.clone()).await?;
     let agent_b_sys = user.start_agent(&component.id, agent_b.clone()).await?;
 

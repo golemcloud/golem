@@ -45,10 +45,11 @@
 //	    })
 //	}
 //
-// Another agent calls it through the definition — [AgentDefinition.Get] returns a
-// client, and the method descriptor carries the call:
+// Another agent calls it through the definition — [AgentDefinition.Upsert]
+// returns a client of the keyed agent of the constructor parameters, and the
+// method descriptor carries the call:
 //
-//	client := counteragent.Agent.Get(counteragent.CounterID{Name: "c1"})
+//	client := counteragent.Agent.Upsert(counteragent.CounterID{Name: "c1"})
 //	n, err := counteragent.Add.Call(client, counteragent.AddIn{By: 5})
 //
 // Method descriptors are package-level values so the same value drives the
@@ -199,21 +200,20 @@ type AgentDependency interface{ dependencyName() string }
 // Context is passed to every method handler. State is the agent instance's
 // private state, as returned by the agent's init function.
 type Context[S any] struct {
-	State     *S
-	principal Principal
+	State  *S
+	caller func() Caller
 }
 
-// AgentID returns the raw id of the running agent. It is read from the host on
-// each call, so a copy made by [ForkSelf] sees its own id. The id comes from
+// AgentID returns the ID of the running agent. It is read from the host on
+// each call, so a copy made by [ForkSelf] sees its own ID. The ID comes from
 // the GOLEM_AGENT_ID environment variable, which the agent can read only when
 // its permission card allows env(?agent) @ ?agent : read : GOLEM_AGENT_ID;
-// without that grant AgentID returns "".
-func (c *Context[S]) AgentID() string { return selfAgentID() }
+// without that grant AgentID returns the zero AgentID.
+func (c *Context[S]) AgentID() AgentID { return selfAgentID() }
 
-// Principal returns the principal the agent was initialized with. The
-// principal of the current invocation is a [Principal] field of the method's
-// input struct.
-func (c *Context[S]) Principal() Principal { return c.principal }
+// Caller says who caused the running invocation. The host is asked on the first
+// call, and the answer is kept for the rest of the invocation.
+func (c *Context[S]) Caller() Caller { return callerOf(c.caller) }
 
 // InitContext is the execution scope passed to a [DefineConfiguredAgent]
 // constructor. It carries the constructor parameters ([InitContext.ID]) and reads
@@ -222,28 +222,29 @@ func (c *Context[S]) Principal() Principal { return c.principal }
 // method. Agents declared with the plain [DefineAgent] receive their id directly
 // and never see this type.
 type InitContext[Id any, S any, Cfg any] struct {
-	id        Id
-	principal Principal
+	id     Id
+	caller func() Caller
 }
 
-// Principal returns the principal initializing the agent.
-func (c *InitContext[Id, S, Cfg]) Principal() Principal { return c.principal }
+// Caller says who caused the invocation that initializes the agent.
+func (c *InitContext[Id, S, Cfg]) Caller() Caller { return callerOf(c.caller) }
 
 // ID returns the constructor parameters the agent instance was created with.
 func (c *InitContext[Id, S, Cfg]) ID() Id { return c.id }
 
-// AgentID returns the raw id of the agent being initialized, read from the host.
-// The id comes from the GOLEM_AGENT_ID environment variable, which the agent can
+// AgentID returns the ID of the agent being initialized, read from the host.
+// The ID comes from the GOLEM_AGENT_ID environment variable, which the agent can
 // read only when its permission card allows
 // env(?agent) @ ?agent : read : GOLEM_AGENT_ID; without that grant AgentID
-// returns "".
-func (c *InitContext[Id, S, Cfg]) AgentID() string { return selfAgentID() }
+// returns the zero AgentID.
+func (c *InitContext[Id, S, Cfg]) AgentID() AgentID { return selfAgentID() }
 
 // AgentDefinition is the state-free handle returned by [DefineAgent] /
 // [DefineConfiguredAgent]. Id is the constructor parameter type, which doubles as
 // the agent's type-level identity; Cfg is the agent's config struct ([NoConfig]
 // for a config-less agent). It carries no state type: callers obtain a client
-// with [AgentDefinition.Get] and never depend on how the target stores state.
+// with [AgentDefinition.Upsert], [AgentDefinition.Create] or
+// [AgentDefinition.GetByID] and never depend on how the target stores state.
 // The behaviour (and the private state) is attached separately with
 // [AgentDefinition.Implement].
 type AgentDefinition[Id any, Cfg any] struct{ name string }

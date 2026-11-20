@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::Caller;
 
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
@@ -36,7 +37,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::InvocationResultPosition;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
@@ -87,7 +88,7 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
     let key = InvocationId(Uuid::new_v4());
     let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
-        callee: test_case.owned_agent_id.agent_id().clone(),
+        callee: test_case.owned_agent_id.agent_id(),
         callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
         idempotency_key: key,
     };
@@ -230,10 +231,7 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
         format_version: 1,
         session_key: StreamRegistrationInvocation::Remote(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
-            callee: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "remote".into(),
-            },
+            callee: AgentId::from_parts(7, 1),
             callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
             idempotency_key: InvocationId(Uuid::new_v4()),
         }),
@@ -530,6 +528,189 @@ fn restart_sets_ephemeral_execution_begun_permanently() {
     assert!(later.ephemeral_execution_begun);
 }
 
+fn create_with_mark(never_live: bool) -> OplogEntry {
+    let component_id = ComponentId::new();
+    OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        agent_id: AgentId::from_parts(7, 1),
+        component_id,
+        agent_type_name: None,
+        canonical_key: None,
+        owner_kind: OwnerKind::ComponentAgent,
+        agent_mode: AgentMode::Durable,
+        component_revision: ComponentRevision::INITIAL,
+        env: vec![],
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId::new(),
+        parent: None,
+        component_size: 100,
+        initial_total_linear_memory_size: 200,
+        initial_active_plugins: HashSet::new(),
+        local_agent_config: Vec::new(),
+        constructor_parameters: None,
+        instance_id: uuid::Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::Fork,
+            None,
+            Caller::anonymous(),
+            &InvocationContextStack::fresh(),
+        ),
+        never_live,
+    }))
+}
+
+/// The fold takes the mark from `Create` and keeps it through later folds, a revert and an
+/// update. A marked agent reports `Sandboxed`, while its folded `status` keeps the replayed state
+/// and never holds `Sandboxed`.
+#[test]
+fn the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status() {
+    let retry = RetryConfig::default();
+    let fold = |status: AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
+        update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            entries
+                .into_iter()
+                .map(|(index, entry)| (OplogIndex::from_u64(index), entry))
+                .collect(),
+            &retry,
+        )
+        .unwrap()
+    };
+
+    let unmarked = fold(
+        AgentStatusRecord::default(),
+        vec![(1, create_with_mark(false)), (2, OplogEntry::resumed())],
+    );
+    assert!(!unmarked.never_live);
+    assert_eq!(unmarked.status, AgentStatus::Running);
+    assert_eq!(unmarked.reported_status(), AgentStatus::Running);
+    assert_eq!(unmarked.underlying_status(), None);
+
+    let running = fold(
+        AgentStatusRecord::default(),
+        vec![(1, create_with_mark(true)), (2, OplogEntry::resumed())],
+    );
+    assert!(running.never_live);
+    assert_eq!(running.status, AgentStatus::Running);
+    assert_eq!(running.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(running.underlying_status(), Some(AgentStatus::Running));
+
+    let update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let updated = fold(
+        running.clone(),
+        vec![
+            (3, OplogEntry::pending_update(update, None)),
+            (
+                4,
+                OplogEntry::successful_update(
+                    ComponentRevision::new(2).unwrap(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                    None,
+                ),
+            ),
+        ],
+    );
+    assert!(updated.never_live);
+    assert_eq!(
+        updated.component_revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(updated.status, AgentStatus::Running);
+    assert_eq!(updated.reported_status(), AgentStatus::Sandboxed);
+
+    let interrupted = fold(updated, vec![(5, OplogEntry::interrupted())]);
+    assert!(interrupted.never_live);
+    assert_eq!(interrupted.status, AgentStatus::Interrupted);
+    assert_eq!(interrupted.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(
+        interrupted.underlying_status(),
+        Some(AgentStatus::Interrupted)
+    );
+
+    let reverted = fold(
+        AgentStatusRecord::default(),
+        vec![
+            (1, create_with_mark(true)),
+            (2, OplogEntry::resumed()),
+            (3, OplogEntry::interrupted()),
+            (4, OplogEntry::revert(OplogRegion::from_range(3..=3))),
+        ],
+    );
+    assert!(reverted.never_live);
+    assert_eq!(reverted.reported_status(), AgentStatus::Sandboxed);
+    assert_ne!(reverted.status, AgentStatus::Sandboxed);
+
+    let exited = fold(running, vec![(3, OplogEntry::exited())]);
+    assert!(exited.never_live);
+    assert_eq!(exited.status, AgentStatus::Exited);
+    assert_eq!(exited.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(exited.underlying_status(), Some(AgentStatus::Exited));
+}
+
+fn fold_marked_method_failure(recovery_error: Option<OplogEntry>) -> AgentStatusRecord {
+    let invocation_id = InvocationId(Uuid::new_v4());
+    let mut entries = vec![create_with_mark(true), started_invocation(&invocation_id)];
+    entries.extend(recovery_error);
+    entries.push(OplogEntry::agent_invocation_failed(
+        None,
+        invocation_id,
+        AgentError::InternalError("method gave up".into()),
+        OplogIndex::from_u64(2),
+    ));
+    update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(position, entry)| (OplogIndex::from_u64(position as u64 + 1), entry))
+            .collect(),
+        &RetryConfig::default(),
+    )
+    .unwrap()
+}
+
+/// A method failure stays local to its invocation and leaves the agent idle. On a marked agent
+/// the reported status stays `Sandboxed`, and the idle state is only the underlying status.
+#[test]
+fn a_marked_agent_stays_sandboxed_after_a_method_failure() {
+    let failed = fold_marked_method_failure(None);
+
+    assert!(failed.never_live);
+    assert_eq!(failed.status, AgentStatus::Idle);
+    assert_eq!(failed.last_error_kind, None);
+    assert_eq!(failed.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(failed.underlying_status(), Some(AgentStatus::Idle));
+}
+
+/// A method failure does not hide an unresolved recovery: the folded status stays `Retrying`
+/// until the recovery succeeds. On a marked agent that state is the underlying status, and the
+/// reported status stays `Sandboxed`.
+#[test]
+fn a_marked_agent_stays_sandboxed_after_a_method_failure_during_unresolved_recovery() {
+    let failed = fold_marked_method_failure(Some(OplogEntry::error(
+        None,
+        OplogErrorKind::Recovery,
+        None,
+        AgentError::InternalError("replay diverged".to_string()),
+        OplogIndex::from_u64(2),
+        None,
+        None,
+        None,
+    )));
+
+    assert!(failed.never_live);
+    assert_eq!(failed.status, AgentStatus::Retrying);
+    assert_eq!(failed.last_error_kind, Some(OplogErrorKind::Recovery));
+    assert_eq!(failed.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(failed.underlying_status(), Some(AgentStatus::Retrying));
+}
+
 fn export_owner_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::from_u128(1))
 }
@@ -545,17 +726,14 @@ fn export_admission_baseline() -> AgentStatusRecord {
 }
 
 fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) -> OplogEntry {
-    let source = AgentId {
-        component_id: target.component_id,
-        agent_id: "source".into(),
-    };
+    let source = AgentId::from_parts(7, 2);
     OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
         record: OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(
             StreamExportForkAdmittedRecord {
                 format_version: 1,
-                target: target.clone(),
+                target,
                 request_hash: vec![1; 32],
                 candidate: StreamExportForkCandidate {
                     export: StreamExportFork {
@@ -585,7 +763,7 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
                     selected: StreamId(uuid::Uuid::new_v4()),
                     source_invocation: StreamInvocationId {
                         callee_environment_id: EnvironmentId::new(),
-                        callee: target.clone(),
+                        callee: target,
                         callee_fingerprint: export_owner_fingerprint(),
                         idempotency_key: InvocationId(Uuid::new_v5(
                             &Uuid::NAMESPACE_OID,
@@ -608,18 +786,15 @@ fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) ->
 
 #[test]
 fn export_fork_admission_fold_is_incremental_and_idempotent_per_target() {
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target".into(),
-    };
+    let target = AgentId::from_parts(7, 3);
     let entries = BTreeMap::from([
         (
             OplogIndex::from_u64(2),
-            export_fork_admission(target.clone(), "s", 10),
+            export_fork_admission(target, "s", 10),
         ),
         (
             OplogIndex::from_u64(3),
-            export_fork_admission(target.clone(), "s", 20),
+            export_fork_admission(target, "s", 20),
         ),
     ]);
     let rebuilt = update_status_with_new_entries(
@@ -661,16 +836,13 @@ fn export_fork_admission_fold_is_incremental_and_idempotent_per_target() {
 
 #[test]
 fn export_fork_admission_fold_accepts_serialized_inline_payload() {
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target".into(),
-    };
+    let target = AgentId::from_parts(7, 4);
     let OplogEntry::StreamSession {
         timestamp,
         entity_parent_start_index,
         record: OplogPayload::Inline(record),
         ..
-    } = export_fork_admission(target.clone(), "s", 10)
+    } = export_fork_admission(target, "s", 10)
     else {
         unreachable!()
     };
@@ -710,14 +882,11 @@ fn export_fork_admission_fold_accepts_serialized_inline_payload() {
 
 #[test]
 fn export_fork_admission_fold_accepts_cached_payloads_and_rejects_missing_external() {
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target".into(),
-    };
+    let target = AgentId::from_parts(7, 5);
     let OplogEntry::StreamSession {
         record: OplogPayload::Inline(record),
         ..
-    } = export_fork_admission(target.clone(), "s", 10)
+    } = export_fork_admission(target, "s", 10)
     else {
         unreachable!()
     };
@@ -778,11 +947,8 @@ fn export_fork_admission_fold_accepts_cached_payloads_and_rejects_missing_extern
 
 #[test]
 fn export_fork_admission_fold_distinguishes_skip_revert_and_new_owner() {
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target".into(),
-    };
-    let admitted = export_fork_admission(target.clone(), "s", 10);
+    let target = AgentId::from_parts(7, 6);
+    let admitted = export_fork_admission(target, "s", 10);
     let region = OplogRegion::from_index_range(OplogIndex::from_u64(2)..=OplogIndex::from_u64(2));
     let retained = super::calculate_export_fork_admissions(
         export_admission_baseline().export_fork_admissions,
@@ -841,10 +1007,7 @@ fn export_fork_admission_fold_distinguishes_skip_revert_and_new_owner() {
 
 #[test]
 fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut() {
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "ancestor-target".into(),
-    };
+    let target = AgentId::from_parts(7, 7);
     let cut = StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![3; 32],
@@ -866,7 +1029,7 @@ fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut()
         (OplogIndex::INITIAL, create),
         (
             OplogIndex::from_u64(2),
-            export_fork_admission(target.clone(), "ancestor-session", 10),
+            export_fork_admission(target, "ancestor-session", 10),
         ),
         (
             OplogIndex::from_u64(3),
@@ -910,14 +1073,11 @@ fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut()
 fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
     use crate::services::worker_fork::admission::{self, Admission};
 
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "first".into(),
-    };
+    let target = AgentId::from_parts(7, 8);
     let OplogEntry::StreamSession {
         record: OplogPayload::Inline(template),
         ..
-    } = export_fork_admission(target.clone(), "session", 1500)
+    } = export_fork_admission(target, "session", 1500)
     else {
         unreachable!()
     };
@@ -927,7 +1087,7 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
     let original = template.candidate;
     let accepted = admission::reserve(
         &Default::default(),
-        target.clone(),
+        target,
         vec![1; 32],
         original.clone(),
         1,
@@ -958,7 +1118,7 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
     assert_eq!(
         admission::reserve(
             &rebuilt.export_fork_admissions,
-            target.clone(),
+            target,
             vec![1; 32],
             later.clone(),
             0,
@@ -972,7 +1132,7 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
     assert_eq!(
         admission::reserve(
             &rebuilt.export_fork_admissions,
-            target.clone(),
+            target,
             vec![2; 32],
             later.clone(),
             10,
@@ -981,14 +1141,11 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
         ),
         Err(Admission::Conflict)
     );
-    let second = AgentId {
-        agent_id: "second".into(),
-        ..target.clone()
-    };
+    let second = crate::test_agent_id("second");
     assert_eq!(
         admission::reserve(
             &rebuilt.export_fork_admissions,
-            second.clone(),
+            second,
             vec![2; 32],
             later.clone(),
             1,
@@ -1025,16 +1182,13 @@ fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
         &RetryConfig::default(),
     )
     .unwrap();
-    let third = AgentId {
-        agent_id: "third".into(),
-        ..target
-    };
+    let third = crate::test_agent_id("third");
     later.export.session = "third-session".into();
     for now in [1400, 1999] {
         assert_eq!(
             admission::reserve(
                 &rebuilt.export_fork_admissions,
-                third.clone(),
+                third,
                 vec![3; 32],
                 later.clone(),
                 1,
@@ -1338,7 +1492,7 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "a".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
-                    principal: Principal::anonymous(),
+                    caller: Caller::anonymous(),
                     scope_card: None,
                 })),
                 trace_id: TraceId::generate(),
@@ -1848,7 +2002,7 @@ fn recovery_errors_are_not_invocation_results() {
                 payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
                     method_name: "agent:method".to_string(),
                     input: SchemaValue::Record { fields: Vec::new() },
-                    principal: Principal::anonymous(),
+                    caller: Caller::anonymous(),
                     scope_card: None,
                 })),
                 trace_id: TraceId::generate(),
@@ -1893,7 +2047,7 @@ fn started_invocation(key: &InvocationId) -> OplogEntry {
         payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         trace_id: TraceId::generate(),
@@ -1950,7 +2104,7 @@ fn pending_invocation_entry(key: &InvocationId) -> OplogEntry {
         OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
             method_name: "agent:method".to_string(),
             input: SchemaValue::Record { fields: Vec::new() },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })),
         TraceId::generate(),
@@ -2665,6 +2819,8 @@ fn failed_update_to_revision_two() -> OplogEntry {
         None,
         None,
         None,
+        golem_common::model::oplog::UpdateFailureClass::Other,
+        None,
     )
 }
 
@@ -3260,7 +3416,7 @@ async fn multiple_reverts() {
                 fields: vec![SchemaValue::Bool(true)],
             },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .agent_invocation_finished(
@@ -3305,7 +3461,7 @@ async fn cancel_pending_invocation() {
                 fields: vec![SchemaValue::Bool(true)],
             },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .pending_invocation(AgentInvocation::AgentMethod {
@@ -3313,7 +3469,7 @@ async fn cancel_pending_invocation() {
             method_name: "b".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .cancel_pending_invocation(k1)
@@ -3331,7 +3487,7 @@ async fn permission_denied_rejection_survives_status_reconstruction() {
             method_name: "denied".to_string(),
             input: SchemaValue::Record { fields: vec![] },
             invocation_context: InvocationContextStack::fresh(),
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         })
         .permission_denied_pending_invocation(idempotency_key)
@@ -4296,13 +4452,7 @@ async fn snapshot_tracking_with_revert() {
 #[test]
 async fn non_existing_oplog() {
     let environment_id = EnvironmentId::new();
-    let owned_agent_id = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
-        },
-    );
+    let owned_agent_id = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 9));
     let test_case = TestCase {
         owned_agent_id: owned_agent_id.clone(),
         entries: vec![],
@@ -4846,7 +4996,7 @@ impl TestCaseBuilder {
                 oplog_entry: OplogEntry::create(Box::new(
                     golem_common::model::oplog::CreateParameters {
                         agent_id: owned_agent_id.agent_id(),
-                        component_id: owned_agent_id.agent_id.component_id,
+                        component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                         agent_type_name: None,
                         canonical_key: None,
                         owner_kind: OwnerKind::ComponentAgent,
@@ -4860,15 +5010,16 @@ impl TestCaseBuilder {
                         initial_total_linear_memory_size: 200,
                         initial_active_plugins: HashSet::new(),
                         local_agent_config: Vec::new(),
-                        original_phantom_id: None,
+                        constructor_parameters: None,
                         instance_id,
                         create_request: golem_common::model::oplog::CreateRequest::new(
                             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                             None,
-                            golem_common::model::agent::Principal::anonymous(),
+                            golem_common::model::caller::Caller::anonymous(),
                             &golem_common::model::invocation_context::InvocationContextStack::fresh(
                             ),
                         ),
+                        never_live: false,
                     },
                 )),
                 expected_status: status.clone(),
@@ -4912,7 +5063,7 @@ impl TestCaseBuilder {
         let payload = AgentInvocationPayload::AgentMethod {
             method_name: function_name.to_string(),
             input: SchemaValue::Record { fields: request },
-            principal: Principal::anonymous(),
+            caller: Caller::anonymous(),
             scope_card: None,
         };
         self.add(
@@ -5533,6 +5684,8 @@ impl TestCaseBuilder {
             None,
             update_attempt_index,
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -5574,6 +5727,8 @@ impl TestCaseBuilder {
                 pending_update: applied_update,
                 snapshot_assisted_details: None,
                 snapshot_fault: None,
+                failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+                divergence: None,
             });
 
             if status.skipped_regions.is_overridden() {
@@ -5610,6 +5765,8 @@ impl TestCaseBuilder {
             Some(details.clone()),
             Some(pending.admission_index),
             None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
@@ -5621,6 +5778,8 @@ impl TestCaseBuilder {
                 pending_update: applied_update,
                 snapshot_assisted_details: Some(details.clone()),
                 snapshot_fault: None,
+                failure_class: golem_common::model::oplog::UpdateFailureClass::Other,
+                divergence: None,
             });
             status
         })
@@ -5679,13 +5838,7 @@ impl TestCase {
     pub fn builder(initial_component_version: u64) -> TestCaseBuilder {
         let environment_id = EnvironmentId::new();
         let account_id = AccountId::new();
-        let owned_agent_id = OwnedAgentId::new(
-            environment_id,
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "test-worker".to_string(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(environment_id, &AgentId::from_parts(7, 10));
         TestCaseBuilder::new(
             account_id,
             owned_agent_id,
@@ -5817,7 +5970,7 @@ impl OplogService for TestCase {
             && unavailable <= end
         {
             return Err(UnreadableOplog {
-                agent_id: self.owned_agent_id.agent_id.clone(),
+                agent_id: self.owned_agent_id.agent_id,
                 error: crate::services::oplog::OplogReadError::source_unavailable(
                     crate::services::oplog::OplogReadSource::Archive(1),
                     "injected archive outage",
@@ -5828,7 +5981,7 @@ impl OplogService for TestCase {
             && unreadable <= end
         {
             return Err(UnreadableOplog {
-                agent_id: self.owned_agent_id.agent_id.clone(),
+                agent_id: self.owned_agent_id.agent_id,
                 error: crate::services::oplog::OplogReadError::Gap {
                     start: OplogIndex::from_u64(unreadable.max(idx_u64)),
                     end: OplogIndex::from_u64(end),
@@ -5858,10 +6011,10 @@ impl OplogService for TestCase {
         unreachable!()
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _environment_id: &EnvironmentId,
-        _component_id: &ComponentId,
+        _type_id: golem_common::model::type_id::TypeId,
         _modes: Option<AgentMode>,
         _cursor: ScanCursor,
         _count: u64,
@@ -6002,7 +6155,7 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
     let mut test_case = TestCase::builder(1).build();
     let session_key = StreamInvocationId {
         callee_environment_id: test_case.owned_agent_id.environment_id,
-        callee: test_case.owned_agent_id.agent_id.clone(),
+        callee: test_case.owned_agent_id.agent_id,
         callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
         idempotency_key: InvocationId(Uuid::new_v4()),
     };
@@ -6188,10 +6341,7 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
 #[test]
 fn checkpoint_latest_per_grant_id_wins() {
     let grant_id = EnvironmentPluginGrantId::new();
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target-worker".to_string(),
-    };
+    let target = AgentId::from_parts(7, 11);
     let active_plugins = HashSet::from([grant_id]);
     let deleted_regions = DeletedRegions::default();
 
@@ -6201,7 +6351,7 @@ fn checkpoint_latest_per_grant_id_wins() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: grant_id,
-                target_agent_id: target.clone(),
+                target_agent_id: target,
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(10),
                 last_batch_start: OplogIndex::NONE,
@@ -6214,7 +6364,7 @@ fn checkpoint_latest_per_grant_id_wins() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: grant_id,
-                target_agent_id: target.clone(),
+                target_agent_id: target,
                 confirmed_up_to: OplogIndex::from_u64(10),
                 sending_up_to: OplogIndex::from_u64(20),
                 last_batch_start: OplogIndex::NONE,
@@ -6243,14 +6393,8 @@ fn checkpoint_latest_per_grant_id_wins() {
 fn checkpoint_different_plugins_tracked_independently() {
     let grant_id_a = EnvironmentPluginGrantId::new();
     let grant_id_b = EnvironmentPluginGrantId::new();
-    let target_a = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target-a".to_string(),
-    };
-    let target_b = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "target-b".to_string(),
-    };
+    let target_a = AgentId::from_parts(7, 12);
+    let target_b = AgentId::from_parts(7, 13);
     let active_plugins = HashSet::from([grant_id_a, grant_id_b]);
     let deleted_regions = DeletedRegions::default();
 
@@ -6260,7 +6404,7 @@ fn checkpoint_different_plugins_tracked_independently() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: grant_id_a,
-                target_agent_id: target_a.clone(),
+                target_agent_id: target_a,
                 confirmed_up_to: OplogIndex::from_u64(5),
                 sending_up_to: OplogIndex::from_u64(10),
                 last_batch_start: OplogIndex::NONE,
@@ -6273,7 +6417,7 @@ fn checkpoint_different_plugins_tracked_independently() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: grant_id_b,
-                target_agent_id: target_b.clone(),
+                target_agent_id: target_b,
                 confirmed_up_to: OplogIndex::from_u64(3),
                 sending_up_to: OplogIndex::from_u64(7),
                 last_batch_start: OplogIndex::NONE,
@@ -6305,10 +6449,7 @@ fn checkpoint_different_plugins_tracked_independently() {
 #[test]
 fn checkpoint_target_agent_id_preserved() {
     let grant_id = EnvironmentPluginGrantId::new();
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "specific-target".to_string(),
-    };
+    let target = AgentId::from_parts(7, 14);
     let active_plugins = HashSet::from([grant_id]);
     let deleted_regions = DeletedRegions::default();
 
@@ -6317,7 +6458,7 @@ fn checkpoint_target_agent_id_preserved() {
         OplogEntry::OplogProcessorCheckpoint {
             timestamp: Timestamp::now_utc(),
             plugin_grant_id: grant_id,
-            target_agent_id: target.clone(),
+            target_agent_id: target,
             confirmed_up_to: OplogIndex::from_u64(5),
             sending_up_to: OplogIndex::from_u64(5),
             last_batch_start: OplogIndex::NONE,
@@ -6353,10 +6494,7 @@ fn deactivated_plugin_evicted_from_checkpoints() {
     let initial = HashMap::from([(
         grant_id,
         OplogProcessorCheckpointState {
-            target_agent_id: Some(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "old-target".to_string(),
-            }),
+            target_agent_id: Some(AgentId::from_parts(7, 15)),
             confirmed_up_to: OplogIndex::from_u64(10),
             sending_up_to: OplogIndex::from_u64(10),
             last_batch_start: OplogIndex::NONE,
@@ -6390,10 +6528,7 @@ fn deactivated_plugin_retained_when_in_flight() {
     let initial = HashMap::from([(
         grant_id,
         OplogProcessorCheckpointState {
-            target_agent_id: Some(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "target".to_string(),
-            }),
+            target_agent_id: Some(AgentId::from_parts(7, 16)),
             confirmed_up_to: OplogIndex::from_u64(5),
             sending_up_to: OplogIndex::from_u64(15),
             last_batch_start: OplogIndex::NONE,
@@ -6431,10 +6566,7 @@ fn successful_update_drops_old_grant_retains_new() {
     let initial = HashMap::from([(
         old_grant,
         OplogProcessorCheckpointState {
-            target_agent_id: Some(AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "old".to_string(),
-            }),
+            target_agent_id: Some(AgentId::from_parts(7, 17)),
             confirmed_up_to: OplogIndex::from_u64(10),
             sending_up_to: OplogIndex::from_u64(10),
             last_batch_start: OplogIndex::NONE,
@@ -6460,10 +6592,7 @@ fn successful_update_drops_old_grant_retains_new() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: new_grant,
-                target_agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "new-target".to_string(),
-                },
+                target_agent_id: AgentId::from_parts(7, 18),
                 confirmed_up_to: OplogIndex::from_u64(12),
                 sending_up_to: OplogIndex::from_u64(12),
                 last_batch_start: OplogIndex::NONE,
@@ -6537,10 +6666,7 @@ fn activate_plugin_initializes_checkpoint() {
 #[test]
 fn activate_plugin_does_not_overwrite_existing_checkpoint() {
     let grant_id = EnvironmentPluginGrantId::new();
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "existing-target".to_string(),
-    };
+    let target = AgentId::from_parts(7, 19);
     let active_plugins = HashSet::from([grant_id]);
     let deleted_regions = DeletedRegions::default();
 
@@ -6548,7 +6674,7 @@ fn activate_plugin_does_not_overwrite_existing_checkpoint() {
     let initial = HashMap::from([(
         grant_id,
         OplogProcessorCheckpointState {
-            target_agent_id: Some(target.clone()),
+            target_agent_id: Some(target),
             confirmed_up_to: OplogIndex::from_u64(3),
             sending_up_to: OplogIndex::from_u64(8),
             last_batch_start: OplogIndex::NONE,
@@ -6609,10 +6735,7 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
     }
 
     let grant_id = EnvironmentPluginGrantId::new();
-    let target = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "checkpoint-target".to_string(),
-    };
+    let target = AgentId::from_parts(7, 20);
     let test_case = TestCase::builder(0).build();
     let mut create = test_case.entries[0].oplog_entry.clone();
     let OplogEntry::Create { parameters, .. } = &mut create else {
@@ -6627,7 +6750,7 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: grant_id,
-                target_agent_id: target.clone(),
+                target_agent_id: target,
                 confirmed_up_to: OplogIndex::INITIAL,
                 sending_up_to: OplogIndex::from_u64(4),
                 last_batch_start: OplogIndex::INITIAL,
@@ -6647,7 +6770,7 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
             OplogEntry::OplogProcessorCheckpoint {
                 timestamp: Timestamp::now_utc(),
                 plugin_grant_id: grant_id,
-                target_agent_id: target.clone(),
+                target_agent_id: target,
                 confirmed_up_to: OplogIndex::from_u64(4),
                 sending_up_to: OplogIndex::from_u64(4),
                 last_batch_start: OplogIndex::INITIAL,
@@ -6976,10 +7099,8 @@ fn card_transfer_confirmed_removes_only_the_matching_pending_transfer() {
     let completed_transfer_id = uuid::Uuid::new_v4();
     let pending_transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 21),
     });
     let entries = BTreeMap::from([
         (
@@ -7047,10 +7168,8 @@ fn polymorphic_transfer_confirmation_matches_source_and_installed_child_ids() {
     let installed_child = test_card(golem_common::model::card::CardId::new());
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "polymorphic-card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 22),
     });
     let entries = BTreeMap::from([
         (
@@ -7098,10 +7217,8 @@ fn source_card_transfer_records_fold_across_a_cached_baseline() {
 
     let holder = |name: &str| {
         CardHolder::Agent(AgentCardHolder {
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-                agent_id: name.to_string(),
-            },
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            agent_id: crate::test_agent_id(name),
         })
     };
     let source_holder = holder("source");
@@ -7208,10 +7325,8 @@ fn source_card_transfer_with_two_distinct_records_of_a_kind_stays_in_conflict() 
 
     let holder = |name: &str| {
         CardHolder::Agent(AgentCardHolder {
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-                agent_id: name.to_string(),
-            },
+            environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+            agent_id: crate::test_agent_id(name),
         })
     };
     let target_holder = holder("target");
@@ -7266,10 +7381,8 @@ fn polymorphic_transfer_confirmation_with_conflicting_source_keeps_pending_inten
     let installed_child = test_card(golem_common::model::card::CardId::new());
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "polymorphic-card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 23),
     });
     let entries = BTreeMap::from([
         (
@@ -7427,10 +7540,8 @@ fn target_card_transferred_clears_only_its_matching_receipt() {
     let source_card_id = golem_common::model::card::CardId::new();
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 24),
     });
     let entries = BTreeMap::from([
         (
@@ -7477,10 +7588,8 @@ fn target_card_transferred_with_conflicting_source_keeps_the_receipt() {
     let source_card_id = golem_common::model::card::CardId::new();
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 25),
     });
     let entries = BTreeMap::from([
         (
@@ -7534,10 +7643,8 @@ fn card_transfer_confirmed_with_conflicting_source_card_keeps_pending_transfer()
     let conflicting_card = test_card(golem_common::model::card::CardId::new());
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 26),
     });
     let entries = BTreeMap::from([
         (
@@ -7588,10 +7695,8 @@ fn card_install_failure_does_not_clear_pending_transfer() {
     let card = test_card(golem_common::model::card::CardId::new());
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 27),
     });
     let entries = BTreeMap::from([
         (
@@ -7646,10 +7751,8 @@ fn target_card_transferred_does_not_clear_source_pending_transfer() {
     let card = test_card(golem_common::model::card::CardId::new());
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 28),
     });
     let entries = BTreeMap::from([
         (
@@ -7702,10 +7805,8 @@ fn reverted_card_transfer_confirmation_still_closes_pending_transfer() {
     let card = test_card(golem_common::model::card::CardId::new());
     let transfer_id = uuid::Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: golem_common::model::AgentId {
-            component_id: golem_common::model::component::ComponentId(uuid::Uuid::new_v4()),
-            agent_id: "card-transfer-target".to_string(),
-        },
+        environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
+        agent_id: golem_common::model::AgentId::from_parts(7, 29),
     });
     let entries = BTreeMap::from([
         (
@@ -8384,7 +8485,15 @@ mod region_fold {
     }
 
     pub(super) fn failed(target: u64, attempt: Option<u64>) -> OplogEntry {
-        OplogEntry::failed_update(revision(target), None, None, attempt.map(idx), None)
+        OplogEntry::failed_update(
+            revision(target),
+            None,
+            None,
+            attempt.map(idx),
+            None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
+            None,
+        )
     }
 
     pub(super) fn succeeded(target: u64) -> OplogEntry {
@@ -8751,6 +8860,8 @@ mod region_fold {
                         ),
                         Some(idx(4)),
                         fault,
+                        golem_common::model::oplog::UpdateFailureClass::Other,
+                        None,
                     ),
                 ),
                 (7, automatic_admission(2)),
@@ -8807,6 +8918,8 @@ mod region_fold {
                     None,
                     Some(idx(3)),
                     Some(SnapshotFault::Incompatible),
+                    golem_common::model::oplog::UpdateFailureClass::Other,
+                    None,
                 ),
             ),
         ]));
@@ -8994,7 +9107,7 @@ mod invocation_payload_decodes {
                 input: SchemaValue::Record {
                     fields: vec![SchemaValue::String("input".to_string())],
                 },
-                principal: Principal::anonymous(),
+                caller: Caller::anonymous(),
                 scope_card: None,
             })),
             trace_id: TraceId::generate(),

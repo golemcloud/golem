@@ -69,7 +69,7 @@ async fn builtin_node_tcp_replays_after_restart(
         let worker_id = executor
             .start_agent(
                 &caller_component.id,
-                agent_id!("ToolStreamingCaller", agent_name.clone()),
+                agent_key!("ToolStreamingCaller", agent_name.clone()),
             )
             .await?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -120,7 +120,7 @@ await new Promise((resolve, reject) => {{
             assert!(String::from_utf8_lossy(&result.stderr).contains("AccessDenied"));
         }
 
-        executor.commit_oplog(&worker_id).await?;
+        executor.commit_oplog(&worker_id.agent_id).await?;
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides()).await?;
         let next = invoke_cli_tool(
@@ -219,7 +219,7 @@ async fn builtin_node_tcp_send_parks_between_writes_and_replays(
     let worker_id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", agent_name),
+            agent_key!("ToolStreamingCaller", agent_name),
         )
         .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -276,7 +276,7 @@ await new Promise((resolve, reject) => {{
     assert_eq!(result.stdout, b"ack-one-4b1d,ack-two-4b1d,ack-three-4b1d\n");
     assert_eq!(received, vec!["one-4b1d", "two-4b1d", "three-4b1d"]);
 
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let send_parent = oplog
         .iter()
@@ -691,12 +691,9 @@ async fn builtin_npm_lifecycle_crash_during_pending_tool_output(
 /// Crash the owner while built-in `node` also holds a second bound-tool call with an open
 /// stdin.
 ///
-/// Four of nine isolated runs hung after the crash: replay reached the checkpoint again
-/// without repeating the effect and the held call completed after release, but the script's
-/// final stdin write and end never reached the provider. Each hung run logged `terminal guard
-/// abandoned during runtime teardown; leaving the end markerless` for the pending
-/// `tool-stdin-closed::wait` Start at the crash, and its `End` was the first entry recorded
-/// after recovery. No passing run logged it.
+/// The crash fences the owner while a `tool-stdin-closed::wait` is pending. That wait's `Start`
+/// must stay incomplete rather than record the fence's `Cancelled` as a closed stdin, so after
+/// recovery the script's final stdin write and end still reach the provider.
 #[test]
 #[timeout("5m")]
 async fn builtin_node_crash_during_open_tool_stdin(
@@ -722,10 +719,6 @@ async fn builtin_node_crash_during_open_tool_stdin(
 }
 
 /// Run the open-stdin crash cut in an npm lifecycle script's local Node child.
-///
-/// Without the crash this passes. With it, four of five isolated runs hung in the same way and
-/// with the same log. A local Node child started by built-in `node` with `execFile` instead of
-/// npm also hung, so the hang is not specific to npm.
 #[test]
 #[timeout("5m")]
 async fn builtin_npm_lifecycle_crash_during_open_tool_stdin(
@@ -888,7 +881,7 @@ async fn crash_during_pending_tool_attachments(
         if lifecycle { "npm" } else { "node" },
         if open_stdin { "stdin" } else { "output" }
     );
-    let agent = agent_id!("ToolStreamingCaller", name.clone());
+    let agent = agent_key!("ToolStreamingCaller", name.clone());
     let worker = executor
         .start_agent_with(
             &caller_component.id,
@@ -910,7 +903,7 @@ async fn crash_during_pending_tool_attachments(
             Vec::new(),
         )
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owner = worker.clone();
 
     let (body, expected) = if open_stdin {
         (OPEN_STDIN_CRASH_CUT, OPEN_STDIN_CRASH_CUT_OUTPUT)
@@ -970,7 +963,7 @@ async fn crash_during_pending_tool_attachments(
     assert_eq!(effect.as_deref(), Some(CRASH_CUT_EFFECT));
     let original = next_crash_cut_checkpoint(&mut checkpoints, "before the crash").await?;
     let recorded_before =
-        persist_pending_tool_attachments(&executor, &worker, &owner, open_stdin).await?;
+        persist_pending_tool_attachments(&executor, &worker.agent_id, &owner, open_stdin).await?;
 
     executor.simulated_crash(&worker).await?;
     drop(original.release);
@@ -1027,7 +1020,7 @@ async fn crash_during_pending_tool_attachments(
         "the checkpoint was reached more than once after the crash"
     );
 
-    let recorded_after = executor.stored_oplog(&worker).await;
+    let recorded_after = executor.stored_oplog(&worker.agent_id).await;
     assert!(recorded_after.len() >= recorded_before.len());
     for (index, (before, after)) in recorded_before.iter().zip(&recorded_after).enumerate() {
         assert_eq!(
@@ -1040,7 +1033,7 @@ async fn crash_during_pending_tool_attachments(
     let history = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     assert_collector_history_settled(&history);
     let stored_key = executor
-        .external_invocation_key(&worker, &key, "builtin_cli")
+        .external_invocation_key(&worker.agent_id, &key, "builtin_cli")
         .await?;
     assert_eq!(
         history
@@ -1138,7 +1131,7 @@ async fn persist_pending_tool_attachments(
         anyhow::bail!("the held calls did not expose open attachments: {last:#?}");
     }
     executor.commit_oplog(worker).await?;
-    let oplog = executor.get_oplog(worker, OplogIndex::INITIAL).await?;
+    let oplog = executor.get_oplog(owner, OplogIndex::INITIAL).await?;
     let terminated = |start: OplogIndex| {
         oplog.iter().any(|entry| match &entry.entry {
             PublicOplogEntry::End(end) => end.start_index == start,

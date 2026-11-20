@@ -17,7 +17,7 @@ import './schema/valibot';
 import './schema/arktype';
 import './schema/effect';
 
-export type { Principal } from './principal';
+export type { Caller, InvocationContext, Principal } from './caller';
 export type { StandardSchemaV1 } from './schema/standardSchema';
 export { Bytes, KeyValue, Path, Quantity, s } from './schema/markers';
 export type {

@@ -18,7 +18,7 @@ use crate::Tracing;
 use crate::transactions::SagaPeer;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -53,7 +53,7 @@ async fn go_transaction_with_outgoing_http(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpAgent", "go-transaction-http-1");
+    let agent_id = agent_key!("HttpAgent", "go-transaction-http-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), peer.port.to_string());
     let worker_id = executor
@@ -100,7 +100,7 @@ async fn go_http_compensation_survives_executor_restart(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpAgent", "go-http-compensation-owner-loss");
+    let agent_id = agent_key!("HttpAgent", "go-http-compensation-owner-loss");
     let worker_id = executor
         .start_agent_with(
             &component.id,

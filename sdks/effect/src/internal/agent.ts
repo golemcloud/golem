@@ -7,12 +7,9 @@ import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
 import { existsSync } from "node:fs"
-import * as AgentIdentity from "../AgentIdentity.js"
-import { AgentHostClient } from "../host/AgentHostClient.js"
-import { decodeAgentId } from "./agentIdentity.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "../host/HostLive.js"
-import { immediateCaller } from "../host/InvocationContextClient.js"
+import { provideInvocationContext } from "../host/InvocationContextClient.js"
 import { SqliteHostExtClient } from "../host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
@@ -25,12 +22,10 @@ import {
 import type { BindableKeys, MountDefCovering, WebhookVarsValid } from "./httpTypes.js"
 import { isMultimodal } from "../Multimodal.js"
 import {
-  compileCallerParamBindings,
   compileMethodSpec,
   compileParamBindings,
   invokeWireValue,
   type CompiledInputCodec,
-  type CallerInput,
   type Handler,
   type MethodCodec,
   type MethodInput,
@@ -38,7 +33,8 @@ import {
   type MethodSpec,
   type MethodSuccess,
 } from "./method.js"
-import { Principal } from "../Principal.js"
+import { InvocationContext } from "../InvocationContext.js"
+import { type RejectLiveValues } from "./liveValues.js"
 import { SelfAgentId } from "../SelfAgentId.js"
 import {
   compileSnapshot,
@@ -59,17 +55,16 @@ import {
   encodeJsonEnvelope,
   encodeMultipartJsonEnvelope,
   SnapshotEnvelopeError,
-  UnsupportedSnapshotFormatError,
 } from "./snapshotEnvelope.js"
 import { decodeSnapshotState, encodeSnapshotState } from "./snapshotState.js"
 import { isElementSpec } from "../Unstructured.js"
 import { type UnsupportedSchemaError } from "../WitCodec.js"
 import {
-  bindIdentity,
+  bindAgentId,
   bindingFor,
   clientFor,
   type AgentClient,
-  type IdentityBinding,
+  type AgentIdBinding,
   type RemoteAgent,
 } from "../Client.js"
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "../Config.js"
@@ -232,7 +227,7 @@ export type ConfigDef<F extends ConfigFields> = ConfigClass<F>
 /**
  * Compute the `CfgTag` (R-slot identity) carried by a config field
  * record. `never` for agents without a `config` field — that collapses
- * the union below back to `Scope.Scope | Principal`.
+ * the union below back to `Scope.Scope | InvocationContext`.
  *
  * @since 1.5.0
  * @category models
@@ -268,7 +263,7 @@ export type AgentImpl<
 > = {
   readonly init: (
     id: MethodInput<C>,
-  ) => Effect.Effect<State, unknown, Scope.Scope | Principal | HostServices | CfgTagOf<F>>
+  ) => Effect.Effect<State, unknown, Scope.Scope | InvocationContext | HostServices | CfgTagOf<F>>
   readonly methods: (
     state: NoInfer<State>,
   ) =>
@@ -276,7 +271,7 @@ export type AgentImpl<
     | Effect.Effect<
         Handlers<Methods, CfgTagOf<F>>,
         unknown,
-        Scope.Scope | Principal | HostServices | CfgTagOf<F>
+        Scope.Scope | InvocationContext | HostServices | CfgTagOf<F>
       >
 } & ([S] extends [never]
   ? { readonly snapshot?: never }
@@ -321,7 +316,7 @@ type StateStrategy<
   SnapshotStrategy<
     State,
     SavedState<S>,
-    Scope.Scope | Principal | HostServices | CfgTagOf<F>,
+    Scope.Scope | InvocationContext | HostServices | CfgTagOf<F>,
     MethodInput<C>,
     CfgTagOf<F>
   >
@@ -400,8 +395,9 @@ export interface AgentMetadata<
  *
  * The `client` shape depends on the agent's `mode`:
  *
- * - durable agents expose `get`, `getPhantom`, and `newPhantom`.
- * - ephemeral agents expose only `getPhantom` and `newPhantom`.
+ * - durable agents expose `upsert`, `create`, `getById`, and `bindSelf`.
+ * - ephemeral agents expose only `upsert`; each invocation runs on a new
+ *   one-shot instance.
  *
  * A spec on its own performs NO runtime registration — it is safe for
  * pure RPC callers to import a module that only constructs spec values.
@@ -418,24 +414,7 @@ export type AgentSpec<
   S extends SnapshotDef = never,
 > = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
-  readonly agentId: M extends "ephemeral"
-    ? (
-        input: CallerInput<C>,
-        phantomId: string,
-      ) => Effect.Effect<
-        AgentIdentity.Identity,
-        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
-        AgentHostClient
-      >
-    : (
-        input: CallerInput<C>,
-        phantomId?: string,
-      ) => Effect.Effect<
-        AgentIdentity.Identity,
-        AgentIdentity.AgentIdentityError | UnsupportedSchemaError,
-        AgentHostClient
-      >
-  readonly [bindIdentity]: IdentityBinding<RemoteAgent<Methods>>[typeof bindIdentity]
+  readonly [bindAgentId]: AgentIdBinding<RemoteAgent<Methods>>[typeof bindAgentId]
   /**
    * Attach an implementation to the spec and eagerly register the agent
    * with the runtime. Returns an {@link ImplementedAgent} that exposes
@@ -473,8 +452,7 @@ export type ImplementedAgent<
   S extends SnapshotDef = never,
 > = AgentMetadata<C, Methods, M, F, S> & {
   readonly client: AgentClient<C, Methods, M, F>
-  readonly agentId: AgentSpec<C, Methods, M, F, S>["agentId"]
-  readonly [bindIdentity]: IdentityBinding<RemoteAgent<Methods>>[typeof bindIdentity]
+  readonly [bindAgentId]: AgentIdBinding<RemoteAgent<Methods>>[typeof bindAgentId]
   readonly spec: AgentSpec<C, Methods, M, F, S>
 }
 
@@ -569,7 +547,9 @@ export const defineAgent = <
   MV extends string = BindableKeys<C>,
   WV extends string = never,
 >(
-  metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
+  metadata: AgentMetadata<C, Methods, M, F, S, MV, WV> &
+    AgentHttpRequirement<C, Methods, MV, WV> &
+    RejectLiveValues<{ id: MethodInput<C> }>,
 ): AgentSpec<C, Methods, M, F, S> => {
   // Canonicalize: shallow-clone the top-level object and the two
   // nested containers, then freeze them so the spec is immutable from
@@ -589,29 +569,6 @@ export const defineAgent = <
   // `ImplementedAgent` produced by `spec.implement(...)` below.
   const sharedClient = clientFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
   const sharedBinding = bindingFor(canonical as unknown as AgentMetadata<C, Methods, M, F>)
-  let identityCodec: CompiledInputCodec<C, CallerInput<C>> | undefined
-  const agentId = (input: CallerInput<C>, phantomId?: string) =>
-    Effect.gen(function* () {
-      if (canonical.mode === "ephemeral" && phantomId === undefined)
-        return yield* Effect.fail(
-          new AgentIdentity.AgentIdentityError(
-            new TypeError(`ephemeral agent type '${canonical.name}' requires a phantom ID`),
-          ),
-        )
-      const codec = (identityCodec ??= yield* compileCallerParamBindings(
-        `${canonical.name} constructor`,
-        canonical.id,
-      ))
-      const constructorValue = yield* codec
-        .encodeAsync(input)
-        .pipe(Effect.mapError((cause) => new AgentIdentity.AgentIdentityError(cause)))
-      return yield* AgentIdentity.make({
-        typeName: canonical.name,
-        constructorValue,
-        ...(phantomId === undefined ? {} : { phantomId }),
-      })
-    })
-
   // `implement` is created as a closure rather than a prototype method
   // so the generics inferred by `defineAgent` (C, Methods, M, F, S)
   // flow into the constructor parameter shape without requiring the
@@ -648,8 +605,7 @@ export const defineAgent = <
     return Object.freeze({
       ...canonical,
       client: sharedClient,
-      agentId,
-      [bindIdentity]: sharedBinding[bindIdentity],
+      [bindAgentId]: sharedBinding[bindAgentId],
       spec,
     }) as unknown as ImplementedAgent<C, Methods, M, F, S>
   }
@@ -660,8 +616,7 @@ export const defineAgent = <
   const spec = Object.freeze({
     ...canonical,
     client: sharedClient,
-    agentId,
-    [bindIdentity]: sharedBinding[bindIdentity],
+    [bindAgentId]: sharedBinding[bindAgentId],
     implement,
   }) as unknown as AgentSpec<C, Methods, M, F, S>
   return spec
@@ -1041,8 +996,6 @@ interface ActiveAgent {
   readonly name: string
   readonly scope: Scope.Closeable
   readonly handlers: Readonly<Record<string, Handler<AnyMethodSpec>>>
-  /** Principal supplied to `initialize` / embedded in the loaded snapshot. */
-  readonly principal: AgentCommon.Principal
   /**
    * Captured per-instance snapshot binding when the agent declared a
    * `snapshot` field; `null` otherwise. Read by `dispatchSaveSnapshot`
@@ -1087,7 +1040,7 @@ const decodeConstructorInput = async (
 }
 
 /**
- * Open a fresh scope, run `impl` with the supplied principal/config
+ * Open a fresh scope, run `impl` with the invocation context and the config
  * service, and return the resulting handlers + (optional) bound
  * snapshot. Used by both `dispatchInitialize` and `dispatchLoadSnapshot`
  * so the two share a single code path for everything except how state
@@ -1097,10 +1050,7 @@ const initAgentInstance = async (
   agentTypeName: string,
   compiled: CompiledAgent,
   constructorInput: Record<string, unknown>,
-  principal: AgentCommon.Principal,
   restoration?: {
-    readonly phantomId: CoreTypes.Uuid | undefined
-    readonly parsedAgentId: string
     readonly saved: unknown
     readonly restoreDatabases: (bound: BoundSnapshot) => void
   },
@@ -1128,10 +1078,7 @@ const initAgentInstance = async (
           ? Effect.succeed(restoration.saved)
           : compiled.impl.snapshot.restore(restoration.saved as never, {
               id: constructorInput,
-              principal,
-              phantomId: restoration.phantomId,
               agentId: await runUserPromise(SelfAgentId),
-              parsedAgentId: restoration.parsedAgentId,
               config: configShape as never,
             })
     let program = Effect.gen(function* () {
@@ -1149,7 +1096,7 @@ const initAgentInstance = async (
       const produced = compiled.impl.methods(state)
       const handlers = Effect.isEffect(produced) ? yield* produced : produced
       return { state, handlers }
-    }).pipe(Effect.provideService(Principal, principal))
+    }).pipe(provideInvocationContext)
     if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
@@ -1196,16 +1143,14 @@ export const dispatchInitialize = async (
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
 
-  const principal = await runUserPromise(immediateCaller)
   const constructorInput = await decodeConstructorInput(compiled, input)
   const { scope, handlers, snapshot, state } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
-    principal,
   )
 
-  activeAgent = { name: agentTypeName, scope, handlers, principal, snapshot, state }
+  activeAgent = { name: agentTypeName, scope, handlers, snapshot, state }
 }
 
 /**
@@ -1234,10 +1179,10 @@ export const dispatchInvoke = async (
       `agent '${activeAgent.name}' did not provide an implementation for '${methodName}'`,
     )
   }
-  // Provide the per-call principal as an Effect service so handler
-  // bodies can read the *current* caller via `yield* Principal` (which
-  // may differ from the initialize-time principal stored on
-  // `activeAgent`). The optional config service is rebuilt fresh per
+  // Provide the per-call invocation context as an Effect service so handler
+  // bodies can read the *current* caller via `yield* InvocationContext` (which
+  // may differ from the caller of `initialize`). The host is asked for the
+  // caller only when a handler reads it. The optional config service is rebuilt fresh per
   // invocation: regular fields are memoized for the duration of THIS
   // call only; secret fields are never cached.
   let program = invokeWireValue(
@@ -1246,8 +1191,6 @@ export const dispatchInvoke = async (
     {
       errorWrapped: mc.errorWrapped,
       successVoid: mc.successVoid,
-      inputSchema: compiled.agentType.methods.find((method) => method.name === methodName)!
-        .inputSchema,
     },
     (decoded) =>
       Effect.suspend(() => handler(decoded)).pipe(
@@ -1268,10 +1211,7 @@ export const dispatchInvoke = async (
       ),
     input,
   ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
-  if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
-    const principal = await runUserPromise(immediateCaller)
-    program = program.pipe(Effect.provideService(Principal, principal)) as typeof program
-  }
+  program = program.pipe(provideInvocationContext) as typeof program
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
     const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     program = program.pipe(
@@ -1440,7 +1380,7 @@ const encodeAutoSnapshot = async (
   )
   const encodedState = encodeSnapshotState(encoded)
   if (snap.kind === "auto" && snap.declaredDatabases.length === 0) {
-    return encodeJsonEnvelope(agent.principal, encodedState)
+    return encodeJsonEnvelope(encodedState)
   }
   const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
@@ -1456,7 +1396,6 @@ const encodeAutoSnapshot = async (
     else fileDatabases.push([dbName, location])
   }
   return encodeMultipartJsonEnvelope(
-    agent.principal,
     encodedState,
     dbParts,
     bundle?.parts,
@@ -1490,7 +1429,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     return encodeAutoSnapshot(agent, compiled, snap)
   }
   const bytes = await saveSnapshotState(agent, compiled)
-  return encodeBinaryEnvelope(agent.principal, bytes as Uint8Array)
+  return encodeBinaryEnvelope(bytes as Uint8Array)
 }
 
 /**
@@ -1498,7 +1437,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
  */
 const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): Promise<unknown> => {
   let saveProgram = Effect.suspend(() => compiled.impl.snapshot!.save(agent.state)).pipe(
-    Effect.provideService(Principal, agent.principal),
+    provideInvocationContext,
     Effect.scoped,
   ) as Effect.Effect<unknown, unknown, never>
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
@@ -1515,8 +1454,10 @@ const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): P
  * this *instead of* `agent-guest.guest.initialize` when restoring an
  * agent from a snapshot. We:
  *
- * 1. Recover the agent's own ID from `GOLEM_AGENT_ID` and parse it.
- * 2. Decode the envelope to recover principal + user-state bytes.
+ * 1. Read the agent's type name from `GOLEM_AGENT_TYPE`.
+ * 2. Decode the envelope to recover principal + user-state bytes, and
+ *    decode `constructor` against the constructor schema, as `initialize`
+ *    decodes its input.
  * 3. Decode state or run the strategy's restore effect, skipping `init`.
  * 4. Restore SQLite images and construct the shared methods with that state.
  * 5. Mark the agent active so subsequent `invoke`s see the restored
@@ -1525,34 +1466,29 @@ const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): P
  * @since 1.5.0
  * @category runtime hooks
  */
-export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<void> => {
+export const dispatchLoadSnapshot = async (
+  snapshot: ApiHost.Snapshot,
+  constructor: CoreTypes.SchemaValueTree,
+): Promise<void> => {
   if (activeAgent !== null) {
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
 
-  // 1. Recover the agent ID + parse it. Reading the WASI process env
-  //    via the `EnvironmentClient` host service and parsing it via
-  //    `AgentHostClient.parseAgentId` lets tests substitute fakes
-  //    without monkey-patching the real specifier.
-  const { env, parseAgentId } = await runUserPromise(
+  // 1. Reading the WASI process env through the `EnvironmentClient` host
+  //    service lets tests substitute fakes.
+  const env = await runUserPromise(
     Effect.gen(function* () {
       const ec = yield* EnvironmentClient
-      const ah = yield* AgentHostClient
-      const env = yield* ec.getEnvironment
-      return { env, parseAgentId: ah.parseAgentId }
+      return yield* ec.getEnvironment
     }),
   )
-  const agentIdEntry = env.find(([k]) => k === "GOLEM_AGENT_ID")
-  if (agentIdEntry === undefined) {
+  const agentTypeEntry = env.find(([k]) => k === "GOLEM_AGENT_TYPE")
+  if (agentTypeEntry === undefined) {
     throw new Error(
-      "load-snapshot: GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
+      "load-snapshot: GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE",
     )
   }
-  const agentIdString = agentIdEntry[1]
-  const [agentTypeName, typedConstructor, phantomId] = decodeAgentId(
-    { parseAgentId },
-    agentIdString,
-  )
+  const agentTypeName = agentTypeEntry[1]
 
   const compiled = registry.get(agentTypeName)
   if (!compiled) {
@@ -1564,20 +1500,8 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     throw new Error(`load-snapshot: agent '${agentTypeName}' did not declare a snapshot definition`)
   }
 
-  // 2. Decode the envelope. We use `anonymous` as the fallback principal
-  //    only for the legacy v1 binary format which carries no embedded
-  //    principal — every modern envelope embeds one.
-  const fallbackPrincipal: AgentCommon.Principal = { tag: "anonymous" }
-  let decoded: ReturnType<typeof decodeEnvelope>
-  try {
-    decoded = decodeEnvelope(snapshot, fallbackPrincipal)
-  } catch (e) {
-    if (e instanceof SnapshotEnvelopeError || e instanceof UnsupportedSnapshotFormatError) {
-      throw e
-    }
-    throw e
-  }
-  const principal = decoded.principal
+  // 2. Decode the envelope.
+  const decoded = decodeEnvelope(snapshot)
 
   let saved: unknown
   if (compiled.compiledSnapshot.kind !== "custom") {
@@ -1694,15 +1618,13 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   }
 
   // Restore resources and database images before constructing shared methods.
-  const constructorInput = await decodeConstructorInput(compiled, typedConstructor.value)
+  const constructorInput = await decodeConstructorInput(compiled, constructor)
   const {
     scope,
     handlers,
     snapshot: bound,
     state,
-  } = await initAgentInstance(agentTypeName, compiled, constructorInput, principal, {
-    phantomId,
-    parsedAgentId: agentIdString,
+  } = await initAgentInstance(agentTypeName, compiled, constructorInput, {
     saved,
     restoreDatabases,
   })
@@ -1710,7 +1632,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     name: agentTypeName,
     scope,
     handlers,
-    principal,
     snapshot: bound,
     state,
   }

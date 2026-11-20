@@ -33,7 +33,7 @@ import (
 // payload.
 //
 // Completion can come from another agent ([CompletePromise]) or from off-platform
-// via the worker REST API (POST /:component/workers/:agent/complete with the
+// via the runtime REST API (POST .../agents/:agent_id/complete with the
 // PromiseID's fields), so the completion payload is arbitrary bytes with no
 // predefined meaning. [Promise] types those bytes as T via JSON, so an external
 // completer (a webhook, a curl, a human) can produce them. As an escape hatch, a
@@ -41,12 +41,12 @@ import (
 
 // PromiseID is the durable, serializable identity of a promise. Hand it to
 // whoever will complete the promise — another agent, or an external system via
-// the worker-service complete endpoint (which needs its component, agent,
-// fingerprint and oplog index). The exported fields make it directly
+// the runtime complete endpoint (which needs its agent, fingerprint and oplog
+// index). The exported fields make it directly
 // JSON-marshalable.
 type PromiseID struct {
-	// AgentID is the agent that created the promise; its AgentID string is the
-	// ":agent" path segment of the REST complete endpoint.
+	// AgentID is the agent that created the promise; its text form is the
+	// ":agent_id" path segment of the REST complete endpoint.
 	AgentID AgentID
 	// Fingerprint identifies the incarnation of the agent that created the
 	// promise — the "fingerprint" field of the REST complete endpoint, as the
@@ -62,7 +62,7 @@ type PromiseID struct {
 // String renders the promise ID as <agent-id>/<fingerprint>/<oplog-idx>, the
 // form the host displays it in (not a parse target).
 func (id PromiseID) String() string {
-	return fmt.Sprintf("%s/%s/%s/%d", id.AgentID.ComponentID, id.AgentID.AgentID, id.Fingerprint, id.OplogIndex)
+	return fmt.Sprintf("%s/%s/%d", id.AgentID, id.Fingerprint, id.OplogIndex)
 }
 
 func promiseIDFromWit(w types.PromiseId) PromiseID {
@@ -75,7 +75,7 @@ func promiseIDFromWit(w types.PromiseId) PromiseID {
 
 func (id PromiseID) toWit() types.PromiseId {
 	return types.PromiseId{
-		AgentId:     id.AgentID.toWit(),
+		AgentId:     agentIDToWit(id.AgentID),
 		Fingerprint: uuidToWit(id.Fingerprint),
 		OplogIdx:    id.OplogIndex,
 	}

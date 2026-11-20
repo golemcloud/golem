@@ -21,15 +21,15 @@ var agent = rpccaller.Agent.Implement(func(rpccaller.Id) *state { return &state{
 
 func init() {
 	agent.Handle(rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
-		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
+		c := ledger.Agent.Upsert(ledger.Id{Region: in.Region})
 		return ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 	})
 	agent.Handle(rpccaller.AwaitRemote, func(_ *golem.Context[state], in rpccaller.AwaitRemoteIn) string {
-		c := promises.Agent.Get(promises.Id{Name: in.Name})
+		c := promises.Agent.Upsert(promises.Id{Name: in.Name})
 		return promises.Await.MustCall(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx})
 	})
 	agent.Handle(rpccaller.AwaitRemoteAsync, func(_ *golem.Context[state], in rpccaller.AwaitRemoteIn) string {
-		c := promises.Agent.Get(promises.Id{Name: in.Name})
+		c := promises.Agent.Upsert(promises.Id{Name: in.Name})
 		return promises.Await.CallAsync(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx}).MustGet()
 	})
 	agent.Handle(rpccaller.CallParallel, func(_ *golem.Context[state], in rpccaller.CallParallelIn) []int64 {
@@ -37,7 +37,7 @@ func init() {
 		var wg sync.WaitGroup
 		for i, region := range in.Regions {
 			wg.Go(func() {
-				c := ledger.Agent.Get(ledger.Id{Region: region})
+				c := ledger.Agent.Upsert(ledger.Id{Region: region})
 				totals[i] = ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 			})
 		}
@@ -45,7 +45,7 @@ func init() {
 		return totals
 	})
 	agent.Handle(rpccaller.Async, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
-		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
+		c := ledger.Agent.Upsert(ledger.Id{Region: in.Region})
 		return ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}).MustGet().MustOk()
 	})
 }

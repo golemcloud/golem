@@ -1,7 +1,7 @@
 use golem_rust::agentic::{
     AgentInitiator, AgentInvocationResult, AgentStream, AgentTypeName, BaseAgent, DirectAgentInput,
     EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor, ExtendedAgentType,
-    Principal, ResolvedAgent, Schema, SnapshotData, SnapshotRestoreContext, custom_error,
+    InvocationContext, ResolvedAgent, Schema, SnapshotData, SnapshotRestoreContext, custom_error,
     get_agent_id, get_agent_type_by_name, register_agent_initiator, register_agent_type,
 };
 use golem_rust::golem_agentic::golem::agent::common::{
@@ -44,15 +44,15 @@ impl MethodFailure {
 // error channel explicitly to distinguish it from a declared Result and a trap.
 #[golem_rust::async_trait::async_trait(?Send)]
 impl BaseAgent for MethodFailure {
-    fn get_agent_id(&self) -> String {
-        get_agent_id().agent_id
+    fn get_agent_id(&self) -> golem_rust::AgentId {
+        get_agent_id()
     }
 
     async fn invoke(
         &mut self,
         method_name: String,
         input: SchemaValueTree,
-        _principal: Principal,
+        _context: InvocationContext,
     ) -> Result<AgentInvocationResult, AgentError> {
         let mut input = DirectAgentInput::new(input).map_err(custom_error)?;
         if method_name == "fail_after_http" || method_name == "fail_stream_after_http" {
@@ -112,7 +112,7 @@ impl AgentInitiator for Initiator {
     async fn initiate(
         &self,
         params: SchemaValueTree,
-        _principal: Principal,
+        _context: InvocationContext,
     ) -> Result<ResolvedAgent, AgentError> {
         let mut input = DirectAgentInput::new(params).map_err(custom_error)?;
         let name = input.take::<String>().map_err(custom_error)?;

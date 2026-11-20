@@ -16,9 +16,9 @@ use super::*;
 
 mod schema_native_tests {
     use super::*;
+    use crate::model::AgentId;
     use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
     use crate::model::oplog::payload::{HostRequestSecretReveal, HostResponseSecretRevealed};
-    use crate::model::{AgentId, ComponentId};
     use crate::schema::IntoTypedSchemaValue;
     use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
     use crate::schema::metadata::MetadataEnvelope;
@@ -440,10 +440,7 @@ mod schema_native_tests {
             },
             result: Ok(()),
             audit: SecretRevealAudit {
-                calling_agent: AgentId {
-                    component_id: ComponentId(Uuid::nil()),
-                    agent_id: "agent-1".to_string(),
-                },
+                calling_agent: AgentId::from_parts(7, 1),
                 config_key: Some(vec!["db".to_string(), "password".to_string()]),
                 timestamp: SerializableDateTime {
                     seconds: 1_700_000_001,
@@ -701,7 +698,6 @@ mod canonical_key_tests {
         let result = crate::schema::agent::ParsedAgentKey::try_new(
             crate::model::agent::AgentTypeName("T".to_string()),
             params(vec![map_type()], vec![map(&[(1, "a"), (1, "b")])]),
-            None,
         );
         assert_eq!(result, Err("Duplicate map key: 1".to_string()));
     }

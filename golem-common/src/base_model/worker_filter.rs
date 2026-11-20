@@ -14,7 +14,7 @@
 
 use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
-use crate::base_model::{AgentStatus, Timestamp};
+use crate::base_model::{AgentId, AgentStatus, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -27,20 +27,47 @@ use std::str::FromStr;
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct AgentNameFilter {
+/// Matches the canonical key text, `Type(params)`, of keyed agents. An agent created
+/// without a key never matches.
+pub struct AgentKeyFilter {
     pub comparator: StringFilterComparator,
     pub value: String,
 }
 
-impl AgentNameFilter {
+impl AgentKeyFilter {
     pub fn new(comparator: StringFilterComparator, value: String) -> Self {
         Self { comparator, value }
     }
 }
 
-impl Display for AgentNameFilter {
+impl Display for AgentKeyFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "name {} {}", self.comparator, FilterText(&self.value))
+        write!(f, "key {} {}", self.comparator, FilterText(&self.value))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct AgentIdFilter {
+    pub comparator: FilterComparator,
+    pub value: AgentId,
+}
+
+impl AgentIdFilter {
+    pub fn new(comparator: FilterComparator, value: AgentId) -> Self {
+        Self { comparator, value }
+    }
+}
+
+impl Display for AgentIdFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "id {} {}", self.comparator, self.value)
     }
 }
 
@@ -322,7 +349,8 @@ impl Display for AgentNotFilter {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum AgentFilter {
-    Name(AgentNameFilter),
+    Key(AgentKeyFilter),
+    Id(AgentIdFilter),
     Status(AgentStatusFilter),
     Revision(AgentRevisionFilter),
     CreatedAt(AgentCreatedAtFilter),
@@ -369,8 +397,12 @@ impl AgentFilter {
         AgentFilter::Not(AgentNotFilter::new(filter))
     }
 
-    pub fn new_name(comparator: StringFilterComparator, value: String) -> Self {
-        AgentFilter::Name(AgentNameFilter::new(comparator, value))
+    pub fn new_key(comparator: StringFilterComparator, value: String) -> Self {
+        AgentFilter::Key(AgentKeyFilter::new(comparator, value))
+    }
+
+    pub fn new_id(comparator: FilterComparator, value: AgentId) -> Self {
+        AgentFilter::Id(AgentIdFilter::new(comparator, value))
     }
 
     pub fn new_env(name: String, comparator: StringFilterComparator, value: String) -> Self {
@@ -478,7 +510,10 @@ impl AgentFilter {
 impl Display for AgentFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            AgentFilter::Name(filter) => {
+            AgentFilter::Key(filter) => {
+                write!(f, "{filter}")
+            }
+            AgentFilter::Id(filter) => {
                 write!(f, "{filter}")
             }
             AgentFilter::Revision(filter) => {
@@ -802,7 +837,13 @@ fn parse_property_filter(
     value: String,
 ) -> Result<AgentFilter, String> {
     match property {
-        "name" => Ok(AgentFilter::new_name(comparator.parse()?, value)),
+        "key" => Ok(AgentFilter::new_key(comparator.parse()?, value)),
+        "id" => Ok(AgentFilter::new_id(
+            comparator.parse()?,
+            value
+                .parse()
+                .map_err(|e| format!("Invalid agent ID: {e}"))?,
+        )),
         "revision" => Ok(AgentFilter::new_revision(
             comparator.parse()?,
             value

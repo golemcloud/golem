@@ -16,8 +16,7 @@
 
 package golem.runtime.guest
 
-import golem.Principal
-import golem.host.js.PrincipalConverter
+import golem.host.js.LegacySnapshotPrincipal
 import golem.runtime.{MultipartSnapshot, SnapshotError, SnapshotPart, SnapshotPayload}
 import zio.blocks.schema.json.Json
 
@@ -119,11 +118,10 @@ private[runtime] object MultipartSnapshotCodec {
       result.result()
     }.toEither.left.map(_.getMessage)
 
-  def encode(snapshot: MultipartSnapshot, principal: Principal): Either[String, SnapshotPayload] =
+  def encode(snapshot: MultipartSnapshot): Either[String, SnapshotPayload] =
     scala.util.Try {
-      val principalJson = new String(PrincipalConverter.toJson(principal), "UTF-8")
-      val envelope      = s"""{"version":1,"principal":$principalJson,"state":${snapshot.state.print}}""".getBytes("UTF-8")
-      val parts         = Vector("state" -> SnapshotPart(envelope, "application/json")) ++ snapshot.parts.toVector.map {
+      val envelope = s"""{"version":2,"state":${snapshot.state.print}}""".getBytes("UTF-8")
+      val parts    = Vector("state" -> SnapshotPart(envelope, "application/json")) ++ snapshot.parts.toVector.map {
         case (name, part) =>
           ensure(MultipartSnapshot.validName(name), s"Invalid snapshot part '$name'")
           ("part:" + name) -> part.copy(contentType = checked(MultipartSnapshot.normalizeContentType(part.contentType)))
@@ -198,7 +196,7 @@ private[runtime] object MultipartSnapshotCodec {
     throw SnapshotError("Missing version")
   }
 
-  def decode(data: Array[Byte], mime: String): Either[String, (Principal, MultipartSnapshot)] =
+  def decode(data: Array[Byte], mime: String): Either[String, MultipartSnapshot] =
     scala.util.Try {
       val parts     = checked(parseParts(data, mime))
       val statePart = parts.find(_._1 == "state").getOrElse(throw SnapshotError("Missing state"))._2
@@ -206,29 +204,31 @@ private[runtime] object MultipartSnapshotCodec {
       val text = new String(statePart.bytes, "UTF-8")
       ensure(java.util.Arrays.equals(text.getBytes("UTF-8"), statePart.bytes), "Invalid JSON UTF-8")
       val envelope = objectFields(checked(Json.parse(statePart.bytes)))
-      ensure(
-        envelope.contains("version") && envelope.contains("principal") && envelope.contains("state"),
-        "Incomplete envelope"
-      )
-      ensure(versionToken(text.trim) == "1", "Multipart version must be integer 1")
-      val principal = envelope("principal")
-      val metadata  = objectFields(principal)
-      if (metadata.get("tag") != Some(Json.String("anonymous"))) {
-        val value = objectFields(metadata.getOrElse("val", throw SnapshotError("Missing principal payload")))
-        if (metadata.get("tag") == Some(Json.String("oidc"))) {
-          Set("email", "name", "givenName", "familyName", "picture", "preferredUsername").foreach { key =>
+      ensure(envelope.contains("version") && envelope.contains("state"), "Incomplete envelope")
+      val version = versionToken(text.trim)
+      ensure(version == "1" || version == "2", "Multipart version must be integer 1 or 2")
+      if (version == "1") {
+        // A 1.6 envelope: its principal is checked as before and then dropped.
+        ensure(envelope.contains("principal"), "Incomplete envelope")
+        val principal = envelope("principal")
+        val metadata  = objectFields(principal)
+        if (metadata.get("tag") != Some(Json.String("anonymous"))) {
+          val value = objectFields(metadata.getOrElse("val", throw SnapshotError("Missing principal payload")))
+          if (metadata.get("tag") == Some(Json.String("oidc"))) {
+            Set("email", "name", "givenName", "familyName", "picture", "preferredUsername").foreach { key =>
+              ensure(
+                value.get(key).forall(v => v == Json.Null || v.isInstanceOf[Json.String]),
+                "Invalid principal optional string"
+              )
+            }
             ensure(
-              value.get(key).forall(v => v == Json.Null || v.isInstanceOf[Json.String]),
-              "Invalid principal optional string"
+              value.get("emailVerified").forall(v => v == Json.Null || v.isInstanceOf[Json.Boolean]),
+              "Invalid principal optional boolean"
             )
           }
-          ensure(
-            value.get("emailVerified").forall(v => v == Json.Null || v.isInstanceOf[Json.Boolean]),
-            "Invalid principal optional boolean"
-          )
         }
+        checked(LegacySnapshotPrincipal.check(principal.printBytes))
       }
-      val recovered = checked(PrincipalConverter.fromJson(principal.printBytes))
       val userParts = parts
         .filterNot(_._1 == "state")
         .map { case (wireName, part) =>
@@ -239,6 +239,6 @@ private[runtime] object MultipartSnapshotCodec {
           wireName.drop(5) -> part.copy(contentType = checked(MultipartSnapshot.normalizeContentType(part.contentType)))
         }
         .toMap
-      recovered -> MultipartSnapshot(envelope("state"), userParts)
+      MultipartSnapshot(envelope("state"), userParts)
     }.toEither.left.map(_.getMessage)
 }

@@ -43,7 +43,7 @@ pub async fn audit(
 ] {
   ignore(invocation.tool_name())
   ignore(invocation.tool_metadata())
-  ignore(invocation.principal())
+  ignore(invocation.invocation_context())
   underlying.invoke_raw(
     invocation.command_path(),
     invocation.input(),

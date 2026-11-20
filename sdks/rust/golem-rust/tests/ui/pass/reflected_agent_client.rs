@@ -41,31 +41,40 @@ fn definition_is_caller_owned() -> MethodOnlyAgentClientDefinition {
     SearchApiClient::client_definition().expect("valid client definition")
 }
 
+async fn full_clients(agent_id: &golem_rust::AgentId) {
+    let complete = CompleteSearchApiClient::upsert("default".to_string())
+        .expect("fallible full client creation");
+    let _status = complete.status();
+    let _pending = complete.pending_status();
+    let _: Result<golem_rust::AgentId, golem_rust::GolemReflectError> = complete.agent_id().await;
+    let _ = CompleteSearchApiClient::create(
+        "default".to_string(),
+        golem_rust::CreateOptions {
+            keyed: true,
+            config: SearchConfigRpc {
+                model: Some("fast".to_string()),
+            },
+            env: vec![("MODE".to_string(), "test".to_string())],
+        },
+    )
+    .await
+    .expect("fallible keyed creation");
+    let _ = CompleteSearchApiClient::create("default".to_string(), Default::default())
+        .await
+        .expect("fallible creation");
+    let _ = CompleteSearchApiClient::get_by_id(agent_id).expect("fallible lookup by id");
+    let ephemeral = EphemeralSearchApiClient::upsert("default".to_string())
+        .expect("fallible ephemeral creation");
+    let _status = ephemeral.status();
+    let _pending = ephemeral.pending_status();
+    let method_only = SearchApiClient::get_by_id(agent_id).expect("method-only client");
+    let _: Result<golem_rust::AgentId, golem_rust::GolemReflectError> =
+        method_only.agent_id().await;
+}
+
 fn main() {
     let _ = definition_is_caller_owned();
-    if false {
-        let _ = CompleteSearchApiClient::agent_id("default".to_string(), None);
-        let complete = CompleteSearchApiClient::get("default".to_string())
-            .expect("fallible full client creation");
-        let _status = complete.status();
-        let _pending = complete.pending_status();
-        let _ = CompleteSearchApiClient::new_phantom("default".to_string())
-            .expect("fallible phantom creation");
-        let _ = CompleteSearchApiClient::get_phantom(
-            golem_rust::Uuid::new_v4(),
-            "default".to_string(),
-        )
-        .expect("fallible known phantom creation");
-        let ephemeral = EphemeralSearchApiClient::new_phantom("default".to_string())
-            .expect("fallible ephemeral creation");
-        let _status = ephemeral.status();
-        let _pending = ephemeral.pending_status();
-        let _ = EphemeralSearchApiClient::get_phantom(
-            golem_rust::Uuid::new_v4(),
-            "default".to_string(),
-        )
-        .expect("fallible ephemeral phantom creation");
-    }
+    let _ = full_clients;
 
     let durable = MethodOnlyAgentClientDefinition::builder()
         .durable::<Query>("SearchAgent")
@@ -86,20 +95,22 @@ fn main() {
         let constructor = Query {
             text: "query".to_string(),
         };
-        let phantom_id = golem_rust::Uuid::new_v4();
-        let parsed = durable
-            .agent_id(&constructor, Some(phantom_id))
-            .expect("agent id");
-        let client = durable.bind(&parsed).expect("durable bind");
+        let agent_id = golem_rust::AgentId::new(golem_rust::Uuid::nil());
+        let client = durable.get_by_id(&agent_id).expect("durable get by id");
         let _ = client.agent_id();
-        let _ = durable.get(&constructor);
-        let _ = durable.get_phantom(phantom_id, &constructor);
-        let _ = durable.new_phantom(&constructor);
-        let _ = ephemeral.get_phantom(phantom_id, &constructor);
-        let _ = ephemeral.new_phantom(&constructor);
+        let _ = durable.upsert(&constructor);
+        let _ = durable.create(&constructor, golem_rust::CreateOptions::default());
+        let _ = ephemeral.upsert(&constructor);
         let config = SearchConfigRpc {
             model: Some("fast".to_string()),
         };
-        let _ = configured.get_with_config(&constructor, config);
+        let _ = configured.create(
+            &constructor,
+            golem_rust::CreateOptions {
+                keyed: true,
+                config,
+                env: Vec::new(),
+            },
+        );
     }
 }

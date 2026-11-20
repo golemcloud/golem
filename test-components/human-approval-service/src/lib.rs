@@ -28,8 +28,8 @@ mod acceptance_tests;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalOwner {
-    pub component_id: Uuid,
-    pub agent_name: String,
+    pub environment_id: Uuid,
+    pub agent_id: Uuid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -49,9 +49,10 @@ pub struct ApprovalRequest {
 #[serde(rename_all = "kebab-case")]
 pub enum AuthenticatedPrincipalKind {
     Anonymous,
-    Oidc,
+    User,
+    Account,
     Agent,
-    GolemUser,
+    Tool,
 }
 
 impl TryFrom<&str> for AuthenticatedPrincipalKind {
@@ -60,9 +61,10 @@ impl TryFrom<&str> for AuthenticatedPrincipalKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "anonymous" => Ok(Self::Anonymous),
-            "oidc" => Ok(Self::Oidc),
+            "user" => Ok(Self::User),
+            "account" => Ok(Self::Account),
             "agent" => Ok(Self::Agent),
-            "golem-user" => Ok(Self::GolemUser),
+            "tool" => Ok(Self::Tool),
             _ => Err(()),
         }
     }
@@ -432,7 +434,7 @@ async fn register_request(
     AuthenticatedPrincipalKind::try_from(request.principal.as_str()).map_err(|_| {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
-            "principal must be one of anonymous, oidc, agent, or golem-user".to_string(),
+            "principal must be one of anonymous, user, account, agent, or tool".to_string(),
         )
     })?;
     let mut store = state.store.lock().unwrap();
@@ -568,10 +570,11 @@ async fn deliver_callback(
         })?
         .extend([
             "v1",
-            "components",
-            &record.request.owner.component_id.to_string(),
-            "workers",
-            &record.request.owner.agent_name,
+            "runtime",
+            "envs",
+            &record.request.owner.environment_id.to_string(),
+            "agents",
+            &record.request.owner.agent_id.to_string(),
             "complete",
         ]);
     let callback = serde_json::to_vec(&ApprovalCallback {
@@ -629,15 +632,15 @@ mod tests {
         ApprovalRequest {
             request_id: Uuid::from_u128(1),
             owner: ApprovalOwner {
-                component_id: Uuid::from_u128(2),
-                agent_name: "agent/owner".to_string(),
+                environment_id: Uuid::from_u128(2),
+                agent_id: Uuid::from_u128(4),
             },
             promise_oplog_idx: 42,
             promise_fingerprint: Uuid::from_u128(3),
             policy: "production-change".to_string(),
             tool_name: "deploy".to_string(),
             command_path: vec!["apply".to_string()],
-            principal: "golem-user".to_string(),
+            principal: "account".to_string(),
         }
     }
 
@@ -695,8 +698,8 @@ mod tests {
         let request = request();
         store.register(request.clone()).unwrap();
         let wrong_owner = ApprovalOwner {
-            component_id: Uuid::from_u128(3),
-            agent_name: request.owner.agent_name.clone(),
+            environment_id: Uuid::from_u128(3),
+            agent_id: request.owner.agent_id,
         };
         assert!(matches!(
             store.decide(

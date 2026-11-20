@@ -73,14 +73,11 @@ func hostSearch(id golem.AgentID, text string) iter.Seq2[SearchHit, error] {
 }
 
 func agentIDToWit(id golem.AgentID) types.AgentId {
-	u := id.ComponentID
-	return types.AgentId{
-		ComponentId: types.ComponentId{Uuid: types.Uuid{
-			HighBits: binary.BigEndian.Uint64(u[0:8]),
-			LowBits:  binary.BigEndian.Uint64(u[8:16]),
-		}},
-		AgentId: id.AgentID,
-	}
+	u := id.UUID()
+	return types.AgentId{Uuid: types.Uuid{
+		HighBits: binary.BigEndian.Uint64(u[0:8]),
+		LowBits:  binary.BigEndian.Uint64(u[8:16]),
+	}}
 }
 
 func readErrorFromWit(e oplogwit.OplogReadError) error {

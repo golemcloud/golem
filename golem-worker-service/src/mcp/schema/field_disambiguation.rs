@@ -182,8 +182,8 @@ fn rewrite(args: &JsonObject, renames: &HashMap<String, String>) -> JsonObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::schema::agent::InputSchema;
     use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
-    use golem_common::schema::agent::{AutoInjectedKind, InputSchema};
     use golem_common::schema::schema_type::SchemaType;
     use serde_json::json;
     use test_r::test;
@@ -397,22 +397,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn auto_injected_fields_are_not_disambiguated() {
-        // A method field that shares a name but is auto-injected must not be
-        // treated as a collision (auto-injected fields are never advertised).
-        let ctor = constructor(vec![NamedField::user_supplied(
-            "shared",
-            SchemaType::string(),
-        )]);
-        let meth = method(vec![NamedField::auto_injected(
-            "shared",
-            AutoInjectedKind::Principal,
-            SchemaType::string(),
-        )]);
-        let mapping = field_name_mapping(&ctor, &meth);
-        assert!(is_empty(&mapping));
     }
 }

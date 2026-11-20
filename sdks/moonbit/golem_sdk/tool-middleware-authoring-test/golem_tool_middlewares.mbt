@@ -1746,11 +1746,11 @@ async fn __golem_monomorphic_tool_middleware_invoke_Policy(
           ),
         )
     }
-    let principal = __golem_invocation.principal()
+    let context = __golem_invocation.invocation_context()
     let __golem_expected = PresentedUnderlying::{
       underlying: __golem_underlying,
     }
-    match Policy::io(__golem_expected, input, principal) {
+    match Policy::io(__golem_expected, input, context) {
       Ok(__golem_result) => {
         let (__golem_value, __golem_stdout) = __golem_result
         return __golem_invocation.typed_result_value_with_stdout(
@@ -2005,11 +2005,11 @@ async fn __golem_monomorphic_tool_middleware_invoke_Adapter(
           ),
         )
     }
-    let principal = __golem_invocation.principal()
+    let context = __golem_invocation.invocation_context()
     let __golem_expected = StorageUnderlying::{
       underlying: __golem_underlying,
     }
-    match Adapter::io(__golem_expected, input, principal) {
+    match Adapter::io(__golem_expected, input, context) {
       Ok(__golem_result) => {
         let (__golem_value, __golem_stdout) = __golem_result
         return __golem_invocation.typed_result_value_with_stdout(

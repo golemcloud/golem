@@ -383,6 +383,7 @@ mod stored_invalid_binding_name {
     /// tool and its binding are written into the stored metadata afterwards.
     fn creation() -> ComponentCreation {
         ComponentCreation {
+            package_metadata: None,
             component_name: ComponentName("probe-tools".into()),
             config_schema: Default::default(),
             component_provision_config: Default::default(),
@@ -585,6 +586,7 @@ mod stored_invalid_binding_name {
             .update(
                 component.id,
                 ComponentUpdate {
+                    package_metadata: None,
                     current_revision: component.revision,
                     config_schema: None,
                     component_provision_config: None,

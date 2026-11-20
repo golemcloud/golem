@@ -65,7 +65,13 @@ async fn reject_initial_with_saturated_data_budgets(first: Message) -> Message {
     let mut messages = ReceiverStream::new(messages);
     let rejected = tokio::time::timeout(
         Duration::from_secs(1),
-        receive_initial(&mut messages, &outbound, &keyring, &bindings),
+        receive_initial(
+            &mut messages,
+            &outbound,
+            &keyring,
+            &bindings,
+            golem_common::model::environment::EnvironmentId::new(),
+        ),
     )
     .await
     .expect("prefetched input must not block protocol rejection writes");

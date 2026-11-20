@@ -95,7 +95,7 @@ steps:
 
         - `getTickCount` — returns `tickCount` as a number.
 
-        Use the real `@golemcloud/effect-golem` API: `TickerDefinition.client.get({ name })`
+        Use the real `@golemcloud/effect-golem` API: `TickerDefinition.client.upsert({ name })`
         returns the self client, and `self.tick.schedule(scheduledAt, {})` returns a
         `Client.ScheduledInvocation`. The Effect SDK's `.schedule(...)` is already cancelable;
         do not invent `.scheduleCancelable()`. Store the live handle in a separate

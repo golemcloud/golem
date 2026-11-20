@@ -23,9 +23,26 @@ const exceptionTag = new WebAssembly.Tag({ parameters: [] })
 let instance
 let componentContext = 0
 let nextWaitableSet = 1
-let selfBindingMode = 0
-let selfBindingDrops = 0
-const selfBindingId = 'Counter("recorded")[00000000-0000-0011-0000-00000000001d]'
+// Fake `golem:agent/host` RPC client functions. `rpcHost.error` is the
+// `rpc-error` case that the next call returns (-1: success), and
+// `rpcHost.calls` describes every call so a test can check what reached the
+// host.
+const rpcHost = {
+  error: -1,
+  selfType: "Counter",
+  drops: 0,
+  calls: [],
+}
+const RPC_HOST_HANDLE = 800
+const RPC_HOST_AGENT_ID = [42n, 17n]
+const RPC_HOST_ERROR_MESSAGES = [
+  "protocol failure",
+  "denied by the host",
+  "no agent of the type has the ID",
+  "remote failure",
+  null,
+  "the key is current",
+]
 let schemaValueStreamHostMode = 0
 let toolHostMode = 0
 let toolPendingGet = false
@@ -305,7 +322,7 @@ const permissionHostImports = {
       )
       memory.setBigUint64(retPtr + 8, 9n, true)
     },
-    "install-card"(handle, holderTag, high, low, agentPtr, agentLen, retPtr) {
+    "install-card"(handle, holderTag, high, low, retPtr) {
       permissionHost.installCalls++
       permissionHost.lastInstalled = handle
       permissionHostErr(retPtr, "install-recipient-mismatch", "card does not cover the recipient")
@@ -332,6 +349,41 @@ const permissionHostImports = {
       }
     },
   },
+}
+
+function rpcHostUuid(high, low) {
+  const hex = BigInt.asUintN(64, BigInt(high)).toString(16).padStart(16, "0") +
+    BigInt.asUintN(64, BigInt(low)).toString(16).padStart(16, "0")
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function rpcHostWriteAgentId(at) {
+  const memory = new DataView(instance.exports.memory.buffer)
+  memory.setBigUint64(at, RPC_HOST_AGENT_ID[0], true)
+  memory.setBigUint64(at + 8, RPC_HOST_AGENT_ID[1], true)
+}
+
+// Writes the configured `rpc-error` as the error case of a `result` whose
+// tag is at `retPtr` and whose payload is at `retPtr + payload`. Returns
+// false when the call succeeds.
+function rpcHostWriteError(retPtr, payload) {
+  if (rpcHost.error < 0) return false
+  const memory = new DataView(instance.exports.memory.buffer)
+  const message = RPC_HOST_ERROR_MESSAGES[rpcHost.error]
+  if (message === undefined || message === null) {
+    throw new Error(`unsupported rpc-error case in SDK unit-test host: ${rpcHost.error}`)
+  }
+  memory.setUint8(retPtr, 1)
+  memory.setUint8(retPtr + payload, rpcHost.error)
+  permissionHostWriteString(memory, retPtr + payload + 4, message)
+  return true
+}
+
+function rpcHostWriteClientResult(retPtr, payload) {
+  new Uint8Array(instance.exports.memory.buffer, retPtr, 44).fill(0)
+  if (!rpcHostWriteError(retPtr, payload)) {
+    new DataView(instance.exports.memory.buffer).setInt32(retPtr + payload, RPC_HOST_HANDLE, true)
+  }
 }
 
 const resourceDrops = {
@@ -432,47 +484,75 @@ const importObject = {
     },
   },
   "golem:agent/host@2.0.0": {
-    "parse-agent-id"(ptr, len, retPtr) {
-      if (permissionHostReadString(ptr, len) !== selfBindingId)
-        throw new Error("self binding parsed a different identity")
+    "[static]wasm-rpc.upsert"(namePtr, nameLen, _nodesPtr, nodesLen, root, retPtr) {
+      rpcHost.calls.push(
+        `upsert ${permissionHostReadString(namePtr, nameLen)} nodes=${nodesLen} root=${root}`,
+      )
+      rpcHostWriteClientResult(retPtr, 4)
+    },
+    "[static]wasm-rpc.get-by-id"(namePtr, nameLen, high, low, retPtr) {
+      rpcHost.calls.push(
+        `get-by-id ${permissionHostReadString(namePtr, nameLen)} ${rpcHostUuid(high, low)}`,
+      )
+      rpcHostWriteClientResult(retPtr, 4)
+    },
+    "[async-lower][static]wasm-rpc.create"(lowerPtr, resultPtr) {
       const memory = new DataView(instance.exports.memory.buffer)
-      new Uint8Array(instance.exports.memory.buffer, retPtr, 72).fill(0)
-      if (selfBindingMode === 1) {
-        memory.setUint8(retPtr, 1)
-        memory.setUint8(retPtr + 8, 3) // invalid-agent-id
-        permissionHostWriteString(memory, retPtr + 12, "bad id")
-        return
+      const string = at =>
+        permissionHostReadString(memory.getInt32(at, true), memory.getInt32(at + 4, true))
+      const list = (at, size, read) =>
+        Array.from({ length: memory.getInt32(at + 4, true) }, (_, index) =>
+          read(memory.getInt32(at, true) + index * size),
+        )
+      const config = list(lowerPtr + 24, 40, at =>
+        list(at, 8, string).join("."),
+      )
+      const env = list(lowerPtr + 32, 16, at => `${string(at)}=${string(at + 8)}`)
+      rpcHost.calls.push(
+        `create ${string(lowerPtr)} nodes=${memory.getInt32(lowerPtr + 12, true)} ` +
+          `keyed=${memory.getUint8(lowerPtr + 20) !== 0} ` +
+          `config=[${config.join(",")}] env=[${env.join(",")}]`,
+      )
+      new Uint8Array(instance.exports.memory.buffer, resultPtr, 48).fill(0)
+      if (!rpcHostWriteError(resultPtr, 8)) {
+        memory.setInt32(resultPtr + 8, RPC_HOST_HANDLE, true)
+        rpcHostWriteAgentId(resultPtr + 16)
       }
-      permissionHostWriteString(memory, retPtr + 8, "Counter")
-      // Binding retains the constructor tree without decoding it. Even empty
-      // arrays need guest allocations because the generated lifter frees them.
-      for (const offset of [16, 24, 36])
-        memory.setInt32(retPtr + offset, permissionHostAllocate(1), true)
-      memory.setUint8(retPtr + 48, 1)
-      memory.setBigUint64(retPtr + 56, 17n, true)
-      memory.setBigUint64(retPtr + 64, 29n, true)
+      return 2
+    },
+    "[async-lower][method]wasm-rpc.agent-id"(handle, resultPtr) {
+      if (handle !== RPC_HOST_HANDLE) throw new Error("agent-id on a different RPC resource")
+      rpcHost.calls.push("agent-id")
+      new Uint8Array(instance.exports.memory.buffer, resultPtr, 48).fill(0)
+      if (!rpcHostWriteError(resultPtr, 8)) rpcHostWriteAgentId(resultPtr + 8)
+      return 2
     },
     "[static]wasm-rpc.bind-self"(retPtr) {
-      const memory = new DataView(instance.exports.memory.buffer)
-      new Uint8Array(instance.exports.memory.buffer, retPtr, 44).fill(0)
-      if (selfBindingMode === 2) {
-        memory.setUint8(retPtr, 1)
-        memory.setUint8(retPtr + 4, 1) // denied
-        permissionHostWriteString(memory, retPtr + 8, "ephemeral owner")
-        return
+      rpcHost.calls.push("bind-self")
+      new Uint8Array(instance.exports.memory.buffer, retPtr, 48).fill(0)
+      if (!rpcHostWriteError(retPtr, 8)) {
+        rpcHostWriteAgentId(retPtr + 8)
+        new DataView(instance.exports.memory.buffer).setInt32(retPtr + 24, RPC_HOST_HANDLE, true)
       }
-      permissionHostWriteString(memory, retPtr + 4, selfBindingId)
-      memory.setInt32(retPtr + 12, 800, true)
+    },
+    "get-agent-type-by-agent-id"(high, low, retPtr) {
+      rpcHost.calls.push(`get-agent-type-by-agent-id ${rpcHostUuid(high, low)}`)
+      const memory = new DataView(instance.exports.memory.buffer)
+      new Uint8Array(instance.exports.memory.buffer, retPtr, 240).fill(0)
+      if (rpcHost.selfType === null) return
+      memory.setUint8(retPtr, 1)
+      // Only the type name matters to the SDK. Every string and list of the
+      // agent type still needs a guest allocation, because the generated
+      // lifter takes ownership of it.
+      const agentType = retPtr + 8
+      permissionHostWriteString(memory, agentType, rpcHost.selfType)
+      for (const offset of [12, 20, 60]) permissionHostWriteString(memory, agentType + offset, "")
+      for (const offset of [28, 36, 84, 92, 100, 224])
+        memory.setInt32(agentType + offset, permissionHostAllocate(1), true)
     },
     "[resource-drop]wasm-rpc"(handle) {
-      if (handle !== 800) throw new Error("dropped a different RPC resource")
-      selfBindingDrops++
-    },
-    "make-agent-id"() {
-      throw new Error("unexpected identity creation in SDK unit-test host")
-    },
-    "[static]wasm-rpc.create"() {
-      throw new Error("unexpected RPC connection in SDK unit-test host")
+      if (handle !== RPC_HOST_HANDLE) throw new Error("dropped a different RPC resource")
+      rpcHost.drops++
     },
   },
   "wasi:logging/logging": {
@@ -483,13 +563,28 @@ const importObject = {
   "$root": rootImports,
   "[export]$root": rootImports,
   "golem:test": {
-    "reset-self-binding-host"(mode) {
-      selfBindingMode = mode
-      selfBindingDrops = 0
+    "reset-rpc-host"() {
+      rpcHost.error = -1
+      rpcHost.selfType = "Counter"
+      rpcHost.drops = 0
+      rpcHost.calls = []
       resetPermissionHost()
     },
-    "self-binding-drops"() {
-      return selfBindingDrops
+    "set-rpc-host-error"(tag) {
+      rpcHost.error = tag
+    },
+    "set-rpc-host-unknown-self-type"() {
+      rpcHost.selfType = null
+    },
+    "rpc-host-drops"() {
+      return rpcHost.drops
+    },
+    "rpc-host-calls"(retPtr) {
+      permissionHostWriteString(
+        new DataView(instance.exports.memory.buffer),
+        retPtr,
+        rpcHost.calls.join("\n"),
+      )
     },
     "reset-resource-drop-counts"() {
       for (const kind of Object.keys(resourceDrops)) {

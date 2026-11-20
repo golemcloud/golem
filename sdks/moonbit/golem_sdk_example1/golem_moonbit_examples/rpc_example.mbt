@@ -14,7 +14,7 @@ fn RpcExampleAgent::new() -> RpcExampleAgent {
 ///|
 /// Calls a remote Counter agent, increments three times, reads value, then decrements
 pub async fn RpcExampleAgent::counter_rpc_example(self : Self) -> UInt64 {
-  CounterClient::scoped("my-counter", async fn(counter) {
+  CounterClient::scoped_upsert("my-counter", async fn(counter) {
     counter.increment()
     counter.increment()
     counter.increment()
@@ -28,7 +28,7 @@ pub async fn RpcExampleAgent::counter_rpc_example(self : Self) -> UInt64 {
 ///|
 /// Calls a remote TaskManager agent using custom types like TaskInfo and Priority
 pub async fn RpcExampleAgent::task_rpc_example(self : Self) -> UInt64 {
-  TaskManagerClient::scoped(async fn(tm) {
+  TaskManagerClient::scoped_upsert(async fn(tm) {
     let count = tm.add_task({
       title: "Build RPC support",
       priority: High,

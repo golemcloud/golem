@@ -16,7 +16,7 @@ Single-component applications keep `src/` and `tsconfig.json` at the application
 ## Agent fundamentals
 
 - Define APIs with `defineAgent`, `method`, and Effect `Schema` values.
-- Agent `id` fields define durable agent identity.
+- Agent `id` fields define the agent key: `client.upsert(id)` reaches the keyed agent of those values, and every agent also has an agent ID, a UUID that Golem issues.
 - Implement methods as Effects and compose services with normal Effect operators.
 - Agents are durable by default and invocations are processed sequentially.
 - Declare method inputs with `input`, mark side-effect-free methods with `readOnly`, and use
@@ -33,7 +33,7 @@ Single-component applications keep `src/` and `tsconfig.json` at the application
 - Import the SDK from `@golemcloud/effect-golem` and Effect APIs from `effect`.
 - Use `@golemcloud/effect-golem/sqlite`, `/postgres`, `/mysql`, or `/ignite2` for database access. Native Node database drivers cannot run inside WebAssembly.
 - The build bundles reachable SDK code and generates static exports for discovered capabilities. Effect remains shared in the base WASM. Keep its version aligned with the generated `package.json`.
-- The runtime reports Effect components as TypeScript source, so CLI values and agent IDs use TypeScript syntax.
+- The runtime reports Effect components as TypeScript source, so CLI values and agent keys use TypeScript syntax.
 
 ## Commands
 
@@ -67,7 +67,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
-| `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent new` |
+| `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent create` or `golem agent upsert` |
 | `golem-invoke-agent-rust` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-rust` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-rust` | Scheduling a future invocation on a Golem agent |
@@ -88,7 +88,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-recurring-task-rust` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
 | `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-rust` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
-| `golem-multi-instance-agent-rust` | Creating multiple agent instances with the same constructor parameters using phantom agents |
+| `golem-multi-instance-agent-rust` | Creating multiple agents with the same constructor parameters as agents without a key |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-rust` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-rust` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -132,15 +132,15 @@ This is a **Golem Application** — a distributed computing project targeting We
 Key concepts:
 - **Component**: A WASM module compiled from Rust, defining one or more agent types
 - **Agent type**: A trait annotated with `#[agent_definition]`, defining the agent's API
-- **Agent (worker)**: A running instance of an agent type, identified by constructor parameters, with persistent state
+- **Agent (worker)**: A running instance of an agent type, identified by its agent ID (a UUID), with persistent state
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **constructor parameter values** — two agents with the same parameters are the same agent
+- Every agent is identified by its **agent ID**. A keyed agent also has a **key**, the agent type and its constructor parameter values (`Type(params)`): there is at most one keyed agent per key, and `upsert` returns it. An agent created without a key is reachable only by its ID
 - Agents are **durable by default** — their state persists across invocations, failures, and restarts
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
-- An agent is created implicitly on first invocation — no separate creation step needed
+- A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed
 - **Futures cannot outlive invocations** — every `Future` spawned during an invocation must complete (be `.await`ed or driven to completion) before the invocation returns; do not store unresolved futures in agent state to poll them from a later invocation
 
 ## Durability & Automatic Retries
@@ -276,7 +276,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-recurring-task-ts` | Recurring (cron-like) tasks via self-scheduling |
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for webhook-driven external APIs |
-| `golem-multi-instance-agent-ts` | Creating multiple agent instances with phantom agents |
+| `golem-multi-instance-agent-ts` | Creating multiple agents with the same constructor parameters as agents without a key |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoints |
 | `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -300,7 +300,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-profiles-and-environments` | CLI profiles, app environments, and component presets |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
-| `golem-create-agent-instance-ts` | Creating a new agent instance with `golem agent new` |
+| `golem-create-agent-instance-ts` | Creating a new agent instance with `golem agent create` or `golem agent upsert` |
 | `golem-invoke-agent-ts` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-ts` | Triggering a fire-and-forget invocation from the CLI |
 | `golem-schedule-agent-ts` | Scheduling a future invocation from the CLI |
@@ -326,17 +326,17 @@ This is a **Golem Application** — a distributed computing project. TypeScript 
 Key concepts:
 - **Component**: A deployable unit built from your TypeScript sources, defining one or more agent types
 - **Agent type**: Declared with `defineAgent({ ... })` and given behaviour with `.implement({ ... })` from `@golemcloud/golem-ts-sdk`
-- **Agent (worker)**: A running instance of an agent type, identified by its `id` record values, with persistent state
+- **Agent (worker)**: A running instance of an agent type, identified by its agent ID (a UUID), with persistent state
 
 The SDK is schema-driven: method inputs and return values are described with [Standard Schema](https://standardschema.dev/) values. **Zod** is used throughout these examples; **Valibot** and **ArkType** also work (any Standard Schema vendor). There are no classes and no decorators.
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **`id` record values** — two agents with the same id values are the same agent. The id fields are the constructor parameters.
+- Every agent is identified by its **agent ID**. A keyed agent also has a **key**: the agent type and its `id` record values (the constructor parameters). There is at most one keyed agent per key, and `upsert` returns it. An agent created without a key is reachable only by its ID.
 - Agents are **durable by default** — state persists across invocations, failures, and restarts.
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no locks needed.
 - Agents can **spawn / call other agents** via **RPC** (see Calling Other Agents).
-- An agent is created implicitly on first invocation — no separate creation step needed.
+- A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed.
 - **Futures cannot outlive invocations** — every `Promise` started during an invocation must be `await`ed before the handler returns; do not store unresolved promises in state to poll them from a later invocation.
 
 ## Durability & Automatic Retries
@@ -422,7 +422,7 @@ s.result(okSchema, errSchema)    // a typed result<ok, err> return (see Typed Er
 
 ## State
 
-State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, principal, phantomId, config }`); handlers' `this` also carries SDK helpers `getId()`, `getPhantomId()`, `getPrincipal()`, and `config`.
+State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, principal, config }`); handlers' `this` also carries SDK helpers `getId()` (the agent's `AgentId`), `getPrincipal()`, and `config`.
 
 ```typescript
 export const HttpAgentImpl = HttpAgent.implement({
@@ -495,13 +495,13 @@ Config values are provisioned via `golem.yaml` (`env`/`envDefaults`/`secretDefau
 
 ## Calling Other Agents (RPC)
 
-Every agent definition exposes a `.client` factory. Use `.get(id)` for a durable agent, `.getPhantom(id, phantomId)` for a known phantom, or `.newPhantom(id)` to create a phantom and return `{ client, agentId, phantomId }`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
+Every agent definition exposes a `.client` factory. Use `.upsert(id)` for the keyed agent of the constructor parameters (created when it is missing), `await .create(id, { keyed, config, env })` to create a new agent (without `keyed`, it has no key and a new agent ID; with `keyed`, an existing keyed agent rejects with a `conflict` error), or `await .getById(agentId)` to address an existing agent by its ID (an unknown ID rejects with `not-found`). `await client.agentId()` returns a durable client's agent ID. An ephemeral agent offers only `.upsert(id)`. `await client.m(input, { signal })` invokes with optional cancellation; `client.m.trigger(input)` is fire-and-forget; `client.m.schedule(at, input)` enqueues for later and returns a `CancellationToken`.
 
 ```typescript
 import { Counter } from './counter-agent.js';
 
-const next = await Counter.client.get({ name: 'c1' }).add({ by: 5 });
-Counter.client.get({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
+const next = await Counter.client.upsert({ name: 'c1' }).add({ by: 5 });
+Counter.client.upsert({ name: 'c1' }).add.trigger({ by: 1 });   // fire-and-forget
 ```
 
 ## Snapshotting

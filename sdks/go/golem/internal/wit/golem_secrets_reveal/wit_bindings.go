@@ -81,7 +81,7 @@ func Reveal(s *golem_core_types.Secret, expected golem_core_types.SchemaGraph) w
 
 		result5 = witTypes.Ok[golem_core_types.SchemaValueTree, golem_secrets_types.SecretError](result3)
 	case 1:
-		result4 := wasm_lift_1_t947(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result4 := wasm_lift_1_t963(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result5 = witTypes.Err[golem_core_types.SchemaValueTree, golem_secrets_types.SecretError](result4)
 	default:
@@ -139,7 +139,7 @@ func wasm_lift_1_t80(src unsafe.Pointer) golem_core_types.SchemaValueTree {
 }
 
 //go:noinline
-func wasm_lift_1_t947(src unsafe.Pointer) golem_secrets_types.SecretError {
+func wasm_lift_1_t963(src unsafe.Pointer) golem_secrets_types.SecretError {
 	var variant golem_secrets_types.SecretError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -148,7 +148,7 @@ func wasm_lift_1_t947(src unsafe.Pointer) golem_secrets_types.SecretError {
 		variant = golem_secrets_types.MakeSecretErrorUnavailable(value0)
 
 	case 1:
-		result := wasm_lift_1_t941(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t957(unsafe.Add(unsafe.Pointer(src), 4))
 
 		variant = golem_secrets_types.MakeSecretErrorVersionNotFound(result)
 
@@ -852,7 +852,7 @@ func wasm_lift_1_t78(src unsafe.Pointer) golem_core_types.SchemaValueNode {
 }
 
 //go:noinline
-func wasm_lift_1_t941(src unsafe.Pointer) golem_secrets_types.SecretVersion {
+func wasm_lift_1_t957(src unsafe.Pointer) golem_secrets_types.SecretVersion {
 	value0 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 
 	return golem_secrets_types.SecretVersion{Bytes: value0}

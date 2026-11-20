@@ -101,7 +101,7 @@ use url::Url;
 use self::account::{AccountEmail, AccountId};
 use self::component::{AgentFilePermissions, ComponentId};
 #[cfg(test)]
-use crate::base_model::agent::{AgentMode, Principal};
+use crate::base_model::agent::AgentMode;
 pub use crate::base_model::*;
 
 impl Timestamp {

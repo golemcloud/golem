@@ -60,7 +60,7 @@ final class CounterAgentImpl(private val name: String) extends CounterAgent {
 
 ## Agent Identity
 
-The agent's constructor parameters define its identity. Declare them as an inner `class Id(...)` in the trait:
+The agent's constructor parameters are its key: `upsert` with the same parameters addresses the same keyed agent. Declare them as an inner `class Id(...)` in the trait:
 
 ```scala
 @agentDefinition()
@@ -96,7 +96,7 @@ trait WeatherAgent extends BaseAgent {
 }
 ```
 
-Identity fields appear in agent IDs and telemetry. Never put API keys in `Id`.
+Identity fields appear in the agent key and in telemetry. Never put API keys in `Id`.
 If the weather provider needs a key, inject `Config[WeatherConfig]` into the
 implementation with an `apiKey: Secret[String]` field and extend
 `AgentConfig[WeatherConfig]` on the trait; see `golem-add-secret-scala`.
@@ -174,9 +174,9 @@ trait ApiAgent extends BaseAgent {
 - All agent traits must extend `BaseAgent` and be annotated with `@agentDefinition`
 - All agent implementations must be annotated with `@agentImplementation()`
 - Custom types used in agent methods require a `zio.blocks.schema.Schema` instance (use `derives Schema` in Scala 3)
-- Constructor parameters define agent identity — they must be serializable types with `Schema` instances
+- Constructor parameters are the agent's key — they must be serializable types with `Schema` instances
 - The `class Id(...)` inner class in the agent trait defines the constructor parameter schema
 - The implementation takes identity fields as separate constructor parameters in declaration order
-- Agents are created implicitly on first invocation — no separate creation step
+- A keyed agent is created implicitly on first use through `upsert`; `create` makes a new agent with a new agent ID and no key (see `golem-multi-instance-agent-scala`)
 - Invocations are processed sequentially; asynchronous I/O and Futures can overlap within one invocation. This does not imply CPU-thread parallelism.
 - The `scalacOptions += "-experimental"` flag is required for macro annotations

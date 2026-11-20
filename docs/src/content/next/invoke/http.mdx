@@ -2,57 +2,95 @@ import { Callout } from "nextra/components"
 
 # Invoke through the REST API
 
-The Golem REST API has endpoints for invoking agent methods and native tools. See the [Agent REST API reference](/next/rest-api/agent) for every field.
+The Golem REST API has endpoints for creating agents and for invoking agent methods and native tools. Each endpoint names the environment by its ID in the path. See the [Agent REST API reference](/next/rest-api/agent) for every field.
 These endpoints are direct, low-level APIs: arguments and results travel in the REST wire form described below. To expose agents to the world, define [custom HTTP APIs](/next/invoke/making-custom-apis), or call them from a program through a [bridge library](/next/invoke/bridge-libraries), which builds these requests for you.
+
+## Agent IDs and keys
+
+Every agent has an agent ID, a UUID that Golem issues. The constructor parameters of an agent are its key. One key names at most one current agent of a type, the keyed agent of that key. An agent that Golem created without a key is reached only by its ID.
+
+## Create an agent
+
+```
+POST /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents
+```
+
+```json
+{
+  "parameters": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "my-counter"}]}},
+  "config": [],
+  "env": {},
+  "keyed": false
+}
+```
+
+- Without `keyed`, Golem creates a new agent without a key on each request. A request with the same `Idempotency-Key` header from the same caller returns the agent of the first request.
+- With `"keyed": true`, Golem creates the keyed agent of the parameters. The request fails with 409 when that agent already exists.
+- `config` sets local agent configuration and `env` sets environment variables of the new agent.
+
+The response is `201` with the `agentId` and the `agentFingerprint` of the new agent.
+
+## Upsert and look up a keyed agent
+
+```
+POST /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/upsert
+POST /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/agents/lookup
+```
+
+Both take `{"parameters": …}`. `upsert` returns the keyed agent of the parameters and creates it when it does not exist. `lookup` returns the keyed agent, or 404 when it does not exist. Both return the `agentId` and the `agentFingerprint`.
 
 ## Invoke an agent
 
 ```
-POST /v1/agents/invoke-agent
+POST /v1/runtime/envs/{environment_id}/agent-types/{agent_type_name}/invoke
 ```
 
-The request body selects the agent by its application, environment, agent type and constructor parameters, and names the method to call:
+The request body selects the agent by exactly one of `agentId` or `parameters`, and names the method to call:
 
 ```json
 {
-  "appName": "my-app",
-  "envName": "local",
-  "agentTypeName": "CounterAgent",
   "parameters": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "my-counter"}]}},
-  "methodName": "increment",
+  "method": "increment",
   "methodParameters": {"kind": "record", "value": {"fields": [{"kind": "u32", "value": 5}]}},
   "mode": "await"
 }
 ```
 
-- `parameters` are the constructor parameters and `methodParameters` the method parameters, each a record of the parameter values in declaration order.
+- `parameters` are the constructor parameters and `methodParameters` the method parameters, each a record of the parameter values in declaration order. With `parameters`, the invocation upserts the keyed agent of the parameters.
+- `agentId` selects an existing agent. The invocation never creates an agent for an ID, and an unknown ID gives 404.
+- `expectedFingerprint` makes the invocation fail with 404, and run nothing, when the agent at the target is not that incarnation.
 - `mode` is `await` to wait for the method to finish, or `schedule` to enqueue the invocation and return at once. With `schedule`, `scheduleAt` (an RFC 3339 date-time) delays the invocation.
-- `idempotencyKey` (or the `Idempotency-Key` header) identifies the invocation. Golem runs an invocation with the same key once. Without a key, Golem generates one.
-- `phantomId` selects a phantom agent instance, and `config` overrides local agent configuration.
+- The `Idempotency-Key` header identifies the invocation. Golem runs an invocation with the same key once. Without a key, Golem generates one.
 
 The response carries the `agentId`, the `idempotencyKey` and, for `await`, the `result`: the method's result together with its schema graph.
 
-## Implicit agent creation
+## Manage an agent
 
-If the agent does not exist, the invocation creates it.
+The management endpoints address one agent by its ID:
+
+```
+/v1/runtime/envs/{environment_id}/agents/{agent_id}/…
+```
+
+Each one takes an optional `expectedFingerprint` query parameter, with the same meaning as on invoke.
 
 ## Cancel a pending invocation
 
 Golem runs the invocations of one agent in sequence, so an invocation that has not started yet can be cancelled, identified by its idempotency key:
 
 ```
-DELETE /v1/components/{component_id}/workers/{agent_name}/invocations/{idempotency_key}
+DELETE /v1/runtime/envs/{environment_id}/agents/{agent_id}/invocations/{idempotency_key}
 ```
 
 ## Invoke a native tool
 
 ```
-POST /v1/agents/invoke-tool
+POST /v1/runtime/envs/{environment_id}/invoke-tool
 ```
 
 Select exactly one tool owner:
 
-- `agentId`: an existing agent, expressed as an object with `componentId` and `agentId` fields. The tool runs with that agent's state and bindings.
+- `agentId`: the ID of an existing agent. The tool runs with that agent's state and bindings.
 - `componentId`: a deployed component's UUID. Golem creates a fresh ephemeral owner using the component's baseline bindings. It runs component initializers but does not construct an agent.
 
 The tool must be bound to the selected owner. Declaring a tool implementation alone does not authorize invocation. Both endpoints require a bearer token and the permissions for the requested operation.
@@ -61,8 +99,6 @@ For example, suppose the bound `search` tool has a `query` command with a requir
 
 ```json
 {
-  "appName": "my-app",
-  "envName": "local",
   "componentId": "616ccd92-d666-4180-8349-8d125b269fac",
   "toolName": "search",
   "commandPath": ["query"],
@@ -94,7 +130,7 @@ For example, suppose the bound `search` tool has a `query` command with a requir
 
 ### Describe the tool and encode its input
 
-Use `POST /v1/agents/describe-tool` with `appName`, `envName`, `toolName`, and the same owner selector to get the effective deployed definition, including middleware. `commandPath` selects subcommands without the tool name; use `[]` for the root command.
+Use `POST /v1/runtime/envs/{environment_id}/describe-tool` with `toolName` and the same owner selector to get the effective deployed definition, including middleware. `commandPath` selects subcommands without the tool name; use `[]` for the root command.
 
 Unlike agent method parameters, a tool's `input` contains both a schema `graph` and a `value`. The input is one flat record: inherited global options and flags come first, followed by positional arguments, the tail positional list, command options, and command flags. Preserve declaration order within each group. The graph must include any referenced type definitions.
 
@@ -106,7 +142,7 @@ Supply all fields, including defaults and absent optional values. An optional sc
 - `schedule` enqueues the invocation and returns without waiting. Set `scheduleAt` to an RFC 3339 date-time to delay it.
 - `lookup` observes an existing invocation without starting it. Supply its `idempotencyKey` and the same owner, tool, and command path, but omit `input` and `scheduleAt`.
 
-Use `idempotencyKey` or the `Idempotency-Key` header to identify the invocation. The response carries `agentId` and `idempotencyKey`. A completed tool result has `type: "Success"` with an optional typed `result`, or `type: "Failure"` with an `error`. Check this discriminator: a tool failure is not necessarily an HTTP error. A scheduled or pending invocation can have no result yet.
+Use the `Idempotency-Key` header to identify the invocation. The response carries `agentId` and `idempotencyKey`. A completed tool result has `type: "Success"` with an optional typed `result`, or `type: "Failure"` with an `error`. Check this discriminator: a tool failure is not necessarily an HTTP error. A scheduled or pending invocation can have no result yet.
 
 This endpoint does not attach byte stdin, stdout, or stderr. Use the [streaming invocation protocol](/next/stream-session-public-protocol-v1) for those streams, or the [CLI](/next/invoke/cli#byte-streams-and-invocation-controls).
 

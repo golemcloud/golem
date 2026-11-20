@@ -12,63 +12,61 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Uuid as RawUuid } from 'golem:core/types@2.0.0';
+import type { AgentId as RawAgentId, Uuid as RawUuid } from 'golem:core/types@2.0.0';
 import type {
   CancellationToken,
   InvocationMetadata as HostInvocationMetadata,
 } from 'golem:agent/host@2.0.0';
+import { AgentId } from './agentId';
 import { Uuid } from './uuid';
 
 const UUID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const UUID_TEXT_LENGTH = 36;
 
+function parseUuidText(text: string, what: string): Uuid {
+  if (!UUID_PATTERN.test(text)) {
+    throw new Error(`Invalid invocation ID: invalid ${what} ${text}`);
+  }
+  const hex = text.replace(/-/g, '');
+  return new Uuid(BigInt(`0x${hex.slice(0, 16)}`), BigInt(`0x${hex.slice(16)}`));
+}
+
 /**
- * Identifies one invocation of an agent: the agent ID text form together with the invocation's
- * UUID. The text form is `<agent-id>.<uuid>`.
+ * Identifies one invocation of an agent: the agent's ID together with the invocation's UUID.
+ * The text form is `<agent-id>.<uuid>`, where both parts are UUIDs.
  */
 export class InvocationId {
-  readonly agentId: string;
+  readonly agentId: AgentId;
   readonly uuid: Uuid;
 
-  constructor(agentId: string, uuid: RawUuid) {
-    if (agentId.length === 0) {
-      throw new Error('Invalid invocation ID: the agent ID is empty');
-    }
-    this.agentId = agentId;
+  constructor(agentId: RawAgentId, uuid: RawUuid) {
+    this.agentId = AgentId.from(agentId);
     this.uuid = Uuid.from(uuid);
   }
 
   /** Formats the invocation ID as `<agent-id>.<uuid>`. */
   toString(): string {
-    return `${this.agentId}.${this.uuid.toString()}`;
+    return `${this.agentId.toString()}.${this.uuid.toString()}`;
   }
 
-  /**
-   * Parses the `<agent-id>.<uuid>` text form. The UUID and its separator are the last 37
-   * characters, so the agent ID itself can contain `.`.
-   */
+  /** Parses the `<agent-id>.<uuid>` text form. */
   static parse(value: string): InvocationId {
-    const separatorIndex = value.length - UUID_TEXT_LENGTH - 1;
-    if (separatorIndex < 0 || value[separatorIndex] !== '.') {
-      throw new Error(`Invalid invocation ID: missing '.' before the UUID in ${value}`);
+    if (value.length !== 2 * UUID_TEXT_LENGTH + 1 || value[UUID_TEXT_LENGTH] !== '.') {
+      throw new Error(`Invalid invocation ID: expected <agent-id>.<uuid>, got ${value}`);
     }
-    const uuidText = value.slice(separatorIndex + 1);
-    if (!UUID_PATTERN.test(uuidText)) {
-      throw new Error(`Invalid invocation ID: invalid UUID ${uuidText}`);
-    }
-    const hex = uuidText.replace(/-/g, '');
-    const uuid = new Uuid(BigInt(`0x${hex.slice(0, 16)}`), BigInt(`0x${hex.slice(16)}`));
-    return new InvocationId(value.slice(0, separatorIndex), uuid);
+    const agentUuid = parseUuidText(value.slice(0, UUID_TEXT_LENGTH), 'agent ID');
+    const uuid = parseUuidText(value.slice(UUID_TEXT_LENGTH + 1), 'UUID');
+    return new InvocationId(new AgentId(agentUuid), uuid);
   }
 }
 
 /**
- * Final identity allocated for one remote invocation. For an ephemeral target, `agentId`
- * contains the generated one-shot phantom ID.
+ * Final identity allocated for one remote invocation. For an ephemeral target, `agentId` is the
+ * ID of the one-shot instance that ran it.
  */
 export interface InvocationMetadata {
-  readonly agentId: string;
+  readonly agentId: AgentId;
   readonly invocationId: InvocationId;
 }
 
@@ -85,8 +83,9 @@ export interface CancelableScheduledInvocationReceipt {
 
 /** @internal Converts the host invocation metadata into the frozen SDK form. */
 export function invocationMetadataFromHost(metadata: HostInvocationMetadata): InvocationMetadata {
+  const agentId = AgentId.from(metadata.agentId);
   return Object.freeze({
-    agentId: metadata.agentId,
-    invocationId: new InvocationId(metadata.agentId, metadata.invocationId.id),
+    agentId,
+    invocationId: new InvocationId(agentId, metadata.invocationId.id),
   });
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
+use golem_common::model::caller::{Caller, Principal};
 
 use crate::worker::*;
 
@@ -534,7 +535,7 @@ pub(in crate::worker) fn stream_output_consumer_is_observer(
     })?;
     // The first accepted caller owns cancellation, even if a fork dispatched an
     // inherited call before its logical origin did. Other readers abandon only their slot.
-    Ok(caller != attachment.consumer.clone().into()
+    Ok(caller != attachment.consumer.into()
         || environment != attachment.consumer_environment_id.into())
 }
 
@@ -542,11 +543,16 @@ pub(in crate::worker) fn stream_effective_identity_is_agent(effective_identity: 
     stream_agent_authority(effective_identity).is_some()
 }
 
+/// The auth-context entry of an effective identity whose principal is an agent. The identity is
+/// the auth-context entry followed by the principal entry, when the request has a principal, so
+/// only a second entry is a principal: an auth context alone can also decode as an agent principal.
 pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Option<&[u8]> {
     let mut cursor = effective_identity;
     let mut last = None;
     let mut authority = None;
+    let mut entries = 0;
     while cursor.len() >= 8 {
+        entries += 1;
         authority = Some(&effective_identity[..effective_identity.len() - cursor.len()]);
         let (length, rest) = cursor.split_at(8);
         let length = u64::from_be_bytes(
@@ -564,15 +570,15 @@ pub(in crate::worker) fn stream_agent_authority(effective_identity: &[u8]) -> Op
         last = Some(value);
         cursor = rest;
     }
-    if !cursor.is_empty() {
+    if !cursor.is_empty() || entries != 2 {
         return None;
     }
     last.and_then(|value| {
-        golem_api_grpc::proto::golem::component::Principal::decode(value)
+        golem_api_grpc::proto::golem::component::Caller::decode(value)
             .ok()
-            .and_then(|principal| Principal::try_from(principal).ok())
+            .and_then(|caller| Caller::try_from(caller).ok())
     })
-    .is_some_and(|principal| matches!(principal, Principal::Agent(_)))
+    .is_some_and(|caller| matches!(caller.immediate, Principal::Agent(_)))
     .then_some(authority?)
 }
 
@@ -638,7 +644,7 @@ pub(crate) fn same_origin_stream_invocation(
                 .origin_invocation
                 .as_ref()
                 .and_then(|origin| origin.callee_environment_id);
-            if parent != Some(&handle.producer.clone().into())
+            if parent != Some(&handle.producer.into())
                 || environment != Some(handle.producer_environment_id.into())
             {
                 return false;
@@ -669,18 +675,19 @@ pub(in crate::worker) fn normalize_stream_join_authority(
     use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
     use golem_common::model::card::{PermissionPattern, PermissionTarget, ScopeCard};
 
-    fn normalize_owner(owner: &mut AgentOwnerPattern, caller: &str, origin: &str) {
+    // A fork keeps the type of its origin, so only the agent ID of the leaf changes.
+    fn normalize_owner(owner: &mut AgentOwnerPattern, caller: &AgentId, origin: &AgentId) {
         if let AgentOwnerPattern::Agent {
-            agent: AgentOwnerLeafPattern::Agent(name),
+            agent: AgentOwnerLeafPattern::Agent(leaf),
             ..
         } = owner
-            && name == caller
+            && leaf.agent_id == *caller
         {
-            *name = origin.to_string();
+            leaf.agent_id = *origin;
         }
     }
 
-    fn normalize_grants(grants: &mut [PermissionPattern], caller: &str, origin: &str) {
+    fn normalize_grants(grants: &mut [PermissionPattern], caller: &AgentId, origin: &AgentId) {
         for grant in grants {
             let owner = match grant {
                 PermissionPattern::Agent(grant) => &mut grant.owner,
@@ -701,8 +708,8 @@ pub(in crate::worker) fn normalize_stream_join_authority(
     }
     let mut auth =
         AuthCtx::try_from(golem_api_grpc::proto::golem::auth::AuthCtx::decode(bytes).ok()?).ok()?;
-    let caller = &config.context.as_ref()?.parent.as_ref()?.name;
-    let origin = &config.origin_invocation.as_ref()?.callee.as_ref()?.name;
+    let caller = &AgentId::try_from(config.context.as_ref()?.parent?).ok()?;
+    let origin = &AgentId::try_from(config.origin_invocation.as_ref()?.callee?).ok()?;
     // Forks monomorphize the retained wallet under their own name. Compare self-scoped
     // grants under the common author, retaining card IDs, scopes, verbs and resources.
     if let AuthCtx::Agent(agent) = &mut auth {
@@ -766,37 +773,37 @@ pub(crate) fn stream_session_record_key(
         )),
         StreamSessionRecord::Prepared(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ExpiryRefreshed(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Expired(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Attached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::ResumeAttempt(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
         StreamSessionRecord::Detached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
@@ -867,7 +874,7 @@ pub(crate) fn stream_session_record_key(
         )),
         StreamSessionRecord::ExportForkInitialized(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
-            callee: owner.clone(),
+            callee: *owner,
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key,
         }),
@@ -939,5 +946,80 @@ pub(in crate::worker) fn validate_stream_session_record(
         Err(WorkerExecutorError::runtime(
             "unsupported or malformed durable Stream Session record version",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{stream_agent_authority, stream_effective_identity_is_agent};
+    use golem_api_grpc::proto::golem::auth::{AuthCtx, UserAuthCtx, auth_ctx};
+    use golem_common::model::AgentId;
+    use prost::Message;
+    use test_r::test;
+
+    fn identity(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut identity = Vec::new();
+        for entry in entries {
+            identity.extend_from_slice(&(entry.len() as u64).to_be_bytes());
+            identity.extend_from_slice(entry);
+        }
+        identity
+    }
+
+    // A user auth context has the wire shape of an agent principal: its account ID decodes as
+    // the principal's agent ID.
+    #[test]
+    fn a_user_auth_context_without_a_principal_is_not_an_agent_identity() {
+        let user = AuthCtx {
+            value: Some(auth_ctx::Value::User(UserAuthCtx {
+                account_id: Some(
+                    golem_common::model::account::AccountId(uuid::Uuid::from_u128(7)).into(),
+                ),
+                ..Default::default()
+            })),
+        }
+        .encode_to_vec();
+        let agent: golem_api_grpc::proto::golem::component::Caller =
+            crate::test_callers::agent_caller(AgentId::from_parts(7, 1)).into();
+
+        assert!(!stream_effective_identity_is_agent(&identity(
+            std::slice::from_ref(&user)
+        )));
+        assert!(!stream_effective_identity_is_agent(&identity(&[
+            agent.encode_to_vec()
+        ])));
+        assert!(stream_effective_identity_is_agent(&identity(&[
+            user,
+            agent.encode_to_vec()
+        ])));
+    }
+
+    #[test]
+    fn stream_agent_authority_reads_the_caller_identity() {
+        use golem_common::model::caller::Caller;
+
+        let caller_identity = |caller: &Caller| {
+            let wire: golem_api_grpc::proto::golem::component::Caller = caller.clone().into();
+            identity(&[AuthCtx::default().encode_to_vec(), wire.encode_to_vec()])
+        };
+        let agent = crate::test_callers::agent_caller(AgentId::from_parts(7, 1));
+        let identity_of_agent = caller_identity(&agent);
+        assert!(stream_agent_authority(&identity_of_agent).is_some());
+        assert!(stream_effective_identity_is_agent(&identity_of_agent));
+
+        let user = Caller::entry(crate::test_callers::user_principal());
+        assert!(stream_agent_authority(&caller_identity(&user)).is_none());
+
+        let mut agent_for_user = agent.clone();
+        agent_for_user.original = user.original.clone();
+        assert!(stream_agent_authority(&caller_identity(&agent_for_user)).is_some());
+        let mut user_via_agent_root = user;
+        user_via_agent_root.original = agent.original;
+        assert!(stream_agent_authority(&caller_identity(&user_via_agent_root)).is_none());
+
+        let mut garbage = Vec::new();
+        garbage.extend_from_slice(&3u64.to_be_bytes());
+        garbage.extend_from_slice(&[0xff, 0xff, 0xff]);
+        assert!(stream_agent_authority(&garbage).is_none());
     }
 }

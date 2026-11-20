@@ -21,6 +21,7 @@ import {
 } from '../../../../javascript/js-bundle-fixtures.mjs';
 
 const nativeRequire = createRequire(import.meta.url);
+const COUNTER_AGENT_ID = '00000007-0000-8000-8000-000000000021';
 const fixtures = path.resolve('tests/components');
 const richToolContract = JSON.parse(
   fs.readFileSync(path.resolve('../../../../test-data/gol-40/rich-tool-conformance-v1.json')),
@@ -158,13 +159,21 @@ function instantiate(code, overrides = {}, format = 'cjs') {
   const module = { exports: {} };
   const host = {
     DatabaseSync: class {},
-    getEnvironment: () => [['GOLEM_AGENT_ID', 'Counter()']],
-    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } }),
-    parseAgentId: () => [
-      'Counter',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: unit },
-      undefined,
+    getEnvironment: () => [
+      ['GOLEM_AGENT_ID', COUNTER_AGENT_ID],
+      ['GOLEM_AGENT_TYPE', 'Counter'],
     ],
+    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' }, tokens: [] }),
+    parseUuid: (uuid) => {
+      const hex = uuid.replace(/-/g, '');
+      return { highBits: BigInt(`0x${hex.slice(0, 16)}`), lowBits: BigInt(`0x${hex.slice(16)}`) };
+    },
+    uuidToString: ({ highBits, lowBits }) => {
+      const hex = [highBits, lowBits]
+        .map((bits) => BigInt.asUintN(64, bits).toString(16).padStart(16, '0'))
+        .join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    },
     ...overrides,
   };
   new Function('require', 'module', 'exports', code)(
@@ -801,10 +810,12 @@ describe('component exports', () => {
     let configReads = 0;
     let secretDrops = 0;
     let title;
-    let principal = { tag: 'anonymous' };
     const runtime = await instantiate(output.code, {
-      makeAgentId: () => 'Counter()',
-      caller: () => ({ original: principal, immediate: principal }),
+      caller: () => ({
+        original: { tag: 'anonymous' },
+        immediate: { tag: 'anonymous' },
+        tokens: [],
+      }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
         if (path.join('.') === 'group.title')
@@ -838,10 +849,14 @@ describe('component exports', () => {
         root: 0,
       }),
       WasmRpc: class {
+        static upsert(agentTypeName, input) {
+          calls.push({ upsert: agentTypeName, input });
+          return new this();
+        }
         asyncInvokeAndAwait(method, input) {
           calls.push({ method, input });
           return {
-            metadata: hostInvocationMetadata('Counter()'),
+            metadata: hostInvocationMetadata(COUNTER_AGENT_ID),
             future: {
               get: async () => ({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 }),
               cancel() {},
@@ -859,19 +874,20 @@ describe('component exports', () => {
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);
     await runtime.guest.initialize('Counter', structuredClone(unit));
-    principal = {
-      tag: 'golem-user',
-      val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
-    };
-    const principalResult = await runtime.guest.invoke('principal', structuredClone(unit));
-    principal = { tag: 'anonymous' };
-    expect(principalResult).toEqual({
+    const principalRefResult = await runtime.guest.invoke('principalRef', {
       root: 3,
       valueNodes: [
-        { tag: 'uuid-value', val: { highBits: 17n, lowBits: 31n } },
-        { tag: 'record-value', val: [0] },
-        { tag: 'record-value', val: [1] },
-        { tag: 'variant-value', val: { case_: 2, payload: 2 } },
+        { tag: 'string-value', val: 'https://login.example' },
+        { tag: 'string-value', val: 'u-1' },
+        { tag: 'record-value', val: [0, 1] },
+        { tag: 'record-value', val: [2] },
+      ],
+    });
+    expect(schemaValueFromWit(principalRefResult)).toEqual({
+      tag: 'record',
+      fields: [
+        { tag: 'string', value: 'https://login.example' },
+        { tag: 'string', value: 'u-1' },
       ],
     });
     expect(configReads).toBe(0);
@@ -910,6 +926,7 @@ describe('component exports', () => {
     });
     expect(remote).toEqual({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 });
     expect(calls).toEqual([
+      { upsert: 'Counter', input: expect.objectContaining({ valueNodes: expect.any(Array) }) },
       {
         method: 'scalar',
         input: {
@@ -1179,7 +1196,7 @@ describe('component exports', () => {
           expect(retained).not.toContain(module);
       if (name === 'agent-reflection') expect(retained).toContain('schema-model/wit.mjs');
       if (!capabilities.agents) {
-        expect(output.unminified).not.toContain('serializePrincipal');
+        expect(output.unminified).not.toContain('validateLegacySnapshotPrincipal');
         expect(output.unminified).not.toContain('initializedAgent');
       }
       const exports = await instantiate(output.code);
@@ -1205,7 +1222,10 @@ describe('component exports', () => {
           val: 'missing',
         });
         await expect(
-          exports.loadSnapshot.load({ payload: new Uint8Array(), mimeType: 'application/json' }),
+          exports.loadSnapshot.load(
+            { payload: new Uint8Array(), mimeType: 'application/json' },
+            unit,
+          ),
         ).rejects.toBe('This component does not define agents');
       } else {
         await exports.guest.initialize('Counter', unit);
@@ -1216,13 +1236,12 @@ describe('component exports', () => {
         expect(compileSchema(z.number()).fromValue(schemaValueFromWit(result))).toBe(18);
         const snapshot = await exports.saveSnapshot.save();
         expect(JSON.parse(new TextDecoder().decode(snapshot.payload))).toEqual({
-          version: 1,
-          principal: { tag: 'anonymous' },
+          version: 2,
           state: { count: 18 },
           fileDatabases: {},
         });
         const restored = await instantiate(output.code);
-        await restored.loadSnapshot.load(snapshot);
+        await restored.loadSnapshot.load(snapshot, unit);
         expect(await restored.saveSnapshot.save()).toEqual(snapshot);
       }
       const input = wireValue(z.object({ name: z.string() }), { name: 'Ada' });

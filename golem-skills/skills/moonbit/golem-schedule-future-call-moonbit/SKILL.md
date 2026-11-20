@@ -13,10 +13,10 @@ This is for **agent-to-agent scheduled calls from code**. To schedule an invocat
 
 ## Usage
 
-Methods with recursively stream-free inputs and outputs have a generated `schedule_` variant. These examples use durable clients. Ephemeral clients require `scoped_new_phantom` or `scoped_get_phantom`, not `scoped`. Use `AgentClient::scoped` inside an async function to obtain a client and call the synchronous enqueue method with a `scheduled_at` instant and the method arguments. The scoped helper and its callback are async even though scheduling itself is synchronous:
+Methods with recursively stream-free inputs and outputs have a generated `schedule_` variant. These examples use durable clients. Ephemeral clients have only `upsert` and `scoped_upsert`, and each scheduled invocation runs on a new one-shot instance. Use `AgentClient::scoped_upsert` inside an async function to obtain a client and call the synchronous enqueue method with a `scheduled_at` instant and the method arguments. The scoped helper and its callback are async even though scheduling itself is synchronous:
 
 ```moonbit
-AgentClient::scoped("param", async fn(client) {
+AgentClient::scoped_upsert("param", async fn(client) {
   client.schedule_increment(scheduled_at)
 })
 ```
@@ -24,7 +24,7 @@ AgentClient::scoped("param", async fn(client) {
 ## Full Example
 
 ```moonbit
-AgentClient::scoped("my-counter", async fn(client) {
+AgentClient::scoped_upsert("my-counter", async fn(client) {
   // Schedule increment to run 60 seconds from now
   let now = @systemClock.now()
   let scheduled_at = @systemClock.Instant::{
@@ -38,7 +38,7 @@ AgentClient::scoped("my-counter", async fn(client) {
 ### Schedule with arguments
 
 ```moonbit
-ReportAgentClient::scoped("daily", async fn(client) {
+ReportAgentClient::scoped_upsert("daily", async fn(client) {
   let scheduled_at = @systemClock.Instant::{
     seconds: tomorrow_midnight,
     nanoseconds: 0,
@@ -63,7 +63,7 @@ let scheduled_at = @systemClock.Instant::{
 Stream-free methods on durable clients also have a `schedule_cancelable_` variant that returns a `CancellationToken`. Ephemeral clients return a receipt containing the token and invocation metadata instead. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
 
 ```moonbit
-AgentClient::scoped("my-counter", async fn(client) {
+AgentClient::scoped_upsert("my-counter", async fn(client) {
   let now = @systemClock.now()
   let scheduled_at = @systemClock.Instant::{
     seconds: now.seconds + 60,

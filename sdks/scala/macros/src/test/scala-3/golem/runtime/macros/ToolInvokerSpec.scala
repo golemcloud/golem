@@ -16,7 +16,7 @@
 
 package golem.runtime.macros
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.{IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.tool.*
 import golem.runtime.annotations.*
@@ -26,8 +26,9 @@ import scala.concurrent.Future
 
 /**
  * Verifies the macro-generated tool invocation surface on the JVM using a fake
- * invocation environment: canonical input decoding, Principal injection,
- * sync/async result encoding, custom-error encoding, and subtree forwarding.
+ * invocation environment: canonical input decoding, InvocationContext
+ * injection, sync/async result encoding, custom-error encoding, and subtree
+ * forwarding.
  */
 object ToolInvokerSpec extends ZIOSpecDefault {
 
@@ -44,7 +45,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
 
     def asyncEcho(input: String): Future[String]
 
-    def whoami(input: String, principal: Principal): String
+    def whoami(input: String, context: InvocationContext): String
 
     @arg("times", kind = "count-flag", max = 5)
     def repeat(input: String, times: Int): String
@@ -59,7 +60,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
 
     def asyncEcho(input: String): Future[String] = Future.successful(s"async: $input")
 
-    def whoami(input: String, principal: Principal): String = s"$input/$principal"
+    def whoami(input: String, context: InvocationContext): String = s"$input/${context.caller.immediate}"
 
     def repeat(input: String, times: Int): String = input * times
 
@@ -77,7 +78,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   @toolDefinition(version = "1.0.0")
   trait Streaming {
     def writeUnit(payload: String, stdout: ToolOutputStream): Future[Unit]
-    def copy(stdin: ToolInputStream, stdout: ToolOutputStream, principal: Principal): Future[String]
+    def copy(stdin: ToolInputStream, stdout: ToolOutputStream, context: InvocationContext): Future[String]
     def failWithOutput(message: String, stdout: ToolOutputStream): Future[Either[EchoError, String]]
   }
 
@@ -90,8 +91,8 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         case Left(error) => Future.failed(new IllegalStateException(s"write failed: $error"))
       }
 
-    def copy(stdin: ToolInputStream, stdout: ToolOutputStream, principal: Principal): Future[String] =
-      writeUnit(stdin.asInstanceOf[FakeStdin].content, stdout).map(_ => s"copied/$principal")
+    def copy(stdin: ToolInputStream, stdout: ToolOutputStream, context: InvocationContext): Future[String] =
+      writeUnit(stdin.asInstanceOf[FakeStdin].content, stdout).map(_ => s"copied/${context.caller.immediate}")
 
     def failWithOutput(message: String, stdout: ToolOutputStream): Future[Either[EchoError, String]] =
       writeUnit(s"diagnostic:$message", stdout).map(_ => Left(EchoError.BadInput(message)))
@@ -160,11 +161,11 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   private lazy val gitHandler =
     ToolInvokerRuntime.handler(gitTool, gitHandle, gitEnv)
 
-  private val anonymous = Principal.Anonymous
+  private val anonymous = InvocationContext.anonymous
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolInvokerSpec")(
-      test("generated stdout injection preserves unit, structured, custom errors, stdin and principal") {
+      test("generated stdout injection preserves unit, structured, custom errors, stdin and context") {
         val handle  = ToolImplementationMacro.handle[Streaming, StreamingImpl]
         val tool    = handle.descriptor(new ToolBuildCtx).toOption.get
         val out     = new CapturingStdout
@@ -190,7 +191,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         val body = tool.commands(tool.commandIndexByPath(List("copy")).get).body.get
         assertTrue(
           unit == Right(ToolInvokeResult(None, Some(out))),
-          copied == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("copied/Anonymous")), Some(out))),
+          copied == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("copied/anonymous")), Some(out))),
           failed == Left(ToolInvokeError.UnknownToolError("bad-input", IntoSchema[String].toTyped("bad"))),
           new String(out.bytes.toArray, "UTF-8") == "αstdindiagnostic:bad",
           body.stdout.exists(_.required),
@@ -228,7 +229,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
           result == Left(ToolInvokeError.UnknownToolError("bad-input", IntoSchema[String].toTyped("nope")))
         )
       },
-      test("Principal parameters are injected and excluded from the schema") {
+      test("InvocationContext parameters are injected and excluded from the schema") {
         val idx    = echoTool.commandIndexByPath(List("whoami")).get
         val fields = echoTool.canonicalInputFields(idx).map(_.name)
         val result = outcome(
@@ -241,7 +242,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
         )
         assertTrue(
           fields == List("input"),
-          result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("me/Anonymous"))))
+          result == Right(ToolInvokeResult(Some(IntoSchema[String].toTyped("me/anonymous"))))
         )
       },
       test("count flags decode from their u32 canonical field") {
