@@ -83,7 +83,7 @@ and [shared HTTP API and MCP ports](/next/operate/http-gateway#serving-http-apis
 
 #### MCP with several replicas
 
-The MCP endpoint keeps no session: it serves each request with the deployment of the request's domain alone, so any replica serves any MCP request. See [Revisions](/next/invoke/mcp#revisions). The worker service still reads the MCP session store: `mcp.session_storage`, or the gateway session store when that setting is not set. See [MCP sessions](/next/operate/http-gateway#mcp-sessions). With more than one replica, the store must be Redis (6.2 or later) or Postgres, shared by all replicas. A SQLite store serves one process only.
+The MCP endpoint keeps no session: it serves each request with the deployment of the request's domain alone, so any replica serves any MCP request. See [Revisions](/next/invoke/mcp#revisions). The worker service still opens the MCP session store until the store is removed: `mcp.session_storage`, or the gateway session store when that setting is not set. See [MCP sessions](/next/operate/http-gateway#mcp-sessions). With more than one replica, the store must be Redis (6.2 or later) or Postgres, shared by all replicas. A SQLite store serves one process only.
 
 A replica keeps a running tool call and its response stream in its own memory, on the connection of the request. The server issues no `Mcp-Session-Id`, `GET` and `DELETE` on `/mcp` get `405`, and the server ignores `Last-Event-ID`, so a client cannot resume a cut response stream. `notifications/cancelled` cancels no call, so the call runs to its end on its replica.
 

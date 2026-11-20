@@ -302,13 +302,14 @@ async fn any_port_serves_any_request(
     Ok(())
 }
 
-/// An rmcp client of the endpoint at `port`, which sends the deployment's domain as `Host`.
+/// An rmcp client of the endpoint at `port` that uses `revision` and sends the deployment's domain
+/// as `Host`. When `revision` has `initialize`, the client initializes. Otherwise, it discovers.
 async fn rmcp_client(
     ctx: &McpTestContext,
     port: u16,
     revision: rmcp::model::ProtocolVersion,
 ) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>> {
-    use rmcp::model::{ClientCapabilities, ClientConfig, Implementation, ProtocolVersion};
+    use rmcp::model::{ClientCapabilities, ClientConfig, Implementation};
     use rmcp::transport::StreamableHttpClientTransport;
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
     use rmcp::{ClientLifecycleMode, ClientServiceExt, ServiceExt};
@@ -324,7 +325,7 @@ async fn rmcp_client(
     );
     let config = ClientConfig::new(
         ClientCapabilities::default(),
-        Implementation::new("golem-mcp-era-test", "1"),
+        Implementation::new("golem-mcp-revision-test", "1"),
     );
     Ok(if revision.has_initialize() {
         config
@@ -336,7 +337,7 @@ async fn rmcp_client(
             .serve_with_lifecycle(
                 transport,
                 ClientLifecycleMode::Discover {
-                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                    preferred_versions: vec![revision],
                 },
             )
             .await?
@@ -377,12 +378,12 @@ async fn a_2026_client_and_a_2025_client_list_and_call_the_same_tools(
             )
     };
     let results = [
-        modern.call_tool(call("era-2026")).await?,
-        legacy.call_tool(call("era-2025")).await?,
+        modern.call_tool(call("revision-2026")).await?,
+        legacy.call_tool(call("revision-2025")).await?,
     ];
     results
         .iter()
-        .zip(["era-2026", "era-2025"])
+        .zip(["revision-2026", "revision-2025"])
         .for_each(|(result, name)| {
             assert_eq!(result.is_error, Some(false), "{result:?}");
             assert_eq!(

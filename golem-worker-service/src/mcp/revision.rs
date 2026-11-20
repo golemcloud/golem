@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The MCP protocol revisions that the endpoint serves, and the rule that selects the revision
-//! of a request.
+//! The MCP protocol revisions that the endpoint serves, and the rule that refuses a request
+//! that names another revision.
 
 use poem::http::{Method, StatusCode};
 use poem::{Endpoint, IntoResponse, Middleware, Request, Response};
@@ -29,36 +29,27 @@ pub(crate) const SERVED_REVISIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V_2026_07_28,
 ];
 
-/// The revision of a request that is not `initialize`: the value of its `MCP-Protocol-Version`
-/// header, or 2025-03-26 when the request has no header. `Err` holds the text of the `400`
-/// answer for a value that is not UTF-8 or that the endpoint does not serve.
-fn request_revision(header: Option<&[u8]>) -> Result<ProtocolVersion, Box<str>> {
-    header.map_or(Ok(ProtocolVersion::V_2025_03_26), |value| {
+/// Checks the `MCP-Protocol-Version` header of a request that is not `initialize`. A request
+/// without the header passes, and rmcp serves it as 2025-03-26. A served revision passes. `Err`
+/// holds the text of the `400` answer for a value that is not UTF-8 or that the endpoint does not
+/// serve.
+fn check_header(header: Option<&[u8]>) -> Result<(), Box<str>> {
+    header.map_or(Ok(()), |value| {
         let value = std::str::from_utf8(value).map_err(|_| {
             Box::<str>::from("Bad Request: Invalid MCP-Protocol-Version header encoding")
         })?;
         SERVED_REVISIONS
             .iter()
-            .find(|revision| revision.as_str() == value)
-            .cloned()
+            .any(|revision| revision.as_str() == value)
+            .then_some(())
             .ok_or_else(|| format!("Bad Request: Unsupported MCP-Protocol-Version: {value}").into())
     })
 }
 
-/// Whether the endpoint serves a request. An `initialize` is always served, because its body
-/// negotiates the revision. Every other request is served when [`request_revision`] accepts its
-/// `MCP-Protocol-Version` header.
-fn admit(initialize: bool, header: Option<&[u8]>) -> Result<(), Box<str>> {
-    if initialize {
-        Ok(())
-    } else {
-        request_revision(header).map(drop)
-    }
-}
-
-/// Whether the endpoint serves a `POST` with the JSON-RPC `body` and the `MCP-Protocol-Version`
-/// `header`, as [`admit`] says. A body that is not a JSON-RPC message is served, so that rmcp
-/// answers it.
+/// Checks a `POST` with the JSON-RPC `body` and the `MCP-Protocol-Version` `header`. A body that
+/// does not parse as a JSON object passes, so that rmcp answers it. An `initialize` passes with
+/// any header, because its body negotiates the revision. Every other JSON-RPC message passes when
+/// [`check_header`] accepts the header.
 fn admit_post(body: &[u8], header: Option<&[u8]>) -> Result<(), Box<str>> {
     let is_object = body
         .iter()
@@ -67,9 +58,8 @@ fn admit_post(body: &[u8], header: Option<&[u8]>) -> Result<(), Box<str>> {
     is_object
         .then(|| serde_json::from_slice::<JsonRpcMethod>(body).ok())
         .flatten()
-        .map_or(Ok(()), |message| {
-            admit(message.method.as_deref() == Some("initialize"), header)
-        })
+        .filter(|message| message.method.as_deref() != Some("initialize"))
+        .map_or(Ok(()), |_| check_header(header))
 }
 
 /// The method of a JSON-RPC message object. A response has no method.
@@ -122,18 +112,13 @@ mod tests {
     use super::*;
     use test_r::test;
 
-    #[test]
-    fn a_request_without_a_header_is_2025_03_26() {
-        assert_eq!(request_revision(None), Ok(ProtocolVersion::V_2025_03_26));
-    }
+    const INITIALIZE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+    const LIST: &[u8] = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
 
     #[test]
     fn each_served_revision_is_accepted() {
         SERVED_REVISIONS.iter().for_each(|revision| {
-            assert_eq!(
-                request_revision(Some(revision.as_str().as_bytes())).as_ref(),
-                Ok(revision),
-            );
+            assert_eq!(check_header(Some(revision.as_str().as_bytes())), Ok(()));
         });
     }
 
@@ -149,18 +134,18 @@ mod tests {
         .into_iter()
         .for_each(|header| {
             assert!(
-                request_revision(Some(header)).is_err(),
+                check_header(Some(header)).is_err(),
                 "{:?}",
                 String::from_utf8_lossy(header)
             );
-            assert!(admit(false, Some(header)).is_err());
+            assert!(admit_post(LIST, Some(header)).is_err());
         });
     }
 
     #[test]
     fn the_refusal_names_the_value() {
         assert_eq!(
-            request_revision(Some(b"2024-11-05")),
+            check_header(Some(b"2024-11-05")),
             Err("Bad Request: Unsupported MCP-Protocol-Version: 2024-11-05".into())
         );
     }
@@ -174,27 +159,26 @@ mod tests {
             Some(b"2025-06-18"),
         ]
         .into_iter()
-        .for_each(|header| assert_eq!(admit(true, header), Ok(())));
+        .for_each(|header| assert_eq!(admit_post(INITIALIZE, header), Ok(())));
     }
 
     #[test]
     fn a_post_is_refused_only_when_it_is_not_initialize_and_names_another_revision() {
         let old = Some(&b"2024-11-05"[..]);
-        let initialize = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
-        let list = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let notification = br#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#;
-        assert_eq!(admit_post(initialize, old), Ok(()));
-        assert!(admit_post(list, old).is_err());
+        assert_eq!(admit_post(INITIALIZE, old), Ok(()));
+        assert!(admit_post(LIST, old).is_err());
         assert!(admit_post(notification, old).is_err());
-        assert_eq!(admit_post(list, Some(b"2025-06-18")), Ok(()));
-        assert_eq!(admit_post(list, None), Ok(()));
+        assert_eq!(admit_post(LIST, Some(b"2025-06-18")), Ok(()));
+        assert_eq!(admit_post(LIST, None), Ok(()));
         assert_eq!(admit_post(b"not json", old), Ok(()));
         assert_eq!(admit_post(b"[]", old), Ok(()));
     }
 
     #[test]
     fn other_requests_are_admitted_with_a_served_revision_or_no_header() {
-        assert_eq!(admit(false, None), Ok(()));
-        assert_eq!(admit(false, Some(b"2026-07-28")), Ok(()));
+        assert_eq!(check_header(None), Ok(()));
+        assert_eq!(admit_post(LIST, None), Ok(()));
+        assert_eq!(admit_post(LIST, Some(b"2026-07-28")), Ok(()));
     }
 }
