@@ -315,9 +315,9 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
             AgentConfigSource.Local,
             List("db", "host"),
             graphOf[Greeting],
-            Some("{\"text\":\"db.example\"}")
+            Some(golem.schema.SchemaValue.RecordValue(List(golem.schema.SchemaValue.StringValue("db.example"))))
           ),
-          AgentConfigDeclaration(AgentConfigSource.Local, List("optional"), graphOf[Option[String]], Some("null")),
+          AgentConfigDeclaration(AgentConfigSource.Local, List("optional"), graphOf[Option[String]], Some(golem.schema.SchemaValue.OptionValue(None))),
           AgentConfigDeclaration(
             AgentConfigSource.Secret,
             List("password"),
@@ -354,7 +354,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           assertTrue(
             List(dynamic, compiled).forall(at =>
               at.config.toList
-                .map(_.defaultValue.toOption) == List(Some("{\"text\":\"db.example\"}"), Some("null"), None) &&
+                .map(_.defaultValue.toOption.map(value => SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(value)))) == declarations.map(_.defaultValue) &&
                 at.config.toList.map(_.path.toList) == declarations.map(_.path) &&
                 at.config.toList.map(_.source) == List("local", "local", "secret") &&
                 at.config.toList.zip(declarations).forall { case (config, declaration) =>
@@ -362,7 +362,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
                 }
             ),
             reflected.forall(
-              _.config.map(_.defaultValue) == List(Some("{\"text\":\"db.example\"}"), Some("null"), None)
+              _.config.map(_.defaultValue) == declarations.map(_.defaultValue)
             ),
             reflected.forall(_.config.map(_.path) == declarations.map(_.path)),
             reflected.forall(_.config.map(_.source) == List("local", "local", "secret")),

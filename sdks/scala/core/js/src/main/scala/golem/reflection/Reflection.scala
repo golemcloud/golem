@@ -234,7 +234,7 @@ final case class ReflectedConfigDeclaration(
   path: List[String],
   source: String,
   schema: SchemaRef,
-  defaultValue: Option[String] = None
+  defaultValue: Option[SchemaValue] = None
 )
 final case class ReflectedConfigJson(path: List[String], value: Json)
 
@@ -304,7 +304,7 @@ object Reflection {
               declaration.path.toList,
               declaration.source,
               SchemaRef(decoded.graph, decoded.at(declaration.valueType)),
-              declaration.defaultValue.toOption
+              declaration.defaultValue.toOption.map(v => SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(v)))
             )
           }
         )

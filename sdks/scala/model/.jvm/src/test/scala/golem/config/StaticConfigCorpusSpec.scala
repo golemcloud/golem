@@ -60,7 +60,7 @@ object StaticConfigCorpusSpec extends ZIOSpecDefault {
       assertTrue(List("settings", "slots", "omitted").forall { name =>
         val expected = reference.find(_("path").arr.toList.map(_.str) == List(name)).get
         val actual   = produced.find(_.path == List(name)).get
-        actual.defaultValue.map(ujson.read(_)) == expected.obj.get("default_value").map(v => ujson.read(v.str))
+        actual.defaultValue.map(value => ujson.read(SchemaRef(actual.valueType).unpackJson(value).toOption.get.print)) == expected.obj.get("default_value").map(v => ujson.read(v.str))
       })
     },
     test("canonical defaults retain reference graphs, union discriminators and recursive shapes") {

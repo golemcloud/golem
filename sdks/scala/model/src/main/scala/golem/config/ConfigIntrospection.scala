@@ -99,7 +99,7 @@ private[golem] object ConfigIntrospection {
                   AgentConfigSource.Local,
                   path,
                   graph,
-                  default.map(ConfigSchema.defaultJson(graph, _))
+                  default.map(ConfigSchema.defaultValue(graph, _))
                 )
               )
           }

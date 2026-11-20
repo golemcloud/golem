@@ -17,7 +17,7 @@
 package golem.config
 
 import golem.reflection.SchemaRef
-import golem.schema.{DiscriminatorRule, SchemaGraph, SchemaType, SchemaTypeBody}
+import golem.schema.{DiscriminatorRule, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue}
 import scala.collection.immutable.ListMap
 import zio.blocks.schema.Schema
 import zio.blocks.schema.json.Json
@@ -93,13 +93,12 @@ object ConfigSchema {
       )
   }
 
-  private[golem] def defaultJson(graph: SchemaGraph, json: String): String = {
+  private[golem] def defaultValue(graph: SchemaGraph, json: String): SchemaValue = {
     val ref    = SchemaRef(graph)
     val result = for {
       parsed <- Json.parse(json).left.map(_.toString)
       value  <- ref.validateJson(parsed).left.map(_.map(_.message).mkString("; "))
-      output <- ref.unpackJson(value).left.map(_.message)
-    } yield output.print
+    } yield value
     result.fold(error => throw new IllegalArgumentException(s"Invalid config default: $error"), identity)
   }
 

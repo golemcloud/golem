@@ -489,7 +489,7 @@ fn selector<'a>(
 }
 
 impl ConfigSchema {
-    /// Uses the owner's shared definitions and the canonical defaults emitted by its SDK.
+    /// Uses the owner's shared definitions and native defaults emitted by its SDK.
     pub fn from_declarations(
         graph: &SchemaGraph,
         declarations: &[AgentConfigDeclarationSchema],
@@ -519,23 +519,7 @@ impl ConfigSchema {
                         (ConfigFieldKind::Secret, payload.root)
                     }
                 };
-                let default = declaration
-                    .default_value
-                    .as_ref()
-                    .map(|json| {
-                        let value = serde_json::from_str(json).map_err(|error| {
-                            field_origin.error(format!("invalid code default JSON: {error}"))
-                        })?;
-                        golem_schema::schema::render::from_untrusted_json_value(
-                            graph,
-                            &value_type,
-                            &value,
-                        )
-                        .map_err(|error| {
-                            field_origin.error(format!("invalid code default: {error}"))
-                        })
-                    })
-                    .transpose()?;
+                let default = declaration.default_value.clone();
                 Ok(ConfigFieldSchema {
                     path: declaration.path.clone(),
                     kind,

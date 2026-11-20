@@ -47,9 +47,9 @@ object StaticConfigSpec extends ZIOSpecDefault {
         declarations.map(_.path) == List("settings", "slots", "cleared", "omitted", "recursive", "enabled").map(
           List(_)
         ),
-        Json.parse(settings.defaultValue.get) == Json.parse("{\"label\":\"code-default\",\"count\":31}"),
-        byPath("slots").defaultValue.contains("[null,7,\"retained\"]"),
-        byPath("cleared").defaultValue.contains("null"),
+        settings.defaultValue.contains(SchemaValue.RecordValue(List(SchemaValue.StringValue("code-default"), SchemaValue.U32Value(31)))),
+        byPath("slots").defaultValue.contains(SchemaValue.TupleValue(List(SchemaValue.OptionValue(None), SchemaValue.OptionValue(Some(SchemaValue.S32Value(7))), SchemaValue.StringValue("retained")))),
+        byPath("cleared").defaultValue.contains(SchemaValue.OptionValue(None)),
         byPath("omitted").defaultValue.isEmpty,
         settings.valueType == IntoSchema[Settings].graph,
         byPath("recursive").valueType == IntoSchema[Node].graph

@@ -205,13 +205,13 @@ object AgentDefinitionMacro {
       case _ =>
         ConfigMacro.checkStaticFields(tpe, path)
         val schema = ConfigSchema.canonicalGraph(graph(tpe))
-        val json   = default.map { value =>
-          try ConfigSchema.defaultJson(schema, value)
+        val value  = default.map { json =>
+          try ConfigSchema.defaultValue(schema, json)
           catch {
             case error: IllegalArgumentException => report.errorAndAbort(s"${path.mkString(".")}: ${error.getMessage}")
           }
         }
-        List(AgentConfigDeclaration(AgentConfigSource.Local, path, schema, json))
+        List(AgentConfigDeclaration(AgentConfigSource.Local, path, schema, value))
     }
     val configTypes = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig").flatMap { base =>
       traitType.baseType(base).typeArgs

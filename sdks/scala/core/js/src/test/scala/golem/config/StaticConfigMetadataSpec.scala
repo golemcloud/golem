@@ -67,9 +67,9 @@ object StaticConfigMetadataSpec extends ZIOSpecDefault {
       assertTrue(
         wire.map(d => d.path -> d.defaultValue) == model.map(d => d.path -> d.defaultValue),
         wire.map(_.defaultValue) == List(
-          Some("{\"label\":\"code-default\",\"count\":31}"),
-          Some("[null,7,\"retained\"]"),
-          Some("null"),
+          Some(SchemaValue.RecordValue(List(SchemaValue.StringValue("code-default"), SchemaValue.U32Value(31)))),
+          Some(SchemaValue.TupleValue(List(SchemaValue.OptionValue(None), SchemaValue.OptionValue(Some(SchemaValue.S32Value(7))), SchemaValue.StringValue("retained")))),
+          Some(SchemaValue.OptionValue(None)),
           None,
           None
         ),

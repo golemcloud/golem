@@ -19,8 +19,8 @@ package golem.runtime.autowire
 import golem.host.SchemaWireInterop
 import golem.host.js.{JsHttpEndpointDetails, JsHttpMountDetails, JsReadOnlyConfig, JsSnapshotting}
 import golem.host.js.schema._
-import golem.schema.{MetadataEnvelope, SchemaGraph}
-import golem.schema.wire.GraphEncoder
+import golem.schema.{MetadataEnvelope, SchemaGraph, SchemaValue}
+import golem.schema.wire.{GraphEncoder, SchemaWire}
 import golem.schema.SchemaBuilder
 
 import scala.collection.mutable
@@ -81,7 +81,7 @@ object AgentTypeEncoderV2 {
     source: String,
     path: List[String],
     graph: SchemaGraph,
-    defaultValue: Option[String] = None
+    defaultValue: Option[SchemaValue] = None
   )
 
   final case class AgentRequest(
@@ -146,7 +146,8 @@ object AgentTypeEncoderV2 {
 
     val configJs: js.Array[JsAgentConfigDeclaration] =
       req.config.map { c =>
-        JsAgentConfigDeclaration(c.source, c.path.toJSArray, rootIndex(c.graph), c.defaultValue.orUndefined)
+        JsAgentConfigDeclaration(c.source, c.path.toJSArray, rootIndex(c.graph),
+          c.defaultValue.map(v => SchemaWireInterop.valueTreeToJs(SchemaWire.schemaValueToWit(v))).orUndefined)
       }.toJSArray
 
     // 4. Finish the single graph (placeholder structural root) and convert to JS.
