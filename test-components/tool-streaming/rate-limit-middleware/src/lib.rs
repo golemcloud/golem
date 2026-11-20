@@ -176,7 +176,7 @@ async fn persistent_rate_limit(
         ));
     }
 
-    let mut backend = RateLimitBackendClient::get(
+    let mut backend = RateLimitBackendClient::upsert(
         parameters.policy,
         parameters.limit,
         parameters.window_milliseconds,

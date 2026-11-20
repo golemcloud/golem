@@ -12,7 +12,7 @@ An **ephemeral agent** gets a **fresh instance for every invocation**. Unlike th
 - **Has no shared state** — each invocation starts from a clean init function; values set in one call are gone by the next.
 - **Has no method recovery replay** — an oplog is still recorded lazily (inspectable via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **Discards its memory** after each invocation completes.
-- **Requires phantom addressing** — constructor parameters (`ID`) initialize each invocation, but do not name a reusable durable instance. Create a new `Agent.NewPhantom(id)` client for each independent invocation; an ephemeral invocation's resulting agent ID cannot be passed to `Agent.Bind`.
+- **Is addressed with `Upsert` only** — constructor parameters (`ID`) initialize each invocation, but do not name a reusable durable instance. `Agent.Upsert(id)` returns a client whose every invocation runs on a new one-shot instance; `Create` and `GetByID` refuse an ephemeral type, and an ephemeral invocation's agent ID cannot be addressed again.
 
 This fits **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
 
@@ -69,17 +69,19 @@ func init() {
 
 ## What "fresh instance per invocation" means
 
-`Mode` controls state lifetime; client addressing must also use `NewPhantom` for an ephemeral target.
+`Mode` controls state lifetime; an ephemeral target is addressed with `Upsert`.
 
-`NewPhantom` chooses its UUID once per client, not once per call. Do not reuse that client for independent invocations: a terminal ephemeral identity cannot be invoked again. For the handler defined above:
+Each invocation through an `Upsert` client of an ephemeral agent runs on a new one-shot instance, so one client serves independent invocations. For the handler defined above:
 
 ```go
+c := handler.Agent.Upsert(handler.ID{})
 for _, input := range inputs {
-    c := handler.Agent.NewPhantom(handler.ID{})
     result := handler.Handle.MustCall(c, handler.HandleIn{Input: input})
     _ = result
 }
 ```
+
+The `InvocationMetadata` that `Trigger` returns names, in `AgentID`, the one-shot instance that ran the invocation.
 
 ```go
 // DURABLE (default) — state accumulates across calls.
@@ -88,7 +90,7 @@ var Durable = golem.DefineAgent[ID](golem.Spec{Name: "DurableCounter"})
 
 // EPHEMERAL — state resets every call.
 var Ephemeral = golem.DefineAgent[ID](golem.Spec{Name: "EphemeralCounter", Mode: golem.Ephemeral})
-// increment() with three fresh NewPhantom clients → 1, 1, 1
+// increment() three times → 1, 1, 1
 ```
 
 Each invocation of an ephemeral agent:
@@ -133,7 +135,7 @@ var (
 ## Key Constraints
 
 - Ephemeral mode is set at the **agent type level** (`Spec.Mode`) — all instances of the type are ephemeral.
-- Constructor parameters initialize each fresh invocation; they do not create reusable durable identities. Use `NewPhantom(id)`, not plain `Get(id)` or `Bind(agentID)`, for an ephemeral target.
+- Constructor parameters initialize each fresh invocation; they do not create reusable durable identities. Address an ephemeral target with `Upsert(id)`; `Create(id)` and `GetByID(agentID)` refuse it.
 - Ephemeral agents can still call other agents (RPC), make HTTP requests, and use the rest of the SDK — they do not retain state across independent invocations or recover methods by replay.
 - The oplog is recorded lazily (inspectable via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - Snapshot-based recovery does not apply to ephemeral agents; leave `Spec.Snapshot` at its default.

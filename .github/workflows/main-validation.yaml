@@ -16,6 +16,11 @@ on:
         description: 'Acceptance only: exercise the three overlapping subflows'
         type: boolean
         default: true
+      build-jobs:
+        description: 'Acceptance only: Cargo jobs for the preparation producers'
+        type: choice
+        options: ['32', '20']
+        default: '32'
 
 # Only one cycle runs. Replaced pending wake-ups lose no exact-source requests:
 # those requests remain open issues until their cycle finishes.
@@ -120,7 +125,7 @@ jobs:
     outputs:
       workload_exit_code: ${{ steps.workload.outputs.exit_code }}
     env:
-      CARGO_BUILD_JOBS: 20
+      MAIN_VALIDATION_BUILD_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance && inputs.build-jobs || '32' }}
       WASI_SDK_PATH: /opt/wasi-sdk
       MAIN_VALIDATION_PARALLEL: ${{ !(github.event_name == 'workflow_dispatch' && inputs.acceptance) || inputs.parallel }}
     steps:
@@ -162,6 +167,10 @@ jobs:
           rm -rf "$HOME/.ivy2"
           ln -s "$PWD/.validation-cache/ivy" "$HOME/.ivy2"
       - uses: ./.validation-control/.github/actions/setup-main-validation
+      - name: Record restored cache identities
+        env:
+          MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
+        run: bun .validation-control/.github/main-validation/cache-diagnostics.ts begin || echo 'Cache diagnostics unavailable'
       - name: Validate the selected source
         id: workload
         timeout-minutes: 300
@@ -175,8 +184,14 @@ jobs:
           # Keep ordinary workload failures out of the cache-owning job's status.
           # The result job requires this exit code as well as successful cache/report delivery.
           status=0
-          python3 .validation-control/.github/main-validation/progress.py observe -- cargo make --profile ci main-validation || status=$?
+          bun .validation-control/.github/main-validation/progress.ts observe -- cargo make --profile ci main-validation || status=$?
           printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
+      - name: Record cache contents before commit request
+        if: always()
+        env:
+          MAIN_VALIDATION_SOURCE: ${{ needs.select.outputs.source }}
+          WORKLOAD_EXIT_CODE: ${{ steps.workload.outputs.exit_code }}
+        run: bun .validation-control/.github/main-validation/cache-diagnostics.ts complete || echo 'Cache diagnostics unavailable'
       - name: Retain Linux reports even after failure
         if: always()
         uses: actions/upload-artifact@v6
@@ -203,6 +218,9 @@ jobs:
         with:
           cache-shared-key: main-validation-apfs
           cache-save-if: 'true'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install validation tooling
+        run: npm ci --ignore-scripts --prefix .github/main-validation
       - name: Execute same-source native APFS coverage
         env:
           MAIN_VALIDATION_REPORT_DIR: ${{ runner.temp }}/main-validation-apfs

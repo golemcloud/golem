@@ -22,12 +22,12 @@ import golem.BaseAgent
 import scala.concurrent.Future
 
 @agentDefinition()
-@description("Demonstrates agent type registry, metadata queries, resolution, lifecycle, and phantom RPC.")
+@description("Demonstrates agent type registry, metadata queries, resolution, lifecycle, and RPC by agent ID.")
 trait AgentRegistryDemo extends BaseAgent {
 
   class Id(val value: String)
 
-  @description("Explores registeredAgentType, getAllAgentTypes, parseAgentId, resolveComponentId, resolveAgentId.")
+  @description("Explores registeredAgentType, getAllAgentTypes, registeredAgentTypeFor and resolveComponentId.")
   def exploreRegistry(): Future[String]
 
   @description("Explores getSelfMetadata, getAgentMetadata, getAgents/nextAgentBatch, generateIdempotencyKey.")
@@ -36,6 +36,6 @@ trait AgentRegistryDemo extends BaseAgent {
   @description("Exercises agent lifecycle: updateAgent, forkAgent, revertAgent (best-effort, may fail locally).")
   def exploreLifecycle(): Future[String]
 
-  @description("Exercises getPhantom to create a deterministic agent instance.")
-  def phantomDemo(): Future[String]
+  @description("Creates an agent without a key and reaches it again with getById.")
+  def createDemo(): Future[String]
 }

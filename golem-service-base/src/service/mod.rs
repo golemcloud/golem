@@ -16,3 +16,4 @@
 pub mod compiled_component;
 pub mod initial_agent_files;
 pub mod routing_table;
+pub mod type_id_resolution;

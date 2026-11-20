@@ -54,7 +54,7 @@ impl AgentWebhooksService {
             return Ok(None);
         };
 
-        let webhook_id = AgentWebhookId::from_promise_id(promise_id, &self.hmac_key);
+        let webhook_id = AgentWebhookId::from_promise_id(environment, promise_id, &self.hmac_key);
         let encoded_webhook_id = webhook_id.to_base64_url();
 
         let protocol = if self.use_https_for_webhook_url {

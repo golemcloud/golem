@@ -1750,10 +1750,7 @@ pub(crate) mod tests {
     fn invocation() -> EntityInvocationId {
         let owner = golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".to_string(),
-            },
+            &AgentId::from_parts(7, 1),
         );
         EntityInvocationId::new(
             OwnedAgentEntityId {

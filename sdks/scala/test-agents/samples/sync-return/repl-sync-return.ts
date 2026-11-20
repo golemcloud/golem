@@ -1,4 +1,4 @@
-const agent = await SyncReturnAgent.get();
+const agent = await SyncReturnAgent.upsert();
 const greeting = await agent.greet("world");
 const sum = await agent.add(3, 4);
 await agent.touch("test-tag");

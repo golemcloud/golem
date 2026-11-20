@@ -148,10 +148,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .then(|| self.state.invocations.loop_key().invocation_id())
             .flatten()
             .map(|key| {
-                golem_common::model::OwnedInvocationId::new(
-                    self.state.owned_agent_id.agent_id.clone(),
-                    key,
-                )
+                golem_common::model::OwnedInvocationId::new(self.state.owned_agent_id.agent_id, key)
             });
         self.state.loop_invocation_state_mut().invocation_id = invocation_id;
     }

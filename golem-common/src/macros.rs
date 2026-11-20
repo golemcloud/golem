@@ -21,12 +21,7 @@ macro_rules! newtype_uuid {
         $crate::newtype_uuid!(@inner $name, "", "" $(, $proto_type)?);
     };
     (@inner $name:ident, $wit_name:literal, $wit_owner:literal $(, $proto_type:path)?) => {
-        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
-        #[derive(serde::Serialize, serde::Deserialize)]
-        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-        #[serde(transparent)]
-        #[cfg_attr(feature = "full", desert(transparent))]
-        pub struct $name(pub uuid::Uuid);
+        $crate::newtype_uuid!(@common $name $(, $proto_type)?);
 
         impl Default for $name {
             fn default() -> Self {
@@ -38,7 +33,21 @@ macro_rules! newtype_uuid {
             pub fn new() -> $name {
                 Self(uuid::Uuid::now_v7())
             }
+        }
+    };
+    // A UUID newtype whose values only its owner issues, so it has no `new` and no `Default`.
+    (issued $name:ident $(, $proto_type:path)?) => {
+        $crate::newtype_uuid!(@common $name $(, $proto_type)?);
+    };
+    (@common $name:ident $(, $proto_type:path)?) => {
+        #[derive(Copy, Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+        #[serde(transparent)]
+        #[cfg_attr(feature = "full", desert(transparent))]
+        pub struct $name(pub uuid::Uuid);
 
+        impl $name {
             $(
                 #[cfg(feature = "full")]
                 pub fn render_proto(proto: Option<$proto_type>) -> Option<String> {
@@ -392,7 +401,7 @@ macro_rules! error_forwarding {
 /// `into_typed_schema_value()` and combined into a single positional record
 /// carrier with [`build_input_record`](crate::schema::build_input_record).
 /// This is the schema-native carrier accepted by the invocation DSL and by
-/// [`agent_id!`] / [`phantom_agent_id!`] for constructor parameters.
+/// [`agent_key!`] for constructor parameters.
 ///
 /// # Example
 /// ```ignore
@@ -417,61 +426,28 @@ macro_rules! data_value {
     }};
 }
 
-/// Create a ParsedAgentKey with the given agent type name and parameters.
+/// Create a ParsedAgentKey with the given agent type name and constructor parameters.
 ///
 /// The first argument is the agent type name (as a string expression), followed by
-/// optional component model values. Expands to:
-/// `ParsedAgentKey::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), None)`
+/// optional values whose types implement [`IntoSchema`](crate::schema::IntoSchema).
 ///
 /// # Example
 /// ```ignore
-/// let id = agent_id!("my-agent");
-/// let id = agent_id!("my-agent", 42u32, "hello");
+/// let key = agent_key!("my-agent");
+/// let key = agent_key!("my-agent", 42u32, "hello");
 /// ```
 #[macro_export]
-macro_rules! agent_id {
+macro_rules! agent_key {
     ($name:expr) => {
         $crate::model::agent::ParsedAgentKey::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!(),
-            None
         ).unwrap()
     };
     ($name:expr, $($element:expr),+ $(,)?) => {
         $crate::model::agent::ParsedAgentKey::try_new(
             $crate::base_model::agent::AgentTypeName($name.to_string()),
             $crate::data_value!($($element),+),
-            None
-        ).unwrap()
-    };
-}
-
-/// Create a ParsedAgentKey with a phantom UUID.
-///
-/// The first argument is the agent type name (as a string expression), the second is
-/// a UUID, followed by optional component model values. Expands to:
-/// `ParsedAgentKey::from_legacy_parameters(AgentTypeName("NAME".to_string()), data_value!(...params), Some(uuid))`
-///
-/// # Example
-/// ```ignore
-/// let uuid = Uuid::now_v7();
-/// let id = phantom_agent_id!("my-agent", uuid);
-/// let id = phantom_agent_id!("my-agent", uuid, 42u32, "hello");
-/// ```
-#[macro_export]
-macro_rules! phantom_agent_id {
-    ($name:expr, $phantom_id:expr) => {
-        $crate::model::agent::ParsedAgentKey::try_new(
-            $crate::base_model::agent::AgentTypeName($name.to_string()),
-            $crate::data_value!(),
-            Some($phantom_id)
-        ).unwrap()
-    };
-    ($name:expr, $phantom_id:expr, $($element:expr),+ $(,)?) => {
-        $crate::model::agent::ParsedAgentKey::try_new(
-            $crate::base_model::agent::AgentTypeName($name.to_string()),
-            $crate::data_value!($($element),+),
-            Some($phantom_id)
         ).unwrap()
     };
 }

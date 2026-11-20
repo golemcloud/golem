@@ -432,7 +432,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
                 attachment.attachment_id,
                 attachment.stream_id,
                 attachment.consumer_environment_id,
-                attachment.consumer.clone(),
+                attachment.consumer,
             )])
             .await?;
         index.validate_attachment_key(

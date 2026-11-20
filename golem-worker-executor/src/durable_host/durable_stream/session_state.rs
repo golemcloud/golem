@@ -1179,7 +1179,7 @@ mod tests {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 stream_id: StreamId(Uuid::from_u128(id)),
                 producer_environment_id: session.callee_environment_id,
-                producer: session.callee.clone(),
+                producer: session.callee,
                 expected_producer_fingerprint: session.callee_fingerprint,
                 producer_generation: OplogIndex::NONE,
                 source_invocation: session.clone(),
@@ -1583,8 +1583,7 @@ mod tests {
         assert!(matching.caller_attempt.is_some());
 
         let remote_environment_id = real_owner.environment_id;
-        let mut remote_agent_id = real_owner.agent_id.clone();
-        remote_agent_id.agent_id = "remote".into();
+        let remote_agent_id = crate::test_agent_id("remote");
         let remote_fingerprint = real_owner.fingerprint;
         let mut mismatching = SessionControlMetadata::default();
         mismatching.apply(
@@ -1752,7 +1751,7 @@ mod tests {
             .unwrap();
         assert_eq!(pending.len(), 1);
         assert!(forked.topologies.is_empty());
-        attachment.consumer.agent_id = "forked-consumer".into();
+        attachment.consumer = crate::test_agent_id("forked-consumer");
         attachment.expected_consumer_fingerprint = AgentFingerprint::new();
         attachment.consumer_invocation =
             StreamRegistrationInvocation::Local(intent.consumer_invocation).qualify(

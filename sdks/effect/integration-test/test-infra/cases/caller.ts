@@ -2,9 +2,9 @@
  * Caller case — exercises the cross-agent typed-RPC client wired into
  * every `defineAgent` call.
  *
- *   - bump / peek drive the remote Counter via `Counter.client.get`
- *   - greetWithOverride proves the `{ overrides }` channel on the typed
- *     client actually replaces the `golem.yaml` default
+ *   - bump / peek drive the remote Counter via `Counter.client.upsert`
+ *   - greetWithOverride proves the `config` option of the typed
+ *     `create` actually replaces the `golem.yaml` default
  *   - abortInFlight forks `counter.slowValue(60s)`, sleeps 100ms, then
  *     interrupts the fiber. The SDK's
  *     `Effect.acquireUseRelease(asyncInvokeAndAwait, …, fut.cancel)`

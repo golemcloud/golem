@@ -110,9 +110,12 @@ declare module 'agent-guest' {
     /**
      * Tries to load a user-defined snapshot, setting up the agent's state based on it.
      * The function can return with a failure to indicate that the update is not possible.
+     * `constructor` is a value tree whose root encodes the agent's constructor parameter
+     * list, in the same form `initialize` received it when the agent was created.
      * @throws string
      */
-    export function load(snapshot: Snapshot): Promise<void>;
+    export function load(snapshot: Snapshot, constructor: SchemaValueTree): Promise<void>;
+    export type SchemaValueTree = golemCore200Types.SchemaValueTree;
     export type Snapshot = golemApi150Host.Snapshot;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
   }

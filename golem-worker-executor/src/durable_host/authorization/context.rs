@@ -903,7 +903,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let affected_wallets = if wallet_changed {
             vec![CardHolder::Agent(AgentCardHolder {
-                agent_id: self.owned_agent_id.agent_id.clone(),
+                environment_id: self.owned_agent_id.environment_id,
+                agent_id: self.owned_agent_id.agent_id,
             })]
         } else {
             Vec::new()
@@ -1018,7 +1019,10 @@ pub(crate) fn agent_monomorphization_context(
         application: component.application_name.clone(),
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
-        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        agent: golem_common::model::card::owner::AgentOwnerLeaf {
+            agent_id: owned_agent_id.agent_id,
+            agent_type: Some(agent_id.agent_type.clone()),
+        },
         owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
             agent_id.agent_type.clone(),
         ),
@@ -1034,7 +1038,10 @@ fn component_baseline_monomorphization_context(
         application: component.application_name.clone(),
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
-        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        agent: golem_common::model::card::owner::AgentOwnerLeaf {
+            agent_id: owned_agent_id.agent_id,
+            agent_type: None,
+        },
         owner:
             golem_common::model::card::recipient::RecipientOwnerContext::ComponentExternalToolOwner,
     }
@@ -1106,14 +1113,11 @@ pub(in crate::durable_host) fn derive_permission_uuid_for_sequence(
     invocation_key: &golem_common::model::InvocationId,
     sequence: u64,
 ) -> Uuid {
-    let agent_name = owned_agent_id.agent_id.agent_id.as_bytes();
     let invocation_key = invocation_key.to_string();
     let invocation_key = invocation_key.as_bytes();
     let mut hasher = blake3::Hasher::new_derive_key(context);
     hasher.update(owned_agent_id.environment_id.0.as_bytes());
-    hasher.update(owned_agent_id.agent_id.component_id.0.as_bytes());
-    hasher.update(&(agent_name.len() as u64).to_be_bytes());
-    hasher.update(agent_name);
+    hasher.update(owned_agent_id.agent_id.0.as_bytes());
     hasher.update(&(invocation_key.len() as u64).to_be_bytes());
     hasher.update(invocation_key);
     hasher.update(&sequence.to_be_bytes());
@@ -1524,7 +1528,10 @@ mod tests {
             application: "shop".try_into().unwrap(),
             environment: "prod".try_into().unwrap(),
             component: golem_common::model::component::ComponentName("migrations".into()),
-            agent_name: "Migrator(test)".into(),
+            agent: golem_common::model::card::owner::AgentOwnerLeaf {
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
+                agent_type: Some(AgentTypeName("Migrator".into())),
+            },
             owner: RecipientOwnerContext::AgentType(AgentTypeName("Migrator".into())),
         };
         let defaults = StoredCard::Polymorphic(PolymorphicCard {

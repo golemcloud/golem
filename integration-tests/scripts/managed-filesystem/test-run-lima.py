@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline Linux launch checks; the limactl stub never boots a VM."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -70,6 +71,7 @@ elif args[0] not in ('start', 'shell'):
         self.assertEqual(first.returncode, 0, first.stderr)
         cache = Path(calls[1]["cache"])
         self.assertEqual(cache.parent, self.root / ".validation-cache/lima-images-v1")
+        self.assertEqual(cache.name, hashlib.sha256(self.images.read_text().rstrip("\n").encode()).hexdigest())
         marker = cache / "retained-download"
         marker.write_text("native Lima owns the downloads here")
         second, repeated = self.run_lima()

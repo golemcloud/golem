@@ -15,7 +15,6 @@ import { decodeMultipart, encodeMultipart } from "../src/internal/multipart.js"
 import { decodeEnvelope, encodeMultipartJsonEnvelope } from "../src/internal/snapshotEnvelope.js"
 import { schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
-import { __setParseAgentIdImpl, __resetParseAgentIdImpl } from "./mocks/golem-agent-host.js"
 import { __setEnvironment, __resetEnvironment } from "./mocks/wasi-cli-environment.js"
 import { __setRestoreDatabaseSync, __resetSqliteExtensions } from "./mocks/node-sqlite.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
@@ -120,8 +119,7 @@ const sqlite = defineAgent({
 })
 
 const setLoad = (name: string) => {
-  __setEnvironment([["GOLEM_AGENT_ID", name]])
-  __setParseAgentIdImpl(() => [name, { value: wire } as never, undefined])
+  __setEnvironment([["GOLEM_AGENT_TYPE", name]])
 }
 
 describe("explicit multipart snapshots", () => {
@@ -140,7 +138,6 @@ describe("explicit multipart snapshots", () => {
   })
   afterEach(() => {
     __resetEnvironment()
-    __resetParseAgentIdImpl()
     __resetSqliteExtensions()
   })
 
@@ -171,7 +168,7 @@ describe("explicit multipart snapshots", () => {
     expect(decoded.parts.get("index")).toEqual({ bytes, contentType: "application/octet-stream" })
     await __resetAgents()
     setLoad("MultipartIndex")
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
     expect(initCalls).toBe(1)
     expect(restoreCalls).toBe(1)
     expect(methodsCalls).toBe(2)
@@ -187,10 +184,7 @@ describe("explicit multipart snapshots", () => {
     })
     const initial: typeof schema.Type = {
       promise: {
-        agentId: {
-          componentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
-          agentId: "waiting-agent",
-        },
+        agentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
         fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
         oplogIdx: 9007199254740993n,
       },
@@ -235,7 +229,7 @@ describe("explicit multipart snapshots", () => {
     expect(decoded.state).toBeDefined()
     await __resetAgents()
     setLoad("MultipartPromise")
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
     await withCaller(principal, () => guest.invoke("check", wire))
   })
 
@@ -247,7 +241,7 @@ describe("explicit multipart snapshots", () => {
     expect(decoded).toMatchObject({ kind: "multipart", state: null, parts: new Map() })
     await __resetAgents()
     setLoad("MultipartNull")
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
   })
 
   it("failed restoration installs no active instance or methods", async () => {
@@ -257,25 +251,28 @@ describe("explicit multipart snapshots", () => {
     setLoad("MultipartIndex")
     methodsCalls = 0
     failRestore = true
-    await expect(dispatchLoadSnapshot(snapshot)).rejects.toThrow(/restore failed/)
+    await expect(dispatchLoadSnapshot(snapshot, wire)).rejects.toThrow(/restore failed/)
     expect(methodsCalls).toBe(0)
     await expect(dispatchSaveSnapshot()).rejects.toThrow(/not initialized/)
     failRestore = false
-    await dispatchLoadSnapshot(snapshot)
+    await dispatchLoadSnapshot(snapshot, wire)
   })
 
   it("validates the declared DB inventory before restoration, then hydrates before methods", async () => {
     setLoad("MultipartSqlite")
     const parts = new Map([["index", { bytes, contentType: "application/octet-stream" }]])
     await expect(
-      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [], parts)),
+      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [], parts), wire),
     ).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
     expect(dbRestoreCalls).toBe(0)
     __setRestoreDatabaseSync((_db, image) => {
       expect(image).toEqual(bytes)
       dbHydrated = true
     })
-    await dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [{ name: "main", bytes }], parts))
+    await dispatchLoadSnapshot(
+      encodeMultipartJsonEnvelope(null, [{ name: "main", bytes }], parts),
+      wire,
+    )
     expect(dbRestoreCalls).toBe(1)
     expect(dbHydrated).toBe(true)
   })
@@ -283,13 +280,16 @@ describe("explicit multipart snapshots", () => {
   it("rejects nonmultipart and reserved DBs before user restoration", async () => {
     setLoad("MultipartNull")
     await expect(
-      dispatchLoadSnapshot({
-        payload: new TextEncoder().encode("{}"),
-        mimeType: "application/json",
-      }),
+      dispatchLoadSnapshot(
+        {
+          payload: new TextEncoder().encode("{}"),
+          mimeType: "application/json",
+        },
+        wire,
+      ),
     ).rejects.toBeDefined()
     await expect(
-      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [{ name: "other", bytes }])),
+      dispatchLoadSnapshot(encodeMultipartJsonEnvelope(null, [{ name: "other", bytes }]), wire),
     ).rejects.toThrow(/SnapshotDatabaseUnknownPartError/)
   })
 

@@ -24,7 +24,7 @@ inherit_test_dep!(
 );
 
 const WASM_RPC_DROP: &str = "golem::rpc::wasm-rpc::drop";
-const WASM_RPC_NEW: &str = "golem::rpc::wasm-rpc::new";
+const WASM_RPC_NEW: &str = "golem::rpc::wasm-rpc::upsert";
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, IntoSchema)]
@@ -95,7 +95,7 @@ struct Caller {
     executor: TestWorkerExecutor,
     component: ComponentDto,
     id: ParsedAgentKey,
-    agent: AgentId,
+    agent: OwnedAgentId,
     target: ParsedAgentKey,
 }
 
@@ -112,14 +112,14 @@ impl Caller {
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let id = agent_id!("GcTimingCaller", name);
+        let id = agent_key!("GcTimingCaller", name);
         let agent = executor.start_agent(&component.id, id.clone()).await?;
         Ok(Self {
             executor,
             component,
             id,
             agent,
-            target: agent_id!("GcTimingTarget", name),
+            target: agent_key!("GcTimingTarget", name),
         })
     }
 
@@ -217,15 +217,8 @@ impl Caller {
 
     async fn oplog(&self) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         // An unloaded (suspended) agent has committed its whole oplog.
-        if self
-            .executor
-            .worker_is_loaded(&OwnedAgentId::new(
-                self.component.environment_id,
-                &self.agent,
-            ))
-            .await
-        {
-            self.executor.commit_oplog(&self.agent).await?;
+        if self.executor.worker_is_loaded(&self.agent).await {
+            self.executor.commit_oplog(&self.agent.agent_id).await?;
         }
         self.executor
             .get_oplog(&self.agent, OplogIndex::INITIAL)
@@ -248,7 +241,7 @@ fn starts_named<'a>(
 }
 
 /// The settled-history rules every test in this file checks: no `wasm-rpc::drop` call, every
-/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::new` span, and nothing
+/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::upsert` span, and nothing
 /// positional follows the last `AgentInvocationFinished`.
 fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
     assert_eq!(
@@ -264,7 +257,7 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
                 .expect("a recorded SpanClosed names the Start that opened the span");
             assert!(
                 clients.contains(&start),
-                "the SpanClosed at {} names {start}, which is not a wasm-rpc::new Start",
+                "the SpanClosed at {} names {start}, which is not a wasm-rpc::upsert Start",
                 entry.oplog_index
             );
         }
@@ -380,7 +373,14 @@ async fn crash_while_awaiting(
     let caller = caller
         .restart(deps, context, snapshot_every_invocation())
         .await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let report = caller.inspect().await?;
     assert_eq!(report.completed, scenario.completed);
     assert_eq!(
@@ -586,7 +586,7 @@ async fn multiple_owners_release_in_different_order(
         },
     )
     .await?;
-    let second = agent_id!("GcTimingTarget", "owners-b");
+    let second = agent_key!("GcTimingTarget", "owners-b");
     assert_eq!(caller.target_count(&second).await?, 3);
     Ok(())
 }
@@ -790,7 +790,14 @@ async fn assert_divergent_snapshot_rejected(
     };
     let caller = caller.restart(deps, &context, overrides).await?;
     let mut events = caller.executor.capture_output(&caller.agent).await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let result = tokio::time::timeout(
         REPLAY_TIMEOUT,
         caller.executor.invoke_and_await_agent_with_key(
@@ -832,7 +839,7 @@ async fn assert_divergent_snapshot_rejected(
         "snapshot rejection and full replay must not dispatch another awaited increment"
     );
     if kind == "owner" {
-        let other = agent_id!("GcTimingTarget", format!("{name}-other"));
+        let other = agent_key!("GcTimingTarget", format!("{name}-other"));
         assert_eq!(caller.target_count(&other).await?, 0);
     }
     let history = caller.oplog().await?;
@@ -884,7 +891,14 @@ async fn abandon_while_awaiting(
     let caller = caller
         .restart(deps, context, snapshot_every_invocation())
         .await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let report = caller.inspect().await?;
     assert_eq!(report.completed, 1);
     assert_eq!(report.checksum, 1);
@@ -1030,7 +1044,14 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
         .await?;
     let gate = caller.create_promise().await?;
     let completed = caller.create_promise().await?;
-    caller.executor.complete_promise(&completed, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &completed,
+            vec![],
+        )
+        .await?;
     caller
         .invoke(
             "abandon_then_await",
@@ -1076,7 +1097,14 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
     );
 
     let caller = caller.restart(deps, &context, overrides()).await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     let report = caller.inspect().await?;
     assert_eq!(report.completed, 1);
     assert!(report.restored, "the agent was restored from a snapshot");
@@ -1126,7 +1154,14 @@ async fn cache_futures_replay_with_changed_drop_schedule(
         let caller = caller
             .restart(deps, &context, snapshot_every_invocation())
             .await?;
-        caller.executor.complete_promise(&promise, vec![]).await?;
+        caller
+            .executor
+            .complete_promise(
+                &caller.executor.context.default_environment_id,
+                &promise,
+                vec![],
+            )
+            .await?;
         assert!(
             caller
                 .invoke("inspect_cache", data_value!())
@@ -1163,7 +1198,14 @@ async fn cache_futures_replay_drop_in_an_earlier_invocation(
         .invoke("configure_abandon", data_value!(NEVER, BEFORE_NEXT_CALL))
         .await?;
     let completed = caller.create_promise().await?;
-    caller.executor.complete_promise(&completed, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &completed,
+            vec![],
+        )
+        .await?;
     let promise = caller.create_promise().await?;
     caller
         .invoke("abandon_cache_then_await", data_value!(completed))
@@ -1203,7 +1245,14 @@ async fn cache_futures_replay_drop_in_an_earlier_invocation(
     let caller = caller
         .restart(deps, &context, snapshot_every_nth_invocation(2))
         .await?;
-    caller.executor.complete_promise(&promise, vec![]).await?;
+    caller
+        .executor
+        .complete_promise(
+            &caller.executor.context.default_environment_id,
+            &promise,
+            vec![],
+        )
+        .await?;
     assert!(
         caller
             .invoke("inspect_cache", data_value!())
@@ -1248,7 +1297,14 @@ async fn cache_fill_replay_with_changed_drop_schedule(
         let promise = caller.create_promise().await?;
         if cross_invocation {
             let completed = caller.create_promise().await?;
-            caller.executor.complete_promise(&completed, vec![]).await?;
+            caller
+                .executor
+                .complete_promise(
+                    &caller.executor.context.default_environment_id,
+                    &completed,
+                    vec![],
+                )
+                .await?;
             caller
                 .invoke("fill_cache_then_await", data_value!(completed))
                 .await?;
@@ -1323,7 +1379,14 @@ async fn cache_fill_replay_with_changed_drop_schedule(
         let caller = caller
             .restart(deps, &context, snapshot_every_nth_invocation(frequency))
             .await?;
-        caller.executor.complete_promise(&promise, vec![]).await?;
+        caller
+            .executor
+            .complete_promise(
+                &caller.executor.context.default_environment_id,
+                &promise,
+                vec![],
+            )
+            .await?;
         assert!(caller.inspect().await?.restored);
         let observed = caller
             .executor
@@ -1387,7 +1450,14 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             .invoke("configure_abandon", data_value!(NEVER, BEFORE_NEXT_CALL))
             .await?;
         let completed = caller.create_promise().await?;
-        caller.executor.complete_promise(&completed, vec![]).await?;
+        caller
+            .executor
+            .complete_promise(
+                &caller.executor.context.default_environment_id,
+                &completed,
+                vec![],
+            )
+            .await?;
         caller.invoke(method, data_value!(completed)).await?;
         let original = caller.oplog().await?;
         let a_started = original
@@ -1612,8 +1682,8 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let id = agent_id!("TsGcSnapshotDriver", "ts-gc-snapshot");
-    let target = agent_id!("TsCounter", "ts-gc-snapshot-target");
+    let id = agent_key!("TsGcSnapshotDriver", "ts-gc-snapshot");
+    let target = agent_key!("TsCounter", "ts-gc-snapshot-target");
     let agent = executor.start_agent(&component.id, id.clone()).await?;
     let last_index = |oplog: &[PublicOplogEntryWithIndex], pred: fn(&PublicOplogEntry) -> bool| {
         oplog
@@ -1721,8 +1791,8 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
 
 async fn ts_oplog(
     executor: &TestWorkerExecutor,
-    agent: &AgentId,
+    agent: &OwnedAgentId,
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-    executor.commit_oplog(agent).await?;
+    executor.commit_oplog(&agent.agent_id).await?;
     executor.get_oplog(agent, OplogIndex::INITIAL).await
 }

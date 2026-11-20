@@ -18,6 +18,7 @@ pub(crate) mod connect_proxy;
 mod error;
 mod routing_logic;
 mod service;
+mod target;
 mod worker_stream;
 
 pub use client::*;
@@ -26,6 +27,7 @@ pub use connect_proxy::*;
 pub use error::*;
 pub use routing_logic::*;
 pub use service::*;
+pub use target::*;
 pub use worker_stream::*;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;

@@ -170,7 +170,9 @@ async function load() {
   }));
   vi.doMock('golem:api/host@1.5.0', () => ({
     getSelfMetadata: () => ({
-      agentId: { componentId: { uuid: { highBits: 0n, lowBits: 1n } }, agentId: 'TestAgent()' },
+      agentId: { uuid: { highBits: 0x00000007_0000_8000n, lowBits: 0x8000_0000_0000_0001n } },
+      agentTypeName: 'TestAgent',
+      fingerprint: { highBits: 0n, lowBits: 3n },
       args: [],
       env: [],
       config: [],

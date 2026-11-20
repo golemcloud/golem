@@ -27,7 +27,6 @@ fn audit_1_record_contract_is_versioned_attributed_summary_only_and_exact_json()
         tool_name: "artifact".to_string(),
         command_path: vec!["render".to_string()],
         owner: OwnerSummary {
-            component_id: "component-01".to_string(),
             agent_id: "Artifact/audit-owner".to_string(),
         },
         principal: PrincipalSummary::User {

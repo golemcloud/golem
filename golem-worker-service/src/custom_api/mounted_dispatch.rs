@@ -17,7 +17,8 @@ use super::error::RequestHandlerError;
 use super::raw_handler::RawHandler;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
-use golem_common::model::AgentId;
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::component::ComponentId;
 use golem_schema::http::{FileMapping, FileResponseHeader};
 use golem_service_base::custom_api::{MountFileSource, MountTarget, RouterFileIndexEntry};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
@@ -99,7 +100,8 @@ impl MountBackend for MountedBackend<'_> {
             .await
             .map(Some),
             MountFile::Live {
-                agent_id,
+                component_id,
+                constructor,
                 path,
                 directory_request,
             } => {
@@ -107,7 +109,8 @@ impl MountBackend for MountedBackend<'_> {
                     &self.owner.worker_service,
                     request,
                     selected,
-                    agent_id,
+                    component_id,
+                    constructor,
                     &path,
                     directory_request,
                     self.file_deadline,
@@ -131,8 +134,10 @@ impl MountBackend for MountedBackend<'_> {
 #[allow(dead_code)]
 pub(super) enum MountFile<'a> {
     Initial(&'a RouterFileIndexEntry),
+    /// A file of the keyed agent of the constructor, whose type the component implements.
     Live {
-        agent_id: &'a AgentId,
+        component_id: ComponentId,
+        constructor: &'a ParsedAgentKey,
         path: String,
         directory_request: bool,
     },
@@ -190,16 +195,17 @@ pub(super) async fn dispatch_mount(
             "Expected mounted behavior",
         ));
     };
-    let agent_id = match &mount.files {
+    let agent = match &mount.files {
         MountFileSource::Router { .. } => None,
-        MountFileSource::Live { agent } => Some(CallAgentHandler::build_agent_id(
-            selected,
+        MountFileSource::Live { agent } => Some((
             agent.component_id,
-            &agent.agent_type,
-            &agent.constructor_input,
-            &agent.constructor_parameters,
-            None,
-        )?),
+            CallAgentHandler::route_constructor(
+                selected,
+                &agent.agent_type,
+                &agent.constructor_input,
+                &agent.constructor_parameters,
+            )?,
+        )),
     };
     let relative = &selected.request_target.segments()[selected.route.path.len()..];
     let directory_request = !relative.is_empty() && selected.request_target.trailing_slash();
@@ -226,11 +232,15 @@ pub(super) async fn dispatch_mount(
                         continue;
                     }
                 }
-                MountFileSource::Live { .. } => MountFile::Live {
-                    agent_id: agent_id.as_ref().unwrap(),
-                    path,
-                    directory_request,
-                },
+                MountFileSource::Live { .. } => {
+                    let (component_id, constructor) = agent.as_ref().unwrap();
+                    MountFile::Live {
+                        component_id: *component_id,
+                        constructor,
+                        path,
+                        directory_request,
+                    }
+                }
             };
             if let Some(mut response) = backend.file(request, selected, file).await? {
                 if matches!(
@@ -332,11 +342,12 @@ mod tests {
             let (path, directory) = match file {
                 MountFile::Initial(entry) => (entry.path.clone(), false),
                 MountFile::Live {
-                    agent_id,
+                    constructor,
                     path,
                     directory_request,
+                    ..
                 } => {
-                    self.agents.push(agent_id.agent_id.clone());
+                    self.agents.push(constructor.to_string());
                     (path, directory_request)
                 }
             };

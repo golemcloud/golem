@@ -28,8 +28,6 @@ import { absolute, attempt, here, main, readJson, run, runChecked, temporary, wr
 
 const golemEnv = {
   GOLEM_AGENT_ID: "conformance-agent",
-  GOLEM_WORKER_NAME: "conformance-agent",
-  GOLEM_COMPONENT_ID: "00000000-0000-0000-0000-000000000000",
   GOLEM_COMPONENT_REVISION: "0",
   GOLEM_AGENT_TYPE: "Conformance"
 }

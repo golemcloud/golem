@@ -188,17 +188,17 @@ func TestConfiguredFullAgentClientDeclaresItsConfig(t *testing.T) {
 	})
 }
 
-// TestEphemeralTargetsHaveNoGet — an ephemeral agent has no durable identity
-// to get or bind; only a phantom addresses one.
-func TestEphemeralTargetsHaveNoGet(t *testing.T) {
+// TestEphemeralTargetsAreNotCreatedOrAddressedByID — each invocation of an
+// ephemeral agent runs on a new instance, so it is addressed with Upsert only:
+// Create and GetByID refuse it before reaching the host.
+func TestEphemeralTargetsAreNotCreatedOrAddressedByID(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "Request", AgentClientSpec{Mode: Ephemeral})
-		e := d.agents["Request"]
-		if err := requireIdentity(e, false); err == nil || !strings.Contains(err.Error(), "use NewPhantom") {
-			t.Errorf("Get on an ephemeral target gave %v", err)
+		if _, err := createClient[RemoteCounterID](d, "Request", RemoteCounterID{}, nil); err == nil || !strings.Contains(err.Error(), "address it with Upsert") {
+			t.Errorf("Create on an ephemeral target gave %v", err)
 		}
-		if err := requireIdentity(e, true); err != nil {
-			t.Errorf("a phantom of an ephemeral target was refused: %v", err)
+		if _, err := getClientByID[RemoteCounterID](d, "Request", AgentIDFromUUID(UUID{1})); err == nil || !strings.Contains(err.Error(), "cannot be addressed") {
+			t.Errorf("GetByID on an ephemeral target gave %v", err)
 		}
 	})
 }

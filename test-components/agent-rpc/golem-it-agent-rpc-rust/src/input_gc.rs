@@ -59,7 +59,7 @@ impl InputGc for InputGcImpl {
     }
 
     async fn run_to_end(&mut self) {
-        let stream = StreamingRpcTargetClient::get(self.state.name.clone())
+        let stream = StreamingRpcTargetClient::upsert(self.state.name.clone())
             .produce(vec![20, 21, 22])
             .await;
         if self.schedule == 2 {
@@ -80,7 +80,7 @@ impl InputGc for InputGcImpl {
         omit_read_after_restore: bool,
         gate: PromiseId,
     ) {
-        let target = StreamingRpcTargetClient::get(self.state.name.clone());
+        let target = StreamingRpcTargetClient::upsert(self.state.name.clone());
         let mut stream = target.produce(vec![20, 21, 22]).await;
         if unwrap {
             let (reader, outcome) = stream.into_raw().await.unwrap();
@@ -109,7 +109,7 @@ impl InputGc for InputGcImpl {
     }
 
     async fn continuation(&mut self) -> Vec<u32> {
-        StreamingRpcTargetClient::get(self.state.name.clone())
+        StreamingRpcTargetClient::upsert(self.state.name.clone())
             .produce(vec![30, 31, 32])
             .await
             .collect()

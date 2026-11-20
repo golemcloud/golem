@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{cleanup_user_state, delete_workers, invoke_and_await_agent};
+use crate::benchmarks::{
+    cleanup_user_state, delete_workers, invoke_and_await_agent, lookup_keyed_agents,
+};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::model::AgentId;
-use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::component::{ComponentDto, ComponentId};
+use golem_common::model::agent::{OwnedAgentId, ParsedAgentKey};
+use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
 };
@@ -44,16 +45,9 @@ pub struct DurabilityOverheadIterationContext {
     component: ComponentDto,
     durable_persistent_agent_ids: Vec<ParsedAgentKey>,
     ephemeral_agent_ids: Vec<ParsedAgentKey>,
-    final_ephemeral_agent_ids: Mutex<Vec<AgentId>>,
+    final_ephemeral_agent_ids: Mutex<Vec<OwnedAgentId>>,
     durable_persistent_commit_agent_ids: Vec<ParsedAgentKey>,
     env_id: EnvironmentId,
-}
-
-fn agent_ids_to_agent_ids(component_id: ComponentId, agent_ids: &[ParsedAgentKey]) -> Vec<AgentId> {
-    agent_ids
-        .iter()
-        .filter_map(|agent_id| AgentId::from_agent_id(component_id, agent_id).ok())
-        .collect()
 }
 
 #[async_trait]
@@ -127,15 +121,15 @@ impl Benchmark for DurabilityOverhead {
             .unwrap();
 
         for n in 0..self.config.size {
-            durable_persistent_agent_ids.push(agent_id!(
+            durable_persistent_agent_ids.push(agent_key!(
                 "RustBenchmarkAgent",
                 format!("test-{n}-persistent")
             ));
-            ephemeral_agent_ids.push(agent_id!(
+            ephemeral_agent_ids.push(agent_key!(
                 "RustEphemeralBenchmarkAgent",
                 format!("test-{n}-ephemeral")
             ));
-            durable_persistent_commit_agent_ids.push(agent_id!(
+            durable_persistent_commit_agent_ids.push(agent_key!(
                 "RustBenchmarkAgent",
                 format!("test-{n}-persistent-commit")
             ));
@@ -292,7 +286,12 @@ impl Benchmark for DurabilityOverhead {
     ) -> BenchmarkResultValue {
         delete_workers(
             &context.user,
-            &agent_ids_to_agent_ids(context.component.id, &context.durable_persistent_agent_ids),
+            &lookup_keyed_agents(
+                &context.user,
+                &context.component,
+                &context.durable_persistent_agent_ids,
+            )
+            .await,
             &recorder,
         )
         .await;
@@ -304,10 +303,12 @@ impl Benchmark for DurabilityOverhead {
         .await;
         delete_workers(
             &context.user,
-            &agent_ids_to_agent_ids(
-                context.component.id,
+            &lookup_keyed_agents(
+                &context.user,
+                &context.component,
                 &context.durable_persistent_commit_agent_ids,
-            ),
+            )
+            .await,
             &recorder,
         )
         .await;

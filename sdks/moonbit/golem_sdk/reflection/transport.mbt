@@ -5,30 +5,69 @@ priv struct Transport {
 }
 
 ///|
-fn Transport::create(
-  type_name : String,
-  constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid?,
-) -> Transport raise ReflectError {
-  Transport::create_with_config(type_name, constructor_value, phantom_id, [])
+fn Transport::new(raw : @agentHost.WasmRpc) -> Transport {
+  { raw, default_scope_card: None, }
 }
 
 ///|
-fn Transport::create_with_config(
-  type_name : String,
+fn encode_constructor(
   constructor_value : @model.SchemaValue,
-  phantom_id : @schema.Uuid?,
-  agent_config : Array[@common.TypedAgentConfigValue],
-) -> Transport raise ReflectError {
-  let prepared = @identity.Constructor::from_value(
-    type_name, constructor_value, phantom_id,
-  ) catch {
+) -> @types.SchemaValueTree raise ReflectError {
+  @model.schema_value_to_wit(constructor_value) catch {
     error => raise Schema("failed to encode constructor value: \{repr(error)}")
   }
-  let raw = prepared.try_connect(agent_config) catch {
-    error => raise rpc_error(error)
+}
+
+///|
+/// Connects through the host `upsert`: the keyed agent of the constructor
+/// value, created when it is missing, or a one-shot instance per invocation
+/// for an ephemeral type.
+fn Transport::upsert(
+  type_name : String,
+  constructor_value : @model.SchemaValue,
+) -> Transport raise ReflectError {
+  let input = encode_constructor(constructor_value)
+  match @agentHost.WasmRpc::upsert(type_name, input) {
+    Ok(raw) => Transport::new(raw)
+    Err(error) => raise rpc_error(error)
   }
-  { raw, default_scope_card: None, }
+}
+
+///|
+/// Connects to the existing agent with the given ID; never creates one.
+fn Transport::get_by_id(
+  type_name : String,
+  agent_id : @schema.AgentId,
+) -> Transport raise ReflectError {
+  match @agentHost.WasmRpc::get_by_id(type_name, agent_id.to_wit()) {
+    Ok(raw) => Transport::new(raw)
+    Err(error) => raise rpc_error(error)
+  }
+}
+
+///|
+/// Creates a new durable agent through the host `create`.
+async fn Transport::create(
+  type_name : String,
+  constructor_value : @model.SchemaValue,
+  keyed : Bool,
+  agent_config : Array[@common.TypedAgentConfigValue],
+  env : Array[(String, String)],
+) -> Transport {
+  let input = encode_constructor(constructor_value)
+  match
+    @agentHost.WasmRpc::create(type_name, input, { keyed, agent_config, env, }) {
+    Ok(created) => Transport::new(created.client)
+    Err(error) => raise rpc_error(error)
+  }
+}
+
+///|
+async fn Transport::agent_id(self : Transport) -> @schema.AgentId {
+  match self.raw.agent_id() {
+    Ok(id) => @schema.AgentId::from_wit(id)
+    Err(error) => raise rpc_error(error)
+  }
 }
 
 ///|
@@ -36,7 +75,7 @@ fn invocation_metadata(
   metadata : @agentHost.InvocationMetadata,
 ) -> InvocationMetadata {
   {
-    agent_id: { value: metadata.agent_id, },
+    agent_id: @schema.AgentId::from_wit(metadata.agent_id),
     invocation_id: @rpc.InvocationId::from_host(metadata),
   }
 }

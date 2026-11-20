@@ -222,13 +222,7 @@ async fn reconstruction_window_keeps_permit_without_memory_or_filesystem_charge(
         }
         // Close the sampler, not physical ownership, before advancing its injected clock.
         stop_periodic_sampling(&window);
-        let blocked = scheduler.acquire(
-            account,
-            AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "blocked-during-reconstruction".into(),
-            },
-        );
+        let blocked = scheduler.acquire(account, AgentId::from_parts(7, 1));
         tokio::pin!(blocked);
         assert!(blocked.as_mut().now_or_never().is_none());
         clock.set(Duration::from_secs(1)).await;

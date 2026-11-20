@@ -17,6 +17,7 @@ import { schemaValueFromWit, schemaValueToWit, v } from '../src/internal/schema-
 import { compileSchema } from '../src/schema/adapter';
 import { s as markers } from '../src/schema/markers';
 import type { AgentStream } from '../src/schema/agentStream';
+import { selectSelfAgent } from './selfAgentTestSupport';
 
 const input = schemaValueToWit(v.record([]));
 
@@ -41,7 +42,7 @@ const agent = () =>
     tag: 'agent',
     val: {
       pair: pair('agent:2/3'),
-      agentId: { componentId: { uuid: uuid(2n) }, agentId: 'Relay("r")' },
+      agentId: { uuid: uuid(2n) },
       agentType: 'Relay',
       environmentId: { uuid: uuid(4n) },
     },
@@ -100,8 +101,7 @@ describe('a context whose call has ended', () => {
           },
         },
       });
-    (globalThis as { currentAgentId?: string }).currentAgentId =
-      `EndedContextProbe(${JSON.stringify(input)})`;
+    selectSelfAgent('EndedContextProbe');
     const invocationContext = await import('golem:agent/invocation-context@2.0.0');
     const caller = vi.mocked(invocationContext.caller);
     await sdk.golemAgent200Guest.initialize('EndedContextProbe', input);

@@ -77,19 +77,30 @@ pub(crate) enum TsOutput {
 }
 
 struct ExternalConstructorNames {
+    options: String,
     config_parameters: Vec<String>,
     config_values: Vec<String>,
     parameters: String,
     public_parameters: String,
-    phantom_id: String,
     agent_config: String,
-    public_config: String,
     config: String,
+    keyed: String,
     create_response: String,
 }
 
 const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
 const TS_SDK_PACKAGE_NAME: &str = "@golemcloud/golem-ts-sdk";
+const CREATE_DOC: &str = "Creates an agent, and resolves after its initialization. With `keyed`, it creates the keyed agent of the constructor parameters, and rejects with a `conflict` error when that agent exists; otherwise the new agent has no key and a new ID. `config` overrides local configuration values, and `env` adds environment variables to the ones the manifest defines.";
+const GET_BY_ID_DOC: &str = "Connects to the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, rejects with a `not-found` error.";
+/// The instance members of an external client that agent methods must not shadow.
+pub(crate) const EXTERNAL_MEMBER_NAMES: &[&str] = &[
+    "parameters",
+    "publicParameters",
+    "constructor",
+    "__getConfig",
+    "__getPublicParameters",
+    "agentId",
+];
 pub(crate) const MULTIMODAL_INPUT_NAME: &str = "multimodalInput";
 /// Guest-mode shape of a bare `text` value; the same shape as the external
 /// runtime's `AgentText`.
@@ -300,7 +311,6 @@ impl TypeScriptBridgeGenerator {
             naming.reserve(format!("decode{type_name}"));
         }
         if self.mode == TypeScriptBridgeMode::ExternalRest {
-            naming.reserve("uuidv4");
             naming.reserve(self.global_config_var_name());
         }
         if self.testing {
@@ -400,7 +410,6 @@ impl TypeScriptBridgeGenerator {
         };
         let dependencies = match self.mode {
             TypeScriptBridgeMode::ExternalRest => json!({
-                "uuid": "^13",
                 (TS_BRIDGE_PACKAGE_NAME): Self::bridge_package_dep(self.testing)?,
             }),
             TypeScriptBridgeMode::GuestWasmRpc => json!({
@@ -759,9 +768,6 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates the import section of the client library
     fn generate_ts_imports(&self, writer: &mut TsWriter) {
-        if self.mode == TypeScriptBridgeMode::ExternalRest {
-            writer.import_item("v4", "uuidv4", "uuid");
-        }
         self.generate_runtime_import(writer);
     }
 
@@ -806,10 +812,12 @@ impl TypeScriptBridgeGenerator {
         ));
         drop(with_scope_card);
         if self.agent_type.mode == AgentMode::Durable {
-            writer.write_doc("Returns the durable agent's runtime identity.");
-            let mut getter = writer.begin_method("get agentId");
-            getter.result("string");
-            getter.write_line("return this.resolved.agentId;");
+            writer.write_doc(
+                "Returns the ID of the agent. On a client of `upsert` it creates the agent when it is missing, without invoking a method.",
+            );
+            let mut getter = writer.begin_method("agentId");
+            getter.result("ReturnType<base.RemoteAgentHandle['agentId']>");
+            getter.write_line("return this.resolved.agentId();");
         }
         for method in &self.agent_type.methods {
             let member_name = member_naming.fresh(self.to_js_ident(&method.name));
@@ -824,86 +832,23 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsWriter,
         class_name: &str,
     ) -> anyhow::Result<()> {
-        let local_configs: Vec<_> = self
-            .agent_type
-            .config
-            .iter()
-            .filter(|config| config.source == AgentConfigSource::Local)
-            .collect();
-        if self.agent_type.mode == AgentMode::Durable {
-            self.generate_guest_constructor(writer, class_name, "get", false, false, &[])?;
-            self.generate_guest_constructor(writer, class_name, "getPhantom", true, false, &[])?;
-        }
-        self.generate_guest_constructor(writer, class_name, "newPhantom", false, true, &[])?;
-        if !local_configs.is_empty() {
-            if self.agent_type.mode == AgentMode::Durable {
-                self.generate_guest_constructor(
-                    writer,
-                    class_name,
-                    "getWithConfig",
-                    false,
-                    false,
-                    &local_configs,
-                )?;
-                self.generate_guest_constructor(
-                    writer,
-                    class_name,
-                    "getPhantomWithConfig",
-                    true,
-                    false,
-                    &local_configs,
-                )?;
-            }
-            self.generate_guest_constructor(
-                writer,
-                class_name,
-                "newPhantomWithConfig",
-                false,
-                true,
-                &local_configs,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn generate_guest_constructor(
-        &self,
-        writer: &mut TsWriter,
-        class_name: &str,
-        name: &str,
-        explicit_phantom: bool,
-        new_phantom: bool,
-        local_configs: &[&AgentConfigDeclarationSchema],
-    ) -> anyhow::Result<()> {
-        let mut naming = ParameterNaming::new();
-        match self.ts_input(&self.agent_type.constructor.input_schema)? {
-            TsInput::Params(params) => {
-                naming.reserve_many(params.iter().map(|(name, _)| name.clone()));
-            }
-            TsInput::Multimodal(_) => naming.reserve(MULTIMODAL_INPUT_NAME),
-        }
-        let config_names = local_configs
-            .iter()
-            .map(|config| naming.fresh(Self::guest_config_parameter_name(config)))
-            .collect::<Vec<_>>();
-        let phantom_id = naming.fresh("phantomId");
+        let type_name = serde_json::to_string(self.agent_type.type_name.as_str())?;
+        let mut naming = self.constructor_parameter_naming()?;
         let constructor_payload = naming.fresh("constructorPayload");
-        let agent_config = naming.fresh("agentConfig");
         let resolved = naming.fresh("resolved");
 
-        if new_phantom {
-            writer.write_doc(&format!(
-                "{}\n{}",
-                self.new_phantom_description(),
-                self.agent_type.constructor.description
-            ));
-        }
-        let mut method = writer.begin_static_method(name);
-        if explicit_phantom {
-            method.param(&phantom_id, "base.Uuid");
-        }
+        writer.write_doc(&format!(
+            "{}\n{}",
+            match self.agent_type.mode {
+                AgentMode::Durable =>
+                    "Connects to the keyed agent of the constructor parameters, and creates it when it is missing.",
+                AgentMode::Ephemeral =>
+                    "Connects to the agent type; each invocation runs on a new one-shot instance.",
+            },
+            self.agent_type.constructor.description
+        ));
+        let mut method = writer.begin_static_method("upsert");
         self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_guest_config_parameter_list(&mut method, local_configs, &config_names)?;
         method.result(class_name);
         method.write_line(format!("const {constructor_payload}: base.SchemaValue = "));
         self.write_encode_input_record(
@@ -911,30 +856,166 @@ impl TypeScriptBridgeGenerator {
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        if new_phantom && self.agent_type.mode == AgentMode::Durable {
-            method.write_line(format!("const {phantom_id} = base.Uuid.generate();"));
-        } else if !explicit_phantom {
-            method.write_line(format!("const {phantom_id} = undefined;"));
-        }
-        self.write_guest_config_encoding(&mut method, local_configs, &config_names, &agent_config)?;
-        let agent_mode = match self.agent_type.mode {
-            AgentMode::Durable => "durable",
-            AgentMode::Ephemeral => "ephemeral",
-        };
         method.write_line(format!(
-            "const {resolved} = base.resolveRemoteAgent({}, {constructor_payload}, {phantom_id}, {agent_config}, {agent_mode:?});",
-            serde_json::to_string(self.agent_type.type_name.as_str())?,
+            "const {resolved} = base.upsertRemoteAgent({type_name}, {constructor_payload});"
         ));
         method.write_line(format!("return new {class_name}({resolved});"));
+        drop(method);
+
+        if self.agent_type.mode == AgentMode::Ephemeral {
+            return Ok(());
+        }
+
+        let local_configs = self.local_configs();
+        let mut naming = self.constructor_parameter_naming()?;
+        let options = naming.fresh("options");
+        let config_names = local_configs
+            .iter()
+            .map(|config| naming.fresh(Self::guest_config_parameter_name(config)))
+            .collect::<Vec<_>>();
+        let constructor_payload = naming.fresh("constructorPayload");
+        let agent_config = naming.fresh("agentConfig");
+        let resolved = naming.fresh("resolved");
+        writer.write_doc(&format!(
+            "{CREATE_DOC}\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut method = writer.begin_static_async_method("create");
+        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
+        method.param(
+            &format!("{options}?"),
+            &self.create_options_type(&local_configs, false)?,
+        );
+        method.result(class_name);
+        method.write_line(format!("const {constructor_payload}: base.SchemaValue = "));
+        self.write_encode_input_record(
+            &mut method,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
+        self.write_config_option_locals(&mut method, &options, &local_configs, &config_names);
+        self.write_guest_config_encoding(
+            &mut method,
+            &local_configs,
+            &config_names,
+            &agent_config,
+        )?;
+        method.write_line(format!(
+            "const {resolved} = await base.createRemoteAgent({type_name}, {constructor_payload}, {{ keyed: {options}?.keyed ?? false, config: {agent_config}, env: Object.entries({options}?.env ?? {{}}) }});"
+        ));
+        method.write_line(format!("return new {class_name}({resolved});"));
+        drop(method);
+
+        writer.write_doc(GET_BY_ID_DOC);
+        let mut method = writer.begin_static_async_method("getById");
+        method.param("agentId", "Parameters<typeof base.getRemoteAgentById>[1]");
+        method.result(class_name);
+        method.write_line(format!(
+            "return new {class_name}(await base.getRemoteAgentById({type_name}, agentId));"
+        ));
         Ok(())
     }
 
-    fn new_phantom_description(&self) -> &'static str {
-        match self.agent_type.mode {
-            AgentMode::Durable => "Creates a new agent instance with a fresh random phantom id.",
-            AgentMode::Ephemeral => {
-                "Creates a local logical proxy; each invocation receives a fresh final identity."
+    /// The names of the constructor parameters, reserved for the locals of a client factory.
+    pub(crate) fn constructor_parameter_naming(&self) -> anyhow::Result<ParameterNaming> {
+        let mut naming = ParameterNaming::new();
+        match self.ts_input(&self.agent_type.constructor.input_schema)? {
+            TsInput::Params(params) => {
+                naming.reserve_many(params.into_iter().map(|(name, _)| name));
             }
+            TsInput::Multimodal(_) => naming.reserve(MULTIMODAL_INPUT_NAME),
+        }
+        Ok(naming)
+    }
+
+    pub(crate) fn local_configs(&self) -> Vec<&AgentConfigDeclarationSchema> {
+        self.agent_type
+            .config
+            .iter()
+            .filter(|config| config.source == AgentConfigSource::Local)
+            .collect()
+    }
+
+    /// The type of the options of `create`. Its `config` is a partial object nested by the
+    /// paths of the local configuration declarations.
+    pub(crate) fn create_options_type(
+        &self,
+        local_configs: &[&AgentConfigDeclarationSchema],
+        streaming: bool,
+    ) -> anyhow::Result<String> {
+        enum Node {
+            Leaf(String),
+            Branch(Vec<(String, Node)>),
+        }
+        fn insert(nodes: &mut Vec<(String, Node)>, path: &[String], typ: String) {
+            let Some((head, rest)) = path.split_first() else {
+                return;
+            };
+            if rest.is_empty() {
+                nodes.push((head.clone(), Node::Leaf(typ)));
+                return;
+            }
+            if let Some((_, Node::Branch(children))) =
+                nodes.iter_mut().find(|(name, _)| name == head)
+            {
+                insert(children, rest, typ);
+            } else {
+                let mut children = Vec::new();
+                insert(&mut children, rest, typ);
+                nodes.push((head.clone(), Node::Branch(children)));
+            }
+        }
+        fn render(nodes: &[(String, Node)]) -> anyhow::Result<String> {
+            let fields = nodes
+                .iter()
+                .map(|(name, node)| {
+                    let typ = match node {
+                        Node::Leaf(typ) => typ.clone(),
+                        Node::Branch(children) => render(children)?,
+                    };
+                    Ok(format!("{}?: {typ}", serde_json::to_string(name)?))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(format!("{{ {} }}", fields.join("; ")))
+        }
+
+        let mut nodes = Vec::new();
+        for config in local_configs {
+            let typ = if streaming {
+                self.streaming_type_reference(&config.value_type)?
+            } else {
+                self.type_reference(&config.value_type)?
+            };
+            insert(&mut nodes, &config.path, typ);
+        }
+        let mut fields = vec!["keyed?: boolean".to_string()];
+        if !nodes.is_empty() {
+            fields.push(format!("config?: {}", render(&nodes)?));
+        }
+        fields.push("env?: Record<string, string>".to_string());
+        Ok(format!("{{ {} }}", fields.join("; ")))
+    }
+
+    /// Binds each configuration value of the `config` create option to a local.
+    pub(crate) fn write_config_option_locals(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        options: &str,
+        local_configs: &[&AgentConfigDeclarationSchema],
+        local_names: &[String],
+    ) {
+        for (config, local_name) in local_configs.iter().zip(local_names) {
+            let access = config
+                .path
+                .iter()
+                .map(|segment| {
+                    format!(
+                        "?.[{}]",
+                        serde_json::to_string(segment).expect("strings serialize")
+                    )
+                })
+                .collect::<String>();
+            writer.write_line(format!("const {local_name} = {options}?.config{access};"));
         }
     }
 
@@ -947,21 +1028,6 @@ impl TypeScriptBridgeGenerator {
                 .map(|segment| segment.to_upper_camel_case())
                 .collect::<String>()
         )
-    }
-
-    pub(crate) fn write_guest_config_parameter_list(
-        &self,
-        writer: &mut TsFunctionWriter<'_>,
-        local_configs: &[&AgentConfigDeclarationSchema],
-        parameter_names: &[String],
-    ) -> anyhow::Result<()> {
-        for (config, parameter_name) in local_configs.iter().zip(parameter_names) {
-            writer.param(
-                &format!("{parameter_name}?"),
-                &self.type_reference(&config.value_type)?,
-            );
-        }
-        Ok(())
     }
 
     pub(crate) fn write_guest_config_encoding(
@@ -1365,6 +1431,9 @@ impl TypeScriptBridgeGenerator {
         self.generate_ts_class_constructor(writer);
         self.generate_ts_constructor_methods(writer, class_name, config_var)?;
         self.generate_ts_config_getter(writer, config_var);
+        if self.has_external_streams() {
+            self.generate_ts_streaming_parameters_getter(writer);
+        }
         if self.agent_type.mode == AgentMode::Durable {
             self.generate_ts_agent_id_getter(writer);
         }
@@ -1378,456 +1447,260 @@ impl TypeScriptBridgeGenerator {
 
     /// Generates fields of the agent client class.
     ///
-    /// We store the encoded parameters, phantom ID, and agent ID of the targeted agent.
+    /// A client of `upsert` stores the encoded constructor parameters, and its invocations name
+    /// the agent by them. A durable client of `create` or `getById` stores the agent's ID in
+    /// `#target`, and its invocations name the agent by that ID. Only a keyed agent keeps its
+    /// parameters, which streaming invocations need because they name the agent by its key.
     fn generate_ts_class_fields(&self, writer: &mut TsWriter) {
-        writer.declare_field("parameters", "base.SchemaValue", None);
+        let durable = self.agent_type.mode == AgentMode::Durable;
+        writer.declare_field(
+            "parameters",
+            if durable {
+                "base.SchemaValue | undefined"
+            } else {
+                "base.SchemaValue"
+            },
+            None,
+        );
         if self.has_external_streams() {
-            writer.declare_field("publicParameters", "base.PublicValue", None);
             writer.declare_field(
-                "publicConfig",
-                "Array<{ path: string[]; value: base.PublicValue }>",
+                "publicParameters",
+                if durable {
+                    "base.PublicValue | undefined"
+                } else {
+                    "base.PublicValue"
+                },
                 None,
             );
         }
-        writer.declare_field("phantomId", "base.PhantomId | undefined", None);
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            writer.declare_field("#agentConfig", "base.AgentConfigEntry[]", None);
-        }
-        if self.agent_type.mode == AgentMode::Durable {
-            writer.declare_field("_agentId", "base.AgentId", None);
+        if durable {
+            writer.declare_field(
+                "#target",
+                "{ agentId: base.AgentId; agentFingerprint?: base.AgentFingerprint } | undefined",
+                None,
+            );
+            writer.write_line("#agentId: base.AgentId | undefined;");
         }
     }
 
     /// Generates the private constructor of the agent class. The user-facing constructors
-    /// are static methods matching the agent-to-agent API (get, getPhantom, newPhantom)
+    /// are static methods matching the agent-to-agent API (upsert, create, getById).
     fn generate_ts_class_constructor(&self, writer: &mut TsWriter) {
+        let durable = self.agent_type.mode == AgentMode::Durable;
         let mut constructor = writer.begin_private_constructor();
-        constructor.param("parameters", "base.SchemaValue");
-        constructor.param("phantomId", "base.PhantomId | undefined");
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            constructor.param("agentConfig", "base.AgentConfigEntry[]");
-        }
-        if self.agent_type.mode == AgentMode::Durable {
-            constructor.param("agentId", "base.AgentId");
+        if durable {
+            constructor.param("parameters", "base.SchemaValue | undefined");
+            constructor.param(
+                "target",
+                "{ agentId: base.AgentId; agentFingerprint?: base.AgentFingerprint } | undefined",
+            );
+        } else {
+            constructor.param("parameters", "base.SchemaValue");
         }
         if self.has_external_streams() {
-            constructor.param("publicParameters", "base.PublicValue");
             constructor.param(
-                "publicConfig",
-                "Array<{ path: string[]; value: base.PublicValue }>",
+                "publicParameters",
+                if durable {
+                    "base.PublicValue | undefined"
+                } else {
+                    "base.PublicValue"
+                },
             );
         }
         constructor.write_line("this.parameters = parameters;");
         if self.has_external_streams() {
             constructor.write_line("this.publicParameters = publicParameters;");
-            constructor.write_line("this.publicConfig = publicConfig;");
         }
-        constructor.write_line("this.phantomId = phantomId;");
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            constructor.write_line("this.#agentConfig = agentConfig;");
-        }
-        if self.agent_type.mode == AgentMode::Durable {
-            constructor.write_line("this._agentId = agentId;");
+        if durable {
+            constructor.write_line("this.#target = target;");
+            constructor.write_line("this.#agentId = target?.agentId;");
         }
     }
 
-    /// Generates the static methods for constructing agent clients. For durable agents we
-    /// generate the durable constructors. Ephemeral agents only expose the migration-named
-    /// `newPhantom`, which creates a local logical proxy.
+    /// Generates the static methods for constructing agent clients. Every agent has `upsert`;
+    /// durable agents also have `create` and `getById`.
     fn generate_ts_constructor_methods(
         &self,
         writer: &mut TsWriter,
         class_name: &str,
         config_var: &str,
     ) -> anyhow::Result<()> {
+        self.generate_ts_constructor_upsert_method(writer, class_name)?;
         if self.agent_type.mode == AgentMode::Durable {
-            self.generate_ts_constructor_get_method(writer, class_name, config_var)?;
+            self.generate_ts_constructor_create_method(writer, class_name, config_var)?;
+            self.generate_ts_constructor_get_by_id_method(writer, class_name);
         }
-
-        if self.agent_type.mode == AgentMode::Durable {
-            self.generate_ts_constructor_get_phantom_method(writer, class_name, config_var)?;
-        }
-        self.generate_ts_constructor_new_phantom_method(writer, class_name, config_var)?;
-
-        // Generate WithConfig variants if there are local config declarations
-        let local_configs: Vec<_> = self
-            .agent_type
-            .config
-            .iter()
-            .filter(|c| c.source == AgentConfigSource::Local)
-            .collect();
-
-        if !local_configs.is_empty() {
-            if self.agent_type.mode == AgentMode::Durable {
-                self.generate_ts_constructor_get_with_config_method(
-                    writer,
-                    class_name,
-                    config_var,
-                    &local_configs,
-                )?;
-            }
-            if self.agent_type.mode == AgentMode::Durable {
-                self.generate_ts_constructor_get_phantom_with_config_method(
-                    writer,
-                    class_name,
-                    config_var,
-                    &local_configs,
-                )?;
-            }
-            self.generate_ts_constructor_new_phantom_with_config_method(
-                writer,
-                class_name,
-                config_var,
-                &local_configs,
-            )?;
-        }
-
         Ok(())
     }
 
-    /// Generates the `get` constructor method
-    fn generate_ts_constructor_get_method(
+    /// Generates the `upsert` constructor method. It does not contact the server: each
+    /// invocation names the agent by its constructor parameters.
+    fn generate_ts_constructor_upsert_method(
         &self,
         writer: &mut TsWriter,
         class_name: &str,
-        config_var: &str,
-    ) -> anyhow::Result<()> {
-        let names = self.external_constructor_names(&[])?;
-        writer.write_doc(&format!(
-            "Gets or creates an instance of this agent\n{}",
-            self.agent_type.constructor.description
-        ));
-        let mut get = writer.begin_static_async_method("get");
-        self.write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
-        get.result(class_name);
-
-        get.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
-        self.write_encode_input_record(
-            &mut get,
-            &self.agent_type.constructor.input_schema,
-            MULTIMODAL_INPUT_NAME,
-        )?;
-        self.write_public_constructor_parameters(&mut get, &names)?;
-        self.write_empty_public_config(&mut get, &names);
-        get.write_line(format!("const {} = undefined;", names.phantom_id));
-        self.write_create_agent_call(&mut get, config_var, "[]", &names);
-        get.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId{});",
-            names.parameters,
-            names.phantom_id,
-            names.create_response,
-            self.external_public_constructor_args(&names)
-        ));
-
-        Ok(())
-    }
-
-    /// Generates the `getPhantom` constructor method
-    fn generate_ts_constructor_get_phantom_method(
-        &self,
-        writer: &mut TsWriter,
-        class_name: &str,
-        config_var: &str,
-    ) -> anyhow::Result<()> {
-        let names = self.external_constructor_names(&[])?;
-        writer.write_doc(&format!(
-            "Gets or creates a phantom instance of this agent with a specific phantom ID\n{}",
-            self.agent_type.constructor.description
-        ));
-        let mut get_phantom = writer.begin_static_async_method("getPhantom");
-        get_phantom.param(&names.phantom_id, "base.PhantomId");
-        self.write_parameter_list(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
-        get_phantom.result(class_name);
-
-        get_phantom.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
-        self.write_encode_input_record(
-            &mut get_phantom,
-            &self.agent_type.constructor.input_schema,
-            MULTIMODAL_INPUT_NAME,
-        )?;
-        self.write_public_constructor_parameters(&mut get_phantom, &names)?;
-        self.write_empty_public_config(&mut get_phantom, &names);
-        self.write_create_agent_call(&mut get_phantom, config_var, "[]", &names);
-        get_phantom.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId{});",
-            names.parameters,
-            names.phantom_id,
-            names.create_response,
-            self.external_public_constructor_args(&names)
-        ));
-
-        Ok(())
-    }
-
-    /// Generates the `newPhantom` constructor method
-    fn generate_ts_constructor_new_phantom_method(
-        &self,
-        writer: &mut TsWriter,
-        class_name: &str,
-        config_var: &str,
     ) -> anyhow::Result<()> {
         let names = self.external_constructor_names(&[])?;
         writer.write_doc(&format!(
             "{}\n{}",
-            self.new_phantom_description(),
+            match self.agent_type.mode {
+                AgentMode::Durable =>
+                    "Addresses the keyed agent of the constructor parameters. The server creates it on the first invocation when it is missing.",
+                AgentMode::Ephemeral =>
+                    "Addresses the agent type; each invocation runs on a new one-shot instance.",
+            },
             self.agent_type.constructor.description
         ));
-        let mut new_phantom = writer.begin_static_async_method("newPhantom");
-        self.write_parameter_list(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
-        new_phantom.result(class_name);
+        let mut upsert = writer.begin_static_method("upsert");
+        self.write_parameter_list(&mut upsert, &self.agent_type.constructor.input_schema)?;
+        upsert.result(class_name);
 
-        new_phantom.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
+        upsert.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
         self.write_encode_input_record(
-            &mut new_phantom,
+            &mut upsert,
             &self.agent_type.constructor.input_schema,
             MULTIMODAL_INPUT_NAME,
         )?;
-        self.write_public_constructor_parameters(&mut new_phantom, &names)?;
-        self.write_empty_public_config(&mut new_phantom, &names);
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            new_phantom.write_line(format!("const {} = undefined;", names.phantom_id));
-            new_phantom.write_line(format!(
-                "return new {class_name}({}, {}, []{});",
-                names.parameters,
-                names.phantom_id,
-                self.external_public_constructor_args(&names)
-            ));
+        self.write_public_constructor_parameters(&mut upsert, &names)?;
+        let target = if self.agent_type.mode == AgentMode::Durable {
+            ", undefined"
         } else {
-            new_phantom.write_line(format!("const {} = uuidv4();", names.phantom_id));
-            self.write_create_agent_call(&mut new_phantom, config_var, "[]", &names);
-            new_phantom.write_line(format!(
-                "return new {class_name}({}, {}, {}.agentId{});",
-                names.parameters,
-                names.phantom_id,
-                names.create_response,
-                self.external_public_constructor_args(&names)
-            ));
-        }
-
+            ""
+        };
+        upsert.write_line(format!(
+            "return new {class_name}({}{target}{});",
+            names.parameters,
+            self.external_public_constructor_args(&names.public_parameters)
+        ));
         Ok(())
     }
 
-    /// Writes the `await base.createAgent(...)` call into the constructor
-    fn write_create_agent_call(
+    /// Generates the `create` constructor method
+    fn generate_ts_constructor_create_method(
         &self,
-        writer: &mut TsFunctionWriter<'_>,
+        writer: &mut TsWriter,
+        class_name: &str,
         config_var: &str,
-        agent_config_expr: &str,
-        names: &ExternalConstructorNames,
-    ) {
+    ) -> anyhow::Result<()> {
+        let local_configs = self.local_configs();
+        let names = self.external_constructor_names(&local_configs)?;
         let agent_type_name = &self.agent_type.type_name.0;
-        writer.write_line(format!("const {} = {config_var};", names.config));
-        writer.write_line(format!(
+        writer.write_doc(&format!(
+            "Creates an agent, and resolves after its initialization. With `keyed`, it creates the keyed agent of the constructor parameters, and rejects with a `GolemServiceError` of status 409 when that agent exists; otherwise the new agent has no key and a new ID. `config` overrides local configuration values, and `env` adds environment variables to the ones the manifest defines.\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut method = writer.begin_static_async_method("create");
+        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
+        method.param(
+            &format!("{}?", names.options),
+            &self.create_options_type(&local_configs, self.has_external_streams())?,
+        );
+        method.result(class_name);
+
+        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
+        self.write_encode_input_record(
+            &mut method,
+            &self.agent_type.constructor.input_schema,
+            MULTIMODAL_INPUT_NAME,
+        )?;
+        self.write_public_constructor_parameters(&mut method, &names)?;
+        self.write_config_option_locals(
+            &mut method,
+            &names.options,
+            &local_configs,
+            &names.config_parameters,
+        );
+        self.write_config_encoding(&mut method, &local_configs, &names)?;
+        method.write_line(format!("const {} = {config_var};", names.config));
+        method.write_line(format!(
             "if (!{}) {{ throw new Error(\"{agent_type_name} configuration is not set\"); }}",
             names.config
         ));
-        writer.write_line(format!(
+        method.write_line(format!(
+            "const {} = {}?.keyed ?? false;",
+            names.keyed, names.options
+        ));
+        method.write_line(format!(
             "const {} = await base.createAgent({}.server, {{",
             names.create_response, names.config
         ));
-        writer.indent();
-        writer.write_line(format!("appName: {}.application,", names.config));
-        writer.write_line(format!("envName: {}.environment,", names.config));
-        writer.write_line(format!("agentTypeName: \"{agent_type_name}\","));
-        writer.write_line(format!("parameters: {},", names.parameters));
-        writer.write_line(format!("phantomId: {},", names.phantom_id));
-        writer.write_line(format!("config: {agent_config_expr},"));
-        writer.unindent();
-        writer.write_line("});");
-    }
-
-    /// Generates the `getWithConfig` constructor method
-    fn generate_ts_constructor_get_with_config_method(
-        &self,
-        writer: &mut TsWriter,
-        class_name: &str,
-        config_var: &str,
-        local_configs: &[&AgentConfigDeclarationSchema],
-    ) -> anyhow::Result<()> {
-        let names = self.external_constructor_names(local_configs)?;
-        writer.write_doc(&format!(
-            "Gets or creates an instance of this agent with configuration\n{}",
-            self.agent_type.constructor.description
-        ));
-        let mut method = writer.begin_static_async_method("getWithConfig");
-        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_config_parameter_list(&mut method, local_configs, &names.config_parameters)?;
-        method.result(class_name);
-
-        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
-        self.write_encode_input_record(
-            &mut method,
-            &self.agent_type.constructor.input_schema,
-            MULTIMODAL_INPUT_NAME,
-        )?;
-        self.write_public_constructor_parameters(&mut method, &names)?;
-        method.write_line(format!("const {} = undefined;", names.phantom_id));
-        self.write_config_encoding(&mut method, local_configs, &names)?;
-        self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
+        method.indent();
+        method.write_line(format!("appName: {}.application,", names.config));
+        method.write_line(format!("envName: {}.environment,", names.config));
+        method.write_line(format!("agentTypeName: \"{agent_type_name}\","));
+        method.write_line(format!("parameters: {},", names.parameters));
+        method.write_line(format!("keyed: {},", names.keyed));
+        method.write_line(format!("config: {},", names.agent_config));
+        method.write_line(format!("env: {}?.env ?? {{}},", names.options));
+        method.unindent();
+        method.write_line("});");
+        let public_parameters =
+            format!("{} ? {} : undefined", names.keyed, names.public_parameters);
         method.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId{});",
+            "return new {class_name}({} ? {} : undefined, {}{});",
+            names.keyed,
             names.parameters,
-            names.phantom_id,
             names.create_response,
-            self.external_public_constructor_args(&names)
+            self.external_public_constructor_args(&public_parameters)
         ));
-
         Ok(())
     }
 
-    /// Generates the `getPhantomWithConfig` constructor method
-    fn generate_ts_constructor_get_phantom_with_config_method(
-        &self,
-        writer: &mut TsWriter,
-        class_name: &str,
-        config_var: &str,
-        local_configs: &[&AgentConfigDeclarationSchema],
-    ) -> anyhow::Result<()> {
-        let names = self.external_constructor_names(local_configs)?;
-        writer.write_doc(&format!(
-            "Gets or creates a phantom instance of this agent with configuration and a specific phantom ID\n{}",
-            self.agent_type.constructor.description
-        ));
-        let mut method = writer.begin_static_async_method("getPhantomWithConfig");
-        method.param(&names.phantom_id, "base.PhantomId");
-        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_config_parameter_list(&mut method, local_configs, &names.config_parameters)?;
+    /// Generates the `getById` constructor method. It fetches the agent's metadata, so an
+    /// unknown ID, or the ID of an agent of another type, rejects with a `GolemServiceError` of
+    /// status 404. The client pins the agent's fingerprint, which its invocations send as the
+    /// expected fingerprint.
+    fn generate_ts_constructor_get_by_id_method(&self, writer: &mut TsWriter, class_name: &str) {
+        writer.write_doc(
+            "Returns a client of the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, rejects with a `GolemServiceError` of status 404. The invocations of the client fail when the agent was deleted and created again after this call.",
+        );
+        let mut method = writer.begin_static_async_method("getById");
+        method.param("agentId", "base.AgentId");
         method.result(class_name);
-
-        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
-        self.write_encode_input_record(
-            &mut method,
-            &self.agent_type.constructor.input_schema,
-            MULTIMODAL_INPUT_NAME,
-        )?;
-        self.write_public_constructor_parameters(&mut method, &names)?;
-        self.write_config_encoding(&mut method, local_configs, &names)?;
-        self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
+        method.write_line(format!("const config = {class_name}.getConfiguration();"));
         method.write_line(format!(
-            "return new {class_name}({}, {}, {}.agentId{});",
-            names.parameters,
-            names.phantom_id,
-            names.create_response,
-            self.external_public_constructor_args(&names)
+            "const target = await base.getAgent(config.server, {{ appName: config.application, envName: config.environment, agentTypeName: \"{}\" }}, agentId);",
+            self.agent_type.type_name.0
         ));
-
-        Ok(())
-    }
-
-    /// Generates the `newPhantomWithConfig` constructor method
-    fn generate_ts_constructor_new_phantom_with_config_method(
-        &self,
-        writer: &mut TsWriter,
-        class_name: &str,
-        config_var: &str,
-        local_configs: &[&AgentConfigDeclarationSchema],
-    ) -> anyhow::Result<()> {
-        let names = self.external_constructor_names(local_configs)?;
-        writer.write_doc(&format!(
-            "{}\n{}",
-            self.new_phantom_description(),
-            self.agent_type.constructor.description
+        let public_parameters = if self.has_external_streams() {
+            ", undefined"
+        } else {
+            ""
+        };
+        method.write_line(format!(
+            "return new {class_name}(undefined, target{public_parameters});"
         ));
-        let mut method = writer.begin_static_async_method("newPhantomWithConfig");
-        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
-        self.write_config_parameter_list(&mut method, local_configs, &names.config_parameters)?;
-        method.result(class_name);
-
-        method.write_line(format!("const {}: base.SchemaValue = ", names.parameters));
-        self.write_encode_input_record(
-            &mut method,
-            &self.agent_type.constructor.input_schema,
-            MULTIMODAL_INPUT_NAME,
-        )?;
-        self.write_public_constructor_parameters(&mut method, &names)?;
-        method.write_line(if self.agent_type.mode == AgentMode::Ephemeral {
-            format!("const {} = undefined;", names.phantom_id)
-        } else {
-            format!("const {} = uuidv4();", names.phantom_id)
-        });
-        self.write_config_encoding(&mut method, local_configs, &names)?;
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            method.write_line(format!(
-                "return new {class_name}({}, {}, {}{});",
-                names.parameters,
-                names.phantom_id,
-                names.agent_config,
-                self.external_public_constructor_args(&names)
-            ));
-        } else {
-            self.write_create_agent_call(&mut method, config_var, &names.agent_config, &names);
-            method.write_line(format!(
-                "return new {class_name}({}, {}, {}.agentId{});",
-                names.parameters,
-                names.phantom_id,
-                names.create_response,
-                self.external_public_constructor_args(&names)
-            ));
-        }
-
-        Ok(())
     }
 
     fn external_constructor_names(
         &self,
         local_configs: &[&AgentConfigDeclarationSchema],
     ) -> anyhow::Result<ExternalConstructorNames> {
-        let mut naming = ParameterNaming::new();
-        match self.ts_input(&self.agent_type.constructor.input_schema)? {
-            TsInput::Params(params) => {
-                naming.reserve_many(params.into_iter().map(|(name, _)| name));
-            }
-            TsInput::Multimodal(_) => naming.reserve(MULTIMODAL_INPUT_NAME),
-        }
+        let mut naming = self.constructor_parameter_naming()?;
+        let options = naming.fresh("options");
         let config_parameters = local_configs
             .iter()
-            .map(|config| {
-                naming.fresh(format!(
-                    "config{}",
-                    config
-                        .path
-                        .iter()
-                        .map(|part| part.to_upper_camel_case())
-                        .collect::<String>()
-                ))
-            })
+            .map(|config| naming.fresh(Self::guest_config_parameter_name(config)))
             .collect::<Vec<_>>();
         let config_values = local_configs
             .iter()
             .map(|_| naming.fresh("configValue"))
             .collect();
         Ok(ExternalConstructorNames {
+            options,
             config_parameters,
             config_values,
             parameters: naming.fresh("parameters"),
             public_parameters: naming.fresh("publicParameters"),
-            phantom_id: naming.fresh("phantomId"),
             agent_config: naming.fresh("agentConfig"),
-            public_config: naming.fresh("publicConfig"),
             config: naming.fresh("__config"),
+            keyed: naming.fresh("keyed"),
             create_response: naming.fresh("__createResponse"),
         })
     }
 
-    /// Writes optional config parameters to the method signature
-    fn write_config_parameter_list(
-        &self,
-        writer: &mut TsFunctionWriter<'_>,
-        local_configs: &[&AgentConfigDeclarationSchema],
-        config_names: &[String],
-    ) -> anyhow::Result<()> {
-        for (config, param_name) in local_configs.iter().zip(config_names) {
-            let param_type = if self.has_external_streams() {
-                self.streaming_type_reference(&config.value_type)?
-            } else {
-                self.type_reference(&config.value_type)?
-            };
-            writer.param(&format!("{param_name}?"), &param_type);
-        }
-        Ok(())
-    }
-
-    /// Writes code that builds the agentConfig array from optional config params
+    /// Writes code that builds the agentConfig array from the configuration values of the
+    /// `config` create option
     fn write_config_encoding(
         &self,
         writer: &mut TsFunctionWriter<'_>,
@@ -1838,12 +1711,6 @@ impl TypeScriptBridgeGenerator {
             "const {}: base.AgentConfigEntry[] = [];",
             names.agent_config
         ));
-        if self.has_external_streams() {
-            writer.write_line(format!(
-                "const {}: base.AgentConfigEntry[] = [];",
-                names.public_config
-            ));
-        }
         for ((config, param_name), application_name) in local_configs
             .iter()
             .zip(&names.config_parameters)
@@ -1862,12 +1729,6 @@ impl TypeScriptBridgeGenerator {
                 "{}.push({{ path: {path}, value: {application_name} }});",
                 names.agent_config
             ));
-            if self.has_external_streams() {
-                writer.write_line(format!(
-                    "{}.push({{ path: {path}, value: {application_name} }});",
-                    names.public_config
-                ));
-            }
             writer.unindent();
             writer.write_line("}");
         }
@@ -1894,22 +1755,9 @@ impl TypeScriptBridgeGenerator {
         Ok(())
     }
 
-    fn write_empty_public_config(
-        &self,
-        writer: &mut TsFunctionWriter<'_>,
-        names: &ExternalConstructorNames,
-    ) {
+    fn external_public_constructor_args(&self, public_parameters: &str) -> String {
         if self.has_external_streams() {
-            writer.write_line(format!(
-                "const {}: Array<{{ path: string[]; value: base.PublicValue }}> = [];",
-                names.public_config
-            ));
-        }
-    }
-
-    fn external_public_constructor_args(&self, names: &ExternalConstructorNames) -> String {
-        if self.has_external_streams() {
-            format!(", {}, {}", names.public_parameters, names.public_config)
+            format!(", {public_parameters}")
         } else {
             String::new()
         }
@@ -1930,13 +1778,45 @@ impl TypeScriptBridgeGenerator {
         get_config.write_line(format!("return {};", config_var));
     }
 
-    /// Generates a public getter for the agent's identity
+    /// Generates a private helper method for the constructor parameters of a streaming
+    /// invocation, which names the agent by its key
+    fn generate_ts_streaming_parameters_getter(&self, writer: &mut TsWriter) {
+        let mut getter = writer.begin_private_method("__getPublicParameters");
+        getter.result("base.PublicValue");
+        getter.write_line("if (this.publicParameters === undefined) {");
+        getter.write_line(format!(
+            "  throw new Error(\"A streaming invocation names the agent by its key: use a {} client of upsert, or of a keyed create\");",
+            self.agent_type.type_name.0
+        ));
+        getter.write_line("}");
+        getter.write_line("return this.publicParameters;");
+    }
+
+    /// Generates the public method that returns the agent's ID
     fn generate_ts_agent_id_getter(&self, writer: &mut TsWriter) {
-        writer
-            .write_doc("Returns the agent's identity, containing the component ID and agent name.");
-        let mut get_agent_id = writer.begin_method("get agentId");
+        writer.write_doc(
+            "Returns the ID of the agent. On a client of `upsert` it asks the server the first time, and the server creates the agent when it is missing.",
+        );
+        let mut get_agent_id = writer.begin_async_method("agentId");
         get_agent_id.result("base.AgentId");
-        get_agent_id.write_line("return this._agentId;");
+        get_agent_id.write_line("if (this.#agentId === undefined) {");
+        get_agent_id.indent();
+        get_agent_id.write_line("const config = this.__getConfig();");
+        get_agent_id.write_line("const reference = await base.upsertAgent(config.server, {");
+        get_agent_id.indent();
+        get_agent_id.write_line("appName: config.application,");
+        get_agent_id.write_line("envName: config.environment,");
+        get_agent_id.write_line(format!(
+            "agentTypeName: \"{}\",",
+            self.agent_type.type_name.0
+        ));
+        get_agent_id.write_line("parameters: this.parameters!,");
+        get_agent_id.unindent();
+        get_agent_id.write_line("});");
+        get_agent_id.write_line("this.#agentId = reference.agentId;");
+        get_agent_id.unindent();
+        get_agent_id.write_line("}");
+        get_agent_id.write_line("return this.#agentId;");
     }
 
     /// Generates a public static method to access the current configuration
@@ -1962,14 +1842,7 @@ impl TypeScriptBridgeGenerator {
         _class_name: &str,
     ) -> anyhow::Result<()> {
         let mut names = ParameterNaming::new();
-        names.reserve_many([
-            "parameters",
-            "phantomId",
-            "_agentId",
-            "constructor",
-            "__getConfig",
-            "agentId",
-        ]);
+        names.reserve_many(EXTERNAL_MEMBER_NAMES.iter().copied());
         for method_def in &self.agent_type.methods {
             let name = names.fresh(self.to_js_ident(&method_def.name));
             self.generate_ts_remote_method(writer, method_def, &name)?;
@@ -2070,7 +1943,7 @@ impl TypeScriptBridgeGenerator {
         };
         writer.write_doc(&method.description);
         writer.write_line(format!(
-            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig(), () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.publicParameters, phantomId: this.phantomId, config: this.publicConfig, method: {:?} }}), {}, (value: any, stream: any) => {{ {decode_body} }});",
+            "readonly {member_name}: base.StreamingRemoteMethod<[{args}], {result}> = base.createStreamingRemoteMethod<[{args}], {result}>(() => this.__getConfig(), () => ({{ application: this.__getConfig().application, environment: this.__getConfig().environment, agentType: {:?}, constructorParameters: this.__getPublicParameters(), config: [], method: {:?} }}), {}, (value: any, stream: any) => {{ {decode_body} }});",
             self.agent_type.type_name.0, method.name, encode.build().trim()
         ));
         Ok(())
@@ -2588,10 +2461,14 @@ impl TypeScriptBridgeGenerator {
             "agentTypeName: \"{}\",",
             self.agent_type.type_name.0
         ));
-        get_method_request.write_line("parameters: this.parameters,");
-        get_method_request.write_line("phantomId: this.phantomId,");
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            get_method_request.write_line("config: this.#agentConfig,");
+        if self.agent_type.mode == AgentMode::Durable {
+            get_method_request.write_line("agentId: this.#target?.agentId,");
+            get_method_request.write_line(
+                "parameters: this.#target === undefined ? this.parameters : undefined,",
+            );
+            get_method_request.write_line("expectedFingerprint: this.#target?.agentFingerprint,");
+        } else {
+            get_method_request.write_line("parameters: this.parameters,");
         }
         get_method_request.write_line(format!("methodName: \"{}\",", method_def.name));
         get_method_request.write_line("mode: \"await\",");

@@ -14,14 +14,14 @@
 
 use crate::benchmarks::{
     cleanup_account, cleanup_env_and_app, delete_workers, invoke_and_await_agent,
+    lookup_keyed_agent,
 };
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
 };
@@ -269,7 +269,7 @@ impl ColdStartUnknownBenchmark {
                 .await
                 .unwrap();
 
-            let agent_id = agent_id!(&self.agent_type_name, "test");
+            let agent_id = agent_key!(&self.agent_type_name, "test");
             agents.push((component, agent_id));
         }
 
@@ -322,11 +322,16 @@ impl ColdStartUnknownBenchmark {
         iteration: IterationContext,
         recorder: BenchmarkRecorder,
     ) {
-        let agent_ids: Vec<AgentId> = iteration
+        let agent_ids = iteration
             .agents
             .iter()
-            .filter_map(|(component, agent_id)| AgentId::from_agent_id(component.id, agent_id).ok())
-            .collect();
+            .map(|(component, key)| lookup_keyed_agent(&iteration.user, component, key))
+            .collect::<Vec<_>>()
+            .join()
+            .await
+            .into_iter()
+            .filter_map(|result| result.ok())
+            .collect::<Vec<_>>();
         delete_workers(&iteration.user, &agent_ids, &recorder).await;
         // Clean up each env/app individually, then delete the account once.
         // This avoids the account being deleted on the first env cleanup and

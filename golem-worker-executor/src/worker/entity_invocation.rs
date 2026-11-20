@@ -1457,10 +1457,7 @@ mod tests {
 
         let (owner, operation) = cleanup_operation();
         let fence = crate::services::oplog::OplogFence {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "cleanup-fenced".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, 1),
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
         };
@@ -1660,10 +1657,7 @@ mod tests {
         let close = control.block("close");
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "active-cleanup".into(),
-            },
+            &AgentId::from_parts(7, 2),
         ));
         let permit = lane
             .enter_primary(OplogIndex::from_u64(1))
@@ -1749,10 +1743,7 @@ mod tests {
     async fn pre_acquired_body_does_not_repeat_lane_await_after_parent_end() {
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".to_string(),
-            },
+            &AgentId::from_parts(7, 3),
         ));
         let inactive_parent = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
 
@@ -1819,10 +1810,7 @@ mod tests {
         use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
         let owner = golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".into(),
-            },
+            &AgentId::from_parts(7, 4),
         );
         let activation = Arc::new(
             EntityActivation::new(
@@ -1986,10 +1974,7 @@ mod tests {
 
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "cleanup".into(),
-            },
+            &AgentId::from_parts(7, 5),
         ));
         let permit = lane
             .enter_primary(OplogIndex::from_u64(1))

@@ -873,7 +873,6 @@ pub(in crate::durable_host) async fn drain_dropped_call_events_initiation<Ctx: W
 pub(super) mod tests {
     use super::super::tests::InMemoryOplog;
     use super::*;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::{SpanFinished, SpanOutcome};
     use golem_common::model::regions::DeletedRegions;
@@ -907,10 +906,7 @@ pub(super) mod tests {
         let replay = ReplayState::new_for_owner(
             OwnedAgentId {
                 environment_id: EnvironmentId::new(),
-                agent_id: AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "cleanup-test".to_string(),
-                },
+                agent_id: AgentId::from_parts(7, 1),
             },
             oplog.clone(),
             DeletedRegions::default(),

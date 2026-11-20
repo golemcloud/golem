@@ -1,57 +1,4 @@
 ///|
-test "full binding accepts a matching name and constructor shape" {
-  validate_full_id(
-    "MarketAnalyst",
-    {
-      type_name: "MarketAnalyst",
-      constructor_value: @model.SchemaValue::String("markets"),
-      phantom_id: None,
-    },
-    (@schema.type_tag() : @schema.TypeTag[String]),
-  )
-}
-
-///|
-test "full binding rejects a different agent name" {
-  try
-    validate_full_id(
-      "MarketAnalyst",
-      {
-        type_name: "OtherAgent",
-        constructor_value: @model.SchemaValue::String("markets"),
-        phantom_id: None,
-      },
-      (@schema.type_tag() : @schema.TypeTag[String]),
-    )
-  catch {
-    Identity(message) => assert_true(message.contains("OtherAgent"))
-    error => fail("unexpected error: \{repr(error)}")
-  } noraise {
-    _ => fail("expected the mismatched name to be rejected")
-  }
-}
-
-///|
-test "full binding rejects a different constructor shape" {
-  try
-    validate_full_id(
-      "MarketAnalyst",
-      {
-        type_name: "MarketAnalyst",
-        constructor_value: @model.SchemaValue::U64(42),
-        phantom_id: None,
-      },
-      (@schema.type_tag() : @schema.TypeTag[String]),
-    )
-  catch {
-    Identity(message) => assert_true(message.contains("constructor"))
-    error => fail("unexpected error: \{repr(error)}")
-  } noraise {
-    _ => fail("expected the mismatched constructor shape to be rejected")
-  }
-}
-
-///|
 fn custom_rpc_error(value : String) -> ReflectError raise {
   let typed = @schema.try_into_typed_schema_value(value)
   rpc_error(
@@ -70,6 +17,14 @@ test "agent RPC errors preserve variants and distinct custom payloads" {
   assert_eq(
     rpc_error(@agentHost.RpcError::Denied("no access")),
     ReflectError::Remote(AgentRpcError::Denied("no access")),
+  )
+  assert_eq(
+    rpc_error(@agentHost.RpcError::NotFound("no agent")),
+    ReflectError::Remote(AgentRpcError::NotFound("no agent")),
+  )
+  assert_eq(
+    rpc_error(@agentHost.RpcError::Conflict("the key is current")),
+    ReflectError::Remote(AgentRpcError::Conflict("the key is current")),
   )
   let first = custom_rpc_error("first")
   let second = custom_rpc_error("second")
@@ -100,9 +55,9 @@ test "reflected output rejection releases stale and unexpected streams" {
   let invocation = fn(id : Int32) -> Invocation[@model.SchemaValue?] {
     {
       metadata: {
-        agent_id: { value: "agent", },
+        agent_id: @schema.AgentId::from_uuid(@schema.Uuid::from_bits(0, 2)),
         invocation_id: @rpc.InvocationId::new(
-          "agent",
+          @schema.AgentId::from_uuid(@schema.Uuid::from_bits(0, 2)),
           @schema.Uuid::from_bits(0, 1),
         ),
       },

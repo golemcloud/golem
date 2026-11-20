@@ -104,6 +104,7 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
@@ -115,7 +116,6 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         invocation_id: Option<DurableInvocationId>,
-        forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError>;
@@ -533,9 +533,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
-        OwnerKind::ComponentAgent
-            .validate_instance_name(&target_agent_id.agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -547,13 +544,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
         if source_agent_id == target_agent_id {
-            return Err(WorkerExecutorError::worker_already_exists(
-                target_agent_id.clone(),
-            ));
+            return Err(WorkerExecutorError::worker_already_exists(*target_agent_id));
         }
-        if source_agent_id.component_id != target_agent_id.component_id {
+        OwnerKind::ComponentAgent
+            .validate_agent_id(target_agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if source_agent_id.type_id() != target_agent_id.type_id() {
             return Err(WorkerExecutorError::invalid_request(
-                "Source and target must belong to the same component",
+                "Source and target must have the same agent type",
             ));
         }
 
@@ -568,9 +566,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .worker_service
             .get(&owned_source_agent_id)
             .await?
-            .ok_or(WorkerExecutorError::worker_not_found(
-                source_agent_id.clone(),
-            ))?;
+            .ok_or(WorkerExecutorError::worker_not_found(*source_agent_id))?;
         if source_metadata.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
             return Err(WorkerExecutorError::invalid_request(
                 "Only component-agent owners can be forked",
@@ -624,7 +620,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        let target_agent_id = owned_target_agent_id.agent_id.clone();
+        let target_agent_id = owned_target_agent_id.agent_id;
         let environment_id = owned_target_agent_id.environment_id;
 
         let source = self
@@ -669,10 +665,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // preserves the source's `created_by`), and that resource consumption
         // is attributed to the component owner, not the caller.
         let target_worker_metadata = AgentMetadata {
-            agent_id: target_agent_id.clone(),
+            agent_id: target_agent_id,
             component_id: initial_source_worker_metadata.component_id,
             agent_type_name: initial_source_worker_metadata.agent_type_name.clone(),
             canonical_key: None,
+            constructor_parameters: initial_source_worker_metadata.constructor_parameters,
             owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
@@ -682,7 +679,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
-            original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
             create_request: fork_request.clone(),
@@ -829,8 +825,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         for oplog_index in oplog_range {
             let mut entry = rewrite_forked_oplog_entry(
                 read_source(oplog_index).await?,
-                &owned_source_agent_id.agent_id,
-                &owned_target_agent_id.agent_id,
+                &owned_source_agent_id,
+                &owned_target_agent_id,
             );
             copied_bytes = copied_bytes.saturating_add(
                 golem_common::serialization::serialize(&entry)
@@ -1020,7 +1016,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             let producer = DurableStreamStore::load(
                 new_oplog.clone(),
                 environment_id,
-                target_agent_id.clone(),
+                target_agent_id,
                 AgentFingerprint(instance_id),
                 None,
             )
@@ -1075,9 +1071,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source: &OwnedAgentId,
         target_agent_id: &AgentId,
         cut: OplogIndex,
-        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
             source.environment_id,
@@ -1090,8 +1087,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .worker_service
             .get(source)
             .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id.clone()))?
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id))?
             .initial_worker_metadata;
+        if expected_fingerprint.is_some_and(|expected| expected != source_metadata.fingerprint) {
+            return Err(WorkerExecutorError::worker_not_found(source.agent_id));
+        }
         let hash =
             publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
                 .map_err(WorkerExecutorError::runtime)?;
@@ -1128,10 +1128,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // Resume can fail after publication, so retries reconcile the immutable marker and
         // retry this operation without replacing the fork or appending a second synthetic result.
         self.worker_proxy
-            .resume(target_agent_id, true, auth_ctx)
+            .resume(&target, true, auth_ctx)
             .await
             .map_err(|error| {
-                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), error.into())
+                WorkerExecutorError::failed_to_resume_worker(*target_agent_id, error.into())
             })
     }
 
@@ -1149,7 +1149,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         cut: OplogIndex,
         source_fingerprint: AgentFingerprint,
         hash: [u8; 32],
-        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+        guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
         fork_request: &CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
@@ -1171,9 +1171,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     fork_request,
                 )
                 .await?;
-            if let Some((scope, invocation_id, phantom)) = guest_result {
-                publication::write_guest_result(oplog.as_ref(), scope, invocation_id, phantom)
-                    .await?;
+            if let Some((scope, invocation_id)) = guest_result {
+                publication::write_guest_result(
+                    oplog.as_ref(),
+                    scope,
+                    invocation_id,
+                    &target.agent_id,
+                )
+                .await?;
             }
             oplog.commit(CommitLevel::Always).await?;
             let last = oplog.current_oplog_index().await;
@@ -1249,7 +1254,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 timestamp,
                 mut parameters,
             } => {
-                parameters.agent_id = agent_id.clone();
+                parameters.agent_id = *agent_id;
                 parameters.instance_id = instance_id;
                 parameters.canonical_key = None;
                 parameters.create_request = fork_request;
@@ -1265,25 +1270,30 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
 fn rewrite_forked_agent_holder(
     holder: &mut CardHolder,
-    source_agent_id: &AgentId,
-    target_agent_id: &AgentId,
+    source_agent_id: &OwnedAgentId,
+    target_agent_id: &OwnedAgentId,
 ) {
-    if matches!(holder, CardHolder::Agent(holder) if holder.agent_id == *source_agent_id) {
+    if matches!(holder, CardHolder::Agent(holder)
+        if holder.environment_id == source_agent_id.environment_id
+            && holder.agent_id == source_agent_id.agent_id)
+    {
         *holder = CardHolder::Agent(AgentCardHolder {
-            agent_id: target_agent_id.clone(),
+            environment_id: target_agent_id.environment_id,
+            agent_id: target_agent_id.agent_id,
         });
     }
 }
 
 fn rewrite_forked_oplog_entry(
     mut entry: OplogEntry,
-    source_agent_id: &AgentId,
-    target_agent_id: &AgentId,
+    source_agent_id: &OwnedAgentId,
+    target_agent_id: &OwnedAgentId,
 ) -> OplogEntry {
     match &mut entry {
         OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
             wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
-                agent_id: target_agent_id.clone(),
+                environment_id: target_agent_id.environment_id,
+                agent_id: target_agent_id.agent_id,
             })
             .wallet_id_hash();
         }
@@ -1334,6 +1344,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1343,6 +1354,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             None,
             auth_ctx,
             fork_request,
+            expected_fingerprint,
         )
         .await
     }
@@ -1355,7 +1367,6 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         copied_scope_start: Option<OplogIndex>,
         invocation_id: Option<DurableInvocationId>,
-        forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
     ) -> Result<(), WorkerExecutorError> {
@@ -1364,9 +1375,10 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             source_agent_id,
             target_agent_id,
             oplog_index_cut_off,
-            Some((copied_scope_start, invocation_id, forked_phantom_id)),
+            Some((copied_scope_start, invocation_id)),
             auth_ctx,
             fork_request,
+            None,
         )
         .await
     }
@@ -1525,16 +1537,27 @@ mod tests {
     use test_r::test;
 
     fn agent_id(name: &str) -> AgentId {
-        AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: name.to_string(),
-        }
+        crate::test_agent_id(name)
+    }
+
+    fn owned_agent_id(name: &str) -> OwnedAgentId {
+        OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId(Uuid::from_u128(1)),
+            &agent_id(name),
+        )
+    }
+
+    fn holder(owned_agent_id: &OwnedAgentId) -> CardHolder {
+        CardHolder::Agent(AgentCardHolder {
+            environment_id: owned_agent_id.environment_id,
+            agent_id: owned_agent_id.agent_id,
+        })
     }
 
     #[test]
     fn fork_rewrites_invocation_wallet_identity() {
-        let source = agent_id("source");
-        let target = agent_id("target");
+        let source = owned_agent_id("source");
+        let target = owned_agent_id("target");
         let entry = OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: test_invocation_id("fork-wallet-pin".to_string()),
@@ -1549,10 +1572,7 @@ mod tests {
             invocation_context: Vec::new(),
             wallet_pin: Box::new(InvocationWalletPin {
                 wallet_token: WalletVersionToken {
-                    wallet_id_hash: CardHolder::Agent(AgentCardHolder {
-                        agent_id: source.clone(),
-                    })
-                    .wallet_id_hash(),
+                    wallet_id_hash: holder(&source).wallet_id_hash(),
                     generation: 7,
                 },
                 pinned_card_ids: Vec::new(),
@@ -1563,7 +1583,7 @@ mod tests {
         match rewrite_forked_oplog_entry(entry, &source, &target) {
             OplogEntry::AgentInvocationStarted { wallet_pin, .. } => assert_eq!(
                 wallet_pin.wallet_token.wallet_id_hash,
-                CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
+                holder(&target).wallet_id_hash()
             ),
             other => panic!("expected pinned invocation start, got {other:?}"),
         }
@@ -1592,8 +1612,8 @@ mod tests {
             &InvocationContextStack::fresh_rounded(),
         );
         let entry = OplogEntry::create(Box::new(CreateParameters {
-            agent_id: source.clone(),
-            component_id: source.component_id,
+            agent_id: source,
+            component_id: ComponentId(Uuid::from_u128(2)),
             agent_type_name: None,
             canonical_key: None,
             owner_kind: OwnerKind::ComponentAgent,
@@ -1607,7 +1627,7 @@ mod tests {
             initial_total_linear_memory_size: 100,
             initial_active_plugins: HashSet::new(),
             local_agent_config: vec![],
-            original_phantom_id: None,
+            constructor_parameters: None,
             instance_id: Uuid::new_v4(),
             create_request: source_request,
             never_live: false,
@@ -1631,20 +1651,16 @@ mod tests {
 
     #[test]
     fn fork_rewrites_only_local_transfer_holders() {
-        let source = agent_id("source");
-        let target = agent_id("target");
-        let remote = agent_id("remote");
+        let source = owned_agent_id("source");
+        let target = owned_agent_id("target");
+        let remote = owned_agent_id("remote");
         let entry = OplogEntry::CardTransferStarted {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: CardId::new(),
-            source_holder: CardHolder::Agent(AgentCardHolder {
-                agent_id: source.clone(),
-            }),
-            target_holder: CardHolder::Agent(AgentCardHolder {
-                agent_id: remote.clone(),
-            }),
+            source_holder: holder(&source),
+            target_holder: holder(&remote),
             source_wallet_generation: 8,
         };
 
@@ -1654,14 +1670,8 @@ mod tests {
                 target_holder,
                 ..
             } => {
-                assert_eq!(
-                    source_holder,
-                    CardHolder::Agent(AgentCardHolder { agent_id: target })
-                );
-                assert_eq!(
-                    target_holder,
-                    CardHolder::Agent(AgentCardHolder { agent_id: remote })
-                );
+                assert_eq!(source_holder, holder(&target));
+                assert_eq!(target_holder, holder(&remote));
             }
             other => panic!("expected transfer start, got {other:?}"),
         }

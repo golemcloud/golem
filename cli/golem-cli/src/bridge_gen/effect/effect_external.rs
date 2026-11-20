@@ -5,13 +5,14 @@
 
 use super::{effect_stream_alias, effect_type_reference};
 use crate::bridge_gen::parameter_naming::ParameterNaming;
-use crate::bridge_gen::typescript::{TsInput, TsOutput, TypeScriptBridgeGenerator};
+use crate::bridge_gen::typescript::{
+    EXTERNAL_MEMBER_NAMES, TsInput, TsOutput, TypeScriptBridgeGenerator,
+};
 use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::{AgentConfigSource, AgentMode};
+use golem_common::model::agent::AgentMode;
 use golem_common::schema::agent::{AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema};
 use golem_common::schema::schema_type::SchemaType;
-use heck::ToUpperCamelCase;
 use serde_json::json;
 
 const EFFECT_IDENTIFIERS: &[&str] = &[
@@ -145,17 +146,10 @@ impl EffectExternalBridgeGenerator {
         self.write_constructors(&mut out)?;
         out.push_str(&format!("  static getConfiguration(): base.Configuration {{ return transport.{class}.getConfiguration() }}\n"));
         if self.agent_type.mode == AgentMode::Durable {
-            out.push_str("  get agentId(): base.AgentId { return this.raw.agentId }\n");
+            out.push_str("  /** Returns the ID of the agent. On a client of `upsert` it asks the server the first time, and the server creates the agent when it is missing. */\n  agentId(): Effect.Effect<base.AgentId, unknown> {\n    const raw = this.raw\n    return Effect.tryPromise({ try: () => raw.agentId(), catch: error => error })\n  }\n");
         }
         let mut names = ParameterNaming::new();
-        names.reserve_many([
-            "parameters",
-            "phantomId",
-            "_agentId",
-            "constructor",
-            "__getConfig",
-            "agentId",
-        ]);
+        names.reserve_many(EXTERNAL_MEMBER_NAMES.iter().copied());
         for method in &self.agent_type.methods {
             self.write_method(
                 &mut out,
@@ -276,58 +270,86 @@ impl EffectExternalBridgeGenerator {
     }
 
     fn write_constructors(&self, out: &mut String) -> anyhow::Result<()> {
-        let configs: Vec<_> = self
-            .agent_type
-            .config
-            .iter()
-            .filter(|c| c.source == AgentConfigSource::Local)
-            .collect();
-        let mut variants = Vec::new();
+        let params = self.input(&self.agent_type.constructor.input_schema)?;
+        self.write_effect_call(out, true, "upsert", &params, 0, None, false)?;
         if self.agent_type.mode == AgentMode::Durable {
-            variants.extend([("get", false, false), ("getPhantom", true, false)]);
+            self.write_create(out, &params)?;
+            out.push_str("  /** Returns a client of the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, fails with a `GolemServiceError` of status 404. The invocations of the client fail when the agent was deleted and created again after this call. */\n");
+            self.write_effect_call(
+                out,
+                true,
+                "getById",
+                &[(
+                    "agentId".to_string(),
+                    SchemaType::String {
+                        metadata: Default::default(),
+                    },
+                )],
+                0,
+                None,
+                false,
+            )?;
         }
-        variants.push(("newPhantom", false, false));
-        if !configs.is_empty() {
-            if self.agent_type.mode == AgentMode::Durable {
-                variants.extend([
-                    ("getWithConfig", false, true),
-                    ("getPhantomWithConfig", true, true),
-                ]);
-            }
-            variants.push(("newPhantomWithConfig", false, true));
+        Ok(())
+    }
+
+    /// Writes `create`, whose options carry Effect-typed configuration values that are
+    /// converted one by one into the transport's `create` options.
+    fn write_create(
+        &self,
+        out: &mut String,
+        params: &[(String, SchemaType)],
+    ) -> anyhow::Result<()> {
+        let class = &self.agent_type.type_name.0;
+        let configs = self.inner.local_configs();
+        let mut naming = ParameterNaming::new();
+        naming.reserve_many(params.iter().map(|(name, _)| name.clone()));
+        let options = naming.fresh("options");
+        let value = naming.fresh("value");
+        let signature = self.signature(params, 0)?;
+        let options_type = self.effect_type(
+            self.inner
+                .create_options_type(&configs, self.inner.has_external_streams())?,
+        );
+        let separator = if signature.is_empty() { "" } else { ", " };
+        out.push_str(&format!(
+            "  static create({signature}{separator}{options}?: {options_type}): Effect.Effect<{class}, unknown> {{\n    return Effect.gen(function*() {{\n"
+        ));
+        let mut args = Vec::new();
+        for (index, (name, schema)) in params.iter().enumerate() {
+            let argument = naming.fresh(format!("__arg{index}"));
+            out.push_str(&format!(
+                "      const {argument} = yield* fromEffectValue({name}, {}, __schema, __memberNames)\n",
+                serde_json::to_string(schema)?
+            ));
+            args.push(argument);
         }
-        for (name, phantom, with_config) in variants {
-            let mut params = self.input(&self.agent_type.constructor.input_schema)?;
-            let config_count = if with_config { configs.len() } else { 0 };
-            let mut naming = ParameterNaming::new();
-            naming.reserve_many(params.iter().map(|(name, _)| name.clone()));
-            if phantom {
-                params.insert(
-                    0,
-                    (
-                        naming.fresh("phantomId"),
-                        SchemaType::String {
-                            metadata: Default::default(),
-                        },
-                    ),
-                );
-            }
-            if with_config {
-                params.extend(configs.iter().map(|c| {
-                    (
-                        naming.fresh(format!(
-                            "config{}",
-                            c.path
-                                .iter()
-                                .map(|p| p.to_upper_camel_case())
-                                .collect::<String>()
-                        )),
-                        c.value_type.clone(),
-                    )
-                }));
-            }
-            self.write_effect_call(out, true, name, &params, config_count, None, false)?;
+        let mut tree = ConfigTree::default();
+        for config in &configs {
+            let local = naming.fresh("__config");
+            let access = config
+                .path
+                .iter()
+                .map(|segment| Ok(format!("?.[{}]", serde_json::to_string(segment)?)))
+                .collect::<anyhow::Result<String>>()?;
+            out.push_str(&format!(
+                "      const {local} = yield* fromEffectValue({options}?.config{access}, {}, __schema, __memberNames)\n",
+                serde_json::to_string(&config.value_type)?
+            ));
+            tree.insert(&config.path, local);
         }
+        let config = if configs.is_empty() {
+            String::new()
+        } else {
+            format!(", config: {}", tree.render()?)
+        };
+        args.push(format!(
+            "{{ keyed: {options}?.keyed, env: {options}?.env{config} }}"
+        ));
+        out.push_str(&format!(
+            "      const {value} = yield* Effect.tryPromise({{ try: () => transport.{class}.create({}), catch: error => error }})\n      return new {class}({value})\n    }})\n  }}\n",
+            args.join(", ")
+        ));
         Ok(())
     }
 
@@ -444,6 +466,12 @@ impl EffectExternalBridgeGenerator {
             format!("    const {raw} = this.raw\n")
         };
         let requirements = if streaming { ", Scope.Scope" } else { "" };
+        // A constructor of the transport may return its client synchronously.
+        let try_fn = if constructor {
+            "async ()".to_string()
+        } else {
+            signal.clone()
+        };
         let session = if streaming {
             format!(
                 "      const {controller} = yield* Effect.acquireRelease(Effect.sync(() => new AbortController()), controller => Effect.sync(() => controller.abort()))\n"
@@ -458,7 +486,7 @@ impl EffectExternalBridgeGenerator {
         } else {
             String::new()
         };
-        out.push_str(&format!("  {}{name}({signature}): Effect.Effect<{result}, unknown{requirements}> {{\n{raw_capture}    return Effect.gen(function*() {{\n{session}{converted_declarations}      const {value} = yield* Effect.tryPromise({{ try: {signal} => {invocation}, catch: error => error }}){on_failure}\n", if constructor { "static " } else { "" }));
+        out.push_str(&format!("  {}{name}({signature}): Effect.Effect<{result}, unknown{requirements}> {{\n{raw_capture}    return Effect.gen(function*() {{\n{session}{converted_declarations}      const {value} = yield* Effect.tryPromise({{ try: {try_fn} => {invocation}, catch: error => error }}){on_failure}\n", if constructor { "static " } else { "" }));
         if constructor {
             out.push_str(&format!(
                 "      return new {}({value})\n",
@@ -534,6 +562,52 @@ impl EffectExternalBridgeGenerator {
         };
         out.push_str(&format!("  {method}{variant}({signature}): Effect.Effect<ReturnType<transport.{0}['{method}']['{variant}']> extends Promise<infer R> ? R : ReturnType<transport.{0}['{method}']['{variant}']>, unknown> {{\n    const {raw} = this.raw\n    return Effect.gen(function*() {{\n{converted}      return yield* {attempt}({{ try: () => {raw}.{method}.{variant}({args}), catch: error => error }})\n    }})\n  }}\n", self.agent_type.type_name.0));
         Ok(())
+    }
+}
+
+/// The configuration values of a create, nested by their paths.
+#[derive(Default)]
+struct ConfigTree(Vec<(String, ConfigNode)>);
+
+enum ConfigNode {
+    Leaf(String),
+    Branch(ConfigTree),
+}
+
+impl ConfigTree {
+    fn insert(&mut self, path: &[String], value: String) {
+        let Some((head, rest)) = path.split_first() else {
+            return;
+        };
+        if rest.is_empty() {
+            self.0.push((head.clone(), ConfigNode::Leaf(value)));
+        } else if let Some((_, ConfigNode::Branch(child))) =
+            self.0.iter_mut().find(|(name, _)| name == head)
+        {
+            child.insert(rest, value);
+        } else {
+            let mut child = ConfigTree::default();
+            child.insert(rest, value);
+            self.0.push((head.clone(), ConfigNode::Branch(child)));
+        }
+    }
+
+    fn render(&self) -> anyhow::Result<String> {
+        let fields = self
+            .0
+            .iter()
+            .map(|(name, node)| {
+                Ok(format!(
+                    "{}: {}",
+                    serde_json::to_string(name)?,
+                    match node {
+                        ConfigNode::Leaf(value) => value.clone(),
+                        ConfigNode::Branch(child) => child.render()?,
+                    }
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(format!("{{ {} }}", fields.join(", ")))
     }
 }
 

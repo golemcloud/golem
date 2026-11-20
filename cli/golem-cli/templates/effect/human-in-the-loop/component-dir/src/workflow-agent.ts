@@ -25,7 +25,7 @@ export const WorkflowAgent = defineAgent({
     start: ({ approver }) =>
       Effect.gen(function* () {
         const promiseId = yield* Agents.Promises.create;
-        const human = yield* HumanAgent.client.get({ username: approver });
+        const human = yield* HumanAgent.client.upsert({ username: approver });
         const requestId = yield* Schema.decodeEffect(Ids.PromiseId)(promiseId);
         yield* human.requestApproval({ workflowId, promiseId: requestId });
         const bytes = yield* Agents.Promises.await(promiseId);

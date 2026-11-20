@@ -170,7 +170,7 @@ Dropping a retired scope card is safe.
 
 ```moonbit
 let scope = @permissions.derive_scope([parent], @permissions.Bounds::new(lower_positive=[grant]))
-let client = WorkerAgentClient::get("worker-1")
+let client = WorkerAgentClient::upsert("worker-1")
 defer client.drop()
 // Per call:
 let result = client.process(input, scope_card=scope)

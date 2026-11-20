@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
 import { vi } from "vitest"
+import { parseUuid } from "golem:core/types@2.0.0"
 import { Effect, Fiber, Redacted, Ref, Schema } from "effect"
 import { defineAgent, __resetAgents, dispatchSaveSnapshot } from "../src/Agent.js"
 import { SelfAgentId } from "../src/SelfAgentId.js"
@@ -641,8 +642,10 @@ describe("agent-guest exports", () => {
 
   it("reads self identity afresh within a method and snapshot, without rewriting saved state", async () => {
     const metadata = ApiHostMock.getSelfMetadata()
-    const parent = { ...metadata, agentId: { ...metadata.agentId, agentId: "Identity(parent)" } }
-    const child = { ...metadata, agentId: { ...metadata.agentId, agentId: "Identity(child)" } }
+    const parentId = "00000001-0000-8000-8000-0000000000a1"
+    const childId = "00000001-0000-8000-8000-0000000000c1"
+    const parent = { ...metadata, agentId: { uuid: parseUuid(parentId) } }
+    const child = { ...metadata, agentId: { uuid: parseUuid(childId) } }
     const host = vi.spyOn(ApiHostMock, "getSelfMetadata").mockReturnValue(parent)
     try {
       defineAgent({
@@ -651,7 +654,7 @@ describe("agent-guest exports", () => {
         snapshotting: Snapshot.custom({ policy: Snapshot.policy.manual }),
         methods: { read: method({ input: {}, success: Schema.String }) },
       }).implement({
-        init: () => SelfAgentId.pipe(Effect.map((id) => ({ saved: id.agentId }))),
+        init: () => SelfAgentId.pipe(Effect.map((id) => ({ saved: String(id) }))),
         methods: (state) => ({
           read: () =>
             Effect.gen(function* () {
@@ -659,8 +662,8 @@ describe("agent-guest exports", () => {
               const after = yield* SelfAgentId
               return JSON.stringify({
                 saved: state.saved,
-                before: before.agentId,
-                after: after.agentId,
+                before: String(before),
+                after: String(after),
               })
             }),
         }),
@@ -669,7 +672,7 @@ describe("agent-guest exports", () => {
             SelfAgentId.pipe(
               Effect.map((id) =>
                 new TextEncoder().encode(
-                  JSON.stringify({ saved: state.saved, current: id.agentId }),
+                  JSON.stringify({ saved: state.saved, current: String(id) }),
                 ),
               ),
             ),
@@ -681,17 +684,17 @@ describe("agent-guest exports", () => {
       host.mockReturnValueOnce(parent).mockReturnValue(child)
       const result = await withCaller(anonymousPrincipal, () => guest.invoke("read", wire()))
       expect(JSON.parse(read<string>(result!))).toEqual({
-        saved: "Identity(parent)",
-        before: "Identity(parent)",
-        after: "Identity(child)",
+        saved: parentId,
+        before: parentId,
+        after: childId,
       })
       const snapshot = await dispatchSaveSnapshot()
       const envelope = decodeEnvelope(snapshot)
       expect(envelope.kind).toBe("binary")
       if (envelope.kind !== "binary") throw new Error("expected binary snapshot")
       expect(JSON.parse(new TextDecoder().decode(envelope.userPayload))).toEqual({
-        saved: "Identity(parent)",
-        current: "Identity(child)",
+        saved: parentId,
+        current: childId,
       })
     } finally {
       host.mockRestore()

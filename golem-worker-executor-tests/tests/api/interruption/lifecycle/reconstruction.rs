@@ -57,7 +57,7 @@ mod completed_history {
             .component_dep(&context.default_environment_id, agent_counters)
             .store()
             .await?;
-        let name = agent_id!("Counter", "monthly-completed-replay");
+        let name = agent_key!("Counter", "monthly-completed-replay");
         let id = executor.start_agent(&component.id, name.clone()).await?;
         let key = IdempotencyKey::fresh();
         let result = executor
@@ -65,7 +65,7 @@ mod completed_history {
             .await?
             .into_typed::<u32>()?;
         assert_eq!(result, 1);
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        let owned = id.clone();
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -78,14 +78,14 @@ mod completed_history {
         assert!(worker.is_loaded().await);
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         let stored_key = executor
-            .external_invocation_key(&id, &key, "increment")
+            .external_invocation_key(&id.agent_id, &key, "increment")
             .await?;
         let original_tip = worker.oplog().current_oplog_index().await;
         let original = worker
             .oplog()
             .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
             .await?;
-        let original_raw = executor.stored_oplog(&id).await;
+        let original_raw = executor.stored_oplog(&id.agent_id).await;
         let started = |entries: &std::collections::BTreeMap<OplogIndex, OplogEntry>,
                        key: &golem_common::model::InvocationId| {
             entries
@@ -124,7 +124,7 @@ mod completed_history {
         let (replay_start, replay_finished, payload) =
             completed_invocation_payload(&original, &stored_key)?;
         assert_eq!((replay_start, replay_finished), (starts[0], finished_index));
-        let (replay, release_replay) = executor.gate_next_oplog_payload_read(&id, payload);
+        let (replay, release_replay) = executor.gate_next_oplog_payload_read(&id.agent_id, payload);
         // The public crash API ignores Idle. Restart the resident Worker through the same stop path.
         worker.set_interrupting(InterruptKind::Restart).await?;
         tokio::time::timeout(Duration::from_secs(10), replay)
@@ -203,7 +203,7 @@ mod completed_history {
             original
         );
         assert_eq!(started(&stopped, &stored_key), starts);
-        let stopped_raw = executor.stored_oplog(&id).await;
+        let stopped_raw = executor.stored_oplog(&id.agent_id).await;
         assert!(stopped_raw.len() >= original_raw.len());
         assert_eq!(&stopped_raw[..original_raw.len()], original_raw.as_slice());
         assert_eq!(
@@ -254,7 +254,7 @@ mod completed_history {
         );
         let new_key = IdempotencyKey::fresh();
         let stored_new_key = executor
-            .external_invocation_key(&id, &new_key, "increment")
+            .external_invocation_key(&id.agent_id, &new_key, "increment")
             .await?;
         assert_eq!(
             executor
@@ -298,7 +298,7 @@ mod completed_history {
         );
         assert_eq!(started(&recovered, &stored_key), starts);
         assert_eq!(started(&recovered, &stored_new_key).len(), 1);
-        let recovered_raw = executor.stored_oplog(&id).await;
+        let recovered_raw = executor.stored_oplog(&id.agent_id).await;
         assert!(recovered_raw.len() >= stopped_raw.len());
         assert_eq!(&recovered_raw[..stopped_raw.len()], stopped_raw.as_slice());
         assert_eq!(
@@ -437,7 +437,7 @@ mod post_export {
             .component_dep(&context.default_environment_id, http_tests)
             .store()
             .await?;
-        let name = agent_id!("HttpClient4");
+        let name = agent_key!("HttpClient4");
         let id = executor
             .start_agent_with(
                 &component.id,
@@ -446,8 +446,8 @@ mod post_export {
                 Vec::new(),
             )
             .await?;
-        wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
-        let owned = OwnedAgentId::new(context.default_environment_id, &id);
+        wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
+        let owned = id.clone();
         let active = executor.production_active_agent(&owned).await.unwrap();
         let worker = active.primary();
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -459,7 +459,7 @@ mod post_export {
         .context("initial idle permit release")?;
         let key = IdempotencyKey::fresh();
         let stored_key = executor
-            .external_invocation_key(&id, &key, "get_in_spawned_task_after_return")
+            .external_invocation_key(&id.agent_id, &key, "get_in_spawned_task_after_return")
             .await?;
         executor
             .invoke_agent_with_key(
@@ -474,14 +474,16 @@ mod post_export {
             .await
             .context("spawned HTTP request entered held handler")??;
         let (started, chunk) = pending_tail(&worker, &stored_key).await?;
-        let prefix = executor.stored_oplog(&id).await;
+        let prefix = executor.stored_oplog(&id.agent_id).await;
         limits.initialize_account(context.account_id).await?;
         let admitted_revision = registry.current_limits().monthly_policy_revision;
         eprintln!(
             "[monthly-tail] method Start={started}, HTTP chunk Start={chunk}, response body held"
         );
 
-        let (selected, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
+        let (selected, release_outcome) = executor
+            .gate_next_invocation_outcome_append(&id.agent_id)
+            .await;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy;
         exhausted.available_memory_gb_seconds = 0;
@@ -548,7 +550,7 @@ mod post_export {
                 worker.oplog().current_oplog_index().await.as_u64(),
             )
             .await?;
-        let stopped_raw = executor.stored_oplog(&id).await;
+        let stopped_raw = executor.stored_oplog(&id.agent_id).await;
         assert!(stopped_raw.len() >= prefix.len());
         assert_eq!(&stopped_raw[..prefix.len()], prefix.as_slice());
         assert!(

@@ -60,14 +60,13 @@ export const ComponentId = Schema.Struct({
 })
 
 /**
- * Schema for `golem:core/types@2.0.0`.AgentId.
+ * Schema for `golem:core/types@2.0.0`.AgentId. The decoded value is an `AgentId.AgentId`.
  *
  * @since 1.5.1
  * @category codecs
  */
 export const AgentId = Schema.Struct({
-  componentId: ComponentId,
-  agentId: Schema.String,
+  uuid: Uuid,
 })
 
 /**

@@ -112,12 +112,12 @@ struct FooAgentImpl {
 impl FooAgent for FooAgentImpl {
     fn new(opt_string: Option<String>) -> Self {
         FooAgentImpl {
-            client: BarAgentClient::get(opt_string),
+            client: BarAgentClient::upsert(opt_string),
         }
     }
 
     fn get_id(&self) -> String {
-        self.get_agent_id()
+        self.get_agent_id().uuid.to_string()
     }
 
     async fn fun_string(&self, string: String) -> String {
@@ -385,7 +385,7 @@ struct BarAgentImpl {
 #[agent_implementation]
 impl BarAgent for BarAgentImpl {
     fn new(opt_string: Option<String>) -> Self {
-        let _ = SingletonAgentClient::get();
+        let _ = SingletonAgentClient::upsert();
 
         BarAgentImpl {
             _id: opt_string.unwrap_or_else(|| "default_id".to_string()),
@@ -393,7 +393,7 @@ impl BarAgent for BarAgentImpl {
     }
 
     fn get_id(&self) -> String {
-        self.get_agent_id()
+        self.get_agent_id().uuid.to_string()
     }
 
     fn fun_string(&self, string: String) -> String {

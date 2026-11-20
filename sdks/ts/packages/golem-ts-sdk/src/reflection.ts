@@ -39,7 +39,9 @@ import type {
 import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
 import {
   RemoteOutputError,
-  resolveRemoteAgentFallibly,
+  upsertRemoteAgent,
+  createRemoteAgent,
+  getRemoteAgentById,
   type AgentConfigEntry,
   type RemoteAgentHandle,
 } from './bridge/agent';
@@ -54,11 +56,9 @@ import {
   type SchemaValue,
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
-import { Uuid } from './uuid';
-import { ComponentId } from './ids';
-export { ComponentId } from './ids';
-import { ParsedAgentId, bindAgentClient, type AgentClientBindOptions } from './agentId';
+import type { AgentId } from './agentId';
 import type { ScopeCard } from './host/permissions';
+import type { RemoteClientOptions } from './client';
 export {
   DynamicAgentClient,
   DynamicAgentMethod,
@@ -108,7 +108,6 @@ export class AgentType {
   readonly description: string;
   readonly sourceLanguage: string;
   readonly mode: 'durable' | 'ephemeral';
-  readonly implementedBy: ComponentId;
   readonly constructorInput: SchemaRef;
   readonly methods: readonly AgentMethod[];
   readonly config: readonly {
@@ -125,7 +124,6 @@ export class AgentType {
     this.description = raw.description;
     this.sourceLanguage = raw.sourceLanguage;
     this.mode = raw.mode;
-    this.implementedBy = ComponentId.from(registered.implementedBy);
     this.constructorInput = inputSchemaRef(graph, raw.constructor.inputSchema);
     this.methods = Object.freeze(raw.methods.map((method) => new AgentMethod(method, graph)));
     this.config = Object.freeze(
@@ -143,53 +141,6 @@ export class AgentType {
 
   method(name: string): AgentMethod | undefined {
     return this.methods.find((method) => method.name === name);
-  }
-
-  /** Construct an agent identity from canonical JSON constructor input. */
-  agentId(input: JsonValue, phantomId?: Uuid): ParsedAgentId {
-    return this.agentIdValue(this.constructorInput.packJson(input), phantomId);
-  }
-
-  /** Construct an agent identity from an already packed constructor value. */
-  agentIdValue(input: SchemaValue, phantomId?: Uuid): ParsedAgentId {
-    if (!this.constructorInput.validateValue(input).success) {
-      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
-    }
-    return ParsedAgentId.create({
-      typeName: this.name,
-      constructorValue: input,
-      phantomId,
-    });
-  }
-
-  [bindAgentClient](
-    agentId: ParsedAgentId,
-    config: readonly AgentConfigEntry[] = [],
-    options?: AgentClientBindOptions,
-  ): ReflectedAgentClient {
-    const parts = agentId.parts();
-    if (parts.typeName !== this.name) {
-      throw new TypeError(`Reflected agent type '${this.name}' cannot bind '${parts.typeName}'`);
-    }
-    if (this.mode === 'ephemeral') {
-      throw new TypeError(
-        `Cannot bind existing ParsedAgentId '${agentId.value}' to ephemeral agent type '${this.name}'; use agentType.client.newPhantom(...)`,
-      );
-    }
-    if (!this.constructorInput.validateValue(parts.constructorValue).success) {
-      throw new TypeError(`Invalid constructor value for reflected agent type '${this.name}'`);
-    }
-    return new ReflectedAgentClient(
-      this,
-      resolveRemoteAgentFallibly(
-        parts.typeName,
-        parts.constructorValue,
-        parts.phantomId,
-        this.validateConfigValues(config),
-        this.mode,
-      ),
-      options?.scopeCard,
-    );
   }
 
   /** Pack canonical JSON overrides for declared local config fields. */
@@ -240,93 +191,93 @@ export class AgentType {
   }
 }
 
-export interface ReflectedPhantomClient {
-  readonly agentId: ParsedAgentId;
-  readonly phantomId: Uuid;
-  readonly client: ReflectedAgentClient;
+/** Options of {@link ReflectedAgentClientFactory.create} with canonical JSON config values. */
+export interface ReflectedCreateOptions extends RemoteClientOptions {
+  /**
+   * Creates the keyed agent of the constructor parameters, and rejects with a `conflict`
+   * `RemoteCallError` when it already exists. Otherwise the new agent has no key and a new ID.
+   */
+  readonly keyed?: boolean;
+  /** Overrides of declared local configuration values. */
+  readonly config?: readonly ReflectedConfigJsonEntry[];
+  /** Environment variables added to the ones the manifest defines. */
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+/** Options of {@link ReflectedAgentClientFactory.createValue} with schema-native config values. */
+export interface ReflectedCreateValueOptions extends RemoteClientOptions {
+  readonly keyed?: boolean;
+  readonly config?: readonly AgentConfigEntry[];
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export class ReflectedAgentClientFactory {
   constructor(private readonly agentType: AgentType) {}
 
-  get(input: JsonValue, config: readonly ReflectedConfigJsonEntry[] = []): ReflectedAgentClient {
-    this.requireMode('durable', 'get');
-    return this.create(
-      this.agentType.constructorInput.packJson(input),
-      undefined,
-      this.agentType.packConfigJson(config),
+  /**
+   * Address the keyed agent of the constructor parameters, and create a durable one when it is
+   * missing. For an ephemeral type, each invocation runs on a new one-shot instance.
+   */
+  upsert(input: JsonValue, options?: RemoteClientOptions): ReflectedAgentClient {
+    return this.upsertValue(this.agentType.constructorInput.packJson(input), options);
+  }
+
+  upsertValue(input: SchemaValue, options?: RemoteClientOptions): ReflectedAgentClient {
+    this.validateConstructorValue(input);
+    return new ReflectedAgentClient(
+      this.agentType,
+      upsertRemoteAgent(this.agentType.name, input),
+      options?.scopeCard,
     );
   }
 
-  getValue(input: SchemaValue, config: readonly AgentConfigEntry[] = []): ReflectedAgentClient {
-    this.requireMode('durable', 'getValue');
-    return this.create(input, undefined, config);
-  }
-
-  getPhantom(
+  /**
+   * Create a durable agent, and resolve after its initialization. With `keyed`, an existing
+   * keyed agent of these constructor parameters rejects with a `conflict` `RemoteCallError`.
+   */
+  async create(
     input: JsonValue,
-    phantomId: Uuid,
-    config: readonly ReflectedConfigJsonEntry[] = [],
-  ): ReflectedAgentClient {
-    return this.create(
-      this.agentType.constructorInput.packJson(input),
-      phantomId,
-      this.agentType.packConfigJson(config),
+    options: ReflectedCreateOptions = {},
+  ): Promise<ReflectedAgentClient> {
+    return this.createValue(this.agentType.constructorInput.packJson(input), {
+      ...options,
+      config: this.agentType.packConfigJson(options.config ?? []),
+    });
+  }
+
+  async createValue(
+    input: SchemaValue,
+    options: ReflectedCreateValueOptions = {},
+  ): Promise<ReflectedAgentClient> {
+    this.requireMode('durable', 'create');
+    this.validateConstructorValue(input);
+    const remote = await createRemoteAgent(this.agentType.name, input, {
+      keyed: options.keyed ?? false,
+      config: this.agentType.validateConfigValues(options.config ?? []),
+      env: Object.entries(options.env ?? {}),
+    });
+    return new ReflectedAgentClient(this.agentType, remote, options.scopeCard);
+  }
+
+  /**
+   * Address the existing durable agent with this ID. Never creates the agent: an unknown ID, or
+   * the ID of an agent of another type, rejects with a `not-found` `RemoteCallError`.
+   */
+  async getById(agentId: AgentId, options?: RemoteClientOptions): Promise<ReflectedAgentClient> {
+    this.requireMode('durable', 'getById');
+    return new ReflectedAgentClient(
+      this.agentType,
+      await getRemoteAgentById(this.agentType.name, agentId),
+      options?.scopeCard,
     );
   }
 
-  getPhantomValue(
-    input: SchemaValue,
-    phantomId: Uuid,
-    config: readonly AgentConfigEntry[] = [],
-  ): ReflectedAgentClient {
-    return this.create(input, phantomId, config);
-  }
-
-  newPhantom(
-    input: JsonValue,
-    config: readonly ReflectedConfigJsonEntry[] = [],
-  ): ReflectedPhantomClient | ReflectedAgentClient {
-    return this.newPhantomValue(
-      this.agentType.constructorInput.packJson(input),
-      this.agentType.packConfigJson(config),
-    );
-  }
-
-  newPhantomValue(
-    input: SchemaValue,
-    config: readonly AgentConfigEntry[] = [],
-  ): ReflectedPhantomClient | ReflectedAgentClient {
-    if (this.agentType.mode === 'ephemeral') return this.create(input, undefined, config);
-    const phantomId = Uuid.generate();
-    const agentId = this.agentType.agentIdValue(input, phantomId);
-    return {
-      agentId,
-      phantomId,
-      client: this.create(input, phantomId, config),
-    };
-  }
-
-  private create(
-    input: SchemaValue,
-    phantomId?: Uuid,
-    config: readonly AgentConfigEntry[] = [],
-  ): ReflectedAgentClient {
+  private validateConstructorValue(input: SchemaValue): void {
     if (!this.agentType.constructorInput.validateValue(input).success) {
       throw new TypeError(
         `Invalid constructor value for reflected agent type '${this.agentType.name}'`,
       );
     }
-    return new ReflectedAgentClient(
-      this.agentType,
-      resolveRemoteAgentFallibly(
-        this.agentType.name,
-        input,
-        phantomId,
-        this.agentType.validateConfigValues(config),
-        this.agentType.mode,
-      ),
-    );
   }
 
   private requireMode(expected: AgentType['mode'], operation: string): void {
@@ -342,6 +293,17 @@ export class ReflectedAgentClient {
     private readonly remote: RemoteAgentHandle,
     private readonly scopeCard?: ScopeCard,
   ) {}
+
+  /**
+   * The ID of the durable agent the client connects to. On a client of `upsert` it creates the
+   * agent when it is missing, without invoking a method.
+   */
+  agentId(): Promise<AgentId> {
+    if (this.agentType.mode === 'ephemeral') {
+      throw new TypeError('agentId is not available for ephemeral agent types');
+    }
+    return this.remote.agentId();
+  }
 
   method(name: string): ReflectedAgentMethod {
     const method = this.agentType.method(name);
@@ -383,7 +345,7 @@ export class ReflectedAgentMethod {
       };
     } catch (error) {
       throw new RemoteOutputError(
-        `Remote agent ${this.remote.agentId}.${this.definition.name} returned invalid canonical JSON`,
+        `Remote agent ${this.remote.target}.${this.definition.name} returned invalid canonical JSON`,
         { cause: error },
       );
     }
@@ -405,19 +367,19 @@ export class ReflectedAgentMethod {
     );
     if (this.definition.output !== undefined && result.value === undefined) {
       throw new RemoteOutputError(
-        `Remote agent ${this.remote.agentId}.${this.definition.name} returned no value for a non-unit output`,
+        `Remote agent ${this.remote.target}.${this.definition.name} returned no value for a non-unit output`,
       );
     }
     if (this.definition.output === undefined && result.value !== undefined) {
       throw new RemoteOutputError(
-        `Remote agent ${this.remote.agentId}.${this.definition.name} returned a value for a unit output`,
+        `Remote agent ${this.remote.target}.${this.definition.name} returned a value for a unit output`,
       );
     }
     if (this.definition.output !== undefined && result.value !== undefined) {
       const validation = this.definition.output.validateValue(result.value);
       if (!validation.success) {
         throw new RemoteOutputError(
-          `Remote agent ${this.remote.agentId}.${this.definition.name} returned an invalid output: ${validation.issues.map((issue) => issue.message).join('; ')}`,
+          `Remote agent ${this.remote.target}.${this.definition.name} returned an invalid output: ${validation.issues.map((issue) => issue.message).join('; ')}`,
         );
       }
     }
@@ -468,14 +430,13 @@ export function getAgentType(name: string): AgentType | undefined {
 }
 
 /**
- * Look up the current deployed schema for a full environment-scoped identity.
+ * Look up the deployed agent type that the type tag of an agent ID names.
  *
- * Returns `undefined` for routers, or when the agent does not exist, its ID is malformed, its type is missing, or
- * the caller lacks `View` permission. Use {@link ParsedAgentId.parsed} when strict identity parsing is
- * required independently of discovery.
+ * Returns `undefined` for routers, and when no deployed agent type has that tag. It does not check
+ * that the agent exists.
  */
-export function getAgentTypeByAgentId(agentId: ParsedAgentId): AgentType | undefined {
-  const registered = hostGetAgentTypeByAgentId(agentId.value);
+export function getAgentTypeByAgentId(agentId: AgentId): AgentType | undefined {
+  const registered = hostGetAgentTypeByAgentId(agentId);
   return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
 }
 

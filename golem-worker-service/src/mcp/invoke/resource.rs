@@ -15,12 +15,11 @@
 use crate::mcp::agent_mcp_resource::{AgentMcpResource, ConstructorParam};
 use crate::mcp::invoke::build_constructor_parameters;
 use crate::mcp::invoke::constructor_param_extraction::extract_constructor_input_values;
-use crate::service::worker::WorkerService;
+use crate::service::worker::{AgentBinding, WorkerService};
 use base64::Engine;
-use golem_common::base_model::AgentId;
-use golem_common::base_model::caller::Caller;
 use golem_common::model::IdempotencyKey;
-use golem_common::model::agent::{AgentTarget, ParsedAgentKey};
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::caller::Caller;
 use golem_common::schema::agent::OutputSchema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::multimodal::multimodal_variant_cases;
@@ -73,13 +72,11 @@ pub async fn invoke_resource(
         constructor_values,
     );
 
-    let parsed_agent_id =
-        ParsedAgentKey::try_new(mcp_resource.agent_type_name.clone(), parameters, None).map_err(
-            |e| {
-                tracing::error!("Failed to parse agent id: {}", e);
-                ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
-            },
-        )?;
+    let constructor = ParsedAgentKey::try_new(mcp_resource.agent_type_name.clone(), parameters)
+        .map_err(|e| {
+            tracing::error!("Failed to parse agent id: {}", e);
+            ErrorData::invalid_params(format!("Failed to parse agent id: {}", e), None)
+        })?;
 
     // A resource method has no user-supplied input parameters.
     let method_parameters = SchemaValue::Record { fields: vec![] };
@@ -92,39 +89,50 @@ pub async fn invoke_resource(
     let caller = Caller::anonymous();
     let proto_caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
 
-    let agent_id = AgentId {
-        component_id: mcp_resource.component_id,
-        agent_id: parsed_agent_id.to_string(),
-    };
-
     let auth_ctx = golem_service_base::model::auth::AuthCtx::System;
+    let request_key =
+        golem_common::model::InvocationRequestKey::external(None, idempotency_key.as_ref());
 
-    let agent_output = worker_service
-        .invoke_agent(
-            &AgentTarget::Current(agent_id.clone()),
-            Some(mcp_resource.method.name.clone()),
-            Some(proto_method_parameters),
-            golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
-            None,
-            golem_common::model::InvocationRequestKey::external(None, idempotency_key.as_ref()),
-            None,
-            false,
-            golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-            Vec::new(),
-            auth_ctx,
-            proto_caller,
-            None,
-            None,
-            None,
-        )
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to invoke worker for resource: {:?}", e);
-            ErrorData::internal_error(
-                format!("Failed to invoke worker for resource: {:?}", e),
+    let agent_output = async {
+        let (target, component, freshness_disposition) = worker_service
+            .bound_invocation_target(
+                mcp_resource.component_id,
+                &constructor,
+                AgentBinding::Constructor,
+                &request_key,
+                &mcp_resource.method.name,
+                &auth_ctx,
+            )
+            .await?;
+        worker_service
+            .dispatch_agent_invocation(
+                &component,
+                &target,
+                Some(mcp_resource.method.name.clone()),
+                Some(proto_method_parameters),
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                None,
+                request_key,
+                None,
+                freshness_disposition,
+                Vec::new(),
+                component.environment_id,
+                component.account_id,
+                auth_ctx,
+                proto_caller,
+                None,
                 None,
             )
-        })?;
+            .await
+    }
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to invoke worker for resource: {:?}", e);
+        ErrorData::internal_error(
+            format!("Failed to invoke worker for resource: {:?}", e),
+            None,
+        )
+    })?;
 
     let agent_result = match agent_output.result {
         golem_common::model::AgentInvocationResult::AgentMethod { output } => Some(output),
@@ -274,7 +282,7 @@ fn value_to_resource_content(value: &SchemaValue, uri: &str) -> Option<ResourceC
 mod tests {
     use super::*;
     use crate::mcp::agent_mcp_resource::{AgentMcpResource, AgentMcpResourceKind};
-    use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
+    use crate::mcp::invoke::test_support::InvocationHarness;
     use golem_common::base_model::agent::{AgentMode, AgentTypeName};
     use golem_common::model::AgentInvocationOutput;
     use golem_common::schema::agent::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
@@ -577,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    async fn invoke_resource_auto_generates_phantom_for_ephemeral_agents() {
+    async fn invoke_resource_runs_an_ephemeral_read_on_an_instance_of_its_own() {
         let constructor = AgentConstructorSchema {
             name: None,
             description: String::new(),
@@ -617,13 +625,29 @@ mod tests {
             agent_type_name: AgentTypeName("mcp-agent".to_string()),
         };
 
-        let result =
-            invoke_resource(&harness.worker_service, &resource, TEST_URI, None, None).await;
+        for _ in 0..2 {
+            invoke_resource(&harness.worker_service, &resource, TEST_URI, None, None)
+                .await
+                .unwrap();
+        }
 
-        assert!(result.is_ok());
-        let agent_id = harness.recorded_agent_id();
-        assert_eq!(agent_id.component_id, harness.component_id);
-        assert!(phantom_id(&agent_id).is_some());
+        let targets = harness.targets.lock().unwrap().clone();
+        let contexts = harness.contexts.lock().unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_ne!(targets[0].agent_id, targets[1].agent_id);
+        for (target, context) in targets.iter().zip(contexts.iter()) {
+            assert_eq!(
+                target.agent_id,
+                golem_common::model::AgentId::ephemeral_invocation(
+                    harness.environment_id,
+                    harness.type_id,
+                    &context.idempotency_key,
+                )
+            );
+            assert!(target.creates());
+        }
+        let (_, keyed) = harness.recorded_constructor();
+        assert!(!keyed, "an ephemeral instance has no key");
     }
 
     #[test]
@@ -681,10 +705,12 @@ mod tests {
 
         let ephemeral = read_with_key(AgentMode::Ephemeral).await;
         assert_eq!(
-            phantom_id(&ephemeral.recorded_agent_id()),
-            Some(golem_common::model::agent::ephemeral_invocation_phantom_id(
+            ephemeral.recorded_agent_id(),
+            golem_common::model::AgentId::ephemeral_invocation(
+                ephemeral.environment_id,
+                ephemeral.type_id,
                 &ephemeral.contexts.lock().unwrap()[0].idempotency_key
-            )),
+            ),
             "the ephemeral owner uses the prepared unkeyed seed"
         );
         assert!(matches!(

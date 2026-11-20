@@ -466,8 +466,8 @@ description in the descriptor.
   escapes the router. The regex is the `regex` crate (compiled per
   request; `Regex::new(..)?`). TS's `request.method !== 'GET' || !m` is a
   `let Some(m) = m.filter(|_| request.method == "GET") else { 404 }`.
-  TS `Analyst.client.get({ chat }).exportCsv({ id })` is
-  `AnalystAgentClient::get(chat)?.export_csv(id).await?` (the generated
+  TS `Analyst.client.upsert({ chat }).exportCsv({ id })` is
+  `AnalystAgentClient::upsert(chat)?.export_csv(id).await?` (the generated
   client from the prelude's `#[agent_client]` trait). The 200 response
   puts `status` and `headers: vec![` on one line and closes with `], body:
   csv })` (height); the `body` marker is on that closing line.
@@ -602,7 +602,7 @@ schema taken from `T`.
   (`golem-rust-macro/src/lib.rs:118`; a `new` constructor requires
   `type_name`, `golem-rust-macro/src/agentic/agent_client_impl.rs:164`),
   documented in `docs/src/content/v1.6/develop/reflection.mdx`
-  (`XClient::get(..)?` then `.method(..).await?`).
+  (`XClient::upsert(..)?` then `.method(..).await?`).
 - OIDC principal: `Principal::Oidc(OidcPrincipal { issuer, sub, .. })`
   (the WIT `golem:agent/common` principal re-exported as
   `golem_rust::agentic::Principal`, `sdks/rust/golem-rust/src/agentic/mod.rs:15`).

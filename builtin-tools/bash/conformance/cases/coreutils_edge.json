@@ -497,7 +497,7 @@
       }
     },
     {
-      "name": "coreutils: hostname answers from GOLEM_WORKER_NAME",
+      "name": "coreutils: hostname answers from GOLEM_AGENT_ID",
       "script": "hostname; echo s=$?",
       "tags": [],
       "options": {},

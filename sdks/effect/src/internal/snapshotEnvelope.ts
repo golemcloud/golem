@@ -75,7 +75,6 @@ const LegacySerializedPrincipal = Schema.Union([
   Schema.Struct({
     tag: Schema.Literal("agent"),
     val: Schema.Struct({
-      componentId: Schema.String,
       agentId: Schema.String,
     }),
   }),
@@ -149,7 +148,7 @@ const checkLegacyPrincipal = (principal: typeof LegacySerializedPrincipal.Type):
     case "oidc":
       return
     case "agent":
-      CoreTypes.parseUuid(principal.val.componentId)
+      CoreTypes.parseUuid(principal.val.agentId)
       return
     case "golem-user":
       CoreTypes.parseUuid(principal.val.accountId)
@@ -274,11 +273,7 @@ export interface DecodedMultipartEnvelope {
 
 export type DecodedEnvelope = DecodedJsonEnvelope | DecodedBinaryEnvelope | DecodedMultipartEnvelope
 
-/**
- * Decode a {@link ApiHost.Snapshot}. The 2.0 forms and the 1.6 forms that this SDK's 1.6 reader
- * accepted (JSON v1, multipart v1 and binary v2) are read; a 1.6 principal is checked and dropped.
- * Binary v1 stays rejected.
- */
+/** Decode a {@link ApiHost.Snapshot}. */
 export const decodeEnvelope = (snapshot: ApiHost.Snapshot): DecodedEnvelope => {
   const mime = snapshot.mimeType
   if (mime.split(";", 1)[0]?.trim().toLowerCase() === MULTIPART_MIME_PREFIX) {

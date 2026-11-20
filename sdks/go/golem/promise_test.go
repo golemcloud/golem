@@ -70,10 +70,7 @@ func TestPromisePayloadNamedBytesUsesJSON(t *testing.T) {
 // and back, and String() renders the agent-id/fingerprint/oplog form.
 func TestPromiseIDRoundTrip(t *testing.T) {
 	id := PromiseID{
-		AgentID: AgentID{
-			ComponentID: UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
-			AgentID:     "Approval(\"order-7\")",
-		},
+		AgentID:     AgentIDFromUUID(UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}),
 		Fingerprint: UUID{0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff},
 		OplogIndex:  42,
 	}
@@ -83,7 +80,7 @@ func TestPromiseIDRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip = %+v, want %+v", got, id)
 	}
 
-	want := "00010203-0405-0607-0809-0a0b0c0d0e0f/Approval(\"order-7\")/f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff/42"
+	want := "00010203-0405-0607-0809-0a0b0c0d0e0f/f0f1f2f3-f4f5-f6f7-f8f9-fafbfcfdfeff/42"
 	if id.String() != want {
 		t.Fatalf("String() = %q, want %q", id.String(), want)
 	}
@@ -92,20 +89,14 @@ func TestPromiseIDRoundTrip(t *testing.T) {
 // TestPromiseIDFromWit — decoding a host PromiseId maps every nested field.
 func TestPromiseIDFromWit(t *testing.T) {
 	w := types.PromiseId{
-		AgentId: types.AgentId{
-			ComponentId: types.ComponentId{Uuid: types.Uuid{HighBits: 0x0001020304050607, LowBits: 0x08090a0b0c0d0e0f}},
-			AgentId:     "Shop(\"acme\")",
-		},
+		AgentId:     types.AgentId{Uuid: types.Uuid{HighBits: 0x0001020304050607, LowBits: 0x08090a0b0c0d0e0f}},
 		Fingerprint: types.Uuid{HighBits: 0x1011121314151617, LowBits: 0x18191a1b1c1d1e1f},
 		OplogIdx:    99,
 	}
 
 	id := promiseIDFromWit(w)
-	if id.AgentID.AgentID != "Shop(\"acme\")" || id.OplogIndex != 99 {
+	if id.AgentID != AgentIDFromUUID(UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) || id.OplogIndex != 99 {
 		t.Fatalf("agent/oplog not mapped: %+v", id)
-	}
-	if id.AgentID.ComponentID != (UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
-		t.Fatalf("component uuid not mapped: %v", id.AgentID.ComponentID)
 	}
 	if id.Fingerprint != (UUID{16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}) {
 		t.Fatalf("fingerprint not mapped: %v", id.Fingerprint)
@@ -117,13 +108,13 @@ func TestPromiseIDFromWit(t *testing.T) {
 // actually wrote, because the completer is usually somewhere else entirely.
 func TestPromisePayloadDecodeFailureNamesPromiseAndPayload(t *testing.T) {
 	type Verdict struct{ Approved bool }
-	id := PromiseID{AgentID: AgentID{AgentID: `ApprovalAgent("q")`}, OplogIndex: 12}
+	id := PromiseID{AgentID: AgentIDFromUUID(UUID{0x7}), OplogIndex: 12}
 
 	_, err := decodePromisePayload[Verdict](id, []byte(`"approved"`))
 	if err == nil {
 		t.Fatal("decoding a string as a struct should fail")
 	}
-	for _, want := range []string{`ApprovalAgent("q")`, "golem.Verdict", "approved"} {
+	for _, want := range []string{"07000000-0000-0000-0000-000000000000", "golem.Verdict", "approved"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
@@ -149,7 +140,7 @@ func TestPromisePayloadTruncatesLongPayloads(t *testing.T) {
 // overlapping fields, as a silently zero value).
 func TestPromiseTypeMismatchIsCaughtAtTheMistake(t *testing.T) {
 	type Verdict struct{ Approved bool }
-	id := PromiseID{AgentID: AgentID{AgentID: `ApprovalAgent("q")`}, OplogIndex: 3}
+	id := PromiseID{AgentID: AgentIDFromUUID(UUID{0x7}), OplogIndex: 3}
 	recordPromisePayloadType[Verdict](id)
 	t.Cleanup(func() { delete(promisePayloadTypes, id) })
 
@@ -173,7 +164,7 @@ func TestPromiseTypeMismatchIsCaughtAtTheMistake(t *testing.T) {
 // snapshot-based recovery the creating invocation may not have re-executed, so
 // an unknown id must pass rather than fail.
 func TestPromiseTypeCheckIsSilentWithoutARecord(t *testing.T) {
-	checkPromisePayloadType[string](PromiseID{AgentID: AgentID{AgentID: "never-created"}, OplogIndex: 99})
+	checkPromisePayloadType[string](PromiseID{AgentID: AgentIDFromUUID(UUID{0x9}), OplogIndex: 99})
 }
 
 // TestAwaitWithContextGivesUp — waiting stops when the context ends, and a

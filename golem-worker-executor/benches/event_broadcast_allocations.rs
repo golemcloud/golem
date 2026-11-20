@@ -3,7 +3,6 @@
 // Licensed under the Golem Source License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 
-use golem_common::base_model::component::ComponentId;
 use golem_common::model::{AgentId, AgentInvocationOutput, AgentInvocationResult, InvocationId};
 use golem_common::schema::SchemaValue;
 use golem_worker_executor::services::events::{Event, Events};
@@ -52,10 +51,7 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn event(payload_size: usize) -> Event {
     Event::InvocationCompleted {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "allocation-benchmark".to_string(),
-        },
+        agent_id: AgentId::from_parts(1, 1),
         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
         result: Box::new(Ok(AgentInvocationOutput {
             result: AgentInvocationResult::AgentMethod {

@@ -21,7 +21,6 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use futures::StreamExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor};
@@ -61,31 +60,8 @@ fn blob_archive(storage: Arc<dyn BlobStorage + Send + Sync>) -> BlobOplogArchive
 /// at the first index, and the last index.
 type Observed = (bool, BTreeMap<OplogIndex, OplogEntry>, OplogIndex);
 
-/// The agent names of the tests. None of them can be the name of a directory in blob storage. The
-/// name rules refuse a `..` segment. The one form of a blob path removes a `.` segment and an
-/// empty segment, a `/` adds a directory, and a name of 500 bytes is longer than a file name.
-fn agent_names() -> [String; 5] {
-    [
-        r#"counter("a/../b")"#.to_string(),
-        r#"counter("a/./b")"#.to_string(),
-        r#"counter("a//b")"#.to_string(),
-        r#"counter("a/b")"#.to_string(),
-        format!("counter(\"{}\")", "x".repeat(489)),
-    ]
-}
-
-fn owned_agent_id(
-    environment_id: EnvironmentId,
-    component_id: ComponentId,
-    agent_name: &str,
-) -> OwnedAgentId {
-    OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id,
-            agent_id: agent_name.to_string(),
-        },
-    )
+fn owned_agent_id(environment_id: EnvironmentId, h: u128) -> OwnedAgentId {
+    OwnedAgentId::new(environment_id, &AgentId::from_parts(7, h))
 }
 
 fn log_entry(message: &str) -> OplogEntry {
@@ -99,16 +75,16 @@ fn log_entry(message: &str) -> OplogEntry {
     .rounded()
 }
 
-/// Gives the agents that `scan_for_component` lists. The blob archive gives them in one page.
+/// Gives the agents of the test type that `scan_for_type` lists. The blob archive gives them in
+/// one page.
 async fn scan(
     service: &BlobOplogArchiveService,
     environment_id: EnvironmentId,
-    component_id: ComponentId,
 ) -> BTreeSet<OwnedAgentId> {
     let (cursor, agents) = service
-        .scan_for_component(
+        .scan_for_type(
             &environment_id,
-            &component_id,
+            golem_common::model::type_id::TypeId::try_from(7u32).unwrap(),
             Some(MODE),
             ScanCursor::default(),
             100,
@@ -130,21 +106,16 @@ async fn observe(service: &BlobOplogArchiveService, agent: &OwnedAgentId) -> Obs
     )
 }
 
-/// Each agent gets its own archive, which it can make, read, list and delete. As blob paths,
-/// `counter("a/./b")`, `counter("a//b")` and `counter("a/b")` have one form. So the test deletes
-/// one of them first and reads the other two. Then it deletes the other four agents.
-async fn check_that_each_agent_name_gets_its_own_archive(
-    storage: Arc<dyn BlobStorage + Send + Sync>,
-) {
+/// Each agent gets its own archive, which it can make, read, list and delete. The test deletes
+/// one of them first and reads the others. Then it deletes the other four agents.
+async fn check_that_each_agent_gets_its_own_archive(storage: Arc<dyn BlobStorage + Send + Sync>) {
     let service = blob_archive(storage);
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let archives: Box<[(OwnedAgentId, OplogEntry)]> = agent_names()
-        .iter()
-        .map(|name| {
+    let archives: Box<[(OwnedAgentId, OplogEntry)]> = (1..=5)
+        .map(|h| {
             (
-                owned_agent_id(environment_id, component_id, name),
-                log_entry(name),
+                owned_agent_id(environment_id, h),
+                log_entry(&format!("agent-{h}")),
             )
         })
         .collect();
@@ -192,17 +163,11 @@ async fn check_that_each_agent_name_gets_its_own_archive(
             }
         })
         .await;
-    let made = (
-        observe_all().await,
-        scan(&service, environment_id, component_id).await,
-    );
+    let made = (observe_all().await, scan(&service, environment_id).await);
 
     let first_deleted = &archives[3].0;
     service.delete(first_deleted, MODE).await.unwrap();
-    let after_one_delete = (
-        observe_all().await,
-        scan(&service, environment_id, component_id).await,
-    );
+    let after_one_delete = (observe_all().await, scan(&service, environment_id).await);
 
     futures::stream::iter(archives.iter())
         .filter(|(agent, _)| futures::future::ready(agent != first_deleted))
@@ -211,10 +176,7 @@ async fn check_that_each_agent_name_gets_its_own_archive(
             async move { service.delete(agent, MODE).await.unwrap() }
         })
         .await;
-    let after_all_deletes = (
-        observe_all().await,
-        scan(&service, environment_id, component_id).await,
-    );
+    let after_all_deletes = (observe_all().await, scan(&service, environment_id).await);
 
     let all_agents = archives
         .iter()
@@ -231,21 +193,21 @@ async fn check_that_each_agent_name_gets_its_own_archive(
 }
 
 #[test]
-async fn each_agent_name_gets_its_own_archive_on_the_in_memory_backend() {
-    check_that_each_agent_name_gets_its_own_archive(Arc::new(InMemoryBlobStorage::new())).await;
+async fn each_agent_gets_its_own_archive_on_the_in_memory_backend() {
+    check_that_each_agent_gets_its_own_archive(Arc::new(InMemoryBlobStorage::new())).await;
 }
 
 #[test]
-async fn each_agent_name_gets_its_own_archive_on_the_filesystem_backend() {
+async fn each_agent_gets_its_own_archive_on_the_filesystem_backend() {
     let root = TempDir::new().unwrap();
-    check_that_each_agent_name_gets_its_own_archive(Arc::new(
+    check_that_each_agent_gets_its_own_archive(Arc::new(
         FileSystemBlobStorage::new(root.path()).await.unwrap(),
     ))
     .await;
 }
 
 #[test]
-async fn each_agent_name_gets_its_own_archive_on_the_sqlite_backend() {
+async fn each_agent_gets_its_own_archive_on_the_sqlite_backend() {
     let root = TempDir::new().unwrap();
     let pool = SqlitePool::configured(&DbSqliteConfig {
         database: root
@@ -258,7 +220,7 @@ async fn each_agent_name_gets_its_own_archive_on_the_sqlite_backend() {
     })
     .await
     .unwrap();
-    check_that_each_agent_name_gets_its_own_archive(Arc::new(
+    check_that_each_agent_gets_its_own_archive(Arc::new(
         SqliteBlobStorage::new(pool).await.unwrap(),
     ))
     .await;
@@ -271,8 +233,7 @@ async fn each_agent_name_gets_its_own_archive_on_the_sqlite_backend() {
 async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let service = blob_archive(Arc::new(InMemoryBlobStorage::new()));
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
+    let agent = owned_agent_id(environment_id, 1);
     let second = log_entry("second");
     let archive = service.open(&agent, MODE, None).await.unwrap();
 
@@ -284,7 +245,7 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let emptied = (
         dropped,
         service.exists(&agent, MODE).await.unwrap(),
-        scan(&service, environment_id, component_id).await,
+        scan(&service, environment_id).await,
     );
     archive
         .append(&[(OplogIndex::INITIAL.next(), second.clone())])
@@ -292,7 +253,7 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
         .unwrap();
     let appended = (
         service.exists(&agent, MODE).await.unwrap(),
-        scan(&service, environment_id, component_id).await,
+        scan(&service, environment_id).await,
         service
             .read_source(&agent, MODE, OplogIndex::INITIAL.next(), 1)
             .await
@@ -321,8 +282,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let service = blob_archive(storage.clone());
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
+    let agent = owned_agent_id(environment_id, 1);
     let entry = log_entry("entry");
 
     storage
@@ -331,7 +291,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
             "test",
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
-                component_id,
+                type_tag: agent.agent_id.type_tag(),
                 agent_mode: MODE,
                 level: 0,
             },
@@ -342,7 +302,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
         .unwrap();
     let before = (
         service.exists(&agent, MODE).await.unwrap(),
-        scan(&service, environment_id, component_id).await,
+        scan(&service, environment_id).await,
     );
     service
         .open(&agent, MODE, None)
@@ -353,7 +313,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
         .unwrap();
     let after = (
         service.exists(&agent, MODE).await.unwrap(),
-        scan(&service, environment_id, component_id).await,
+        scan(&service, environment_id).await,
         service
             .read_source(&agent, MODE, OplogIndex::INITIAL, 1)
             .await

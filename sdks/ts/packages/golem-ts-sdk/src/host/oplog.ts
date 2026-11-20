@@ -23,13 +23,13 @@ import {
 import type * as OplogTypes from 'golem:api/oplog@1.5.0';
 
 import { Uuid } from '../uuid';
-import { ComponentId, AccountId, EnvironmentId } from '../ids';
-import type { AgentId } from './hostapi';
+import { AccountId, EnvironmentId } from '../ids';
+import { AgentId } from '../agentId';
 
 // Re-export enriched types for convenience
 export { Uuid } from '../uuid';
 export { ComponentId, AccountId, EnvironmentId } from '../ids';
-export type { AgentId } from './hostapi';
+export { AgentId } from '../agentId';
 
 // Re-export types that don't contain UUID-based types
 export type Datetime = OplogTypes.Datetime;
@@ -141,6 +141,8 @@ export type EnvironmentPluginGrantId = {
 export type CreateParameters = {
   timestamp: Datetime;
   agentId: AgentId;
+  /** The name of the agent's type. Owners without an agent type have none. */
+  agentTypeName?: string;
   componentRevision: ComponentRevision;
   env: [string, string][];
   createdBy: AccountId;
@@ -205,10 +207,7 @@ export type PublicOplogEntry =
 // Wrapping helpers
 
 function wrapAgentId(raw: RawAgentId): AgentId {
-  return {
-    componentId: ComponentId.from(raw.componentId),
-    agentId: raw.agentId,
-  };
+  return AgentId.from(raw);
 }
 
 function wrapPublicOplogEntry(raw: RawPublicOplogEntry): PublicOplogEntry {

@@ -106,7 +106,7 @@ test("re-recording an unchanged case preserves the golden bytes including unsele
         selected: entry,
         untouched: { script: hash("echo ok"), status: 19, stderr: { base64: "/wA=" }, stdout: { text: "untouched\n" } }
       },
-      oracle: { dockerfile: hash("test Dockerfile"), profile: "d2542338f5646f8f" }
+      oracle: { dockerfile: hash("test Dockerfile"), profile: "34ef89961acc4344" }
     },
     null,
     1

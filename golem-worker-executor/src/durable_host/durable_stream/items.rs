@@ -1037,7 +1037,7 @@ impl DurableStreamStore {
             .collect::<HashMap<_, _>>();
 
         let environment_id = self.environment_id;
-        let producer = self.producer.clone();
+        let producer = self.producer;
         let producer_fingerprint = self.producer_fingerprint;
         let payload_for_entry = payload.clone();
         let registrations_for_entry = new_nested;
@@ -1059,7 +1059,7 @@ impl DurableStreamStore {
                     let registration = registration_record(
                         oplog_index,
                         environment_id,
-                        producer.clone(),
+                        producer,
                         producer_fingerprint,
                         request,
                         Some((stream_id, local_stream_id)),

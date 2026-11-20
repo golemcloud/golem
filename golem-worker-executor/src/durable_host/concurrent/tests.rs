@@ -318,10 +318,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-delivery-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -452,12 +449,9 @@ async fn completion_delivery_delivered_records_marker_via_drain() {
 /// agent resident on it - over one agent that another executor now owns.
 #[test]
 async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
-    let agent_id = golem_common::model::AgentId {
-        component_id: golem_common::model::component::ComponentId::new(),
-        agent_id: "fenced-completion-marker-test".to_string(),
-    };
+    let agent_id = golem_common::model::AgentId::from_parts(7, 2);
     let oplog = Arc::new(InMemoryOplog::fenced(crate::services::oplog::OplogFence {
-        agent_id: agent_id.clone(),
+        agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
     }));
@@ -515,10 +509,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "completion-marker-order-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 3),
         },
         seed_oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1129,10 +1120,7 @@ async fn tail_gated_token_over_crash_tail(
     let replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "tail-gated-token-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
         },
         oplog_dyn.clone(),
         golem_common::model::regions::DeletedRegions::default(),
@@ -1772,10 +1760,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
     let persist_replay_state = ReplayState::new_for_owner(
         golem_common::model::OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: golem_common::model::AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "concurrent-test".to_string(),
-            },
+            agent_id: golem_common::model::AgentId::from_parts(7, 5),
         },
         persist_oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),
