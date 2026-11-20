@@ -4000,6 +4000,11 @@ after `CardDerived` reuses the recorded child instead of creating it again. Test
 
 ### Card authorization decisions
 
+Guest `search-oplog.get-next` authorizes a 100-index window from the search cursor. The host caps
+the scan budget for that call to the window size before reading entries. A batch can advance the
+cursor without finding a match. The first batch pins the oplog end separately, and each new live
+batch checks the grant for its own window. Completed calls replay their recorded results.
+
 Card events are hints. When replay commits a recorded entry, `skip_forward` publishes every card
 event up to the next recorded entry, and the next authority boundary applies them. A decision that
 records nothing therefore sees on replay the card events that live execution applied only to a later
