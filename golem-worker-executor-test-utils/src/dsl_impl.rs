@@ -181,7 +181,7 @@ impl TestWorkerExecutor {
             .client
             .clone()
             .get_invocation(GetInvocationRequest {
-                agent_id: Some(agent_id.clone().into()),
+                agent_id: Some((*agent_id).into()),
                 environment_id: Some(environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 invocation_id: Some(invocation_id.into()),
@@ -215,7 +215,7 @@ impl TestWorkerExecutor {
             .client
             .clone()
             .list_invocations(ListInvocationsRequest {
-                agent_id: Some(agent_id.clone().into()),
+                agent_id: Some((*agent_id).into()),
                 environment_id: Some(environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 ..request
@@ -249,7 +249,7 @@ impl TestWorkerExecutor {
             .client
             .clone()
             .lookup_invocations(LookupInvocationsRequest {
-                agent_id: Some(agent_id.clone().into()),
+                agent_id: Some((*agent_id).into()),
                 environment_id: Some(environment_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 idempotency_key: Some(idempotency_key.clone().into()),

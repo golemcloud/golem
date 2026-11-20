@@ -7,8 +7,8 @@ use futures_concurrency::prelude::*;
 use golem_rust::agentic::get_agent_id;
 use golem_rust::schema::{FromSchema, IntoSchema};
 use golem_rust::tool::{
-    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, RawCustomToolError,
-    Tool, ToolInvokeError, UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, PrincipalKind,
+    RawCustomToolError, Tool, ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{TypedSchemaValue, universal_tool_middleware};
 use model::{
@@ -230,22 +230,17 @@ fn owner_summary() -> OwnerSummary {
 }
 
 fn principal_summary(principal: &Principal) -> PrincipalSummary {
-    match principal {
-        Principal::Anonymous => PrincipalSummary::Anonymous,
-        Principal::User(user) => PrincipalSummary::User {
-            issuer: user.issuer().to_string(),
-            subject: user.subject().to_string(),
-        },
-        Principal::Agent(agent) => PrincipalSummary::Agent {
-            agent_id: agent.agent_id().uuid.to_string(),
-        },
-        Principal::Account(account) => PrincipalSummary::Account {
-            account_id: account.account_id().uuid.to_string(),
-        },
-        Principal::Tool(tool) => PrincipalSummary::Tool {
-            environment_id: tool.environment_id().uuid.to_string(),
-            tool_name: tool.tool_name().to_string(),
-        },
+    let Some(principal_ref) = principal.principal_ref() else {
+        return PrincipalSummary::Anonymous;
+    };
+    let issuer = principal_ref.issuer().to_string();
+    let subject = principal_ref.subject().to_string();
+    match principal.kind() {
+        PrincipalKind::User => PrincipalSummary::User { issuer, subject },
+        PrincipalKind::Account => PrincipalSummary::Account { issuer, subject },
+        PrincipalKind::Agent => PrincipalSummary::Agent { issuer, subject },
+        PrincipalKind::Tool => PrincipalSummary::Tool { issuer, subject },
+        PrincipalKind::Anonymous => PrincipalSummary::Anonymous,
     }
 }
 

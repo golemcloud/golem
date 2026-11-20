@@ -33,20 +33,10 @@ pub struct OwnerSummary {
 )]
 pub enum PrincipalSummary {
     Anonymous,
-    User {
-        issuer: String,
-        subject: String,
-    },
-    Agent {
-        agent_id: String,
-    },
-    Account {
-        account_id: String,
-    },
-    Tool {
-        environment_id: String,
-        tool_name: String,
-    },
+    User { issuer: String, subject: String },
+    Account { issuer: String, subject: String },
+    Agent { issuer: String, subject: String },
+    Tool { issuer: String, subject: String },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
