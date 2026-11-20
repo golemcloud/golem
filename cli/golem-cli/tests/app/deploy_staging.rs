@@ -27,6 +27,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
     use golem_client::{Context, Security};
     use golem_common::schema::ExternalTypedSchemaValue;
     use golem_schema::render::json_value::to_json_value;
+    use serde_json::{Value, json};
 
     let mut ctx = TestContext::new();
     ctx.start_server().await;
@@ -93,6 +94,20 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
     let layer_digest = &package.config().components[&name].wasm;
     let layer = package.blob(layer_digest).unwrap();
 
+    let archive = ctx.cwd_path_join("golem-package.tar");
+    let in_root = "packages/golem-package.tar";
+    let first_outside = "../first/golem-package.tar";
+    let second_outside = "../second/golem-package.tar";
+    for source in [in_root, first_outside, second_outside] {
+        let path = ctx.cwd_path_join(source);
+        fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::copy(&archive, path)?;
+    }
+    #[cfg(not(windows))]
+    let app_root = std::fs::canonicalize(ctx.cwd_path())?;
+    #[cfg(windows)]
+    let app_root = ctx.cwd_path();
+
     let registry = RegistryServiceClientLive {
         context: Context {
             client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new()).build(),
@@ -100,7 +115,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
             security_token: Security::Bearer(golem_client::LOCAL_WELL_KNOWN_TOKEN.to_string()),
         },
     };
-    let mut local_revision = None;
+    let mut previous_revision = None;
     let mut local_result = None;
     // The invocation owner is part of the consuming app, not the package.
     let owner = indoc::indoc! {r#"
@@ -111,13 +126,28 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
             tools:
               echo-tool: {}
     "#};
-    for installed in [false, true] {
-        if installed {
+    for (source, expected_provenance, provenance_changed) in [
+        (None, None, false),
+        (Some(in_root), Some(in_root), true),
+        (Some(first_outside), Some("golem-package.tar"), true),
+        (Some(second_outside), Some("golem-package.tar"), false),
+    ] {
+        if let Some(source) = source {
             fs::write_str(&manifest_path, format!("{manifest}{owner}"))?;
-            assert!(
-                ctx.cli(["install", "./golem-package.tar"])
-                    .await
-                    .success_or_dump()
+            assert!(ctx.cli(["install", source]).await.success_or_dump());
+            let lock: serde_yaml::Value =
+                serde_yaml::from_str(&fs::read_to_string(ctx.cwd_path_join("golem.lock"))?)?;
+            let locked_source: std::path::PathBuf =
+                if let Some(outside) = source.strip_prefix("../") {
+                    let mut path = app_root.parent().unwrap().to_path_buf();
+                    path.extend(outside.split('/'));
+                    path
+                } else {
+                    source.split('/').collect()
+                };
+            assert_eq!(
+                lock["packages"]["package-deploy"]["source"].as_str(),
+                Some(fs::path_to_str(&locked_source)?)
             );
             assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
         } else {
@@ -126,7 +156,32 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
                 format!("{manifest}{publisher}{owner}{tool_component}"),
             )?;
         }
-        assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+        let deploy = ctx.cli(["--format", "json", cmd::DEPLOY, flag::YES]).await;
+        assert!(deploy.success_or_dump());
+        let documents = deploy.stdout_json::<Value>();
+        let plan = documents.iter().find(|doc| doc["$type"] == "deploy.plan");
+        if provenance_changed {
+            // Compare the entire deployment diff, not only the installed component.
+            assert_eq!(
+                plan.expect("missing deployment plan")["deploymentDiff"],
+                json!({
+                    "components": {
+                        (component_name): {
+                            "wasmChanged": false,
+                            "packageMetadataChanged": true,
+                            "componentConfigChanged": false,
+                        }
+                    },
+                    "publishedToolMiddlewares": {},
+                    "universalToolMiddlewaresChanged": false,
+                    "toolCompatibilityModeChanged": false,
+                    "environmentToolMiddlewareBindings": {},
+                    "agentToolMiddlewareBindings": {},
+                })
+            );
+        } else if source.is_some() {
+            assert!(plan.is_none(), "Unexpected deployment plan: {plan:#?}");
+        }
         let component = ctx
             .cli_with_input(
                 ["--format", "json", cmd::COMPONENT, cmd::GET, component_name],
@@ -145,23 +200,28 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
             .get_component_wasm(&id, component.revision.into())
             .await?;
         assert_eq!(uploaded.as_ref(), layer);
-        if installed {
-            assert!(component.revision > local_revision.unwrap());
+        let revision = component.revision;
+        if let Some(expected_source) = expected_provenance {
+            if provenance_changed {
+                assert!(revision > previous_revision.unwrap());
+            } else {
+                assert_eq!(revision, previous_revision.unwrap());
+            }
             let origin = serde_json::to_value(component)?;
-            assert_eq!(origin["packageMetadata"]["source"], "golem-package.tar");
+            assert_eq!(origin["packageMetadata"]["source"], expected_source);
             assert_eq!(origin["packageMetadata"]["packageDigest"], package.digest());
             assert_eq!(
                 origin["packageMetadata"]["layerDigest"],
                 layer_digest.as_str()
             );
         } else {
-            local_revision = Some(component.revision);
             assert!(
                 serde_json::to_value(component)?
                     .get("packageMetadata")
                     .is_none()
             );
         }
+        previous_revision = Some(revision);
 
         let invocation = ctx
             .cli_with_input(
@@ -192,7 +252,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         let typed = typed.as_inner();
         let result = to_json_value(typed.graph(), &typed.graph().root, typed.value())?;
         assert_eq!(result, "Hello from a tool");
-        if installed {
+        if source.is_some() {
             assert_eq!(Some(&result), local_result.as_ref());
         } else {
             local_result = Some(result);

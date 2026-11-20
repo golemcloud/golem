@@ -483,8 +483,20 @@ impl ApplicationContext {
                         app_root: &loaded.app_root_dir,
                         cache_root: config_dir.join("package-cache"),
                     };
-                    let expanded =
+                    let mut expanded =
                         golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
+                    for installed in expanded.components.values_mut() {
+                        // The lock is a local locator, not the source label sent to the registry.
+                        let source = fs::absolute_lexical_path_from_base_dir(
+                            Path::new(&installed.package_metadata.source),
+                            &loaded.app_root_dir,
+                        );
+                        installed.package_metadata.source =
+                            match source.strip_prefix(&loaded.app_root_dir) {
+                                Ok(relative) => fs::path_to_unix_str(relative)?,
+                                Err(_) => fs::file_name_to_str(&source)?.to_owned(),
+                            };
+                    }
                     loaded
                         .raw_apps
                         .push(package_manifest(dir.path(), &expanded.declarations)?);
