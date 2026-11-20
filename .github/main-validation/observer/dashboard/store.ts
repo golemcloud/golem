@@ -1,17 +1,19 @@
 import { Effect, Schema, Semaphore } from "effect"
 import { resolve } from "node:path"
-import { atomicJson, exists, now, readJson } from "../runtime.ts"
+import { atomicJson, attempt, exists, now, object, readJson } from "../runtime.ts"
 import { instant, ProgressIdentity, ProgressState, publicRun, RunSchema } from "./model.ts"
 import type { Progress, Run } from "./model.ts"
 
 const StoredRun = Schema.Struct({
   ...RunSchema.fields,
   progress: Schema.optionalKey(ProgressState),
-  _progress_identity: Schema.optionalKey(ProgressIdentity),
+  // Null retains completed historical telemetry without inventing a runner identity.
+  _progress_identity: Schema.optionalKey(Schema.NullOr(ProgressIdentity)),
   _progress_only: Schema.optionalKey(Schema.Boolean)
 }).check(
   Schema.makeFilter((run) =>
     (run.progress === undefined) === (run._progress_identity === undefined) &&
+    (run._progress_identity !== null || (run.status === "completed" && !run._progress_only)) &&
     (!run._progress_only || run.progress !== undefined)
   )
 )
@@ -40,9 +42,37 @@ export class Store {
   }
   static open = Effect.fn("Store.open")(function*(directory: string, persist: Persist = atomicJson) {
     const path = resolve(directory, "data.json")
-    const data = (yield* exists(path))
-      ? yield* Schema.decodeUnknownEffect(Data)(yield* readJson(path))
-      : { updated_at: null, runs: [] }
+    const stored = (yield* exists(path)) ? yield* readJson(path) : { updated_at: null, runs: [] }
+    const data = yield* Schema.decodeUnknownEffect(Data)(
+      yield* attempt(() => {
+        const data = object(stored)
+        if (!Array.isArray(data.runs)) return data
+        return {
+          ...data,
+          runs: data.runs.map((value) => {
+            const run = object(value)
+            return {
+              changes: {
+                available: false,
+                baseline: "",
+                note: "Commit comparison was not recorded for this historical run.",
+                commits: []
+              },
+              evidence: {
+                tasks: [],
+                versions: [],
+                limits: ["Failure evidence was not recorded for this historical run."]
+              },
+              ...run,
+              analysis: { published_at: null, ...object(run.analysis) },
+              ...(run.status === "completed" && run.progress !== undefined && !Object.hasOwn(run, "_progress_identity")
+                ? { _progress_identity: null }
+                : {})
+            }
+          })
+        }
+      })
+    )
     return new Store(path, data, persist)
   })
   snapshot() {
@@ -74,6 +104,9 @@ export class Store {
             context: value.context
           }
           if (existing) {
+            if (existing._progress_identity === null) {
+              return yield* Effect.fail(new AdmissionError({ message: "historical progress has no runner identity" }))
+            }
             for (const known of [existing, existing._progress_identity]) {
               for (const field of identityFields) {
                 if (known?.[field] && known[field] !== value[field]) {
@@ -132,9 +165,10 @@ export class Store {
                 new AdmissionError({ message: "refusing an older observation of this attempt" })
               )
             }
+            const known = existing._progress_identity ?? existing
             if (
-              existing.progress && existing._progress_identity &&
-              !identityFields.some((field) => run[field] && run[field] !== existing._progress_identity?.[field])
+              existing.progress && existing._progress_identity !== undefined &&
+              !identityFields.some((field) => run[field] && known[field] && run[field] !== known[field])
             ) {
               run = { ...run, progress: existing.progress, _progress_identity: existing._progress_identity }
             }

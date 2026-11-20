@@ -204,7 +204,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
 
 fn lease_action() -> ScheduledAction {
     ScheduledAction::WakeInvocation {
-        owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 3)),
+        owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(11, 5)),
         idempotency_key: golem_common::model::InvocationId(Uuid::new_v4()),
         target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
     }

@@ -291,7 +291,10 @@ test("restart decodes persisted state and rejects invalid records without rewrit
         runs: [{ ...valid, tests: { ...valid.tests, totals: { ...valid.tests.totals, tests: true } } }]
       },
       { updated_at: null, runs: [{ ...valid, progress: { ...progress().progress, mode: "unknown" } }] },
-      { updated_at: null, runs: [{ ...valid, progress: progress().progress }] }
+      { updated_at: null, runs: [{ ...valid, status: "in_progress", progress: progress().progress }] },
+      { updated_at: null, runs: [{ ...valid, progress: progress().progress, _progress_only: true }] },
+      { updated_at: null, runs: [{ ...valid, evidence: null }] },
+      { updated_at: null, runs: [{ ...valid, analysis: { ...valid.analysis, published_at: "not a date" } }] }
     ]
   ) {
     const serialized = JSON.stringify(data)
@@ -299,6 +302,42 @@ test("restart decodes persisted state and rejects invalid records without rewrit
     await expect(run(Store.open(directory))).rejects.toThrow()
     expect(await fs.readFile(store.path, "utf8")).toBe(serialized)
   }
+})
+test("historical attempts retain observations and unverified progress across reads, updates and restarts", async () => {
+  const telemetry = publicProgress(progress()).progress
+  const historical: Record<string, unknown> = { ...publicRun(observation()), progress: telemetry }
+  delete historical.changes
+  delete historical.evidence
+  const oldAnalysis = { ...publicRun(observation()).analysis } as Record<string, unknown>
+  delete oldAnalysis.published_at
+  historical.analysis = oldAnalysis
+  const current = publicRun({ ...observation(), attempt: 2 })
+  const serialized = JSON.stringify({ updated_at: observation().updated_at, runs: [current, historical] })
+  await fs.writeFile(store.path, serialized)
+  store = await run(Store.open(directory))
+  handle = handler(store, token, progressToken)
+  expect(await fs.readFile(store.path, "utf8")).toBe(serialized)
+  const saved = store.snapshot()
+  expect(saved.runs).toHaveLength(2)
+  expect(saved.runs[0]).toEqual(current)
+  expect(saved.runs[1]).toMatchObject({ ...historical, analysis: { ...oldAnalysis, published_at: null } })
+  expect(saved.runs[1]?.changes.available).toBe(false)
+  expect(saved.runs[1]?.evidence.limits).toContain("Failure evidence was not recorded for this historical run.")
+  expect((await request("/api/progress", progress(), progressToken)).status).toBe(400)
+  expect(store.snapshot()).toEqual(saved)
+  expect((await request("/api/heartbeat", {})).status).toBe(200)
+  store = await run(Store.open(directory))
+  handle = handler(store, token, progressToken)
+  expect(store.snapshot().runs).toEqual(saved.runs)
+  expect((await request("/api/run", observation())).status).toBe(200)
+  expect(store.snapshot().runs[1]?.progress).toEqual(telemetry)
+  store = await run(Store.open(directory))
+  handle = handler(store, token, progressToken)
+  expect((await request("/api/progress", progress(), progressToken)).status).toBe(400)
+  expect(store.snapshot().runs[1]?.progress).toEqual(telemetry)
+  expect((await request("/api/run", { ...observation(), source: "d".repeat(40) })).status).toBe(200)
+  expect(store.snapshot().runs[1]?.progress).toBeUndefined()
+  expect(store.snapshot().runs).toHaveLength(2)
 })
 test("restart preserves the progress-only trust and independent observer clock", async () => {
   const value = progress()
