@@ -76,7 +76,8 @@ Decide child authorization and protocol readiness before publishing live. Termin
 abandons replay for failure (`authoritative_replay_failure`); it must not publish over sibling
 history. A typed-loss `End` belongs to the original `Start`. Never rewind or discard another
 task's history to make repair possible. HTTP without a safe resend reports
-`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`.
+`http-response-incomplete`, RDBMS reports `resource-lost`, and TCP reports `connection-broken`
+(P2 TCP reports `connection-reset`, because P2 has no `connection-broken` code).
 UDP `ReadRemote` re-executes receive after rebind rather than manufacturing connection loss.
 
 Preview 2 HTTP is removed. Preview 3 send keeps request-body intake running while awaiting

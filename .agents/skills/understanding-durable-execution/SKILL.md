@@ -102,11 +102,14 @@ uses the same table: `start-bind` (`WriteLocal`) records the selected local addr
 `WriteRemote` call with both endpoints. Replay binds and connects nothing natively. A replayed
 successful `finish-connect` pushes `LostTcpInputStream` and `LostTcpOutputStream` as children of
 the socket, in the native order, so the reps stay the same; their first operation fails with
-`connection-reset` (P2 has no `connection-broken`) and their pollables are ready at once. A
-`finish-connect` whose connect started before the reconstruction, incomplete or not yet finished,
-completes with `connection-reset`. The native socket of a replayed entry stays unbound and
-unconnected, so its pollable is ready at once, and the entry answers the address getters and the
-states the native socket no longer holds. Because `start-connect` is a recorded write, the read-only
+`connection-reset` (P2 has no `connection-broken`), the next ones report `closed`, and their
+pollables are ready at once. A `finish-connect` whose connect started before the reconstruction,
+incomplete or not yet finished, completes with `connection-reset`. The native socket of a
+replayed entry stays unbound and unconnected, so its pollable is ready at once, and the entry
+answers the address getters and the states the native socket no longer holds: `finish-bind` of a
+replayed pending bind succeeds once, a replayed bound socket refuses `start-connect` with
+`connection-reset` (its recorded endpoint is not a reserved native port), and a replayed pending
+bind or connect refuses it with `concurrency-conflict`. Because `start-connect` is a recorded write, the read-only
 guard refuses a P2 connect before a poll can drive the native connect. Each P2 TCP stream operation
 is a durable call (`durable_host/io/tcp_streams.rs`): reads record the bytes, writes only the result
 and the count, so replay neither reads nor sends, and an incomplete call completes with
@@ -1939,7 +1942,8 @@ call counter, including permits owned by open transaction protocols.
 Authorization and protocol readiness precede live publication. Terminal refusal abandons replay
 for failure (`authoritative_replay_failure`), not publication over sibling history. Never rewind
 or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
-resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
+resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`
+(P2 TCP `connection-reset`, because P2 has no `connection-broken` code).
 UDP `ReadRemote` instead re-executes receive after rebind.
 
 **A denied call records its denial.** When the host denies a live call before it runs, the call
