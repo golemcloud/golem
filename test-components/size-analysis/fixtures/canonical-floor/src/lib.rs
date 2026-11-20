@@ -136,6 +136,8 @@ unsafe fn trap(_: *mut u8) -> i32 {
     core::arch::wasm32::unreachable()
 }
 unsafe fn trap_agent_call(_: *mut u8, _: usize, _: *mut u8, _: usize, _: i32) -> i32 {
+    // Agent initialization primes the environment cache for snapshot restoration.
+    let _ = std::env::vars_os().count();
     core::arch::wasm32::unreachable()
 }
 unsafe fn callback(_: u32, _: u32, _: u32) -> u32 {
