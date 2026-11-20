@@ -14,6 +14,7 @@
 
 use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
+use crate::gc_heap::{assert_settled_history, constructor_key};
 use crate::persistent_storage::PersistentStorage;
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
@@ -8357,6 +8358,8 @@ async fn reconstruct_interrupted_state(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
 ) -> anyhow::Result<()> {
+    use futures::StreamExt;
+
     let context = TestContext::new(last_unique_id);
     let executor = durable_storage.start(deps, &context, None).await?;
 
@@ -8365,6 +8368,9 @@ async fn reconstruct_interrupted_state(
         .store()
         .await?;
     let agent_id = agent_key!("Clocks", "interruption-2");
+    let warmup_key = IdempotencyKey::fresh();
+    let interrupted_key = IdempotencyKey::fresh();
+    let fresh_key = IdempotencyKey::fresh();
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -8372,18 +8378,29 @@ async fn reconstruct_interrupted_state(
     // Warmup: ensure the agent constructor has completed before we invoke the
     // long-running function we intend to interrupt.
     executor
-        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &warmup_key,
+            "sleep_for",
+            data_value!(0.0f64),
+        )
         .await?;
 
+    let output = tokio_stream::wrappers::UnboundedReceiverStream::new(
+        executor.capture_output(&worker_id).await?,
+    );
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
+    let invocation_key = interrupted_key.clone();
     let fiber = tokio::spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_with_key(
                     &component_clone,
                     &agent_id_clone,
+                    &invocation_key,
                     "interruption",
                     data_value!(),
                 )
@@ -8392,14 +8409,34 @@ async fn reconstruct_interrupted_state(
         .in_current_span(),
     );
 
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
-        .await?;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            output.any(|event| futures::future::ready(stdout_event_matching(
+                &event,
+                "Starting interruption test\n"
+            )))
+        )
+        .await?,
+        "the interrupted method must enter the guest before the interrupt"
+    );
 
     executor.interrupt(&worker_id).await?;
     let result = fiber.await?;
 
     let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let expected_keys = [
+        constructor_key(&before),
+        executor
+            .external_invocation_key(&worker_id, &warmup_key, "sleep_for")
+            .await?,
+        executor
+            .external_invocation_key(&worker_id, &interrupted_key, "interruption")
+            .await?,
+        executor
+            .external_invocation_key(&worker_id, &fresh_key, "sleep_for")
+            .await?,
+    ];
     executor.shutdown_and_wait_for_invocation_loops().await?;
     executor.remove_cached_status(&worker_id).await?;
     drop(executor);
@@ -8413,26 +8450,33 @@ async fn reconstruct_interrupted_state(
     assert_eq!(status, AgentStatus::Interrupted);
 
     let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        after
-            .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
-            .count(),
-        before
-            .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
-            .count(),
-    );
-    assert_eq!(
-        after
-            .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-            .count(),
-        before
-            .iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-            .count(),
-    );
+    assert_eq!(after, before);
+
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+    let completed = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &interrupted_key,
+            "interruption",
+            data_value!(),
+        )
+        .await?;
+    assert_eq!(completed.into_typed::<String>()?, "done");
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &fresh_key,
+            "sleep_for",
+            data_value!(0.0f64),
+        )
+        .await?;
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_settled_history(&recovered, &expected_keys);
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }
@@ -8446,19 +8490,36 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     #[dimension(durable_storage)] durable_storage: &Arc<PersistentStorage>,
 ) -> anyhow::Result<()> {
+    use fred::types::Expiration;
     use golem_common::config::RedisConfig;
     use golem_common::model::account::AccountEmail;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::security_scheme::{
+        Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
+    };
     use golem_common::redis::RedisPool;
+    use golem_service_base::custom_api::{
+        CorsOptions, PathSegment, SecuritySchemeDetails, WebhookCallbackBehaviour,
+    };
     use golem_service_base::mcp::CompiledMcp;
+    use golem_test_framework::oidc::OidcFixture;
+    use golem_worker_service::custom_api::oidc::DefaultIdentityProvider;
+    use golem_worker_service::custom_api::oidc::handler::OidcHandler;
+    use golem_worker_service::custom_api::oidc::session_store::RedisSessionStore;
+    use golem_worker_service::custom_api::route_resolver::ResolvedRouteEntry;
+    use golem_worker_service::custom_api::{
+        RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
+        RichSecuritySchemeRouteSecurity,
+    };
     use golem_worker_service::mcp::McpDeployment;
     use golem_worker_service::mcp::session::store::{
         McpSessionId, McpSessionRecord, McpSessionStore, RedisMcpSessionStore,
     };
     use golem_worker_service::mcp::session::{McpReplica, McpSessionLayer};
+    use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
     use poem::{Endpoint, EndpointExt};
 
     let context = TestContext::new(last_unique_id);
@@ -8498,6 +8559,7 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
         .store()
         .await?;
     let agent_id = agent_id!("GolemWasiHttp", "cache-loss");
+    let keys = [(); 6].map(|()| IdempotencyKey::fresh());
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -8507,19 +8569,144 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
         )
         .await?;
     executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[0],
+            "increment",
+            data_value!(),
+        )
         .await?;
-    let before = executor.oplog_max_index(&worker_id).await?;
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let expected_keys = futures::future::try_join_all(
+        keys.iter()
+            .zip([
+                "increment",
+                "run",
+                "get_count",
+                "get_count",
+                "increment",
+                "get_count",
+            ])
+            .map(|(key, method)| executor.external_invocation_key(&worker_id, key, method)),
+    )
+    .await?;
+    let expected_keys = expected_keys
+        .into_iter()
+        .chain([constructor_key(&before)])
+        .collect::<Box<[_]>>();
 
-    let session_store = Arc::new(RedisMcpSessionStore::new(
-        RedisPool::configured(&RedisConfig {
-            host: deps.redis.public_host(),
-            port: deps.redis.public_port(),
-            key_prefix: context.redis_prefix(),
-            ..Default::default()
-        })
-        .await?,
-    ));
+    let redis_pool = RedisPool::configured(&RedisConfig {
+        host: deps.redis.public_host(),
+        port: deps.redis.public_port(),
+        key_prefix: context.redis_prefix(),
+        ..Default::default()
+    })
+    .await?;
+    let oidc = OidcFixture::start().await?;
+    let scheme = Arc::new(SecuritySchemeDetails {
+        id: SecuritySchemeId::new(),
+        revision: SecuritySchemeRevision::INITIAL,
+        name: SecuritySchemeName("cache-loss-sign-in".into()),
+        provider_type: Provider::custom("fixture".into(), oidc.issuer.to_string())
+            .map_err(anyhow::Error::msg)?,
+        client_id: ClientId::new("fixture-client".into()),
+        client_secret: ClientSecret::new("fixture-secret".into()),
+        redirect_url: RedirectUrl::new("http://cache-loss.example.com/oidc/callback".into())?,
+        scopes: vec![Scope::new("email".into())],
+        login: SecuritySchemeLogin::Cookie(golem_schema::Empty {}),
+    });
+    let protected_route = ResolvedRouteEntry {
+        domain: Domain("cache-loss.example.com".into()),
+        public_scheme: "http".into(),
+        public_authority: "cache-loss.example.com".into(),
+        route: Arc::new(RichCompiledRoute {
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("owner@example.com"),
+            environment_id: context.default_environment_id,
+            deployment_revision: DeploymentRevision::INITIAL,
+            route_id: 1,
+            route_match: golem_common::model::agent::HttpMethod::Method(
+                golem_schema::http::HttpMethod::Get(Default::default()),
+            )
+            .into(),
+            path: vec![PathSegment::Literal {
+                value: "protected".into(),
+            }],
+            behavior: RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
+                component_id: component.id,
+            }),
+            security: RichRouteSecurity::SecurityScheme(RichSecuritySchemeRouteSecurity {
+                security_scheme: scheme.clone(),
+            }),
+            cors: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+        }),
+        captured_path_parameters: Vec::new(),
+        request_target: golem_schema::http::HttpRequestTarget::parse("/protected")
+            .map_err(anyhow::Error::msg)?,
+        openapi_inputs: None,
+    };
+    let oidc_handler = OidcHandler::new(
+        Arc::new(RedisSessionStore::new(
+            redis_pool.clone(),
+            Expiration::EX(300),
+        )),
+        Arc::new(DefaultIdentityProvider),
+    );
+    let mut unauthenticated =
+        RichRequest::new(poem::Request::builder().uri_str("/protected").finish());
+    let redirect = oidc_handler
+        .apply_oidc_incoming_middleware(&mut unauthenticated, &protected_route)
+        .await?
+        .expect("a protected route must require sign-in");
+    assert!(unauthenticated.authenticated_session().is_none());
+    assert_eq!(redirect.status, http::StatusCode::FOUND);
+    let provider = OidcFixture::client_without_redirects()
+        .get(redirect.headers[http::header::LOCATION].to_str()?)
+        .send()
+        .await?;
+    let callback_url = url::Url::parse(provider.headers()[http::header::LOCATION].to_str()?)?;
+    let mut callback = RichRequest::new(
+        poem::Request::builder()
+            .uri_str(format!(
+                "{}?{}",
+                callback_url.path(),
+                callback_url.query().unwrap()
+            ))
+            .finish(),
+    );
+    let callback = oidc_handler
+        .handle_oidc_callback_behaviour(&mut callback, &protected_route, &scheme)
+        .await?;
+    assert_eq!(callback.status, http::StatusCode::FOUND);
+    let cookie = callback.headers[http::header::SET_COOKIE]
+        .to_str()?
+        .split(';')
+        .next()
+        .expect("sign-in cookie");
+    let authenticated_request = || {
+        RichRequest::new(
+            poem::Request::builder()
+                .uri_str("/protected")
+                .header(http::header::COOKIE, cookie)
+                .finish(),
+        )
+    };
+    let mut authenticated = authenticated_request();
+    assert!(
+        oidc_handler
+            .apply_oidc_incoming_middleware(&mut authenticated, &protected_route)
+            .await?
+            .is_none()
+    );
+    assert_eq!(
+        authenticated.authenticated_session().unwrap().subject,
+        "fixture-user"
+    );
+
+    let session_store = Arc::new(RedisMcpSessionStore::new(redis_pool));
     let session_id = McpSessionId::generate()?;
     let session = McpSessionRecord {
         domain: Domain("cache-loss.example.com".into()),
@@ -8569,9 +8756,10 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
         let executor = executor.clone();
         let component = component.clone();
         let agent_id = agent_id.clone();
+        let key = keys[1].clone();
         async move {
             executor
-                .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+                .invoke_and_await_agent_with_key(&component, &agent_id, &key, "run", data_value!())
                 .await
         }
     });
@@ -8580,13 +8768,26 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
         .forget();
 
     let mut redis = deps.redis.get_async_connection(0).await;
-    let keys: Vec<String> = redis::cmd("KEYS")
+    let redis_keys: Vec<String> = redis::cmd("KEYS")
         .arg(format!("{}*", context.redis_prefix()))
         .query_async(&mut redis)
         .await?;
-    assert!(!keys.is_empty());
-    let removed: u64 = redis::cmd("DEL").arg(keys).query_async(&mut redis).await?;
+    assert!(!redis_keys.is_empty());
+    let removed: u64 = redis::cmd("DEL")
+        .arg(redis_keys)
+        .query_async(&mut redis)
+        .await?;
     assert!(removed > 0);
+    let mut expired = authenticated_request();
+    let sign_in = oidc_handler
+        .apply_oidc_incoming_middleware(&mut expired, &protected_route)
+        .await?
+        .expect("the lost sign-in session must not authenticate the cookie");
+    assert_eq!(sign_in.status, http::StatusCode::FOUND);
+    assert!(expired.authenticated_session().is_none());
+    let sign_in_url = url::Url::parse(sign_in.headers[http::header::LOCATION].to_str()?)?;
+    assert_eq!(sign_in_url.origin(), oidc.issuer.origin());
+    assert_eq!(sign_in_url.path(), "/authorize");
     assert_eq!(
         session_endpoint.call(session_request()).await?.status(),
         poem::http::StatusCode::NOT_FOUND
@@ -8596,32 +8797,59 @@ async fn losing_redis_ends_cached_sessions_but_preserves_agent_state(
     assert_eq!(requests.load(Ordering::SeqCst), 1);
 
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[2],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 1);
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
-    let keys: Vec<String> = redis::cmd("KEYS")
+    let redis_keys: Vec<String> = redis::cmd("KEYS")
         .arg(format!("{}*", context.redis_prefix()))
         .query_async(&mut redis)
         .await?;
-    if !keys.is_empty() {
-        let _: u64 = redis::cmd("DEL").arg(keys).query_async(&mut redis).await?;
+    if !redis_keys.is_empty() {
+        let _: u64 = redis::cmd("DEL")
+            .arg(redis_keys)
+            .query_async(&mut redis)
+            .await?;
     }
     let executor = durable_storage.start_with_cache(deps, &context).await?;
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[3],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 1);
     executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[4],
+            "increment",
+            data_value!(),
+        )
         .await?;
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[5],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 2);
     let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_eq!(count_agent_invocation_pair_since(&entries, before), (5, 5));
+    assert_settled_history(&entries, &expected_keys);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     http_server.abort();
     Ok(())

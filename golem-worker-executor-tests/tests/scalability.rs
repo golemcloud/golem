@@ -14,20 +14,22 @@
 
 use crate::Tracing;
 use crate::execution_observations::WorkerObservations;
+use crate::gc_heap::{assert_settled_history, constructor_key};
 use crate::persistent_storage::PersistentStorage;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId};
 use golem_common::{agent_key, data_value};
-use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
+use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{MemoryConfig, OplogConfig};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -794,12 +796,19 @@ async fn auto_committed_invocations_publish_idle_status(
         .store()
         .await?;
     let agent_id = agent_key!("Environment", "auto-commit-status");
+    let keys = [(); 4].map(|()| IdempotencyKey::fresh());
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[0],
+            "increment",
+            data_value!(),
+        )
         .await?;
     let metadata = executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(5))
@@ -810,6 +819,16 @@ async fn auto_committed_invocations_publish_idle_status(
         entries.last().unwrap().oplog_index
     );
     assert_eq!(metadata.pending_invocation_count, 0);
+    let expected_keys = futures::future::try_join_all(
+        keys.iter()
+            .zip(["increment", "get_count", "increment", "get_count"])
+            .map(|(key, method)| executor.external_invocation_key(&worker_id, key, method)),
+    )
+    .await?;
+    let expected_keys = expected_keys
+        .into_iter()
+        .chain([constructor_key(&entries)])
+        .collect::<Box<[_]>>();
 
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
@@ -820,22 +839,37 @@ async fn auto_committed_invocations_publish_idle_status(
         executor.get_worker_metadata(&worker_id).await?.status,
         AgentStatus::Idle
     );
-    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        count_agent_invocation_pair_since(&recovered, OplogIndex::NONE),
-        count_agent_invocation_pair_since(&entries, OplogIndex::NONE),
-    );
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[1],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 1);
     executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[2],
+            "increment",
+            data_value!(),
+        )
         .await?;
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[3],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 2);
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_settled_history(&recovered, &expected_keys);
 
     Ok(())
 }
@@ -864,13 +898,20 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         .await?;
 
     let agent_id = agent_key!("Environment", "archive-idle-1");
+    let keys = [(); 4].map(|()| IdempotencyKey::fresh());
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
     // Invoke a simple function; after it completes, the worker becomes Idle
     executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[0],
+            "increment",
+            data_value!(),
+        )
         .await?;
 
     // Verify the worker is idle
@@ -896,6 +937,16 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         !entries.is_empty(),
         "Oplog entries should still be readable after archiving"
     );
+    let expected_keys = futures::future::try_join_all(
+        keys.iter()
+            .zip(["increment", "get_count", "increment", "get_count"])
+            .map(|(key, method)| executor.external_invocation_key(&worker_id, key, method)),
+    )
+    .await?;
+    let expected_keys = expected_keys
+        .into_iter()
+        .chain([constructor_key(&entries)])
+        .collect::<Box<[_]>>();
 
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
@@ -906,22 +957,37 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         executor.get_worker_metadata(&worker_id).await?.status,
         AgentStatus::Idle
     );
-    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        count_agent_invocation_pair_since(&recovered, OplogIndex::NONE),
-        count_agent_invocation_pair_since(&entries, OplogIndex::NONE),
-    );
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[1],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 1);
     executor
-        .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[2],
+            "increment",
+            data_value!(),
+        )
         .await?;
     let count = executor
-        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &keys[3],
+            "get_count",
+            data_value!(),
+        )
         .await?;
     assert_eq!(count.into_typed::<u64>()?, 2);
+    let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_settled_history(&recovered, &expected_keys);
 
     Ok(())
 }
@@ -950,15 +1016,38 @@ async fn oplog_archive_scheduled_when_worker_fails(
         .await?;
 
     let agent_id = agent_key!("GolemHostApi", "archive-failed-1");
+    let warmup_key = IdempotencyKey::fresh();
+    let failed_key = IdempotencyKey::fresh();
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Invoke with 0 retries to cause immediate failure
-    let result = executor
-        .invoke_and_await_agent(
+    executor
+        .invoke_and_await_agent_with_key(
             &component,
             &agent_id,
+            &warmup_key,
+            "get_self_metadata_result",
+            data_value!(),
+        )
+        .await?;
+    let settled = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let settled_keys = [
+        constructor_key(&settled),
+        executor
+            .external_invocation_key(&worker_id, &warmup_key, "get_self_metadata_result")
+            .await?,
+    ];
+    let failed_invocation = executor
+        .external_invocation_key(&worker_id, &failed_key, "fail_with_custom_max_retries")
+        .await?;
+
+    // Invoke with 0 retries to cause immediate failure
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &failed_key,
             "fail_with_custom_max_retries",
             data_value!(0u64),
         )
@@ -998,10 +1087,76 @@ async fn oplog_archive_scheduled_when_worker_fails(
         executor.get_worker_metadata(&worker_id).await?.status,
         AgentStatus::Failed
     );
+    assert!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "get_self_metadata_result",
+                data_value!()
+            )
+            .await
+            .is_err(),
+        "a failed agent must reject fresh work after reconstruction"
+    );
     let recovered = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(recovered, entries);
+    let failed_start = recovered
+        .iter()
+        .position(|entry| {
+            matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.invocation_id == failed_invocation))
+        })
+        .expect("the original failed invocation");
+    assert_settled_history(&recovered[..failed_start], &settled_keys);
+    let failed = &recovered[failed_start..];
     assert_eq!(
-        count_agent_invocation_pair_since(&recovered, OplogIndex::NONE),
-        count_agent_invocation_pair_since(&entries, OplogIndex::NONE),
+        failed
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        1,
+    );
+    assert!(
+        failed
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+    );
+    let error = failed
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        .expect("the failed invocation must retain its error");
+    let pending_calls =
+        failed
+            .iter()
+            .enumerate()
+            .fold(HashSet::new(), |mut pending, (position, entry)| {
+                match &entry.entry {
+                    PublicOplogEntry::Start(_) => {
+                        assert!(position < error, "Start after failure");
+                        assert!(pending.insert(entry.oplog_index), "duplicate host Start");
+                    }
+                    PublicOplogEntry::End(end) => {
+                        assert!(position < error, "End after failure");
+                        assert!(pending.remove(&end.start_index), "End without unique Start");
+                    }
+                    PublicOplogEntry::Cancelled(cancelled) => {
+                        assert!(position < error, "Cancelled after failure");
+                        assert!(
+                            pending.remove(&cancelled.start_index),
+                            "Cancelled without unique Start"
+                        );
+                    }
+                    _ => {}
+                }
+                pending
+            });
+    assert!(
+        pending_calls.is_empty(),
+        "unfinished calls before the guest trap"
     );
 
     Ok(())

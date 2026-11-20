@@ -1687,10 +1687,10 @@ owner leaves by:
   reopened on this executor at the new epoch: by that recovery if it was in the running-workers
   index, otherwise by its next invocation. The recovery waits for a live lease.
 - **Oplog epoch fence.** A durable agent's primary oplog asserts the epoch it was opened at
-  whenever it appends or deletes entries, inside the storage transaction, on every indexed-storage backend (a Lua
-  script on Redis, `FOR UPDATE` on Postgres, the single-connection write pool on SQLite, a held
-  entry lock in memory; `storage/indexed/*.rs`, surfaced through `services/oplog/primary.rs`). The
-  shard manager mints a new, higher epoch for each new owner, including a restarted executor
+  whenever it appends or deletes entries. Each indexed-storage backend checks the epoch together
+  with the write. PostgreSQL uses `FOR UPDATE`, SQLite uses `BEGIN IMMEDIATE` write transactions,
+  and memory storage holds an entry lock. See `storage/indexed/` and `services/oplog/primary/`.
+  The shard manager mints a new, higher epoch for each new owner, including a restarted executor
   process at registration, so a write from an executor that has lost the shard is refused rather
   than written (`OplogError::Fenced` / `OplogFence`, carrying the asserted and, when known, the
   stored epoch). This protects an assignment change this executor has not yet heard about, and a
