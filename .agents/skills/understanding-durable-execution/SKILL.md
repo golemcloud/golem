@@ -100,8 +100,24 @@ cached effective values. A successful setter invalidates its option cache; the n
 and caches the native effective value, including OS rounding and buffer limits. Unset option getters
 still read the native socket asynchronously; their results are not recorded. Failed connects also reconstruct terminal socket errors. A bound-only TCP
 socket has no reserved native port after replay; a new connect or listen returns `connection-broken` rather
-than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP still
-reconnects as described below. Replayed websocket handles use their connect-time
+than changing that endpoint silently. Drop removes the entry before its resource rep can be reused. P2 TCP
+uses the same table: `start-bind` (`WriteLocal`) records the selected local address, `start-connect`
+(`WriteLocal`) records its result, and every `finish-connect` result, `would-block` too, is a
+`WriteRemote` call with both endpoints. Replay binds and connects nothing natively. A replayed
+successful `finish-connect` pushes `LostTcpInputStream` and `LostTcpOutputStream` as children of
+the socket, in the native order, so the reps stay the same; their first operation fails with
+`connection-reset` (P2 has no `connection-broken`), the next ones report `closed`, and their
+pollables are ready at once. A `finish-connect` whose connect started before the reconstruction,
+incomplete or not yet finished, completes with `connection-reset`. The native socket of a
+replayed entry stays unbound and unconnected, so its pollable is ready at once, and the entry
+answers the address getters and the states the native socket no longer holds: `finish-bind` of a
+replayed pending bind succeeds once, a replayed bound socket refuses `start-connect` with
+`connection-reset` (its recorded endpoint is not a reserved native port), and a replayed pending
+bind or connect refuses it with `concurrency-conflict`. Because `start-connect` is a recorded write, the read-only
+guard refuses a P2 connect before a poll can drive the native connect. Each P2 TCP stream operation
+is a durable call (`durable_host/io/tcp_streams.rs`): reads record the bytes, writes only the result
+and the count, so replay neither reads nor sends, and an incomplete call completes with
+`connection-reset` on the stand-in. Replayed websocket handles use their connect-time
 reconstruction policy under a per-handle coordination gate, so concurrent calls cannot reconnect
 one handle twice or replace a terminal session-loss outcome (see
 "Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
@@ -757,17 +773,12 @@ before peer readiness, then repair the original poll Start for durable agents. S
 and sync a real allocation and run in the privileged managed-XFS suite. These tests do not establish a
 bound for other host waits; preserve the permit-owned billing window.
 
-P2 TCP `start_connect` re-executes natively on reconstruction. A completed connect poll must drive
-the new native connect future before returning its recorded readiness, otherwise synchronous
-`finish_connect` can return `WouldBlock` and diverge. `TcpConnectReplay` in
-`durable_host/sockets/tcp.rs` classifies only socket pollables with an unfinished connect.
-`durable_host/io/poll.rs` revalidates their recorded-ready `poll` or `ready` result without changing
-the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
-completed replay has closed the durable handle. Replay resolution, the recorded terminal and
-file-readiness revalidation stay outside that race. `NativeIoWait` uses the same `InterruptSources`
-subscription as `DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation
-and tail-work deadlines and settled owner failure, then also observes entity cancellation. A deadline
-can leave `ExecutionStatus` Running, so its latch is required for a late subscriber.
+`NativeIoWait` uses the same `InterruptSources` subscription as
+`DurableWorkerCtx::create_interrupt_signal`: it subscribes before checking invocation and tail-work
+deadlines and settled owner failure, then also observes entity cancellation. A deadline can leave
+`ExecutionStatus` Running, so its latch is required for a late subscriber. Replay never drives a
+native P2 connect: a recorded-ready `poll` or `ready` returns its recorded result, and the socket
+of a replayed connect has no native connect future.
 `tests/api/interruption/host/p2/tcp/poll.rs` keeps the TCP peer silent after connect
 reconstruction, then applies a second monthly stop. It retains the original connect poll and ready
 terminals and incomplete input Start, checks observable cleanup and accounting,
@@ -777,13 +788,9 @@ does not establish an elapsed billing interval. The colocated production-window 
 `closed_owner_window_does_not_accrue_over_known_metering_intervals` advances the existing MeteringClock
 after physical permit release, retains allocated memory and the same owner/meter, and asserts no
 memory or mode-specific storage accrual and no filesystem resampling over known intervals.
-Peer withholding does not control TCP connect readiness, so
-this integrated case is not a connect-timeout witness. Failed native reconnect outcomes remain a raw-P2 replay
-limitation; readiness does not guarantee the original successful connection result.
 
-Successful pollable drops clear classification. Native socket deletion requires all pollable
-children to be dropped first, so socket cleanup need not scan unrelated subscriptions. This does
-not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
+Native socket deletion requires all pollable children to be dropped first. Replay does not
+revalidate HTTP, UDP or TCP pollables. Exported P2 `pollable.ready` remains a nonblocking
 live probe, as verified by `tests/api/p2_ready.rs`.
 
 ### Primary DB/KV completion before stop
@@ -967,71 +974,63 @@ exact monthly cause, physical release, unchanged prefix and ordinary same-key co
 For these separate claims and the test-only result-wait startup boundary, read
 [durable-source read proofs](reference/testing-patterns.md#durable-source-reads-without-a-runtime-observer).
 
-Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` use `NativeIoWait`
-with the composed interruption sources around only the native input future. Successful `finish_connect` and
-`accept` classify the returned input stream; successful native stream drop removes that rep.
-File streams use the separate filesystem observation path above; unknown streams keep their existing behavior. Native stream cancellation,
-resource deletion and invocation-result commit remain outside the select.
+P2 TCP stream I/O is recorded in `durable_host/io/tcp_streams.rs`; `durable_host/io/streams.rs`
+routes a stream there when `finish-connect` or `accept` registered its rep. Each operation is one
+durable call with no request payload:
 
-Raw TCP and reconstructed connect keep their existing unbiased selects. Native-wait tests use
-real WASI pollables and streams with independently assembled
-production sources. They cover deadline/entity cancellation before subscription and during actual
-Pending, typed errors, native completion, and resource ownership. They do not establish whole-Worker
-deadline/entity behavior or successful network reconnection. Durable replay resolution stays
-outside the native interruption race. P2 HTTP is unsupported and has no stream retry adapter.
+| Operation | Function | Type | Recorded |
+| -- | -- | -- | -- |
+| `read`, `blocking-read` | `sockets::tcp::input_stream::{read, blocking_read}` | `ReadRemote` | the bytes |
+| `skip`, `blocking-skip` | `sockets::tcp::input_stream::{skip, blocking_skip}` | `ReadRemote` | the count |
+| `check-write` | `sockets::tcp::output_stream::check_write` | `ReadLocal` | the permit |
+| `write`, `write-zeroes`, `blocking-write-and-flush`, `blocking-write-zeroes-and-flush` | `sockets::tcp::output_stream::*` | `WriteRemote` | the count, never the bytes |
+| `flush`, `blocking-flush` | `sockets::tcp::output_stream::{flush, blocking_flush}` | `WriteRemote` | the result |
 
-These raw TCP calls have **no durable host Start or recorded read/skip result**. At a pending
-stop, the connect poll is already complete and the method remains unfinished. Reconstruction
-reconnects and re-executes input under the retained invocation key, not a repaired stream Start.
-Even completed historical raw input executes again when a fresh invocation reconstructs an
-unloaded Worker. Deterministic peer data is required to reproduce the recorded invocation result;
-this does not provide exactly-once TCP consumption.
+An error is recorded as `SerializableTcpStreamError` with its message and either the errno of an
+`std::io::Error` or a socket error code: that of an I/O error without an errno, the P2 `ErrorCode`
+that the native P2 TCP output stream of the Wasmtime fork fails with, or the
+`wasmtime_wasi::sockets::ErrorCode` that its input stream fails with. Replay and live calls return
+the recorded form, rebuilt as an `std::io::Error` of the matching kind, so the guest gets the same
+error, message and `network-error-code` (for example `connection-reset` after a real peer reset)
+live and on replay. Codes with no `std::io::ErrorKind` that Wasmtime maps back
+(`remote-unreachable`, `new-socket-limit`, `concurrency-conflict`, `datagram-too-large`) are rebuilt
+as a raw OS error with the errno that Wasmtime maps to that code. A trap is not recorded. A `write`
+or `write-zeroes` beyond the permit traps with `not permitted to write`; that trap is a permanent
+error, so the invocation fails without a retry that would reach the lost stand-in. A splice with a TCP stream on either side is made of the calls of its parts: the permit of
+the destination (`check_write`, or `write_ready` for `blocking-splice`), the read of at most that
+many bytes, and the write of what was read. `blocking-splice` writes with `blocking_write_and_flush`
+like Wasmtime, so its bytes are sent when it returns; `splice` writes with `write`. A non-TCP side
+goes through the durable host as a direct call on that stream would, so a TCP-to-file splice replays
+its file write from the recorded bytes.
+`blocking-write-and-flush` waits for write permits (the native stream's own implementation) and
+traps above 4096 bytes before its `Start`, like Wasmtime.
 
-`tests/api/interruption/host/p2/tcp/input/mod.rs` exercises each export with memory, prepaid compute and matching
-managed-XFS storage in both modes through a controlled TCP peer and execution APIs.
-Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
-cases retain 2 Started/1 Finished, then reach 2/2 after reconnect and one-byte input. The separate
-completion tests let native input finish, hold the actual selected terminal append, then accept
-a monthly stop and join its establishment while the outcome append remains held. Releasing that
-append preserves the selected result; notification follows its normal commit receipt. The tests do
-not require commit before stop publication. They also reconstruct completed history and count the
-repeated native input before fresh work. Other TCP output and
-UDP waits are separate operations, not covered by these input tests.
+Replay returns the recorded result and touches no stream. Every connection of a replayed stream is
+lost, so its stream is a `LostTcpInputStream` or `LostTcpOutputStream`. An incomplete call runs its
+operation again only on such a stand-in, which fails with `connection-reset` and sends nothing; a
+native stream completes an incomplete call with `connection-reset` without any I/O. The first live
+operation on a stand-in fails with `connection-reset`; the client sees the loss and reconnects.
 
-Raw P2 TCP `output.blocking_splice(&input, 1)` is a distinct export whose native provider first
-checks output capacity, then waits for input and finally writes and flushes output. Successful
-TCP `finish_connect` and `accept` register input and output reps independently; successful stream
-drop removes only that stream's classification. When both reps are registered raw TCP streams,
-the native splice selects the existing composed `create_interrupt_signal()` through
-`interruptible_tcp_input`. Input and output need not share a socket. Filesystem readiness,
-unknown outputs, durable settlement and resource deletion stay outside
-this select. Raw read/skip use the same composed subscription.
+Blocking calls keep `NativeIoWait` with the composed interruption sources around only the native
+future. An interrupt leaves the `Start` incomplete (`abandon_for_trap`), and replay completes it
+with the lost connection. Native stream cancellation, resource deletion and invocation-result commit
+remain outside the select. Native-wait tests use real WASI pollables and streams with independently
+assembled production sources; they cover deadline/entity cancellation before subscription and
+during actual Pending, typed errors, native completion, and resource ownership.
 
-A registered TCP input can also feed a known filesystem output. That pairing uses the existing
-filesystem observation helper for output readiness and the native splice. Cancellation stops guest
-observation; any entered file operation keeps its filesystem owner and generation lease until
-ordinary drain completes. File completion keeps its existing ready-first behavior, while TCP/TCP
-selection remains unbiased. Unknown or unclassified pairs keep their existing paths.
+`tests/api/interruption/host/p2/tcp/` exercise read, skip, same-socket, cross-socket and TCP-to-file
+splice, single and multi input polls, with memory, prepaid compute and matching managed-XFS storage
+in both modes through controlled TCP peers. The peer stays silent through monthly stop, physical
+unload and permit release, and the input `Start` stays incomplete. Durable resume replays the
+connect without connecting, completes the pending input (or repairs the pending poll, whose lost
+inputs are ready at once) with `connection-reset`, and the `host-api-tests` fixture reconnects; its
+result reports the number of lost connections. The completion tests let the input finish, hold the
+selected terminal append through a monthly stop, then reconstruct completed history from the oplog
+with the historical peer silent and no connection. `tests/socket_replay.rs` checks that sent bytes
+reach the peer once across a restart with no bytes in the oplog, that a completed read replays with
+the peer gone, and that a write error replays with the same error and no second copy.
 
-The mixed-pair regression uses actual guest TCP and file streams with a silent peer, not a Worker
-gate. Both modes reproduced accepted Suspend with the socket, Store and permit still live before
-the missing classification was fixed. It retains exact stopped history and the complete committed
-prefix in the actual agent mode. Durable continuation and the fresh ephemeral probe must produce
-exactly the spliced byte in the file, with matching byte count and file size. The native splice
-itself still has no durable Start; surrounding filesystem calls keep their ordinary records. This
-does not add transactional byte effects or an external exactly-once guarantee.
-
-`tests/api/interruption/host/p2/tcp/input/mod.rs` and `api/interruption/host/p2/tcp/input/cross_socket/mod.rs`
-use real same-socket and cross-socket peers. The precise writable-output/blocked-input
-proof belongs to the actual native-body test below, not an inferred internal phase.
-Each now has memory, prepaid-compute and matching managed-XFS storage cases in both agent modes.
-They check socket closure and joined Store/permit/window cleanup before any input byte, durable
-same-key reconnection or ephemeral terminal/probe, and completion-first cached success. The
-cross-socket tests require both sockets to close and later count a byte consumed on A and emitted
-on B. Memory accounting uses a drained seed and isolated target account interval, not a per-worker
-billing key or an exact parked-duration charge. Storage cases use native managed-XFS measurement.
-
-TCP/TCP splice constructs the same `NativeIoWait` as raw read/skip. Colocated tests call the actual
+The colocated native-wait tests of a TCP/TCP splice call the actual
 WASI `HostOutputStream::blocking_splice` on separate input/output resources. Writable memory output
 and quiet native input establish actual Pending without a Worker gate.
 `native_splice_interrupts_actual_pending_without_output_effect` checks actual output capacity in
@@ -1044,10 +1043,9 @@ coverage or real socket teardown. Peer-backed matrices check socket closure,
 observable cleanup and same-key effects, not native Pending. Their immediate post-close flush is not an elapsed
 billing interval; the deterministic closed-owner-window test above proves that separate guarantee.
 
-Like raw read/skip, splice has no durable host Start or recorded byte result. Completed guest
-history can consume and emit TCP bytes again; only a same-key result-cache lookup stays offline.
 These tests do **not** prove output back-pressure, post-consumption flush cancellation,
-transactional byte effects, accepted/half-dropped socket combinations or external exactly-once.
+accepted/half-dropped socket combinations or external exactly-once: a write that was in flight at a
+crash may have reached the peer, and the guest sees only the loss.
 
 P3 HTTP monthly tests in `tests/api/interruption/host/p3/http/` withhold response headers or the
 body suffix at the peer. Recovery retains the original send, consume-body parent and chunk Starts.
@@ -2014,7 +2012,8 @@ call counter, including permits owned by open transaction protocols.
 Authorization and protocol readiness precede live publication. Terminal refusal abandons replay
 for failure (`authoritative_replay_failure`), not publication over sibling history. Never rewind
 or discard another task's history. A typed-loss End belongs to the original Start: HTTP without
-resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`.
+resend returns `http-response-incomplete`, RDBMS `resource-lost`, and TCP `connection-broken`
+(P2 TCP `connection-reset`, because P2 has no `connection-broken` code).
 UDP `ReadRemote` instead re-executes receive after rebind.
 
 **A denied call records its denial.** When the host denies a live call before it runs, the call

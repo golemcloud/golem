@@ -109,7 +109,7 @@ async fn completion_and_history(
         }
         tokio::time::timeout(Duration::from_secs(10), selected).await??;
         executor.commit_oplog(&id.agent_id).await?;
-        let connect_start = completed_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?)?;
+        let setup = input_setup(&executor.get_oplog(&id, OplogIndex::INITIAL).await?, operation)?;
         let mut raw = worker.raw_interrupt_for_test();
         let mut exhausted = policy.clone();
         exhausted.available_memory_gb_seconds = 0;
@@ -123,7 +123,7 @@ async fn completion_and_history(
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         ensure!(!request_is_finished(&invocation));
         release.send(false).unwrap();
-        operation.assert_result(join_request(&mut invocation, "invocation result").await?? )?;
+        operation.assert_result(join_request(&mut invocation, "invocation result").await??, 0)?;
         ensure!(matches!(tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??, InterruptKind::Suspend(_)));
         tokio::time::timeout(Duration::from_secs(10), worker.join_accepted_stops_for_test()).await??;
         tokio::time::timeout(Duration::from_secs(10), async {
@@ -137,27 +137,22 @@ async fn completion_and_history(
         let mut byte = [0];
         ensure!(tokio::time::timeout(Duration::from_secs(10), peer.read(&mut byte)).await?? == 0);
         let completed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
-        ensure!(completed_setup(&completed)? == connect_start);
+        ensure!(input_setup(&completed, operation)? == setup);
+        ensure!(terminal_count(&completed, setup.1) == 1, "the input completed before the stop");
         assert_settled_history(&completed)?;
         ensure!(count_agent_invocation_pair_since(&completed, OplogIndex::INITIAL) == (2, 2));
-        operation.assert_result(executor.invoke_and_await_agent_with_key(&component, &name, &key, operation.method(), data_value!(port)).await?)?;
+        operation.assert_result(executor.invoke_and_await_agent_with_key(&component, &name, &key, operation.method(), data_value!(port)).await?, 0)?;
         ensure!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "cached lookup must not execute history");
 
         registry.set_policy(policy);
         start_refresh(&limits, &registry, context.account_id, &mut refresh).await?;
         join_request(&mut refresh, "policy refresh").await?;
         // A fresh invocation on the physically unloaded Worker reconstructs completed history.
-        // Raw TCP reads/skips are not recorded: the old call must connect and consume again.
+        // The recorded connect and input replay from the oplog: the historical peer stays silent
+        // and gets no connection.
         let fresh_key = IdempotencyKey::fresh();
         let fresh = executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, operation.method(), data_value!(port));
         let peers = async {
-            let (mut historical_peer, _) = listener.accept().await?;
-            historical_peer.write_all(b"x").await?;
-            if matches!(operation, Operation::Splice) {
-                historical_peer.read_exact(&mut byte).await?;
-                ensure!(byte == *b"x");
-            }
-            ensure!(historical_peer.read(&mut byte).await? == 0);
             let (mut fresh_peer, _) = listener.accept().await?;
             fresh_peer.write_all(b"x").await?;
             if matches!(operation, Operation::Splice) {
@@ -168,14 +163,15 @@ async fn completion_and_history(
             Ok::<_, anyhow::Error>(())
         };
         let (fresh, ()) = tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(fresh, peers) }).await??;
-        operation.assert_result(fresh)?;
-        ensure!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "exactly three native connections expected");
+        operation.assert_result(fresh, 0)?;
+        ensure!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err(), "exactly two native connections expected");
         let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (3, 3));
         ensure!(poll_starts(&history).len() == 2, "completed historical connect replays, fresh invocation adds one poll");
+        ensure!(starts_of(&history, operation.input_function()).len() == 2, "replay reads nothing; the fresh invocation reads once");
         assert_settled_history(&history)?;
-        info!(?operation, %key, %fresh_key, connections = 3, peer_bytes = 3,
-            "Native input completed before monthly stop; selected result survived; completed raw TCP history consumed again before fresh work");
+        info!(?operation, %key, %fresh_key, connections = 2, peer_bytes = 2,
+            "Native input completed before monthly stop; selected result survived; completed TCP history replayed from the oplog before fresh work");
         Ok::<_, anyhow::Error>(())
     }.await;
     drop(listener);
