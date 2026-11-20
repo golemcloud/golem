@@ -50,6 +50,7 @@ uuid = { workspace = true, features = ["v4"] }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
+aws-sdk-s3 = { workspace = true }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 h2 = { workspace = true }
@@ -105,6 +106,11 @@ harness = false
 [[test]]
 name = "memory-billing"
 path = "tests/memory_billing.rs"
+harness = false
+
+[[test]]
+name = "volume-client"
+path = "tests/volume_client.rs"
 harness = false
 
 [[bin]]
