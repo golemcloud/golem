@@ -144,7 +144,7 @@ async fn oplog_enrichment_denial<Ctx: WorkerCtx>(
     let _ = crate::model::public_oplog::wit::reject_quota_handles_in_oplog_entries(entries, ctx);
     let request = HostRequestGolemApiOplogEnrich {
         environment_id: owned_agent_id.environment_id,
-        agent_id: owned_agent_id.agent_id.clone(),
+        agent_id: owned_agent_id.agent_id,
         entries: entry_indexes,
         component_revision,
     };

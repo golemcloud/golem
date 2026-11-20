@@ -128,7 +128,7 @@ impl PublicPrincipal {
             }),
             Principal::Agent(agent) => Self::Agent(PublicAgentPrincipal {
                 pair: agent.pair(),
-                agent_id: agent.address.clone(),
+                agent_id: agent.address,
                 agent_type: agent.agent_type.0.clone(),
                 environment_id: agent.environment_id,
             }),

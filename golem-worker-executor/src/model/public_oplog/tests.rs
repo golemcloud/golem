@@ -3764,7 +3764,7 @@ async fn the_public_enrich_request_holds_no_raw_entries() {
     let request: golem_common::model::oplog::HostRequest =
         golem_common::model::oplog::HostRequestGolemApiOplogEnrich {
             environment_id: owned_agent_id.environment_id(),
-            agent_id: owned_agent_id.agent_id.clone(),
+            agent_id: owned_agent_id.agent_id,
             entries: vec![(5, request_entry)],
             component_revision: 0,
         }

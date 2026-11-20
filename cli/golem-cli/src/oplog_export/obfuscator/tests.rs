@@ -2794,7 +2794,7 @@ fn fingerprints_in_clear_on_trusted_paths() {
             fqfn::<host_functions::GolemRpcWasmRpcPrepareInvocation>(),
         ),
         (&create, fqfn::<host_functions::GolemRpcWasmRpcUpsert>()),
-        (&create, fqfn::<host_functions::GolemRpcWasmRpcGetById>()),
+        (&created, fqfn::<host_functions::GolemRpcWasmRpcGetById>()),
         (&created, fqfn::<host_functions::GolemRpcWasmRpcCreate>()),
         (
             &bind_self,
