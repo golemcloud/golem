@@ -1439,7 +1439,8 @@ object SourceDiscovery {
 
   /**
    * Extract non-secret config fields from a config type by looking up its case
-   * class definition. Recursively flattens nested case classes.
+   * class definition. Only required groups containing Secrets are expanded;
+   * static records remain whole creation-override values.
    */
   private def extractConfigFields(
     typeName: String,
@@ -1451,6 +1452,20 @@ object SourceDiscovery {
     val resolved = caseClassIndex
       .get(typeName)
       .orElse(caseClassIndex.get(if (currentPkg.isEmpty) typeName else s"$currentPkg.$typeName"))
+
+    def containsSecret(tpe: Type, pkg: String, seen: Set[String]): Boolean =
+      if (isSecretType(tpe)) true
+      else if (seen(tpe.syntax)) false
+      else {
+        val next   = seen + tpe.syntax
+        val nested = caseClassIndex.get(tpe.syntax).orElse(caseClassIndex.get(qualifiedName(pkg, tpe.syntax)))
+        nested.exists { case (p, c) =>
+          c.ctor.paramClauses.flatMap(_.values).exists(_.decltpe.exists(containsSecret(_, p, next)))
+        } || (tpe match {
+          case Type.Apply.After_4_6_0(_, args) => args.values.exists(containsSecret(_, pkg, next))
+          case _                               => false
+        })
+      }
 
     resolved.map { case (classPkg, cls) =>
       val params = cls.ctor.paramClauses.flatMap(_.values)
@@ -1466,9 +1481,9 @@ object SourceDiscovery {
             val nestedKey    = typeStr
             val nestedFqnKey = if (classPkg.isEmpty) typeStr else s"$classPkg.$typeStr"
             caseClassIndex.get(nestedKey).orElse(caseClassIndex.get(nestedFqnKey)) match {
-              case Some(_) =>
+              case Some(_) if containsSecret(tpe, classPkg, Set.empty) =>
                 extractConfigFields(nestedKey, classPkg, caseClassIndex, fieldPath).getOrElse(Nil)
-              case None =>
+              case _ =>
                 List(ConfigField(fieldPath, typeStr))
             }
           case None => Nil
