@@ -1372,6 +1372,26 @@ or rewrites the unreadable data. The `try_*` reads of `Oplog` and `OplogService`
 maintenance reads: they return every storage failure as text for the transfer and the sweep to
 retry.
 
+The retained start of an agent oplog is the first index that the oplog keeps
+(`services/oplog/retention/`). It is a key-value record in the persistent namespace
+`AgentOplogRetention`, with one field for each agent mode. An absent record means index 1. Oplog
+indexes never renumber, and the start only moves forward: `advance_oplog_retention` writes the
+record with a compare-and-set. Only tests write the record, so in production every oplog starts
+at index 1. `RetentionOplogService` sits directly on the base oplog service, below the plugin
+forwarding layer, and it is the only layer that reads the record. `Oplog::retention` and
+`OplogService::retention` give the plain `OplogRetention` value, and every reader uses its pure
+rules: `clamp`, `range` (`None` when the range holds no retained entry), `check_read`,
+`check_from` and `create_read`. A read below the start returns
+`OplogReadError::Expired { retained_start }`. The one exception is a read of the `Create` entry
+alone at index 1, because that entry is the identity of the agent; a page or a range from index 1
+is expired. A `Gap` that ends below the start becomes the same error, and a gap that ends at or
+after the start stays a read error. `length` counts the retained entries, and the last index does
+not change. The expired error becomes `WorkerExecutorError::OplogFailed` with the cause
+`OplogFailure::Expired`. It crosses gRPC as `OplogExpired` and REST as HTTP 400 `OPLOG_EXPIRED`,
+and the guest oplog API gives it as `internal-error`. A recovery that has no usable restore source
+at or after the start fails with this error and keeps the oplog. `delete` removes the record only
+after the fenced delete of the oplog returns `Ok`, so a refused delete keeps the start.
+
 Opening an oplog can fail (`OplogService::open`/`create`, `OplogConstructor::create_oplog`): an
 archive level whose last index does not read, or whose owning-epoch record fails after its
 retries, fails the open, and the open-oplog cache keeps nothing. The open fails with
