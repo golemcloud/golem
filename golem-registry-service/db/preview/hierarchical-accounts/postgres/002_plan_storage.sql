@@ -1,7 +1,8 @@
 -- Plan definitions owned by accounts, their immutable revisions and account assignments.
 --
--- Preview schema for hierarchical accounts. Tests apply it on top of the production migrations;
--- the production migration flow does not include it.
+-- Test-only schema for hierarchical accounts. Only the repository tests install it, on top of the
+-- production migrations and 001_account_tree.sql. The production migrations do not include it, and
+-- no live repository or service reads it. HA-15 moves it into the production migrations.
 
 -- An assignment references its account together with that account's parent, so the parent of
 -- the assigned account must own the definition.

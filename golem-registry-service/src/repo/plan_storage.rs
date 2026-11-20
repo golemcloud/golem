@@ -37,6 +37,11 @@
 //! ranges: overlapping and touching ranges are valid, and usage is not an input.
 //!
 //! An unused definition is not effective policy; it is checked when it is edited or assigned.
+//!
+//! The tables extend the test-only schema in `db/preview/hierarchical-accounts`. Only the
+//! repository tests install it. The production migrations do not include it, and the existing
+//! `plans`, `PlanRepo` and override writers do not use this code. HA-15 moves the schema into the
+//! production migrations and the active path, with its own migration and active-path tests.
 
 use crate::repo::account_guard::{DbGuards, GuardClass, GuardMode, GuardSet, is_guard_timeout};
 use crate::repo::model::plan_storage::{
@@ -58,6 +63,7 @@ use indoc::indoc;
 use sqlx::FromRow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
+use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 pub const DEFAULT_GUARD_TIMEOUT: Duration = Duration::from_secs(5);
@@ -144,6 +150,158 @@ pub trait PlanStorageRepo: Send + Sync {
     >;
 }
 
+pub struct LoggedPlanStorageRepo<Repo: PlanStorageRepo> {
+    repo: Repo,
+}
+
+static SPAN_NAME: &str = "plan storage repository";
+
+impl<Repo: PlanStorageRepo> LoggedPlanStorageRepo<Repo> {
+    pub fn new(repo: Repo) -> Self {
+        Self { repo }
+    }
+
+    fn span_plan(plan_id: Uuid) -> Span {
+        info_span!(SPAN_NAME, plan_id=%plan_id)
+    }
+
+    fn span_account(account_id: Uuid) -> Span {
+        info_span!(SPAN_NAME, account_id=%account_id)
+    }
+}
+
+#[async_trait]
+impl<Repo: PlanStorageRepo> PlanStorageRepo for LoggedPlanStorageRepo<Repo> {
+    async fn create_definition(
+        &self,
+        owner_account_id: Uuid,
+        plan_id: Uuid,
+        name: String,
+        policy: PlanPolicy,
+        actor: Uuid,
+    ) -> Result<PlanDefinition, PlanStorageRepoError> {
+        let span = info_span!(SPAN_NAME, owner_account_id=%owner_account_id, plan_id=%plan_id);
+        self.repo
+            .create_definition(owner_account_id, plan_id, name, policy, actor)
+            .instrument(span)
+            .await
+    }
+
+    async fn seed_definition(
+        &self,
+        owner_account_id: Uuid,
+        plan_id: Uuid,
+        name: String,
+        policy: PlanPolicy,
+        actor: Uuid,
+    ) -> Result<bool, PlanStorageRepoError> {
+        let span = info_span!(SPAN_NAME, owner_account_id=%owner_account_id, plan_id=%plan_id);
+        self.repo
+            .seed_definition(owner_account_id, plan_id, name, policy, actor)
+            .instrument(span)
+            .await
+    }
+
+    async fn edit_definition(
+        &self,
+        plan_id: Uuid,
+        expected_revision: u64,
+        name: String,
+        policy: PlanPolicy,
+        actor: Uuid,
+    ) -> Result<PlanDefinition, PlanStorageRepoError> {
+        self.repo
+            .edit_definition(plan_id, expected_revision, name, policy, actor)
+            .instrument(Self::span_plan(plan_id))
+            .await
+    }
+
+    async fn retire_definition(
+        &self,
+        plan_id: Uuid,
+        expected_revision: u64,
+        actor: Uuid,
+    ) -> Result<(), PlanStorageRepoError> {
+        self.repo
+            .retire_definition(plan_id, expected_revision, actor)
+            .instrument(Self::span_plan(plan_id))
+            .await
+    }
+
+    async fn assign(
+        &self,
+        account_id: Uuid,
+        expected_revision: Option<u64>,
+        plan_id: Uuid,
+        actor: Uuid,
+    ) -> Result<PlanAssignmentRecord, PlanStorageRepoError> {
+        let span = info_span!(SPAN_NAME, account_id=%account_id, plan_id=%plan_id);
+        self.repo
+            .assign(account_id, expected_revision, plan_id, actor)
+            .instrument(span)
+            .await
+    }
+
+    async fn get_definition(&self, plan_id: Uuid) -> Result<Option<PlanDefinition>, RepoError> {
+        self.repo
+            .get_definition(plan_id)
+            .instrument(Self::span_plan(plan_id))
+            .await
+    }
+
+    async fn get_definition_revision(
+        &self,
+        plan_id: Uuid,
+        revision: u64,
+    ) -> Result<Option<PlanPolicy>, RepoError> {
+        self.repo
+            .get_definition_revision(plan_id, revision)
+            .instrument(Self::span_plan(plan_id))
+            .await
+    }
+
+    async fn list_members(&self, plan_id: Uuid) -> Result<Vec<Uuid>, RepoError> {
+        self.repo
+            .list_members(plan_id)
+            .instrument(Self::span_plan(plan_id))
+            .await
+    }
+
+    async fn get_assignment(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Option<PlanAssignmentRecord>, RepoError> {
+        self.repo
+            .get_assignment(account_id)
+            .instrument(Self::span_account(account_id))
+            .await
+    }
+
+    async fn get_assignment_history(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<PlanAssignmentRevisionRecord>, RepoError> {
+        self.repo
+            .get_assignment_history(account_id)
+            .instrument(Self::span_account(account_id))
+            .await
+    }
+
+    async fn effective_bounds(
+        &self,
+        account_id: Uuid,
+        availability: InstallationAvailability,
+    ) -> Result<
+        Option<BTreeMap<PlanDimension, Result<EffectiveBounds, DimensionBoundsError>>>,
+        RepoError,
+    > {
+        self.repo
+            .effective_bounds(account_id, availability)
+            .instrument(Self::span_account(account_id))
+            .await
+    }
+}
+
 pub struct DbPlanStorageRepo<DBP: Pool> {
     db_pool: DBP,
     guard_timeout: Duration,
@@ -163,6 +321,13 @@ const BOUND_COLUMNS: &str = "dimension, min_value, max_value, max_unlimited, def
 impl<DBP: Pool> DbPlanStorageRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self::with_limits(db_pool, DEFAULT_GUARD_TIMEOUT, DEFAULT_MAX_ATTEMPTS)
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedPlanStorageRepo<Self>
+    where
+        Self: PlanStorageRepo,
+    {
+        LoggedPlanStorageRepo::new(Self::new(db_pool))
     }
 
     /// `guard_timeout` bounds each wait for a guard; `max_attempts` bounds the retries after a

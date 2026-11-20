@@ -122,7 +122,7 @@ async fn deps(db: &SqliteDb) -> Deps {
             db.pool.clone(),
         )),
         account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(db.pool.clone())),
-        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::new(db.pool.clone())),
+        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::logged(db.pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
