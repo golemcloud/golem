@@ -1,8 +1,0 @@
-{
-  "kind": "ResolvedExternalCommandMarkerHash",
-  "id": "[\"/home/vigoo/projects/golem/test-components/external-durable-streams\",\"cargo build --target wasm32-wasip2 --release\",[\"/home/vigoo/projects/golem/test-components/external-durable-streams/target/wasm32-wasip2/release/golem_it_external_durable_streams.wasm\"]]",
-  "hashInput": "{\"build_dir\":\"/home/vigoo/projects/golem/test-components/external-durable-streams\",\"command\":{\"command\":\"cargo build --target wasm32-wasip2 --release\",\"env\":{\"GOLEM_NODE_HTTP_ROUTERS\":\"{}\"},\"sources\":[\"/home/vigoo/projects/golem/test-components/external-durable-streams/src\",\"/home/vigoo/projects/golem/test-components/external-durable-streams/Cargo.toml\"],\"targets\":[\"/home/vigoo/projects/golem/test-components/external-durable-streams/target/wasm32-wasip2/release/golem_it_external_durable_streams.wasm\"]}}",
-  "cliVersion": "v1.6.0-rc2-436-ged7143098c",
-  "hashHex": "631c85f9ffbf5cbdce496c99e369f8ca87c4063e96ef5e6b4e77b3bca708b207",
-  "success": true
-}

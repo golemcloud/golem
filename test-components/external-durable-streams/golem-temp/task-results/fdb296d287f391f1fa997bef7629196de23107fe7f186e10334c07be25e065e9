@@ -1,8 +1,0 @@
-{
-  "kind": "ResolvedExternalCommandMarkerHash",
-  "id": "[\"/home/vigoo/projects/golem/test-components/external-durable-streams\",\"cp \\\"/home/vigoo/projects/golem/test-components/external-durable-streams/target/wasm32-wasip2/release/golem_it_external_durable_streams.wasm\\\" \\\"/home/vigoo/projects/golem/test-components/external-durable-streams/../golem_it_external_durable_streams_release.wasm\\\"\",[]]",
-  "hashInput": "{\"build_dir\":\"/home/vigoo/projects/golem/test-components/external-durable-streams\",\"command\":{\"command\":\"cp \\\"/home/vigoo/projects/golem/test-components/external-durable-streams/target/wasm32-wasip2/release/golem_it_external_durable_streams.wasm\\\" \\\"/home/vigoo/projects/golem/test-components/external-durable-streams/../golem_it_external_durable_streams_release.wasm\\\"\"}}",
-  "cliVersion": "v1.6.0-rc2-436-ged7143098c",
-  "hashHex": "f52dbcdca134d4add2bc6327740304e349bb32a282266fb03abaa0af97e024ce",
-  "success": true
-}
