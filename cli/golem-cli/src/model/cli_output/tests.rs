@@ -1950,7 +1950,8 @@ fn oplog_entries_read_back_from_their_json_text() {
 }
 
 /// The claims of a caller keep their exact JSON text when the CLI reads a REST oplog page: a
-/// number that no `f64` holds, a number that an `f64` rounds, and the order of the members.
+/// number that no `f64` holds, a number that an `f64` rounds, the order of the members, and a
+/// nesting depth that a `serde_json::Value` refuses.
 #[test]
 fn oplog_page_entry_keeps_the_exact_claims_text_of_its_callers() {
     use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
@@ -1976,11 +1977,18 @@ fn oplog_page_entry_keeps_the_exact_claims_text_of_its_callers() {
         .find(|entry| claims_of_original(entry).is_some())
         .expect("a sample entry whose caller is a user with claims");
 
-    for claims in [
-        r#"{"sub":"bob","n":1e400}"#,
-        r#"{"sub":"bob","n":18446744073709551617}"#,
-        r#"{"zeta":1,"alpha":2,"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#,
-    ] {
+    let claim_sets = [
+        r#"{"sub":"bob","n":1e400}"#.to_string(),
+        r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#.to_string(),
+        format!(
+            r#"{{"sub":"bob","deep":{}1{}}}"#,
+            "[".repeat(130),
+            "]".repeat(130)
+        ),
+    ];
+    for claims in &claim_sets {
+        let claims = claims.as_str();
         let mut entry = sample.clone();
         if let PublicOplogEntry::AgentInvocationStarted(params) = &mut entry
             && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
