@@ -194,7 +194,7 @@ async fn moonbit_http_router(_tracing: &Tracing) {
     for owner in ["alice", "bob"] {
         let agent = format!("FileOwner(\"{owner}\")");
         assert!(
-            ctx.cli([cmd::AGENT, cmd::NEW, agent.as_str()])
+            ctx.cli([cmd::AGENT, cmd::CREATE, agent.as_str(), "--keyed"])
                 .await
                 .success_or_dump()
         );

@@ -388,6 +388,7 @@ fn dynamic_admission_compiles_projected_metadata_and_rejects_changed_upstream_co
         metadata: ComponentMetadata::default(),
         created_at: chrono::Utc::now(),
         wasm_hash: Default::default(),
+        package_metadata: None,
         object_store_key: String::new(),
     };
     let source = McpImportSource {

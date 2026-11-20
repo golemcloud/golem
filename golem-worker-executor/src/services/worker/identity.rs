@@ -20,8 +20,8 @@ impl DefaultWorkerService {
     /// written on the per-commit hot path. The `Create` entry remains authoritative, so stale hints
     /// are replaced or removed. This lives in the `Worker` namespace because it has an independent
     /// lifecycle from the status fields.
-    pub(super) fn agent_mode_key(agent_id: &AgentId) -> String {
-        format!("worker:agent_mode:{}", agent_id.to_redis_key())
+    pub(super) fn agent_mode_key(owned_agent_id: &OwnedAgentId) -> String {
+        format!("worker:agent_mode:{}", owned_agent_id.storage_key())
     }
 
     /// Reads the dedicated mode hint, if present. Invalid formats are cache misses.
@@ -34,9 +34,9 @@ impl DefaultWorkerService {
             .with_entity("worker", "read_cached_agent_mode", "agent_mode")
             .get_raw(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: Arc::new(owned_agent_id.agent_id()),
+                    owned_agent_id: owned_agent_id.clone(),
                 },
-                &Self::agent_mode_key(&owned_agent_id.agent_id),
+                &Self::agent_mode_key(owned_agent_id),
             )
             .await
             .map_err(|err| {
@@ -62,9 +62,9 @@ impl DefaultWorkerService {
             .with_entity("worker", "write_cached_agent_mode", "agent_mode")
             .set_raw_with_expiry(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: Arc::new(owned_agent_id.agent_id()),
+                    owned_agent_id: owned_agent_id.clone(),
                 },
-                &Self::agent_mode_key(&owned_agent_id.agent_id),
+                &Self::agent_mode_key(owned_agent_id),
                 &value,
                 DERIVED_CACHE_EXPIRY,
             )
@@ -83,9 +83,9 @@ impl DefaultWorkerService {
             .with("worker", "remove_cached_agent_mode")
             .del(
                 KeyValueStorageNamespace::Worker {
-                    agent_id: Arc::new(owned_agent_id.agent_id()),
+                    owned_agent_id: owned_agent_id.clone(),
                 },
-                &Self::agent_mode_key(&owned_agent_id.agent_id),
+                &Self::agent_mode_key(owned_agent_id),
             )
             .await
     }
@@ -96,9 +96,9 @@ impl DefaultWorkerService {
         fingerprint: AgentFingerprint,
     ) -> Result<(), WorkerExecutorError> {
         let namespace = KeyValueStorageNamespace::Worker {
-            agent_id: Arc::new(owned_agent_id.agent_id()),
+            owned_agent_id: owned_agent_id.clone(),
         };
-        let key = Self::agent_mode_key(&owned_agent_id.agent_id);
+        let key = Self::agent_mode_key(owned_agent_id);
         let current = self
             .key_value_storage
             .with_entity("worker", "remove_cached_agent_mode", "agent_mode")

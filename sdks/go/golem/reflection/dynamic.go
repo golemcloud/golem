@@ -30,29 +30,11 @@ import (
 // snapshot — and keep no schema authority. Nothing is validated locally: the
 // host still authorises the call and validates the target-side input.
 //
-//	client, err := reflection.BindAgentID(id)
+//	client, err := reflection.GetByID(id)
 //	out, invocation, err := client.Call("greet", input)
 //
 // To combine discovery with a dynamic call, pack with the discovered method's
 // Input, call, and read the result with its Output.
-
-// RawAgentID is an agent identity taken apart by the host, with the
-// constructor left as a typed value rather than decoded into a Go type — which
-// is the point: a dynamic caller has no such type. The typed counterpart is
-// [golem.ParseAgentID].
-type RawAgentID struct {
-	// TypeName is the agent type the identity names.
-	TypeName string
-	// Constructor carries the caller-supplied constructor fields. The host
-	// injects principal fields separately, so a principal-scoped agent can be
-	// rebuilt from an identity returned by invocation metadata.
-	Constructor golem.TypedValue
-	// PhantomID is the phantom instance this identity addresses, if any.
-	PhantomID golem.Option[golem.UUID]
-}
-
-// ConstructorJSON reads the constructor fields as canonical JSON.
-func (p RawAgentID) ConstructorJSON() (any, error) { return p.Constructor.JSON() }
 
 // DynamicAgentClient invokes an existing agent with values the caller packed
 // itself.
@@ -65,8 +47,8 @@ func (p RawAgentID) ConstructorJSON() (any, error) { return p.Constructor.JSON()
 // golem.PermissionCard, and the host checks every use of a card, so a copy
 // confers no authority the card did not.
 type DynamicAgentClient struct {
-	agentID   string
-	parsed    RawAgentID
+	agentID   golem.AgentID
+	typeName  string
 	rpc       agentRPC
 	scopeCard any // a golem.ScopeCard, or nil
 }
@@ -79,15 +61,15 @@ type DynamicAgentClient struct {
 // ScopeCard.
 func (c *DynamicAgentClient) WithScopeCard(card golem.ScopeCard) *DynamicAgentClient {
 	scoped := *c
-	scoped.scopeCard = mustScopeCard(c.agentID, card)
+	scoped.scopeCard = mustScopeCard(c.agentID.String(), card)
 	return &scoped
 }
 
-// AgentID returns the identity this client is bound to.
-func (c *DynamicAgentClient) AgentID() string { return c.agentID }
+// AgentID returns the ID of the client's agent.
+func (c *DynamicAgentClient) AgentID() golem.AgentID { return c.agentID }
 
-// Parsed returns what the host made of the identity.
-func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
+// TypeName returns the name of the agent type that the agent ID names.
+func (c *DynamicAgentClient) TypeName() string { return c.typeName }
 
 // Call invokes a method with an already-packed parameter record and waits for
 // its result, none for a method that returns nothing, together with the
@@ -116,7 +98,7 @@ func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue, op
 		return nil, err
 	}
 	return &PendingCall[golem.Option[core.SchemaValue]]{Metadata: p.metadata, cancel: p.cancel, wait: func() (golem.Option[core.SchemaValue], error) {
-		res, err := p.await(c.agentID, method)
+		res, err := p.await(c.agentID.String(), method)
 		if err != nil {
 			return golem.None[core.SchemaValue](), err
 		}

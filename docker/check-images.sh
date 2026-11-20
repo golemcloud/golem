@@ -180,15 +180,15 @@ for _ in $(seq 1 30); do
 done
 # <host> <path> <service>
 cases=(
-    "management.test /v1/agents/test worker"
-    "management.test:443 /v1/agents/test worker"
-    "management.test. /v1/agents/test worker"
-    "management.test.:443 /v1/agents/test worker"
-    "Management.Test. /v1/agents/test worker"
+    "management.test /v1/runtime/envs/e/agents/a worker"
+    "management.test:443 /v1/runtime/envs/e/agents/a worker"
+    "management.test. /v1/runtime/envs/e/agents/a worker"
+    "management.test.:443 /v1/runtime/envs/e/agents/a worker"
+    "Management.Test. /v1/runtime/envs/e/agents/a worker"
     "management.test. /v1/components registry"
-    "app.test /v1/agents/test custom"
-    "app.test.:443 /v1/agents/test custom"
-    "management.test.example /v1/agents/test custom"
+    "app.test /v1/runtime/envs/e/agents/a custom"
+    "app.test.:443 /v1/runtime/envs/e/agents/a custom"
+    "management.test.example /v1/runtime/envs/e/agents/a custom"
 )
 for case in "${cases[@]}"; do
     read -r host path expected <<<"$case"
@@ -242,8 +242,8 @@ upgrade_served_by() {
 # deployments serve no WebSockets, so the router refuses an upgrade for them.
 # <host> <path> <result>
 cases=(
-    "management.test /v1/agents/invoke-agent-session 200 HTTP/1.1 worker"
-    "management.test /v1/components/c/workers/w/connect 200 HTTP/1.1 worker"
+    "management.test /v1/runtime/envs/e/invoke-agent-session 200 HTTP/1.1 worker"
+    "management.test /v1/runtime/envs/e/agents/a/connect 200 HTTP/1.1 worker"
     "app.test /ws 403"
 )
 for case in "${cases[@]}"; do

@@ -1,3 +1,3 @@
-const demo = await ObservabilityDemo.get("demo");
+const demo = await ObservabilityDemo.upsert("demo");
 const result = await demo.durabilityDemo();
 console.log(result);

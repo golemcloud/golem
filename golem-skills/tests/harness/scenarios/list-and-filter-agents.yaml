@@ -48,7 +48,7 @@ steps:
   - id: "list-filtered-agents"
     prompt: >
       Now use the CLI to list agents in the test-app project, but only show agents whose
-      name contains "c1" using the --filter flag. Save the full output to a file called
+      key contains "c1" using the --filter flag. Save the full output to a file called
       filtered-agents.txt in the test-app directory.
     continueSession: true
     expectedSkills:

@@ -88,7 +88,6 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
 use tracing::debug;
-use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{MemoryKind, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
@@ -919,35 +918,27 @@ impl FileSystemReading for Context {
 }
 
 impl HostWasmRpc for Context {
-    async fn new(
+    async fn upsert(
         &mut self,
         agent_type_name: String,
         constructor: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-        config: Vec<
-            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
-        >,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, config)
-            .await
-    }
-
-    async fn create(
-        &mut self,
-        agent_type_name: String,
-        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-        config: Vec<
-            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
-        >,
     ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
-        self.durable_ctx
-            .create(agent_type_name, constructor, phantom_id, config)
-            .await
+        self.durable_ctx.upsert(agent_type_name, constructor).await
     }
 
-    async fn bind_self(&mut self) -> anyhow::Result<Result<(String, Resource<WasmRpc>), RpcError>> {
+    async fn get_by_id(
+        &mut self,
+        agent_type_name: String,
+        agent_id: golem_schema::schema::wit::wire::AgentId,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx.get_by_id(agent_type_name, agent_id).await
+    }
+
+    async fn bind_self(
+        &mut self,
+    ) -> anyhow::Result<
+        Result<(golem_schema::schema::wit::wire::AgentId, Resource<WasmRpc>), RpcError>,
+    > {
         self.durable_ctx.bind_self().await
     }
 
@@ -1054,38 +1045,19 @@ impl AgentHost for Context {
 
     async fn get_agent_type_by_agent_id(
         &mut self,
-        agent_id: String,
+        agent_id: golem_schema::schema::wit::wire::AgentId,
     ) -> anyhow::Result<
         Option<golem_common::schema::agent::bindings::golem::agent::common::RegisteredAgentType>,
     > {
         AgentHost::get_agent_type_by_agent_id(&mut self.durable_ctx, agent_id).await
     }
 
-    async fn make_agent_id(
+    async fn lookup_agent_id(
         &mut self,
         agent_type_name: String,
         input: golem_schema::schema::wit::wire::SchemaValueTree,
-        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
-    ) -> anyhow::Result<
-        Result<String, golem_common::schema::agent::bindings::golem::agent::common::AgentError>,
-    > {
-        AgentHost::make_agent_id(&mut self.durable_ctx, agent_type_name, input, phantom_id).await
-    }
-
-    async fn parse_agent_id(
-        &mut self,
-        agent_id: String,
-    ) -> anyhow::Result<
-        Result<
-            (
-                String,
-                golem_schema::schema::wit::wire::TypedSchemaValue,
-                Option<golem_schema::schema::wit::wire::Uuid>,
-            ),
-            golem_common::schema::agent::bindings::golem::agent::common::AgentError,
-        >,
-    > {
-        AgentHost::parse_agent_id(&mut self.durable_ctx, agent_id).await
+    ) -> anyhow::Result<Result<Option<golem_schema::schema::wit::wire::AgentId>, RpcError>> {
+        AgentHost::lookup_agent_id(&mut self.durable_ctx, agent_type_name, input).await
     }
 
     async fn create_webhook(
@@ -1184,7 +1156,6 @@ impl WorkerCtx for Context {
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<HydratedUpdate>,
-        original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<crate::worker::instance::OwnerExecution>,
@@ -1234,7 +1205,6 @@ impl WorkerCtx for Context {
             http_connection_pool,
             websocket_connection_pool,
             pending_update,
-            original_phantom_id,
             account_resource_limits.per_invocation_http_call_limit(),
             account_resource_limits.per_invocation_rpc_call_limit(),
             runtime,

@@ -18,7 +18,6 @@ use crate::base_model::caller::test_support::{
     user_principal,
 };
 use crate::base_model::caller::{Claims, UserPrincipal};
-use crate::base_model::component::ComponentId;
 use pretty_assertions::assert_eq;
 use prost::Message;
 use test_r::test;
@@ -45,13 +44,7 @@ fn public_caller_keeps_both_roles_and_tokens_and_hides_claims() {
         );
     };
     assert_eq!(Some(agent.pair.clone()), caller.immediate.pair());
-    assert_eq!(
-        agent.agent_id,
-        AgentId {
-            component_id: ComponentId(Uuid::from_u128(0xc0)),
-            agent_id: "Relay(\"r\")".to_string(),
-        }
-    );
+    assert_eq!(agent.agent_id, AgentId::from_parts(7, 0xc0));
     assert_eq!(agent.agent_type, "Relay");
     assert_eq!(agent.environment_id, EnvironmentId(Uuid::from_u128(0xe0)));
 

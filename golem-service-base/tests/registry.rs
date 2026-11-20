@@ -24,7 +24,6 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_common::base_model::api::error_code;
 use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_service_base::clients::registry::{
@@ -118,10 +117,7 @@ async fn call_create_runtime_card(
     });
     let provenance = CardManagedByRuntimeDerived {
         environment_id: EnvironmentId::new(),
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "runtime-card-test".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(1),
     };

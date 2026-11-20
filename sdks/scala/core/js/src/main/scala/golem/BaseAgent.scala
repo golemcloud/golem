@@ -38,9 +38,7 @@ package golem
  * runtime.
  */
 trait BaseAgent {
-  final def agentId: String = BaseAgentPlatform.agentId
+  final def agentId: AgentId = BaseAgentPlatform.agentId
 
   final def agentType: String = BaseAgentPlatform.agentType
-
-  final def agentName: String = BaseAgentPlatform.agentName
 }

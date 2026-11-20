@@ -146,68 +146,6 @@ pub async fn decode_invocation_input(
 }
 
 ///|
-/// Owns the direct wire identity record throughout snapshot restoration.
-pub struct SnapshotIdentity {
-  reader : @schema.WireReader
-  fields : Array[Int32]
-}
-
-///|
-/// Validates and retains the identity record from a parsed agent ID.
-pub fn decode_snapshot_identity(
-  input : @types.SchemaValueTree,
-) -> SnapshotIdentity raise @common.AgentError {
-  let reader = @schema.WireReader::new(input)
-  errdefer reader.abort()
-  let root = @schema.wire_node(reader, input.root) catch {
-    error =>
-      raise @common.AgentError::InvalidInput(
-        "snapshot restoration: \{repr(error)}",
-      )
-  }
-  let fields = match root {
-    @types.RecordValue(fields) => fields
-    _ =>
-      raise @common.AgentError::InvalidInput(
-        "snapshot restoration: expected record value",
-      )
-  }
-  { reader, fields, }
-}
-
-///|
-pub fn[T : @schema.FromWire] decode_snapshot_identity_field(
-  identity : SnapshotIdentity,
-  index : Int32,
-) -> T raise @common.AgentError {
-  match identity.fields.get(index) {
-    None =>
-      raise @common.AgentError::InvalidInput(
-        "snapshot restoration: missing identity field \{index}",
-      )
-    Some(node) =>
-      T::read_wire(identity.reader, node) catch {
-        error =>
-          raise @common.AgentError::InvalidInput(
-            "snapshot restoration: failed decoding identity field \{index}: \{repr(error)}",
-          )
-      }
-  }
-}
-
-///|
-fn SnapshotIdentity::finish(
-  self : SnapshotIdentity,
-) -> Unit raise @schema.WireError {
-  self.reader.finish()
-}
-
-///|
-fn SnapshotIdentity::abort(self : SnapshotIdentity) -> Unit {
-  self.reader.abort()
-}
-
-///|
 /// Decodes a single parameter at `index` from a previously decoded input record.
 /// Decode errors are mapped to `AgentError::InvalidInput`.
 pub fn[T : @schema.FromSchema] decode_param(

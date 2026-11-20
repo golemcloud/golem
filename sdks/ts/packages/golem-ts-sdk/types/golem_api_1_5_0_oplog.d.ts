@@ -149,6 +149,8 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    /** The name of the agent's type. Owners without an agent type have none. */
+    agentTypeName?: string;
     ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
@@ -160,7 +162,6 @@ declare module 'golem:api/oplog@1.5.0' {
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: PluginInstallationDescription[];
     localAgentConfig: LocalAgentConfigEntry[];
-    originalPhantomId?: Uuid;
     instanceId: Uuid;
     /**
      * Whether the agent is a never-live sandbox. A marked agent reports the
@@ -994,6 +995,8 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
+    /** The name of the agent's type. Owners without an agent type have none. */
+    agentTypeName?: string;
     ownerKind: OwnerKind;
     agentMode: AgentMode;
     componentRevision: ComponentRevision;
@@ -1005,7 +1008,6 @@ declare module 'golem:api/oplog@1.5.0' {
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: EnvironmentPluginGrantId[];
     localAgentConfig: RawLocalAgentConfigEntry[];
-    originalPhantomId?: Uuid;
     instanceId: Uuid;
     /**
      * Whether the agent is a never-live sandbox. A marked agent reports the

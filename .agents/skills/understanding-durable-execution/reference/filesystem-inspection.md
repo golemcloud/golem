@@ -34,7 +34,10 @@ reads blob storage without activating an agent. Directory listing remains a sepa
 
 1. Reads and listings never create an agent. `grpc/invocation.rs::get_existing_running`
    first reads `Worker::get_latest_metadata`, which decides absence and rejects a failed
-   agent without loading it. It then resolves the target through
+   agent without loading it. A key-bound read carries its key through the file RPC, compares
+   it with the stored canonical key before exposing failure status, and checks it again under
+   the resident instance lock before inspection may start. A collision returns
+   `AgentKeyCollision`, not the other agent's failure or file contents. It then resolves the target through
    `Worker::get_exact_existing_suspended`, which cannot create an agent and so closes the
    race with a concurrent delete, and starts it. A missing or deleted agent gives
    `FileReadHead::Absent` for reads and `GetFileSystemNodeResult::NotFound` for listings, so an

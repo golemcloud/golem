@@ -52,7 +52,7 @@ impl SelectedQueryAgent for SelectedQueryAgentImpl {
                 details
             }
         };
-        let uuid: golem_rust::Uuid = details.forked_phantom_id.into();
+        let uuid: golem_rust::Uuid = details.forked_agent_id.uuid.into();
         uuid.to_string()
     }
 

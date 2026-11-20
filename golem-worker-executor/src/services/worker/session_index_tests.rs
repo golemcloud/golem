@@ -105,14 +105,8 @@ impl ComponentService for UnusedComponentService {
     async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
 }
 
-fn owned_agent(name: &str, component_id: ComponentId) -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id,
-            agent_id: name.to_string(),
-        },
-    )
+fn owned_agent(name: &str) -> OwnedAgentId {
+    OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id(name))
 }
 
 fn create_entry(
@@ -122,8 +116,8 @@ fn create_entry(
     fingerprint: AgentFingerprint,
 ) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-        agent_id: id.agent_id.clone(),
-        component_id: id.agent_id.component_id,
+        agent_id: id.agent_id,
+        component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
         agent_type_name: None,
         canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
@@ -137,7 +131,7 @@ fn create_entry(
         initial_total_linear_memory_size: 100,
         initial_active_plugins: Default::default(),
         local_agent_config: vec![],
-        original_phantom_id: None,
+        constructor_parameters: None,
         instance_id: fingerprint.0,
         create_request: golem_common::model::oplog::CreateRequest::new(
             golem_common::model::oplog::CreateRequestKind::GetOrCreate,
@@ -162,15 +156,15 @@ async fn cancellation_receipts_prune_recovery_catalogue_after_cold_reopen() {
     use golem_common::model::durable_stream::*;
 
     let (service, kv, oplog_service) = service_with_oplog().await;
-    let owner = owned_agent("cancellation-consumer", ComponentId::new());
-    let remote = owned_agent("cancellation-producer", ComponentId::new());
+    let owner = owned_agent("cancellation-consumer");
+    let remote = owned_agent("cancellation-producer");
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
     let key = session_key(&remote, &test_invocation_id("cancel-session".into()));
     let handle = DurableStreamHandle {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         stream_id: StreamId(uuid::Uuid::new_v4()),
         producer_environment_id: remote.environment_id,
-        producer: remote.agent_id.clone(),
+        producer: remote.agent_id,
         expected_producer_fingerprint: key.callee_fingerprint,
         producer_generation: OplogIndex::NONE,
         source_invocation: key.clone(),
@@ -310,8 +304,8 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
     use golem_schema::schema::SchemaFingerprintV1;
 
     let (service, _, oplog_service) = service_with_oplog().await;
-    let owner = owned_agent("cancel-authority", ComponentId::new());
-    let remote = owned_agent("cancel-source", ComponentId::new());
+    let owner = owned_agent("cancel-authority");
+    let remote = owned_agent("cancel-source");
     let key = session_key(&owner, &test_invocation_id("session".into()));
     let mut metadata = agent_metadata(&owner);
     metadata.fingerprint = key.callee_fingerprint;
@@ -336,8 +330,8 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
             format_version: 1,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: remote.environment_id,
-            producer: remote.agent_id.clone(),
-            expected_producer_fingerprint: AgentFingerprint(remote.agent_id.component_id.0),
+            producer: remote.agent_id,
+            expected_producer_fingerprint: AgentFingerprint(remote.agent_id.as_uuid()),
             producer_generation: OplogIndex::NONE,
             source_invocation: session_key(&remote, &test_invocation_id("source".into())),
             component_revision: ComponentRevision::INITIAL,
@@ -379,10 +373,10 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         epoch: 1,
         session_key: key.clone(),
         producer_environment_id: remote.environment_id,
-        producer: remote.agent_id.clone(),
+        producer: remote.agent_id,
         expected_producer_fingerprint: mapping.handle.expected_producer_fingerprint,
         consumer_environment_id: owner.environment_id,
-        consumer: owner.agent_id.clone(),
+        consumer: owner.agent_id,
         expected_consumer_fingerprint: key.callee_fingerprint,
         consumer_invocation: key.clone(),
     };
@@ -448,7 +442,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
             .unwrap(),
         ConsumerAttachmentStatus::EpochMismatch
     );
-    let foreign = owned_agent("independent-consumer", ComponentId::new());
+    let foreign = owned_agent("independent-consumer");
     let consumer_invocation = session_key(&foreign, &test_invocation_id("consumer".into()));
     let mut foreign_metadata = agent_metadata(&foreign);
     foreign_metadata.fingerprint = consumer_invocation.callee_fingerprint;
@@ -473,7 +467,7 @@ async fn check_committed_cancellation_authority(mode: AgentMode) {
         .unwrap();
     let foreign_attachment = StreamAttachmentKey {
         consumer_environment_id: foreign.environment_id,
-        consumer: foreign.agent_id.clone(),
+        consumer: foreign.agent_id,
         expected_consumer_fingerprint: consumer_invocation.callee_fingerprint,
         consumer_invocation,
         ..attachment.clone()
@@ -572,8 +566,8 @@ async fn source_loss_eof_does_not_advance_the_cascade_producer_prefix() {
             Arc::new(super::tests::IndexTestComponentService),
             Arc::new(GolemConfig::default()),
         );
-        let consumer = owned_agent("overlay-consumer", ComponentId::new());
-        let source = owned_agent("overlay-source", ComponentId::new());
+        let consumer = owned_agent("overlay-consumer");
+        let source = owned_agent("overlay-source");
         let invocation = session_key(&consumer, &test_invocation_id("consume".into()));
         let oplog = create_oplog_with_identity(
             oplog_service.as_ref(),
@@ -586,7 +580,7 @@ async fn source_loss_eof_does_not_advance_the_cascade_producer_prefix() {
             format_version: 1,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: source.environment_id,
-            producer: source.agent_id.clone(),
+            producer: source.agent_id,
             expected_producer_fingerprint: AgentFingerprint::new(),
             producer_generation: OplogIndex::NONE,
             source_invocation: session_key(&source, &test_invocation_id("produce".into())),
@@ -745,7 +739,7 @@ fn independent_stream_index(
 fn session_key(id: &OwnedAgentId, key: &InvocationId) -> StreamInvocationId {
     StreamInvocationId {
         callee_environment_id: id.environment_id,
-        callee: id.agent_id.clone(),
+        callee: id.agent_id,
         callee_fingerprint: test_fingerprint(),
         idempotency_key: *key,
     }
@@ -790,7 +784,7 @@ fn prepared_with_reader(id: &OwnedAgentId, key: &InvocationId) -> StreamSessionR
         unreachable!()
     };
     let mut source = id.clone();
-    source.agent_id.agent_id = "remote-reader-source".into();
+    source.agent_id = crate::test_agent_id("remote-reader-source");
     let source_session = session_key(&source, key);
     let handle = golem_common::model::durable_stream::DurableStreamHandle {
         format_version: 1,
@@ -837,8 +831,8 @@ fn agent_metadata_with_identity(
     fingerprint: AgentFingerprint,
 ) -> AgentMetadata {
     AgentMetadata {
-        agent_id: id.agent_id.clone(),
-        component_id: id.agent_id.component_id,
+        agent_id: id.agent_id,
+        component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
         agent_type_name: None,
         canonical_key: None,
         owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
@@ -850,7 +844,7 @@ fn agent_metadata_with_identity(
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord::default(),
-        original_phantom_id: None,
+        constructor_parameters: None,
         fingerprint,
         agent_mode,
         create_request: golem_common::model::oplog::CreateRequest::new(
@@ -950,7 +944,7 @@ async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
     );
     let mut owners = Vec::new();
     for number in 0..1025 {
-        let owner = owned_agent(&format!("quiescent-{number}"), ComponentId::new());
+        let owner = owned_agent(&format!("quiescent-{number}"));
         let key = test_invocation_id("finished".into());
         let session = session_key(&owner, &key);
         let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
@@ -1056,7 +1050,7 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let owner = owned_agent("cached-cut", ComponentId::new());
+    let owner = owned_agent("cached-cut");
     let key = test_invocation_id("discarded".into());
     let fingerprint = session_key(&owner, &key).callee_fingerprint;
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
@@ -1146,7 +1140,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
 
     for warm in [false, true] {
         let (service, _, oplog_service) = service_with_oplog().await;
-        let id = owned_agent("reverted-session", ComponentId::new());
+        let id = owned_agent("reverted-session");
         let key = test_invocation_id("discarded".into());
         let fingerprint = session_key(&id, &key).callee_fingerprint;
         let mut metadata = agent_metadata(&id);
@@ -1252,9 +1246,9 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     use golem_common::model::regions::OplogRegion;
 
     let (service, kv, oplog_service) = service_with_oplog().await;
-    let owner = owned_agent("consumer-journal-owner", ComponentId::new());
+    let owner = owned_agent("consumer-journal-owner");
     let mut foreign = owner.clone();
-    foreign.agent_id.agent_id = "source-journal-owner".into();
+    foreign.agent_id = crate::test_agent_id("source-journal-owner");
     let local_key = test_invocation_id("original-rpc".into());
     let local_session = session_key(&owner, &local_key);
     let foreign_session = session_key(&foreign, &local_key);
@@ -1463,7 +1457,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let owner = owned_agent("concurrent-refold", ComponentId::new());
+    let owner = owned_agent("concurrent-refold");
     let key = test_invocation_id("session".into());
     let session = session_key(&owner, &key);
     let fingerprint = session.callee_fingerprint;
@@ -1695,7 +1689,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
     };
 
     let (service, kv, oplog_service) = service_with_oplog().await;
-    let owner = owned_agent("forward-reservation", ComponentId::new());
+    let owner = owned_agent("forward-reservation");
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
     let source = session_key(&owner, &test_invocation_id("source".into()));
     let destination = session_key(&owner, &test_invocation_id("destination".into()));
@@ -1740,7 +1734,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
     let producer = DurableStreamStore::load(
         oplog,
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         source.callee_fingerprint,
         None,
     )
@@ -1813,7 +1807,7 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         )
     };
     let service = make_service();
-    let id = owned_agent("control-projection", ComponentId::new());
+    let id = owned_agent("control-projection");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = session_key(&id, &test_invocation_id("result".into()));
     for _ in 0..2050 {
@@ -2277,8 +2271,8 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
     use golem_common::model::durable_stream::*;
     use golem_schema::schema::SchemaFingerprintV1;
     let (service, _, oplog_service) = service_with_oplog().await;
-    let owner = owned_agent("consumer", ComponentId::new());
-    let remote = owned_agent("remote", ComponentId::new());
+    let owner = owned_agent("consumer");
+    let remote = owned_agent("remote");
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
     let key = session_key(&remote, &test_invocation_id("remote-session".into()));
     let consumer = session_key(&owner, &test_invocation_id("consumer-invocation".into()));
@@ -2289,7 +2283,7 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
             format_version: 1,
             stream_id: StreamId(uuid::Uuid::new_v4()),
             producer_environment_id: remote.environment_id,
-            producer: remote.agent_id.clone(),
+            producer: remote.agent_id,
             expected_producer_fingerprint: key.callee_fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: key.clone(),
@@ -2312,10 +2306,10 @@ async fn closed_remote_consumer_streams_leave_recovery_across_epochs() {
             epoch: 1,
             session_key: key.clone(),
             producer_environment_id: remote.environment_id,
-            producer: remote.agent_id.clone(),
+            producer: remote.agent_id,
             expected_producer_fingerprint: key.callee_fingerprint,
             consumer_environment_id: owner.environment_id,
-            consumer: owner.agent_id.clone(),
+            consumer: owner.agent_id,
             expected_consumer_fingerprint: consumer.callee_fingerprint,
             consumer_invocation: consumer.clone(),
         };
@@ -2545,7 +2539,7 @@ async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild(
     use golem_common::model::durable_stream::durable_stream_route_scope;
 
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("route-bindings", ComponentId::new());
+    let id = owned_agent("route-bindings");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let public = "shared-name";
     let scopes = [
@@ -2654,7 +2648,7 @@ async fn public_bindings_isolate_routes_and_recreated_generations_after_rebuild(
 #[test]
 async fn public_binding_projection_is_fenced_and_rebuildable() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("public-binding", ComponentId::new());
+    let id = owned_agent("public-binding");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let first = test_invocation_id("internal-1".into());
     let second = test_invocation_id("internal-2".into());
@@ -2776,7 +2770,7 @@ async fn public_binding_projection_is_fenced_and_rebuildable() {
 #[test]
 async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("target-only-binding", ComponentId::new());
+    let id = owned_agent("target-only-binding");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("internal".into());
     let public = "report-42";
@@ -2846,7 +2840,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
-        creation_fingerprint: AgentFingerprint(id.agent_id.component_id.0),
+        creation_fingerprint: AgentFingerprint(id.agent_id.as_uuid()),
         export: None,
         cut_index: oplog.current_oplog_index().await,
         revert: None,
@@ -2947,7 +2941,7 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
 #[test]
 async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("public-binding-fork", ComponentId::new());
+    let id = owned_agent("public-binding-fork");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("internal".into());
     let public = "report-42";
@@ -2974,7 +2968,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
     let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
         format_version: 1,
         request_hash: vec![1; 32],
-        creation_fingerprint: AgentFingerprint(id.agent_id.component_id.0),
+        creation_fingerprint: AgentFingerprint(id.agent_id.as_uuid()),
         export: None,
         cut_index: oplog.current_oplog_index().await,
         revert: None,
@@ -3064,7 +3058,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
     use golem_common::model::regions::OplogRegion;
 
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("public-binding-self-revert", ComponentId::new());
+    let id = owned_agent("public-binding-self-revert");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("internal".into());
     let public = "retained-public";
@@ -3162,7 +3156,7 @@ async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes(
 #[test]
 async fn covered_physical_index_resolves_evicted_session_and_definitively_misses_absent_key() {
     let (service, kv) = service().await;
-    let id = owned_agent("coverage", ComponentId::new());
+    let id = owned_agent("coverage");
     let namespace = StreamSessionIndexService::namespace(&id, test_fingerprint());
     let old = test_invocation_id("evicted".into());
     let old_status = completed(2, 3);
@@ -3246,9 +3240,8 @@ fn stream_session_index_survives_cache_and_checkpoint_binary_roundtrip() {
 #[test]
 async fn physical_indexes_are_isolated_per_agent_and_clear_deletes_only_target_agent() {
     let (service, kv) = service().await;
-    let component_id = ComponentId::new();
-    let first = owned_agent("first", component_id);
-    let second = owned_agent("second", component_id);
+    let first = owned_agent("first");
+    let second = owned_agent("second");
     let key = test_invocation_id("same-key".into());
     for (id, finished) in [(&first, 10), (&second, 20)] {
         let namespace = StreamSessionIndexService::namespace(id, test_fingerprint());
@@ -3290,7 +3283,7 @@ async fn physical_indexes_are_isolated_per_agent_and_clear_deletes_only_target_a
 #[test]
 async fn stream_projection_rows_and_delayed_publication_are_fingerprint_isolated() {
     let (_, kv) = service().await;
-    let id = owned_agent("fingerprint-isolation", ComponentId::new());
+    let id = owned_agent("fingerprint-isolation");
     let f1 = AgentFingerprint(uuid::Uuid::from_u128(1));
     let f2 = AgentFingerprint(uuid::Uuid::from_u128(2));
     let f1_namespace = StreamSessionIndexService::namespace(&id, f1);
@@ -3396,7 +3389,7 @@ async fn raw_session_cache_uses_the_oplog_owner_fingerprint_in_both_modes() {
 #[test]
 async fn stale_mode_hint_accepts_a_same_mode_recreated_fingerprint() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("same-mode-recreation", ComponentId::new());
+    let id = owned_agent("same-mode-recreation");
     let first_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(101));
     let second_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(102));
     let first = create_oplog_with_fingerprint(oplog_service.as_ref(), &id, first_fingerprint).await;
@@ -3473,7 +3466,7 @@ async fn stale_durable_hint_falls_back_to_current_ephemeral_create_and_is_remove
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let id = owned_agent("cross-mode-recreation", ComponentId::new());
+    let id = owned_agent("cross-mode-recreation");
     let stale_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(201));
     let current_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(202));
     service
@@ -3529,7 +3522,7 @@ async fn warm_durable_identity_resolution_reads_only_the_hinted_create() {
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let id = owned_agent("warm-identity", ComponentId::new());
+    let id = owned_agent("warm-identity");
     let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(301));
     let oplog = create_oplog_with_fingerprint(oplog_service.as_ref(), &id, fingerprint).await;
     oplog.commit(CommitLevel::Always).await.unwrap();
@@ -3546,9 +3539,9 @@ async fn warm_durable_identity_resolution_reads_only_the_hinted_create() {
         .with_entity("test", "corrupt_hint", "agent_mode")
         .set_raw(
             KeyValueStorageNamespace::Worker {
-                agent_id: Arc::new(id.agent_id()),
+                owned_agent_id: id.clone(),
             },
-            &DefaultWorkerService::agent_mode_key(&id.agent_id),
+            &DefaultWorkerService::agent_mode_key(&id),
             &[],
         )
         .await
@@ -3567,7 +3560,7 @@ async fn warm_durable_identity_resolution_reads_only_the_hinted_create() {
 #[test]
 async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let absent = owned_agent("absent-identity", ComponentId::new());
+    let absent = owned_agent("absent-identity");
     assert!(
         service
             .resolve_agent_identity(&absent)
@@ -3576,7 +3569,7 @@ async fn identity_resolution_distinguishes_absent_and_malformed_oplogs() {
             .is_none()
     );
 
-    let malformed = owned_agent("malformed-identity", ComponentId::new());
+    let malformed = owned_agent("malformed-identity");
     let metadata = agent_metadata(&malformed);
     let oplog = oplog_service
         .create_fresh(
@@ -3602,7 +3595,7 @@ async fn assert_raw_cache_owner_fingerprint(
     owner_fingerprint: AgentFingerprint,
     callee_fingerprint: AgentFingerprint,
 ) {
-    let id = owned_agent(&format!("raw-owner-{mode:?}"), ComponentId::new());
+    let id = owned_agent(&format!("raw-owner-{mode:?}"));
     let oplog = create_oplog_with_identity(oplog_service, &id, mode, owner_fingerprint).await;
     let mut prepared = prepared_record(&id, &test_invocation_id("foreign".into()));
     let StreamSessionRecord::Prepared(value) = &mut prepared else {
@@ -3643,7 +3636,7 @@ async fn assert_raw_cache_owner_fingerprint(
 #[test]
 async fn delayed_stream_projection_cannot_overwrite_a_rebuilt_generation() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("stream-generation-race", ComponentId::new());
+    let id = owned_agent("stream-generation-race");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
@@ -3708,7 +3701,7 @@ async fn delayed_stream_projection_cannot_overwrite_a_rebuilt_generation() {
 #[test]
 async fn stream_projection_clear_retries_when_a_writer_advances_its_snapshot() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("stream-clear-race", ComponentId::new());
+    let id = owned_agent("stream-clear-race");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
@@ -3775,7 +3768,7 @@ async fn stream_projection_clear_retries_when_a_writer_advances_its_snapshot() {
 #[test]
 async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
     let (_service, inner, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("resume-expiry-race", ComponentId::new());
+    let id = owned_agent("resume-expiry-race");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
@@ -3841,7 +3834,7 @@ async fn resume_lookup_rebuilds_when_projection_disappears_after_catch_up() {
 #[test]
 async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("multi-chunk", ComponentId::new());
+    let id = owned_agent("multi-chunk");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let old = test_invocation_id("old".into());
     let old_first = append_session(oplog.as_ref(), prepared_record(&id, &old)).await;
@@ -3910,7 +3903,7 @@ async fn catchup_scans_multiple_chunks_and_recovers_evicted_completed_session() 
 #[test]
 async fn incremental_catchup_merges_later_fields_into_old_unfinished_session() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("incremental", ComponentId::new());
+    let id = owned_agent("incremental");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("unfinished".into());
     let first = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
@@ -4011,11 +4004,11 @@ fn status_fold_tracks_local_lifecycle_without_retaining_caller_results() {
     use golem_common::model::oplog::OplogPayload;
     use std::collections::BTreeMap;
 
-    let id = owned_agent("fold", ComponentId::new());
+    let id = owned_agent("fold");
     let key = test_invocation_id("local".into());
     let mut status = AgentStatusRecord::default();
     let mut outgoing_session = session_key(&id, &key);
-    outgoing_session.callee.agent_id = "other-callee".into();
+    outgoing_session.callee = crate::test_agent_id("other-callee");
     assert!(!status.has_durable_stream_history);
     status = update_status_with_new_entries(
         AgentMode::Durable,
@@ -4091,7 +4084,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     };
 
     let (_, _, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("raw-authority", ComponentId::new());
+    let id = owned_agent("raw-authority");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
@@ -4124,7 +4117,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
     let producer = DurableStreamStore::load(
         oplog.clone(),
         id.environment_id,
-        id.agent_id.clone(),
+        id.agent_id,
         session.callee_fingerprint,
         None,
     )
@@ -4217,7 +4210,7 @@ async fn raw_attachment_authority_fences_before_commit_and_survives_buffer_drain
 #[test]
 async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_resume_epoch() {
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("raw-cold-reopen", ComponentId::new());
+    let id = owned_agent("raw-cold-reopen");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
@@ -4299,7 +4292,7 @@ async fn raw_cold_reopen_ignores_stale_supplied_status_and_recovers_committed_re
 #[test]
 async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() {
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("raw-shared-authority", ComponentId::new());
+    let id = owned_agent("raw-shared-authority");
     let first = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
@@ -4390,7 +4383,7 @@ async fn raw_cached_lookup_observes_takeover_committed_by_another_oplog_actor() 
 #[test]
 async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_committed_detach() {
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("raw-cache-eviction", ComponentId::new());
+    let id = owned_agent("raw-cache-eviction");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let old_key = test_invocation_id("old".into());
     let prepared = prepared_record(&id, &old_key);
@@ -4472,7 +4465,7 @@ async fn raw_cache_eviction_recovers_finished_session_and_folds_buffered_then_co
 #[test]
 async fn persisted_exact_horizon_rejects_newer_index_and_offsets_hide_newer_attachment() {
     let (service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("persisted-horizon", ComponentId::new());
+    let id = owned_agent("persisted-horizon");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("stream".into());
     let prepared = prepared_record(&id, &key);
@@ -4545,7 +4538,7 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     let indexed = Arc::new(InMemoryIndexedStorage::new());
     let blobs = Arc::new(InMemoryBlobStorage::new());
     let kv = Arc::new(InMemoryKeyValueStorage::new());
-    let id = owned_agent("raw-archived-reopen", ComponentId::new());
+    let id = owned_agent("raw-archived-reopen");
 
     let primary = Arc::new(
         PrimaryOplogService::new(
@@ -4694,7 +4687,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     );
-    let id = owned_agent("raw-indexed-reads", ComponentId::new());
+    let id = owned_agent("raw-indexed-reads");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let key = test_invocation_id("session".into());
     let prepared = prepared_record(&id, &key);
@@ -4781,7 +4774,7 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
 #[test]
 async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
     let (_worker_service, _kv, oplog_service) = service_with_oplog().await;
-    let id = owned_agent("raw-shared-idempotency-key", ComponentId::new());
+    let id = owned_agent("raw-shared-idempotency-key");
     let oplog = create_oplog(oplog_service.as_ref(), &id).await;
     let idempotency_key = test_invocation_id("shared".into());
     let first = prepared_record(&id, &idempotency_key);
@@ -4789,7 +4782,7 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
         unreachable!()
     };
     let first_key = first_value.attempt.session_key.clone();
-    let remote = owned_agent("remote-callee", ComponentId::new());
+    let remote = owned_agent("remote-callee");
     let second_key = session_key(&remote, &idempotency_key);
     let second = StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
         format_version: 1,
@@ -4881,11 +4874,11 @@ async fn store_archived_chunk(
     )
     .append(
         crate::storage::indexed::IndexedStorageNamespace::CompressedOpLog {
-            agent_id: id.agent_id(),
+            owned_agent_id: id.clone(),
             agent_mode: AgentMode::Durable,
             level: 1,
         },
-        &id.agent_id().to_redis_key(),
+        &id.storage_key(),
         last_idx,
         chunk,
         None,
@@ -4921,7 +4914,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
     ));
     let oplog: Arc<dyn OplogService> =
         Arc::new(MultiLayerOplogService::new(primary, nev![archive], 10, 10));
-    let id = owned_agent("unreadable-later-chunk", ComponentId::new());
+    let id = owned_agent("unreadable-later-chunk");
     let create = create_entry(
         &id,
         AgentMode::Durable,
@@ -5113,7 +5106,7 @@ async fn store_agent_with_undecodable_later_chunk(
 #[test]
 async fn a_cached_status_write_over_an_undecodable_chunk_keeps_the_oplog_failure() {
     let (indexed, _oplog, service) = archived_services().await;
-    let id = owned_agent("status-cache-undecodable", ComponentId::new());
+    let id = owned_agent("status-cache-undecodable");
     store_agent_with_undecodable_later_chunk(&indexed, &id).await;
 
     for has_durable_stream_history in [false, true] {
@@ -5147,16 +5140,7 @@ async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
 
     let (indexed, oplog, service) = archived_services().await;
     let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agent = |name: &str| {
-        OwnedAgentId::new(
-            environment_id,
-            &AgentId {
-                component_id,
-                agent_id: name.to_string(),
-            },
-        )
-    };
+    let agent = |name: &str| OwnedAgentId::new(environment_id, &crate::test_agent_id(name));
     let healthy = agent("healthy");
     let unreadable_create = agent("unreadable-create");
     let unreadable_status = agent("unreadable-status");
@@ -5186,18 +5170,27 @@ async fn a_listing_skips_or_fails_only_the_agents_whose_oplog_does_not_read() {
         let mut cursor = Some(golem_common::model::ScanCursor::default());
         while let Some(current) = cursor {
             let (next, page) = enumeration
-                .get(&environment_id, &component_id, None, current, 100, precise)
+                .get(
+                    &environment_id,
+                    golem_common::model::type_id::TypeId::try_from(7u32).unwrap(),
+                    None,
+                    current,
+                    100,
+                    precise,
+                )
                 .await
                 .expect("one agent's unreadable oplog must not fail the listing");
             listed.extend(page);
             cursor = next;
         }
-        let mut names = listed
+        let mut listed_ids = listed
             .iter()
-            .map(|metadata| metadata.agent_id.agent_id.clone())
+            .map(|metadata| metadata.agent_id)
             .collect::<Vec<_>>();
-        names.sort();
-        assert_eq!(names, ["healthy", "unreadable-status"], "precise {precise}");
+        listed_ids.sort();
+        let mut expected_ids = vec![healthy.agent_id, unreadable_status.agent_id];
+        expected_ids.sort();
+        assert_eq!(listed_ids, expected_ids, "precise {precise}");
         let status = listed
             .iter()
             .find(|metadata| metadata.agent_id == unreadable_status.agent_id)

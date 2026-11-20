@@ -9,10 +9,10 @@ impl PlannerAgent for PlannerAgentImpl {
   fn new(topic: String) -> Self { Self { topic } }
   async fn plan(&self) -> Result<Plan, AppError> {
     // wait for a typed result from a TypeScript ResearchAgent:
-    let facts = ResearchAgent::get(self.topic.clone())? //@
+    let facts = ResearchAgent::upsert(self.topic.clone())? //@
       .gather().await?; //@
     // send now, without waiting for a result:
-    SlackAgent::get("ops".into())? //@
+    SlackAgent::upsert("ops".into())? //@
       .trigger_post(facts.summary.clone())?; //@
     // discover agents, their methods, and available tools:
     let agents = reflection::get_all_agent_types()?.iter() //@

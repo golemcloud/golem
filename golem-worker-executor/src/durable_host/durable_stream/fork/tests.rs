@@ -46,7 +46,7 @@ async fn complete_revert_fold_retains_jump_items_and_discards_suffix_streams() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         identity.fingerprint,
         None,
     )
@@ -128,7 +128,7 @@ async fn complete_revert_fold_retains_jump_items_and_discards_suffix_streams() {
     let rebuilt = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         identity.fingerprint,
         None,
     )
@@ -188,7 +188,7 @@ async fn reverted_consumer_tail_does_not_advance_source_unavailable_overlay() {
     let handle = registered_stream(
         OplogIndex::from_u64(50),
         source_identity.environment_id,
-        source_identity.agent_id.clone(),
+        source_identity.agent_id,
         source_identity.fingerprint,
         super_registration(&source_identity.invocation, 0),
     )
@@ -200,7 +200,7 @@ async fn reverted_consumer_tail_does_not_advance_source_unavailable_overlay() {
     let consumer = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         fingerprint,
         None,
     )
@@ -283,7 +283,7 @@ async fn reverted_consumer_tail_does_not_advance_source_unavailable_overlay() {
     let rebuilt = DurableStreamStore::load(
         oplog.clone(),
         owner.environment_id,
-        owner.agent_id.clone(),
+        owner.agent_id,
         fingerprint,
         None,
     )
@@ -320,7 +320,7 @@ async fn fork_marker_preparation_discards_nested_suffix_and_prevalidates() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         source.environment_id,
-        source.agent_id.clone(),
+        source.agent_id,
         identity.fingerprint,
         None,
     )
@@ -373,10 +373,7 @@ async fn fork_marker_preparation_discards_nested_suffix_and_prevalidates() {
     for number in 0..2 {
         let target = OwnedAgentId::new(
             identity.environment_id,
-            &AgentId {
-                component_id: identity.agent_id.component_id,
-                agent_id: format!("fork-{number}"),
-            },
+            &crate::test_agent_id(&format!("fork-{number}")),
         );
         let target_fingerprint = AgentFingerprint(Uuid::from_u128(600 + number));
         let horizon = history.current_oplog_index().await;
@@ -482,7 +479,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -535,13 +532,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         .await
         .unwrap();
 
-    let target = OwnedAgentId::new(
-        identity.environment_id,
-        &AgentId {
-            component_id: identity.agent_id.component_id,
-            agent_id: "fork".into(),
-        },
-    );
+    let target = OwnedAgentId::new(identity.environment_id, &AgentId::from_parts(7, 1));
     let fingerprint = AgentFingerprint(Uuid::from_u128(420));
     let cut = DurableStreamStore::prepare_fork_cut(
         oplog.as_ref(),
@@ -576,7 +567,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
     let forked = DurableStreamStore::load(
         copied.clone(),
         target.environment_id,
-        target.agent_id.clone(),
+        target.agent_id,
         fingerprint,
         None,
     )
@@ -606,13 +597,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
     );
 
     // Cutting before the parent's own marker still resolves the retained local registration.
-    let next = OwnedAgentId::new(
-        identity.environment_id,
-        &AgentId {
-            component_id: identity.agent_id.component_id,
-            agent_id: "next-fork".into(),
-        },
-    );
+    let next = OwnedAgentId::new(identity.environment_id, &AgentId::from_parts(7, 2));
     let next_fingerprint = AgentFingerprint(Uuid::from_u128(421));
     let before_marker = DurableStreamStore::prepare_fork_cut(
         copied.as_ref(),
@@ -712,7 +697,7 @@ async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         let rebuilt = DurableStreamStore::load(
             copied.clone(),
             target.environment_id,
-            target.agent_id.clone(),
+            target.agent_id,
             fingerprint,
             None,
         )
@@ -993,7 +978,7 @@ async fn streaming_acceptance_cuts_preserve_the_whole_batch() {
         let producer = DurableStreamStore::load(
             oplog.clone(),
             owner.environment_id,
-            owner.agent_id.clone(),
+            owner.agent_id,
             identity.fingerprint,
             None,
         )
@@ -1069,13 +1054,7 @@ async fn fork_after_bare_revert_uses_the_fixed_horizon() {
 
     let identity = identity();
     let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
-    let target = OwnedAgentId::new(
-        owner.environment_id,
-        &AgentId {
-            component_id: owner.agent_id.component_id,
-            agent_id: "bare-revert-fork".into(),
-        },
-    );
+    let target = OwnedAgentId::new(owner.environment_id, &AgentId::from_parts(7, 3));
     let fingerprint = AgentFingerprint(Uuid::from_u128(422));
     let oplog = TestOplog::default();
     for _ in 0..3 {
@@ -1156,7 +1135,7 @@ fn register(
     let record = registration_record(
         oplog_index,
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         request,
         local_parent,
@@ -1425,7 +1404,7 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
     let mut output_only_source = source_session.clone();
     output_only_source.idempotency_key = uuid::Uuid::from_u128(202).into();
     let mut output_only_target = output_only_source.clone();
-    output_only_target.callee = target_session.callee.clone();
+    output_only_target.callee = target_session.callee;
     output_only_target.callee_fingerprint = target_session.callee_fingerprint;
     let mut index = ProducerStreamIndex::default();
     let first = register(&mut index, 5, super_registration(&source_session, 0));
@@ -1504,7 +1483,7 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
     let local = identity.invocation.clone();
     let target = continuation_session(&local, "dependencies");
     let mut remote = local.clone();
-    remote.callee.agent_id = "remote".into();
+    remote.callee = crate::test_agent_id("remote");
     remote.callee_fingerprint = AgentFingerprint(Uuid::from_u128(700));
     let mut index = ProducerStreamIndex::default();
     let mut request = super_registration(&remote, 0);
@@ -1518,15 +1497,14 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
     let input = register(&mut index, 2, request);
     let input_next = continuation(&input, "dependencies");
     let mut foreign = input.clone();
-    foreign.producer = remote.callee.clone();
+    foreign.producer = remote.callee;
     foreign.expected_producer_fingerprint = remote.callee_fingerprint;
     foreign.stream_id = StreamId::derive(
         remote.callee_environment_id,
         &remote.callee,
         remote.callee_fingerprint,
         OplogIndex::from_u64(7),
-    )
-    .unwrap();
+    );
     for (binding_slot, session) in [&local, &remote].into_iter().enumerate() {
         let attribution = (session == &local).then_some(OplogIndex::from_u64(1));
         let session_reference = if session == &local {
@@ -1652,11 +1630,9 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
         key.attachment_id,
         key.stream_id,
         key.consumer_environment_id,
-        key.consumer.clone(),
+        key.consumer,
     );
-    index
-        .attachment_pages
-        .insert(0, vec![attachment_tuple.clone()]);
+    index.attachment_pages.insert(0, vec![attachment_tuple]);
     index.attachment_positions.insert(attachment_tuple, Some(0));
     index.active_attachment_count = 1;
     index
@@ -1741,18 +1717,18 @@ async fn fork_cut_source_unavailable_remains_queryable_by_continuation_consumer(
     let local = identity.invocation.clone();
     let target = continuation_session(&local, "unavailable");
     let mut remote = local.clone();
-    remote.callee.agent_id = "remote".into();
+    remote.callee = crate::test_agent_id("remote");
     remote.callee_fingerprint = AgentFingerprint(Uuid::from_u128(701));
     let handle = registered_stream(
         OplogIndex::from_u64(2),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         super_registration(&identity.invocation, 0),
     )
     .handle;
     let mut remote_handle = handle.clone();
-    remote_handle.producer = remote.callee.clone();
+    remote_handle.producer = remote.callee;
     remote_handle.expected_producer_fingerprint = remote.callee_fingerprint;
     let reader_id = LocalStreamReaderId {
         introducing_oplog_index: OplogIndex::from_u64(1),
@@ -1760,10 +1736,10 @@ async fn fork_cut_source_unavailable_remains_queryable_by_continuation_consumer(
     };
     for session in [&local, &remote] {
         let mut key = attachment_key(&identity, handle.stream_id);
-        key.producer = remote.callee.clone();
+        key.producer = remote.callee;
         key.expected_producer_fingerprint = remote.callee_fingerprint;
         key.consumer_environment_id = identity.environment_id;
-        key.consumer = identity.agent_id.clone();
+        key.consumer = identity.agent_id;
         key.expected_consumer_fingerprint = identity.fingerprint;
         key.consumer_invocation = local.clone();
         key.session_key = session.clone();
@@ -1825,7 +1801,7 @@ async fn fork_cut_source_unavailable_remains_queryable_by_continuation_consumer(
         let producer = DurableStreamStore::from_index(
             Arc::new(TestOplog::default()),
             identity.environment_id,
-            identity.agent_id.clone(),
+            identity.agent_id,
             identity.fingerprint,
             8,
             Arc::new(|_| Box::pin(async {})),
@@ -1850,18 +1826,15 @@ async fn fork_cut_full_reconstruction_qualifies_copied_records_and_retains_later
     use golem_common::model::{Timestamp, oplog::OplogEntry};
 
     let identity = identity();
-    let target_agent = AgentId {
-        component_id: identity.agent_id.component_id,
-        agent_id: "fork-reconstruction".into(),
-    };
+    let target_agent = AgentId::from_parts(7, 4);
     let target_fingerprint = AgentFingerprint(Uuid::from_u128(300));
     let mut target_session = identity.invocation.clone();
-    target_session.callee = target_agent.clone();
+    target_session.callee = target_agent;
     target_session.callee_fingerprint = target_fingerprint;
     let registration = registered_stream(
         OplogIndex::from_u64(2),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         super_registration(&identity.invocation, 0),
     );
@@ -1880,10 +1853,9 @@ async fn fork_cut_full_reconstruction_qualifies_copied_records_and_retains_later
                 &target_agent,
                 target_fingerprint,
                 OplogIndex::from_u64(2),
-            )
-            .unwrap(),
+            ),
             producer_environment_id: identity.environment_id,
-            producer: target_agent.clone(),
+            producer: target_agent,
             expected_producer_fingerprint: target_fingerprint,
             producer_generation: OplogIndex::NONE,
             source_invocation: target_session.clone(),

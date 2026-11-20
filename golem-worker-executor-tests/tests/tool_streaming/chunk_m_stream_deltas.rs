@@ -167,11 +167,11 @@ async fn effect_stream_runtime_middleware_replay_and_cleanup(
         Some(bare_deployment),
     );
 
-    let agent_id = agent_id!("EffectToolStreamingCaller", "chunk-m-effect-stream-runtime");
+    let agent_id = agent_key!("EffectToolStreamingCaller", "chunk-m-effect-stream-runtime");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner = worker_id.clone();
     let bare: ChunkMEffectRuntimeObservation = executor
         .invoke_and_await_agent(
             &caller_component,
@@ -420,11 +420,11 @@ async fn effect_stream_explicit_cancellation_through_universal_middleware_settle
         Some(deployment),
     );
 
-    let agent_id = agent_id!("EffectToolStreamingCaller", "chunk-m-effect-cancellation");
+    let agent_id = agent_key!("EffectToolStreamingCaller", "chunk-m-effect-cancellation");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owner = worker_id.clone();
     let cancellation: String = executor
         .invoke_and_await_agent(
             &caller_component,

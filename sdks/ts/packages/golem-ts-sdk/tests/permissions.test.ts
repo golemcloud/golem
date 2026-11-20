@@ -301,19 +301,16 @@ describe('permission cards', () => {
 
   it('installs a card on an agent holder and moves it on failure', async () => {
     const { host, permissions } = await loadPermissions();
-    const { ComponentId } = await import('../src/ids');
+    const { AgentId } = await import('../src/agentId');
     const { Uuid } = await import('../src/uuid');
-    const target = permissions.Holder.agent({
-      componentId: new ComponentId(new Uuid(11n, 12n)),
-      agentId: 'Worker("a")',
-    });
+    const target = permissions.Holder.agent(new AgentId(new Uuid(11n, 12n)));
     const installed = permissions.deriveFromWallet({}).unwrap();
     expect(installed.install(target).isOk()).toBe(true);
     expect(host.installCard).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'wallet-derived' }),
       {
         tag: 'agent',
-        val: { componentId: { uuid: { highBits: 11n, lowBits: 12n } }, agentId: 'Worker("a")' },
+        val: { uuid: { highBits: 11n, lowBits: 12n } },
       },
     );
     expect(installed.isMoved()).toBe(true);
@@ -500,17 +497,14 @@ describe('permission cards', () => {
     expect(template.isMoved()).toBe(true);
     expect(() => template.derive({})).toThrow(/already been moved/);
 
-    const { ComponentId } = await import('../src/ids');
+    const { AgentId } = await import('../src/agentId');
     const { Uuid } = await import('../src/uuid');
     host.wallet = [{ tag: 'template', val: fakeCard('template', 1n) }];
     const installed = walletCard(permissions, 'template');
     host.installCard.mockImplementationOnce(() => {
       throw { tag: 'install-recipient-mismatch', val: 'no matching recipient' };
     });
-    const target = permissions.Holder.agent({
-      componentId: new ComponentId(new Uuid(1n, 2n)),
-      agentId: 'Worker("a")',
-    });
+    const target = permissions.Holder.agent(new AgentId(new Uuid(1n, 2n)));
     expect(installed.install(target).unwrapErr().kind).toBe('install-recipient-mismatch');
     expect(installed.isMoved()).toBe(true);
     expect(() => installed.install(target)).toThrow(/already been moved/);

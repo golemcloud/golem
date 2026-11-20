@@ -50,10 +50,11 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function getAgentMetadata(agentId: AgentId): AgentMetadata | undefined;
   /**
-   * Fork an agent to another agent at a given oplog index
+   * Forks an agent at a given oplog index into a new agent of the same type, and returns
+   * the ID that Golem issued for the new agent. The new agent has no key.
    * @throws AgentOperationError
    */
-  export function forkAgent(sourceAgentId: AgentId, targetAgentId: AgentId, oplogIdxCutOff: OplogIndex): void;
+  export function forkAgent(sourceAgentId: AgentId, oplogIdxCutOff: OplogIndex): AgentId;
   /**
    * Revert an agent to a previous state
    * @throws AgentOperationError
@@ -71,18 +72,8 @@ declare module 'golem:api/host@1.5.0' {
    */
   export function resolveComponentId(componentReference: string): ComponentId | undefined;
   /**
-   * Get the agent-id for a given component and agent name.
-   * Returns none when no component for the specified reference exists.
-   */
-  export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined;
-  /**
-   * Get the agent-id for a given component and agent-name.
-   * Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
-   */
-  export function resolveAgentIdStrict(componentReference: string, agentName: string): AgentId | undefined;
-  /**
-   * Forks the current agent at the current execution point. The new agent gets the same base agent ID but
-   * with a new unique phantom ID. The phantom ID of the forked agent is returned in `fork-result` on
+   * Forks the current agent at the current execution point. The new agent has the same type, a new
+   * ID that Golem issues and no key. The ID of the forked agent is returned in `fork-result` on
    * both sides. The newly created agent continues running from the same point, but the return value is
    * going to be different in this agent and the forked agent.
    * @throws AgentOperationError
@@ -90,12 +81,12 @@ declare module 'golem:api/host@1.5.0' {
   export function fork(): ForkResult;
   export class GetAgents {
     /**
-     * Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
-     * defined in `component-id`, filtered by the conditions given by `filter`. If `precise` is true,
+     * Creates an agent enumeration request. It is going to enumerate the agents of `agent-type-name`
+     * in the current environment, filtered by the conditions given by `filter`. If `precise` is true,
      * the server will calculate the most recent state of all the returned agents, otherwise the returned
      * metadata will be not guaranteed to be up-to-date.
      */
-    constructor(componentId: ComponentId, filter: AgentAnyFilter | undefined, precise: boolean);
+    constructor(agentTypeName: string, filter: AgentAnyFilter | undefined, precise: boolean);
     /**
      * Retrieves the next batch of agent metadata.
      * @throws AgentOperationError
@@ -140,9 +131,10 @@ declare module 'golem:api/host@1.5.0' {
    */
   export type AgentStatus = "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited" | "sandboxed";
   /**
-   * Describes a filter condition on agent IDs when enumerating agents
+   * Describes a filter condition on the canonical key of keyed agents when enumerating
+   * agents. An agent without a key never matches it.
    */
-  export type AgentNameFilter = {
+  export type AgentKeyFilter = {
     comparator: StringFilterComparator;
     value: string;
   };
@@ -188,8 +180,8 @@ declare module 'golem:api/host@1.5.0' {
    */
   export type AgentPropertyFilter =
   {
-    tag: 'name'
-    val: AgentNameFilter
+    tag: 'key'
+    val: AgentKeyFilter
   } |
   {
     tag: 'status'
@@ -227,8 +219,15 @@ declare module 'golem:api/host@1.5.0' {
    * Metadata about an agent
    */
   export type AgentMetadata = {
-    /** The agent ID, consists of the component ID, agent type and agent parameters */
+    /** The agent ID */
     agentId: AgentId;
+    /** The name of the agent's type. Owners without an agent type have none. */
+    agentTypeName?: string;
+    /**
+     * The incarnation of the agent: a deleted and re-created agent keeps its ID but
+     * gets a new fingerprint
+     */
+    fingerprint: Uuid;
     /** Command line arguments seen by the agent */
     args: string[];
     /** Environment variables seen by the agent */
@@ -273,11 +272,11 @@ declare module 'golem:api/host@1.5.0' {
    * Details about the fork result
    */
   export type ForkDetails = {
-    forkedPhantomId: Uuid;
+    forkedAgentId: AgentId;
   };
   /**
    * Indicates which agent the code is running on after `fork`.
-   * The parameter contains details about the fork result, such as the phantom-ID of the newly
+   * The parameter contains details about the fork result, such as the ID of the newly
    * created agent.
    */
   export type ForkResult =

@@ -12,7 +12,7 @@ An **ephemeral agent** is a Golem agent that gets a **fresh instance for every i
 - **No shared state**: Each invocation starts from a clean `new()` — field values set in one call are gone by the next
 - **No method recovery replay**: An oplog is still recorded lazily (useful for debugging via `golem agent oplog`). If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.
 - **No persistence**: The agent's memory is discarded after each invocation completes
-- **Logical identity**: Constructor parameters address a logical agent proxy. Each invocation uses an idempotency-key-derived phantom execution identity. A completed phantom execution is terminal and cannot be reused for another invocation.
+- **Logical identity**: Constructor parameters address a logical agent proxy; the generated client of an ephemeral agent has only `upsert`. Each invocation runs on a new one-shot instance with its own agent ID, which the invocation metadata reports. A completed one-shot instance is terminal and cannot be reused for another invocation.
 
 This makes ephemeral agents ideal for **pure request handlers**, **stateless transformers**, **adapters**, and **serverless-style functions** where each call is independent.
 
@@ -133,6 +133,6 @@ uses the method parameter name; do not send a bare JSON string.
 ## Key Points
 
 - Ephemeral mode is set at the **agent type level** — all instances of the type are ephemeral
-- Constructor parameters still define identity — you can have multiple ephemeral agents with different parameters
+- Constructor parameters still address the logical agent — you can have multiple ephemeral agents with different parameters
 - Ephemeral agents can call other agents via RPC and make HTTP requests, but do not durably suspend. Long waits can fail at the executor's `ephemeral_max_sleep` limit.
 - The oplog is still recorded lazily, so you can inspect what an ephemeral agent did via `golem agent oplog`. If the executor restarts while preparing an invocation, Golem can replay the recorded initialization so that the method can still start. Once the method starts, a failure is terminal; Golem does not replay the method.

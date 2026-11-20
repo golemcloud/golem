@@ -23,7 +23,7 @@ use axum::extract::{Query, State};
 use axum::routing::get;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::schema::TypedSchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -315,7 +315,7 @@ async fn run_then(
         .component_dep(&context.default_environment_id, component)
         .store()
         .await?;
-    let agent_id = agent_id!("CdConcAgent", name);
+    let agent_id = agent_key!("CdConcAgent", name);
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -679,7 +679,7 @@ async fn go_custom_durability_recovers_with_one_completed_and_one_incomplete_sib
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("CdConcAgent", "partial");
+    let agent_id = agent_key!("CdConcAgent", "partial");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -703,7 +703,7 @@ async fn go_custom_durability_recovers_with_one_completed_and_one_incomplete_sib
         .in_current_span()
     });
     tokio::time::timeout(Duration::from_secs(30), state.checkpoint.notified()).await?;
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
     let before = calls(
         &executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?,
         "partial",

@@ -640,10 +640,10 @@ impl OplogService for MultiLayerOplogService {
         Ok(false)
     }
 
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
@@ -663,7 +663,7 @@ impl OplogService for MultiLayerOplogService {
             0 => {
                 let page = self
                     .primary
-                    .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
+                    .scan_for_type(environment_id, type_id, modes, cursor.clone(), count)
                     .await?;
                 let agent_ids = self
                     .filter_ids_existing_on_lower_layers(page.agent_ids, active_mode, 0)
@@ -681,7 +681,7 @@ impl OplogService for MultiLayerOplogService {
             }
             layer if layer <= self.lower.len().get() => {
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
-                    .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
+                    .scan_for_type(environment_id, type_id, modes, cursor.clone(), count)
                     .await?;
                 let examined_keys = unfiltered_ids.len() as u64;
 

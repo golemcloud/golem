@@ -16,14 +16,13 @@
 
 package golem.runtime.autowire
 
-import golem.InvocationContext
+import golem.{AgentId, InvocationContext}
 import golem.config.Config
 import golem.host.js.schema.{JsAgentError, JsAgentType, JsSchemaValueTree}
 import golem.runtime.{AgentMetadata, WireAgentMetadata}
 import golem.runtime.SnapshotRestoreContext
 import golem.runtime.SnapshotHandlers
 import golem.runtime.SnapshotData
-import java.util.UUID
 
 import scala.scalajs.js
 
@@ -66,7 +65,7 @@ final class AgentDefinition[Instance](
   val mode: AgentMode = AgentMode.Durable,
   val snapshotHandlers: Option[SnapshotHandlers[Instance]] = None,
   private[autowire] val restoreInstance: Option[
-    (SnapshotData, String, JsSchemaValueTree, Option[UUID]) => js.Promise[RestoredInstance[Instance]]
+    (SnapshotData, AgentId, JsSchemaValueTree) => js.Promise[RestoredInstance[Instance]]
   ] = None
 ) {
 
@@ -95,16 +94,19 @@ final class AgentDefinition[Instance](
   def initialize(input: JsSchemaValueTree, context: InvocationContext): js.Promise[Instance] =
     constructor.initialize(input, context)
 
-  /** Restores a fresh instance in a type-erased runtime dispatch context. */
+  /**
+   * Restores a fresh instance in a type-erased runtime dispatch context.
+   * `constructorInput` is the constructor payload the agent was initialized
+   * with.
+   */
   def restoreAny(
     bytes: SnapshotData,
-    agentId: String,
-    identity: JsSchemaValueTree,
-    phantomId: Option[UUID]
+    agentId: AgentId,
+    constructorInput: JsSchemaValueTree
   ): js.Promise[RestoredInstance[Any]] =
     restoreInstance match {
       case Some(restore) =>
-        restore(bytes, agentId, identity, phantomId).asInstanceOf[js.Promise[RestoredInstance[Any]]]
+        restore(bytes, agentId, constructorInput).asInstanceOf[js.Promise[RestoredInstance[Any]]]
       case None => js.Promise.reject(new IllegalStateException(s"Agent '$typeName' has no snapshot handlers"))
     }
 

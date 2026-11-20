@@ -14,13 +14,13 @@ A **fire-and-forget** call enqueues a method invocation on the target agent and 
 For stream-free methods, access `.trigger()` on the per-method wrapper. Durable guest clients return `Future[Unit]`; ephemeral guest clients return `Future[golem.runtime.rpc.InvocationReceipt]`. Compose or return that future to observe enqueue completion/errors, without waiting for the target's result. Streaming methods require awaited calls; bridge clients omit trigger helpers for those methods, while definition-derived clients can expose unsupported helpers that reject live stream inputs at runtime.
 
 ```scala
-val counter = CounterAgentClient.get("my-counter")
+val counter = CounterAgentClient.upsert("my-counter")
 
 // Fire-and-forget — returns immediately
 counter.increment.trigger()
 
 // With arguments
-val processor = DataProcessorAgentClient.get("pipeline-1")
+val processor = DataProcessorAgentClient.upsert("pipeline-1")
 processor.processBatch.trigger(batchData)
 ```
 
@@ -36,12 +36,12 @@ processor.processBatch.trigger(batchData)
 ```scala
 // In AgentAImpl: return B's Future, keeping A's invocation open until B returns.
 override def run(data: String): Future[String] =
-  AgentBClient.get("b1").doWork(data)
+  AgentBClient.upsert("b1").doWork(data)
 
 // In AgentBImpl: enqueue the callback without waiting for A to execute it.
 override def doWork(data: String): Future[String] = {
   val computed = s"processed: $data"
-  AgentAClient.get("a1").onWorkDone.trigger(computed).map(_ => computed)
+  AgentAClient.upsert("a1").onWorkDone.trigger(computed).map(_ => computed)
 }
 ```
 

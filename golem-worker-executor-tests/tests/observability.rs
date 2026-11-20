@@ -21,7 +21,7 @@ use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
 use golem_common::model::{AgentStatus, IdempotencyKey};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
 use pretty_assertions::assert_eq;
@@ -69,7 +69,7 @@ async fn get_oplog_1(
         .store()
         .await?;
 
-    let agent_id = agent_id!("GolemHostApi", "getoplog1");
+    let agent_id = agent_key!("GolemHostApi", "getoplog1");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -154,7 +154,7 @@ async fn ordinary_agent_is_not_never_live_after_restart(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "ordinary-not-never-live");
+    let agent_id = agent_key!("GolemHostApi", "ordinary-not-never-live");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -261,7 +261,7 @@ async fn public_oplog_shows_callers_and_keeps_claims_out_of_guest_reads(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "callers");
+    let agent_id = agent_key!("GolemHostApi", "callers");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -377,7 +377,7 @@ async fn p3_unread_response_cleanup_reconstructs_before_next_accessor(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("RawWasiHttp", "p3-unread-cleanup-reconstruction");
+    let agent = agent_key!("RawWasiHttp", "p3-unread-cleanup-reconstruction");
     let worker = executor
         .start_agent_with(
             &component.id,
@@ -522,7 +522,7 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("HttpGc", format!("drop-{live}-{restored}-{partial_body}"));
+        let agent = agent_key!("HttpGc", format!("drop-{live}-{restored}-{partial_body}"));
         let worker = executor
             .start_agent_with(
                 &component.id,
@@ -566,7 +566,7 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
             .await??;
             executor
                 .interrupt_loaded_worker(
-                    &worker,
+                    &worker.agent_id,
                     golem_service_base::error::worker_executor::InterruptKind::Suspend(
                         golem_common::model::Timestamp::now_utc(),
                     ),
@@ -601,7 +601,9 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
         }
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides()).await?;
-        executor.complete_promise(&promise, Vec::new()).await?;
+        executor
+            .complete_promise(&context.default_environment_id, &promise, Vec::new())
+            .await?;
         let report = executor
             .invoke_and_await_agent(&component, &agent, "inspect", data_value!())
             .await?
@@ -686,7 +688,7 @@ async fn guest_span_reconstructs_completed_and_incomplete_operations(
             .component_dep(&context.default_environment_id, fixture)
             .store()
             .await?;
-        let agent = agent_id!("InvocationContext", format!("span-prefix-{cut}"));
+        let agent = agent_key!("InvocationContext", format!("span-prefix-{cut}"));
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
         let original = executor
             .invoke_and_await_agent(&component, &agent, "span_roundtrip", data_value!())
@@ -771,7 +773,7 @@ async fn finished_guest_span_attribute_error_does_not_open_operation(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let agent = agent_id!("InvocationContext", "finished-span-error");
+    let agent = agent_key!("InvocationContext", "finished-span-error");
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
     assert!(
         executor
@@ -800,7 +802,7 @@ async fn search_oplog_1(
         .store()
         .await?;
 
-    let repo_id = agent_id!("Repository", "search-oplog-1");
+    let repo_id = agent_key!("Repository", "search-oplog-1");
     let worker_id = executor.start_agent(&component.id, repo_id.clone()).await?;
 
     executor
@@ -890,7 +892,7 @@ async fn get_oplog_with_api_changing_updates(
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
         .await?;
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -965,7 +967,7 @@ async fn get_oplog_starting_with_updated_component(
         updated_component.revision
     );
 
-    let agent_id = agent_id!("UpdateTest");
+    let agent_id = agent_key!("UpdateTest");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
@@ -1039,9 +1041,19 @@ async fn invocation_context_test(
         .store()
         .await?;
 
-    let agent_id = agent_id!("InvocationContext", "w1");
+    let agent_id = agent_key!("InvocationContext", "w1");
     let worker_id = executor
-        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .start_agent_with(&component.id, agent_id.clone(), env.clone(), Vec::new())
+        .await?;
+    // An agent that RPC creates does not inherit the caller's environment, so the agent that
+    // `test1` calls must already exist with the port of the HTTP server.
+    executor
+        .start_agent_with(
+            &component.id,
+            agent_key!("InvocationContext", "w2"),
+            env,
+            Vec::new(),
+        )
         .await?;
 
     executor

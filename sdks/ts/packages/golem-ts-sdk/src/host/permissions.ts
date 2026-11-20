@@ -65,7 +65,7 @@ import {
   PERMISSION_CARD_INTERNAL,
   type PermissionCardInternal,
 } from '../internal/schema-model/permissionCardInternal';
-import type { AgentId } from './hostapi';
+import type { AgentId } from '../agentId';
 import type { Duration } from './retryBuilder';
 import { Result } from './result';
 import type { Uuid } from '../uuid';
@@ -376,10 +376,7 @@ function holderToRaw(holder: Holder): RawHolder {
   }
   if (holder.tag === 'agent') {
     const agentId = holder.val as AgentId;
-    return {
-      tag: 'agent',
-      val: { componentId: { uuid: uuidToRaw(agentId.componentId.uuid) }, agentId: agentId.agentId },
-    };
+    return { tag: 'agent', val: { uuid: uuidToRaw(agentId.uuid) } };
   }
   return { tag: holder.tag, val: uuidToRaw(holder.val as Uuid) };
 }

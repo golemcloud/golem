@@ -49,6 +49,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => {
                 let golem_common::model::oplog::CreateProjectionParameters {
                     agent_id,
+                    agent_type_name: created_agent_type_name,
                     owner_kind,
                     agent_mode,
                     component_revision,
@@ -60,7 +61,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                     never_live,
                 } = *parameters;
@@ -94,6 +94,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 return Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
+                    agent_type_name: created_agent_type_name,
                     owner_kind,
                     agent_mode,
                     component_revision,
@@ -105,7 +106,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
                     local_agent_config,
-                    original_phantom_id,
                     instance_id,
                     never_live,
                 }));
@@ -132,7 +132,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         public_host_request(
                             request_payload,
                             &oplog_service,
-                            components,
                             owned_agent_id,
                             agent_mode,
                         )
@@ -486,7 +485,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         with_expected_request(
                             divergence,
                             &oplog_service,
-                            components,
                             owned_agent_id,
                             agent_mode,
                         )
@@ -1019,11 +1017,10 @@ fn make_plugin_installation_description(
     }
 }
 
-/// The public value of the request of a recorded `Start`, with the RPC targets resolved.
+/// The public value of the request of a recorded `Start`.
 async fn public_host_request(
     request_payload: OplogPayload<HostRequest>,
     oplog_service: &Arc<dyn OplogService>,
-    components: Arc<dyn ComponentService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) -> Result<TypedSchemaValue, String> {
@@ -1034,18 +1031,6 @@ async fn public_host_request(
     match host_request {
         HostRequest::EntityInvocation(request) => Ok(request.input),
         HostRequest::McpToolCall(request) => Ok(request.input),
-        HostRequest::GolemRpcInvoke(inner) => {
-            HostRequest::GolemRpcInvoke(enrich_golem_rpc_invoke(components, inner).await)
-                .into_typed_schema_value()
-                .map_err(|error| error.to_string())
-        }
-        HostRequest::GolemRpcScheduledInvocation(inner) => {
-            HostRequest::GolemRpcScheduledInvocation(
-                enrich_golem_rpc_scheduled_invocation(components, inner).await,
-            )
-            .into_typed_schema_value()
-            .map_err(|error| error.to_string())
-        }
         // The enrich request of an oplog processor holds the raw entries of its batch, with the
         // claims of their callers. The public form keeps only the entry indexes, so no reader of
         // the processor's oplog gets the claims.
@@ -1070,7 +1055,6 @@ async fn public_host_request(
 pub(crate) async fn with_expected_request(
     mut divergence: Box<ReplayDivergence>,
     oplog_service: &Arc<dyn OplogService>,
-    components: Arc<dyn ComponentService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) -> Box<ReplayDivergence> {
@@ -1091,14 +1075,7 @@ pub(crate) async fn with_expected_request(
             request: Some(request),
             ..
         })) if function_name.to_string() == expected.function_name => {
-            public_host_request(
-                request,
-                oplog_service,
-                components,
-                owned_agent_id,
-                agent_mode,
-            )
-            .await
+            public_host_request(request, oplog_service, owned_agent_id, agent_mode).await
         }
         Ok(_) => Err(format!(
             "the entry at {index} is not a Start of {} with a request",

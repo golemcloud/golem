@@ -67,7 +67,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     ) -> Result<PermitAcquisition<()>, WorkerExecutorError> {
         if self.permit_state.is_none() {
             let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
-            let agent_id = self.owned_agent_id.agent_id().clone();
+            let agent_id = self.owned_agent_id.agent_id();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
             let deferred_wakeups = &mut *self.deferred_wakeups;
             let acquisition = acquire_permit_or_interrupt(
@@ -75,7 +75,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 self.receiver,
                 || {
                     let account = registered_concurrent_account.clone();
-                    let agent_id = agent_id.clone();
                     async move {
                         debug!("Re-acquiring concurrent-agent permit (waking from idle)");
                         account.acquire(agent_id).await

@@ -780,7 +780,7 @@ Snapshots are whole-buffer operations. Copies of state, part bytes, encoded payl
 
 ## How snapshot restoration runs
 
-Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent identity and restored principal, plus the phantom ID and fresh configuration where applicable.
+Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent ID, the agent's constructor parameters, and the restored principal, plus fresh configuration where applicable. Golem passes the constructor parameters to snapshot loading because the agent ID does not contain them.
 
 Golem runs snapshot loading in read-only mode and writes nothing from it to the oplog. Decoding, local computation, fresh randomness, configuration access, and other permitted reads can be used to construct the restored value. Durable host calls classified as writes, and outgoing HTTP or agent RPC calls, are rejected before they take effect. This restriction is not a general filesystem write sandbox: local filesystem writes are not blocked by it.
 

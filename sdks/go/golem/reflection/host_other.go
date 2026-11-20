@@ -27,34 +27,24 @@ import (
 // a native link that has no bodies for them. The snapshot handling itself is
 // target-independent and tested directly.
 
-var errOutsideComponent = fmt.Errorf("golem: agent discovery and binding are only available inside a component")
+var errOutsideComponent = fmt.Errorf("golem: agent discovery and clients are only available inside a component")
 
 func hostDiscoverAgentTypes() []AgentType { return nil }
 
 func hostDiscoverAgentType(string) (AgentType, bool) { return AgentType{}, false }
 
-func hostDiscoverAgentTypeByID(string) (AgentType, bool) { return AgentType{}, false }
+func hostDiscoverAgentTypeByID(golem.AgentID) (AgentType, bool) { return AgentType{}, false }
 
-func (r AgentType) hostGet(map[string]any, ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostUpsert(map[string]any) (*AgentClient, error) { return nil, errOutsideComponent }
+
+func (r AgentType) hostCreate(map[string]any, ...CreateOpt) (*AgentClient, error) {
 	return nil, errOutsideComponent
 }
 
-func (r AgentType) hostNewPhantom(map[string]any, ...ClientOpt) (*AgentClient, error) {
-	return nil, errOutsideComponent
+func (r AgentType) hostGetByID(golem.AgentID) (*AgentClient, error) { return nil, errOutsideComponent }
+
+func (r AgentType) hostLookupID(map[string]any) (golem.Option[golem.AgentID], error) {
+	return golem.None[golem.AgentID](), errOutsideComponent
 }
 
-func (r AgentType) hostBind(string, ...ClientOpt) (*AgentClient, error) {
-	return nil, errOutsideComponent
-}
-
-func (r AgentType) hostAgentID(map[string]any, golem.Option[golem.UUID]) (string, error) {
-	return "", errOutsideComponent
-}
-
-func hostParseRawAgentID(string) (RawAgentID, error) { return RawAgentID{}, errOutsideComponent }
-
-func hostBindAgentID(string) (*DynamicAgentClient, error) { return nil, errOutsideComponent }
-
-func hostMakeAgentID(string, golem.TypedValue, golem.Option[golem.UUID]) (string, error) {
-	return "", errOutsideComponent
-}
+func hostGetDynamicByID(golem.AgentID) (*DynamicAgentClient, error) { return nil, errOutsideComponent }

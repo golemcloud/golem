@@ -1,34 +1,49 @@
-# Phantom Agents in Rust
+# Multiple Agents With the Same Constructor Parameters in Rust
 
-Phantom agents allow creating **multiple distinct agent instances** that share the same constructor parameters. Normally, an agent is uniquely identified by its constructor parameter values — calling `get` with the same parameters always returns the same agent. Phantom agents add an extra **phantom ID** (a UUID) to the identity, so you can have many independent instances with identical parameters.
+Every agent has an **agent ID**: a UUID that Golem issues. An agent can also have a **key**, the
+canonical `AgentType(params...)` text of its constructor parameters. Only one **keyed** agent exists
+for each key, so calling `upsert` with the same parameters always reaches the same agent. To have
+many independent agents with identical parameters, create agents **without a key**: each one gets
+a new agent ID, and only that ID reaches it.
 
-The persistent identity and reconnect behavior below applies to durable agents only. For an
-ephemeral type, a client is a logical proxy: each invocation gets an idempotency-key-derived
-phantom execution identity. A completed execution is terminal, not a reusable stateful instance.
+The persistent identity and reconnect behavior below applies to durable agents only. An ephemeral
+agent type has only `upsert`: its client is a logical proxy, and each invocation runs on a new
+one-shot instance. A completed execution is terminal, not a reusable stateful instance.
 
-## Agent ID Format
+## Addressing Agents From the CLI
 
-A phantom agent's ID appends the phantom UUID in square brackets:
+```shell
+# The keyed agent of the parameters (created on first invocation when missing)
+golem agent invoke 'Counter("shared")' increment
 
+# A new agent without a key; prints its agent ID
+golem agent create 'Counter("shared")'
+
+# An agent by its agent ID
+golem agent invoke 'Counter[<AGENT_ID>]' increment
+golem agent invoke '<AGENT_ID>' increment
 ```
-agent-type(param1, param2)[a09f61a8-677a-40ea-9ebe-437a0df51749]
-```
 
-A non-phantom agent ID has no bracket suffix:
+## Creating and Addressing Agents (RPC)
 
-```
-agent-type(param1, param2)
-```
-
-## Creating and Addressing Phantom Agents (RPC)
-
-The `#[agent_definition]` macro generates a `<AgentName>Client` with three constructor methods:
+The `#[agent_definition]` macro generates a `<AgentName>Client` with these constructor methods for
+a durable agent type:
 
 | Method | Description |
 |--------|-------------|
-| `get(params...)` | Get or create a **non-phantom** agent identified solely by its parameters |
-| `new_phantom(params...)` | Create a **new phantom** agent with a freshly generated random UUID |
-| `get_phantom(uuid, params...)` | Get or create a phantom agent with a **specific** UUID |
+| `upsert(params...)` | Connect to the **keyed** agent of the parameters, and create it when it is missing |
+| `create(params..., options)` | `async`: create an agent and return after its initialization. Without `keyed`, the new agent has no key and a new agent ID |
+| `get_by_id(&agent_id)` | Connect to the existing agent with this ID. Never creates the agent |
+| `agent_id()` | `async`: the agent ID of the agent the client connects to |
+
+`create` takes a `golem_rust::CreateOptions`:
+
+- `keyed: true` creates the keyed agent of the parameters instead, and fails with
+  `GolemReflectError::Conflict` when it already exists.
+- `config` overrides the agent's configuration (see below).
+- `env` adds environment variables to the ones the manifest defines.
+
+`get_by_id` fails with `GolemReflectError::RemoteNotFound` when no agent of this type has the ID.
 
 ### Example
 
@@ -44,49 +59,64 @@ pub trait Counter {
 
 // --- In another agent, using the generated CounterClient: ---
 
-// Non-phantom: always the same agent for the same name
-let counter = CounterClient::get("shared".to_string());
+// Keyed: always the same agent for the same name
+let counter = CounterClient::upsert("shared".to_string());
 
-// New phantom: creates a brand new independent instance
-let phantom1 = CounterClient::new_phantom("shared".to_string());
-let phantom2 = CounterClient::new_phantom("shared".to_string());
-// phantom1 and phantom2 are different agents, both with name="shared"
+// New agents without a key: each call creates a brand new independent instance
+let first = CounterClient::create("shared".to_string(), Default::default()).await?;
+let second = CounterClient::create("shared".to_string(), Default::default()).await?;
+// first and second are different agents, both with name="shared"
 
-// Retrieve the phantom ID to reconnect later
-let id: golem_rust::Uuid = phantom1.phantom_id().unwrap();
+// Retrieve the agent ID to reconnect later
+let id: golem_rust::AgentId = first.agent_id().await?;
 
-// Reconnect to an existing phantom by its UUID
-let same_as_phantom1 = CounterClient::get_phantom(id, "shared".to_string());
+// Reconnect to the existing agent by its ID
+let same_as_first = CounterClient::get_by_id(&id)?;
 ```
 
-### WithConfig Variants
+`create`, `get_by_id` and `agent_id` return `Result<_, golem_rust::GolemReflectError>`, so call
+them from a method that can propagate or handle that error.
 
-If the constructor injects `#[agent_config] config: Config<MyAgentConfig>`, additional methods
-accept a `MyAgentConfigRpc` override record after the identity arguments (one record per injected
-config parameter), not flattened config fields:
+### Configuration and Environment Overrides
 
-- `get_with_config(params..., config_overrides)`
-- `new_phantom_with_config(params..., config_overrides)`
-- `get_phantom_with_config(uuid, params..., config_overrides)`
+If the constructor injects `#[agent_config] config: Config<MyAgentConfig>`, the `config` field of
+`CreateOptions` is the generated `MyAgentConfigRpc` override record (a tuple of records when the
+constructor injects more than one config parameter), not flattened config fields. Without injected
+config, `config` is `()`. `upsert` takes no overrides.
 
-For example, `MyAgentClient::get_with_config(name, MyAgentConfigRpc { foo: Some(42), ..Default::default() })`.
+```rust
+let agent = MyAgentClient::create(
+    name,
+    golem_rust::CreateOptions {
+        keyed: true,
+        config: MyAgentConfigRpc { foo: Some(42), ..Default::default() },
+        env: vec![("MODE".to_string(), "test".to_string())],
+    },
+)
+.await?;
+```
+
 These are definition-derived guest clients; external bridge client configuration signatures differ.
 
-## Querying the Phantom ID from Inside an Agent
+## Querying the Agent ID From Inside an Agent
 
-An agent can check its own phantom ID using the `BaseAgent` trait:
+An agent can read its own agent ID with `golem_rust::agentic::get_agent_id()`, or through the
+`BaseAgent` trait:
 
 ```rust
 use golem_rust::agentic::BaseAgent;
 
-fn some_method(&self) -> Option<golem_rust::Uuid> {
-    self.phantom_id()  // Returns Some(uuid) if this is a phantom agent, None otherwise
+fn some_method(&self) -> golem_rust::AgentId {
+    self.get_agent_id()
 }
 ```
 
-## HTTP-Mounted Phantom Agents
+The `GOLEM_AGENT_KEY` environment variable holds the key of a keyed agent; an agent without a key
+has no `GOLEM_AGENT_KEY`.
 
-When an agent is mounted as an HTTP endpoint, you can set `phantom_agent = true` to make every incoming HTTP request create a **new phantom instance** automatically:
+## HTTP-Mounted Agents Without a Key
+
+When an agent is mounted as an HTTP endpoint, you can set `phantom_agent = true` to make every incoming HTTP request create a **new agent without a key** automatically:
 
 ```rust
 use golem_rust::{agent_definition, endpoint};
@@ -99,12 +129,11 @@ pub trait RequestHandler {
 }
 ```
 
-Each HTTP request will be handled by a fresh agent instance with its own phantom ID, even though all instances share the same (empty) constructor parameters.
+Each HTTP request will be handled by a fresh agent with its own agent ID, even though all instances share the same (empty) constructor parameters.
 
 ## Key Points
 
-- Phantom instances of durable types are **fully durable** — they persist just like regular durable agents.
-- The phantom ID is a standard UUID (v4 by default when using `new_phantom`).
-- `new_phantom` generates the UUID internally via `golem_rust::Uuid::new_v4()`.
-- For durable types, `get_phantom` is idempotent: calling it with the same UUID and parameters returns the same agent.
-- Phantom and non-phantom agents with the same constructor parameters are **different agents** — they do not share state.
+- Agents without a key of durable types are **fully durable** — they persist just like keyed durable agents.
+- An agent ID is a UUID that Golem issues; it cannot be computed from the constructor parameters.
+- `create` without `keyed` always creates a new agent; reconnect to it later with `get_by_id`.
+- A keyed agent and an agent without a key with the same constructor parameters are **different agents** — they do not share state.

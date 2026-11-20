@@ -1660,7 +1660,6 @@ mod tests {
     };
     use crate::services::oplog::{CommitLevel, Oplog, OplogRefusal, gated_ephemeral_fixture};
     use crate::workerctx::default::Context;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogEntry;
     use golem_common::model::oplog::OplogIndex;
@@ -1755,13 +1754,8 @@ mod tests {
                     },
                 );
                 let weak_stop = Arc::downgrade(&stop);
-                let owned_agent_id = OwnedAgentId::new(
-                    EnvironmentId::new(),
-                    &AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "actor-stop".into(),
-                    },
-                );
+                let owned_agent_id =
+                    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
                 let actor = Arc::new(WorkerStateActor::<Context> {
                     commit: Arc::new(OwnerCommitController {
                         status_jobs,
@@ -2043,13 +2037,7 @@ mod tests {
     async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "stopped-status".into(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2));
         let (status_jobs, status_rx) = mpsc::unbounded_channel();
         let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
         let stop = WorkerStateActorStop::new(
@@ -2085,13 +2073,7 @@ mod tests {
     async fn a_confirmation_gives_the_reply_of_the_status_task() {
         use super::{ConfirmOutcome, WorkerLifecycle};
         use golem_common::model::oplog::FilesystemSnapshotName;
-        let owned_agent_id = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "replying-status".into(),
-            },
-        );
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 3));
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
         let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
         let stop = WorkerStateActorStop::new(

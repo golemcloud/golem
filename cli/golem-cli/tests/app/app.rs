@@ -7669,18 +7669,18 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             Available\s+agent\s+client\s+types:
             .*
             (
-                SampleAgent\.get\(
+                SampleAgent\.upsert\(
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
                     complex\?:\s*.*
                 \)
                 .*
-                CounterAgent\.get\(name:\s*string\)
+                CounterAgent\.upsert\(name:\s*string\)
             |
-                CounterAgent\.get\(name:\s*string\)
+                CounterAgent\.upsert\(name:\s*string\)
                 .*
-                SampleAgent\.get\(
+                SampleAgent\.upsert\(
                     name:\s*string,\s*
                     region:\s*string,\s*
                     mode:\s*"fast"\s*\|\s*"safe",\s*
@@ -7713,36 +7713,36 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             // Hints on "enter"
             {
                 session.send_line_wait_eval_expect_str("Counter", "CounterAgent")?;
-                session.send_line_wait_eval_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+                session.send_line_wait_eval_expect_regex("CounterAgent.", "create .*getById .*upsert")?;
                 session.send_line_wait_eval_expect_regex(
-                    "CounterAgent.get",
-                    "\\(method\\) CounterAgent\\.get\\(name: string\\): Promise<.*CounterAgent>",
+                    "CounterAgent.upsert",
+                    "\\(method\\) CounterAgent\\.upsert\\(name: string\\): CounterAgent",
                 )?;
-                session.send_line_wait_eval_expect_str("CounterAgent.get(", "\"?\"")?;
+                session.send_line_wait_eval_expect_str("CounterAgent.upsert(", "\"?\"")?;
                 session.send_line_wait_eval_expect_regex(
-                    "CounterAgent.get(\"xyz\")",
+                    "CounterAgent.create(\"xyz\")",
                     "awaiting Promise<.*CounterAgent>",
                 )?;
 
                 session.send_line_wait_eval_expect_str(
-                    "(await CounterAgent.get(\"xyz\")).",
+                    "(await CounterAgent.create(\"xyz\")).",
                     "increment",
                 )?;
 
                 session.send_line_wait_eval_expect_str(
-                    "CounterAgent.get(\"xyz\").then(c => c.",
+                    "CounterAgent.create(\"xyz\").then(c => c.",
                     "increment",
                 )?;
 
                 session.send_line_wait_eval_expect_str("Sample", "SampleAgent")?;
 
                 session.send_line_wait_eval_expect_regex(
-                    "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                    "(await SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
                     "sampleMethod",
                 )?;
 
                 session.send_line_wait_eval_expect_regex(
-                    "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
+                    "SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
                     "sampleMethod",
                 )?;
             }
@@ -7754,7 +7754,7 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
 
                 session.send_tab_list_wait_completion_expect_regex(
                     "CounterAgent.",
-                    "get .* getPhantom ",
+                    "create .*getById .*upsert",
                 )?;
                 session.kill_line()?;
 
@@ -7763,21 +7763,21 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
 
                 session.send_tab_list_wait_completion_expect_regex(
                     "CounterAgent.get",
-                    "get .* getPhantom",
+                    "getById .*getConfiguration",
                 )?;
                 session.kill_line()?;
 
-                session.send_tab_wait_completion_expect_str("CounterAgent.get(", "\"?\"")?;
+                session.send_tab_wait_completion_expect_str("CounterAgent.upsert(", "\"?\"")?;
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "(await CounterAgent.get(\"xyz\")).",
+                    "(await CounterAgent.create(\"xyz\")).",
                     "increment",
                 )?;
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "CounterAgent.get(\"xyz\").then(x => x.",
+                    "CounterAgent.create(\"xyz\").then(x => x.",
                     "increment",
                 )?;
                 session.kill_line()?;
@@ -7786,13 +7786,13 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                    "(await SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
                     "sampleMethod",
                 )?;
                 session.kill_line()?;
 
                 session.send_tab_list_wait_completion_expect_regex(
-                    "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
+                    "SampleAgent.create(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
                     "sampleMethod",
                 )?;
                 session.kill_line()?;
@@ -7830,7 +7830,7 @@ async fn ts_repl_foreground_cli_terminal_control(_tracing: &Tracing) {
 
             session.set_expect_timeout(Some(Duration::from_secs(120)));
             session.send_line_and_expect_str(
-                r#"await CounterAgent.get("x").then(_ => "AGENT_CREATED_1")"#,
+                r#"await CounterAgent.create("x").then(_ => "AGENT_CREATED_1")"#,
                 "AGENT_CREATED_1",
             )?;
             session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
@@ -7844,7 +7844,7 @@ async fn ts_repl_foreground_cli_terminal_control(_tracing: &Tracing) {
             session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;
 
             session.send_line_and_expect_str(
-                r#"await CounterAgent.get("x").then(_ => "AGENT_CREATED_2")"#,
+                r#"await CounterAgent.create("x").then(_ => "AGENT_CREATED_2")"#,
                 "AGENT_CREATED_2",
             )?;
             session.expect_regex(r"golem-ts-repl\[[^\]]+\]\[[^\]]+\]>")?;

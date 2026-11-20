@@ -24,13 +24,11 @@ use attribution::PublicOplogAttributionResolver;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
-use invocation::{
-    agent_invocation_result_to_public, agent_invocation_to_public, enrich_golem_rpc_invoke,
-    enrich_golem_rpc_scheduled_invocation,
-};
+use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
-    check_oplog_cursor_query, find_component_revision_at, get_public_oplog_chunk,
-    get_public_oplog_entry, get_public_oplog_page, oplog_page_cursor, oplog_page_start,
+    PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
+    get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
+    get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
     search_public_oplog, search_public_oplog_page,
 };
 use snapshots::raw_snapshot_to_public;
@@ -43,7 +41,7 @@ use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
 use golem_common::base_model::caller::{ClaimVisibility, PublicCaller};
-use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentKey};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
@@ -77,11 +75,10 @@ use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, ExternalToolInvocationParameters,
-    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
-    HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
-    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
-    MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry, OplogIndex,
-    PluginInstallationDescription, ProcessOplogEntriesParameters,
+    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostResponse,
+    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OmittedOplogEntry, OplogEntry,
+    OplogIndex, PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
@@ -97,7 +94,7 @@ use golem_common::model::oplog::{
     SpanOutcome, SpanStarted,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
+    AgentInvocation, AgentInvocationPayload, AgentInvocationResult, OwnedAgentId,
 };
 use golem_common::schema::graph::reachable_defs;
 use golem_common::schema::{

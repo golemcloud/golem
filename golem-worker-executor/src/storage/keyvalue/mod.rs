@@ -26,7 +26,7 @@ use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::SafeDisplay;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentFingerprint, AgentId};
+use golem_common::model::{AgentFingerprint, OwnedAgentId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use std::fmt::{Debug, Display, Formatter};
@@ -950,7 +950,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
 pub enum KeyValueStorageNamespace {
     RunningWorkers,
     Worker {
-        agent_id: Arc<AgentId>,
+        owned_agent_id: OwnedAgentId,
     },
     /// Per-agent cached status. Unlike `Worker` (a flat key space), this namespace is stored as
     /// one structure-per-agent (a Redis hash) so the cached `AgentStatusRecord` can be split into
@@ -959,13 +959,13 @@ pub enum KeyValueStorageNamespace {
     /// part of the namespace so each agent gets its own isolated key space (enabling per-agent
     /// `keys`/`del_many`).
     AgentStatus {
-        agent_id: Arc<AgentId>,
+        owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
     /// Per-incarnation invocation result index. Uses the same hash-style layout and cache routing
     /// as [`Self::AgentStatus`], but has an independent fingerprint-scoped physical namespace.
     AgentInvocationResultIndex {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
     /// Per-agent *clean* cached status checkpoint. Same physical layout as [`Self::AgentStatus`]
@@ -976,23 +976,23 @@ pub enum KeyValueStorageNamespace {
     /// lets the status recompute fold forward from it instead of re-reading the whole oplog from
     /// index 1.
     AgentStatusCheckpoint {
-        agent_id: Arc<AgentId>,
+        owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
     /// Complete oplog-derived durable stream-session summaries and their coverage watermark.
     AgentDurableStreamSessionIndex {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
     /// Per-agent periodic snapshot rejection watermarks, with one hash field per agent
     /// incarnation fingerprint.
     AgentRejectedPeriodicSnapshots {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
     },
     /// Per-incarnation promise storage. The fingerprint is part of the namespace, so a promise ID
     /// of a deleted incarnation finds no entry in the namespace of the re-created agent.
     Promise {
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         fingerprint: AgentFingerprint,
     },
     Schedule,

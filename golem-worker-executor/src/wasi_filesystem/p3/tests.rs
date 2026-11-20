@@ -663,11 +663,10 @@ async fn staged_p2_p3_attribute_namespace_and_replay_routes_execute_through_agen
     use crate::services::linear_memory::LinearMemoryTracker;
     use crate::services::resource_limits::AtomicResourceEntry;
     use crate::services::resource_usage_metering::{ResourceUsageAccount, close_window};
+    use golem_common::model::OwnedAgentId;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::AgentMode;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::{AgentId, OwnedAgentId};
     use std::sync::Arc;
     use std::time::Instant;
     use uuid::Uuid;
@@ -681,7 +680,7 @@ async fn staged_p2_p3_attribute_namespace_and_replay_routes_execute_through_agen
     };
     let agent = OwnedAgentId::new(
         EnvironmentId::new(),
-        &AgentId::from_agent_name_string(ComponentId::new(), "staged-attributes").unwrap(),
+        &crate::test_agent_id("staged-attributes"),
     );
     let provisioning =
         SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone()).unwrap();

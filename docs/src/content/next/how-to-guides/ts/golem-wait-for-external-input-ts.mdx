@@ -51,11 +51,12 @@ const decision = JSON.parse(new TextDecoder().decode(bytes));
 
 ## PromiseId Structure
 
-A `PromiseId` contains an `agentId`, a `fingerprint`, and an `oplogIdx`. The `fingerprint` is a UUID (`{ highBits, lowBits }`) that identifies the agent incarnation that created the promise: a deleted and re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs of the deleted incarnation do not complete the promises of the new one. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. Convert the fingerprint to its string form with `uuidToString`:
+A `PromiseId` contains an `agentId`, a `fingerprint`, and an `oplogIdx`. The `fingerprint` is a UUID (`{ highBits, lowBits }`) that identifies the agent incarnation that created the promise: a deleted and re-created agent keeps its agent ID but gets a new fingerprint, so the promise IDs of the deleted incarnation do not complete the promises of the new one. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. Convert the agent ID and the fingerprint to their string forms with `uuidToString`:
 
 ```typescript
 import { uuidToString } from 'golem:core/types@2.0.0';
 
+const agentId = uuidToString(promiseId.agentId.uuid);
 const fingerprint = uuidToString(promiseId.fingerprint);
 const oplogIdx = promiseId.oplogIdx.toString();
 ```
@@ -63,7 +64,7 @@ const oplogIdx = promiseId.oplogIdx.toString();
 The external caller then sends:
 
 ```
-POST /v1/components/{component_id}/workers/{agent_name}/complete
+POST /v1/runtime/envs/{environment_id}/agents/{agent_id}/complete
 Content-Type: application/json
 
 {"oplogIdx": <oplog_idx>, "fingerprint": "<fingerprint_uuid>", "data": [<bytes>]}
@@ -93,7 +94,7 @@ export const WorkflowAgentImpl = WorkflowAgent.implement({
       // 1. Create a promise
       const promiseId = createPromise();
 
-      // 2. Pass promiseId.fingerprint and promiseId.oplogIdx to an external system.
+      // 2. Pass promiseId.agentId, promiseId.fingerprint and promiseId.oplogIdx to an external system.
       // Creation does not suspend the agent; awaiting can suspend it after the policy delay.
 
       // 3. Wait for external completion

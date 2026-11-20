@@ -1,5 +1,17 @@
 # Publishing packages
 
+Give the package a name and an exact version in the root `golem.yaml`:
+
+```yaml
+package:
+  name: my-package
+  version: 1.0.0
+```
+
+Use a SemVer version without build metadata. The name and version are part of
+the digest-covered package config. Repack any archive made before the package
+config included this identity.
+
 Build your application before you pack it. The package commands use the built
 WebAssembly components and the declarations for the selected manifest environment
 and preset. They do not deploy the application or log in to a server.
@@ -31,4 +43,19 @@ Anyone you give the tar file to can also read its contents. Do not put
 credentials in any of these inputs. Package defaults cannot name a secret or use
 a `$config` reference, even inside a record or list.
 
-Registry publishing and package installation are not available through these commands.
+## Install a file package
+
+From the application that will use the package, run `golem install ./my-package.tar`.
+Install verifies the archive without running its components. It records the file
+source, exact version, and digest in `packages:` in the root `golem.yaml` and
+in `golem.lock`. Commit both files. Put the archive inside the application to
+record a portable path, and make the archive available on other machines that
+need to build it.
+
+Build uses a verified archive from the per-user cache or reads the source on a
+cache miss. It unpacks under `golem-temp` and uses the publisher's metadata
+instead of running the installed components. Build and deploy do not change
+`golem.lock`. If a pin is missing or differs, run `golem install` with the
+intended archive to repair it.
+
+Registry publishing is not available through these commands.

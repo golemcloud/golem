@@ -93,17 +93,18 @@ agents:
 **CLI** — override at agent creation:
 
 ```shell
-golem agent new 'MyAgent("agent-1")' \
+golem agent create --keyed 'MyAgent("agent-1")' \
   --config appName="My App" \
   --config db.host=localhost \
   --config db.port=5432
 ```
 
-**RPC** — override via the generated helper:
+**RPC** — override when creating the agent with the generated `create`; `keyed = true` creates the keyed agent of the constructor parameters and fails with `AgentRpcError.Conflict` when it already exists (`upsert` takes no overrides):
 
 ```scala
-val client = MyAgentClient.getWithConfig(
+val client: Future[MyAgentRemote] = MyAgentClient.create(
   "agent-1",
+  keyed = true,
   appName = Some("OverriddenApp"),
   dbHost = Some("new-host"),
   dbPort = Some(9999)

@@ -16,12 +16,12 @@ use super::TestContext;
 use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
-use golem_client::api::{RegistryServiceClient, WorkerError};
+use golem_client::api::{AgentError, RegistryServiceClient};
 use golem_client::model::AgentSecretCreation;
 use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -76,7 +76,7 @@ async fn agent_reads_secret_created_from_default(
     })
     .await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -154,7 +154,7 @@ async fn agent_reads_secret_updated_from_default(
     })
     .await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -205,7 +205,7 @@ async fn agent_fails_on_missing_environment_secret_value(
 
     user.deploy_environment(env.id).await?;
 
-    let agent_id = agent_id!("SharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("SharedConfigAgent", "test-agent");
 
     let response = user
         .try_start_agent(&component.id, agent_id.clone())
@@ -213,7 +213,7 @@ async fn agent_fails_on_missing_environment_secret_value(
 
     assert_matches!(
         response,
-        Err(golem_client::Error::Item(WorkerError::Error400(_)))
+        Err(golem_client::Error::Item(AgentError::Error400(_)))
     );
 
     Ok(())
@@ -243,7 +243,7 @@ async fn agent_reads_secret_with_different_casing(
     })
     .await?;
 
-    let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalCasingSharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
@@ -296,7 +296,7 @@ async fn agent_reads_secret_with_mixed_case_path(
     })
     .await?;
 
-    let agent_id = agent_id!("LocalCasingSharedConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalCasingSharedConfigAgent", "test-agent");
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 

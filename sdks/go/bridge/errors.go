@@ -17,6 +17,7 @@ package bridge
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -45,6 +46,26 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
+// Is matches [ErrNotFound] to an answer of HTTP 404 and [ErrConflict] to an
+// answer of HTTP 409.
+func (e *Error) Is(target error) bool {
+	switch target {
+	case ErrNotFound:
+		return e.Status == http.StatusNotFound
+	case ErrConflict:
+		return e.Status == http.StatusConflict
+	}
+	return false
+}
+
+// ErrNotFound matches a call whose agent does not exist: an unknown ID, the ID
+// of an agent of another type, or an agent that no longer has the fingerprint
+// its client pinned.
+var ErrNotFound = errors.New("golem: agent not found")
+
+// ErrConflict matches a keyed [Create] whose agent already exists.
+var ErrConflict = errors.New("golem: agent already exists")
+
 // StreamItemError is an item of a stream argument that the call cannot send:
 // one of the wrong kind for its stream's lane, one over the protocol's size
 // limit, or one holding a stream that cannot be given away. It fails the call;
@@ -57,9 +78,11 @@ func (e *StreamItemError) Unwrap() error { return e.Err }
 
 // UnreachableError is a streaming call that could not reach the server within
 // its reconnect window: the server accepted neither the start nor a resume. Endpoint
-// is the WebSocket URL; Cause is the last failure, such as an *Error with the
-// HTTP status of a refused upgrade, a *SessionError with a retryable
-// rejection, a connection error, or ErrNotAnswered.
+// is the WebSocket URL, or the server's WebSocket URL when the environment
+// lookup never succeeded; Cause is the last failure, such as an *Error with the
+// HTTP status of a refused upgrade or of a failed environment lookup, a
+// *SessionError with a retryable rejection, a connection error, or
+// ErrNotAnswered.
 type UnreachableError struct {
 	Endpoint string
 	Window   time.Duration

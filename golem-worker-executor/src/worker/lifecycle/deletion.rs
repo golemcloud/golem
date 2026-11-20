@@ -88,6 +88,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// callers share the retained result; after failure, the next explicit call claims one retry.
     pub(crate) async fn start_deletion(
         self: &Arc<Self>,
+        expected_fingerprint: AgentFingerprint,
     ) -> Result<Option<DeleteOutcome>, WorkerExecutorError> {
         if let Some(hook) = Ctx::worker_deletion_hook(&self.extra_deps()) {
             hook.before_claim(&self.owned_agent_id).await;
@@ -99,6 +100,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // The lifecycle-to-cache lock order serializes the claim with ordinary retirement. The
         // cache lookup itself never takes a worker lifecycle lock.
         let mut instance = self.instance.lock().await;
+        if expected_fingerprint != self.get_initial_worker_metadata().fingerprint {
+            return Err(WorkerExecutorError::worker_not_found(
+                self.owned_agent_id.agent_id(),
+            ));
+        }
         if self.cache_retirement_in_progress() {
             return Ok(None);
         }
@@ -489,7 +495,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         let slot = (
                             record.attachment.producer_environment_id,
-                            record.attachment.producer.clone(),
+                            record.attachment.producer,
                             record.attachment.attachment_id,
                             record.attachment.stream_id,
                         );
@@ -510,7 +516,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         let slot = (
                             record.attachment.producer_environment_id,
-                            record.attachment.producer.clone(),
+                            record.attachment.producer,
                             record.attachment.attachment_id,
                             record.attachment.stream_id,
                         );
@@ -533,7 +539,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         consumer_environment_id: self.owned_agent_id.environment_id,
-                        consumer: self.owned_agent_id.agent_id.clone(),
+                        consumer: self.owned_agent_id.agent_id,
                         consumer_fingerprint: self.initial_worker_metadata.fingerprint,
                         deleting_at_millis: Timestamp::now_utc().to_millis(),
                     }),

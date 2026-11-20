@@ -30,13 +30,11 @@ var Ask = Relay.Method[RelayIn, string]("ask")
 func describe(p golem.Principal) string {
 	switch p := p.(type) {
 	case golem.AgentPrincipal:
-		return "agent:" + p.AgentID.AgentID
-	case golem.AccountPrincipal:
-		return "account"
-	case golem.UserPrincipal:
-		return "user:" + p.Pair.Subject
-	case golem.ToolPrincipal:
-		return "tool:" + p.ToolName
+		return "agent:" + p.AgentID.String()
+	case golem.GolemUserPrincipal:
+		return "golem-user"
+	case golem.OidcPrincipal:
+		return "oidc:" + p.Sub
 	case golem.AnonymousPrincipal:
 		return "anonymous"
 	default:
@@ -57,6 +55,6 @@ func init() {
 
 	relay := Relay.Implement(func(RelayID) *relayState { return &relayState{} })
 	relay.Handle(Ask, func(_ *golem.Context[relayState], in RelayIn) string {
-		return Whoami.MustCall(Ledger.Get(LedgerID{Name: in.Ledger}), WhoamiIn{})
+		return Whoami.MustCall(Ledger.Upsert(LedgerID{Name: in.Ledger}), WhoamiIn{})
 	})
 }

@@ -3,7 +3,7 @@
  * boundary inside the live Golem WASM runtime.
  *
  * `LookupCaller` (the driver agent) calls `Lookup` (the target agent)
- * over `Lookup.client.get(...)` and reports — as a plain `Schema.String`
+ * over `Lookup.client.upsert(...)` and reports — as a plain `Schema.String`
  * — what its typed-E channel actually delivered. The harness then
  * regex-matches the printed string. The typed-E surface MUST be
  * `typed:NotFoundError(<resource>)` (NOT `transport:...` — the legacy

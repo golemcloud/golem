@@ -91,8 +91,8 @@ recovery scenario must produce a snapshot after every successful invocation.
 - Automatic snapshot state is private JSON rather than public WIT. JSON-representable schemas such
   as `Schema.Record(Schema.String, ValueSchema)`, including nested arrays and optional fields, are
   supported even though open-ended records cannot be constructor or method schemas.
-- Constructor parameters remain the durable agent identity; include them in snapshot state only
-  if the methods also need them as mutable persisted data.
+- Restoration receives the constructor parameters from the host, as initialization does; include
+  them in snapshot state only if the methods also need them as mutable persisted data.
 - Preserve the snapshot definition and implementation snapshot strategy when changing methods in a
   later component revision.
 

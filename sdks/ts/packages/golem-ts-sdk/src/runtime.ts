@@ -45,11 +45,11 @@ import {
 import { AgentClassName } from './agentClassName';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { getRawSelfAgentId } from './host/hostapi';
+import { getSelfAgentId } from './host/hostapi';
 import { createCustomError, invalidInput, invalidMethod } from './internal/agentError';
 import type { InvocationContext } from './caller';
 import { assertNotLiveValue } from './liveValues';
-import { ParsedAgentId } from './agentId';
+import type { AgentId } from './agentId';
 import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
 import { MultipartPart } from './internal/multipart';
 import type { SnapshotTransport } from './internal/resolvedAgent';
@@ -94,7 +94,7 @@ import {
   CachePolicy,
 } from 'golem:agent/common@2.0.0';
 
-const reservedStateFields = new Set(['config', 'getId', 'getPhantomId']);
+const reservedStateFields = new Set(['config', 'getId']);
 
 /**
  * Resolve a method's `readOnly` option to the WIT `read-only-config`, or
@@ -775,7 +775,7 @@ function assembleAgentType(
 class ResolvedAgentImpl {
   constructor(
     private readonly reg: AgentRuntime,
-    /** The handler `this`: state fields + `getId`/`getPhantomId` helpers. */
+    /** The handler `this`: state fields and the `getId` helper. */
     private readonly instance: Record<string, unknown>,
     private readonly methods: Record<string, (...args: unknown[]) => unknown>,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
@@ -791,8 +791,8 @@ class ResolvedAgentImpl {
     return this.reg.agentType;
   }
 
-  getId(): ParsedAgentId {
-    return getRawSelfAgentId();
+  getId(): AgentId {
+    return getSelfAgentId();
   }
 
   async invoke(
@@ -985,8 +985,7 @@ export function registerAgentInitiator(
         tag: 'ok';
         val: {
           idRecord: Record<string, unknown>;
-          agentId: ParsedAgentId;
-          phantomId: ReturnType<ParsedAgentId['parsedWire']>[2];
+          agentId: AgentId;
           config: ReturnType<typeof buildConfigAccessor>;
         };
       } => {
@@ -1006,16 +1005,7 @@ export function registerAgentInitiator(
       };
     }
 
-    const agentId = getRawSelfAgentId();
-    if (!agentId.value.startsWith(reg.name)) {
-      return {
-        tag: 'err',
-        val: createCustomError(
-          `Expected the container name to start with "${reg.name}", got "${agentId.value}"`,
-        ),
-      };
-    }
-    const [, , phantomId] = agentId.parsedWire();
+    const agentId = getSelfAgentId();
 
     // Fresh-reading config accessor; shared by `init` (via context) and the
     // handler `this`. Each getter re-fetches on access (config may change
@@ -1024,7 +1014,7 @@ export function registerAgentInitiator(
 
     return {
       tag: 'ok',
-      val: { idRecord, agentId, phantomId, config },
+      val: { idRecord, agentId, config },
     };
   };
 
@@ -1042,8 +1032,7 @@ export function registerAgentInitiator(
         );
       }
     }
-    instance.getId = getRawSelfAgentId;
-    instance.getPhantomId = () => getRawSelfAgentId().parsedWire()[2];
+    instance.getId = getSelfAgentId;
     instance.config = config;
     return new ResolvedAgentImpl(
       reg,
@@ -1057,20 +1046,17 @@ export function registerAgentInitiator(
     async initiate(constructorInput: SchemaValueTree, ctx: InvocationContext) {
       const resolved = resolveContext(constructorInput);
       if (resolved.tag === 'err') return resolved;
-      const { idRecord, phantomId, config } = resolved.val;
+      const { idRecord, config } = resolved.val;
 
       // `init` may be synchronous or async (return a Promise); awaiting a plain
       // value is a no-op, so both forms work. The guest `initialize`/load-snapshot
       // paths await the initiate result.
       let state: object;
       try {
-        state = await impl.init(
-          withCaller(ctx, {
-            id: idRecord as never,
-            phantomId,
-            config,
-          }),
-        );
+        state = await impl.init(withCaller(ctx, {
+          id: idRecord as never,
+          config,
+        }));
         return {
           tag: 'ok',
           val: complete(state, resolved.val) as never,
@@ -1085,7 +1071,7 @@ export function registerAgentInitiator(
     async loadSnapshot(constructorInput, ctx, bytes, mimeType, databases, parts = new Map()) {
       const resolved = resolveContext(constructorInput);
       if (resolved.tag === 'err') return resolved;
-      const { idRecord, phantomId, config } = resolved.val;
+      const { idRecord, config } = resolved.val;
       let state: object;
       try {
         if (reg.multipartSnapshotSchema) {
@@ -1112,7 +1098,6 @@ export function registerAgentInitiator(
             withCaller(ctx, {
               id: idRecord as never,
               agentId: resolved.val.agentId,
-              phantomId,
               config,
             }),
           );
@@ -1128,15 +1113,11 @@ export function registerAgentInitiator(
               AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
             >;
             const load = snapshot.load;
-            state = await load(
-              bytes,
-              withCaller(ctx, {
-                id: idRecord as never,
-                agentId: resolved.val.agentId,
-                phantomId,
-                config,
-              }),
-            );
+            state = await load(bytes, withCaller(ctx, {
+              id: idRecord as never,
+              agentId: resolved.val.agentId,
+              config,
+            }));
           } else if (reg.snapshotStateSchema) {
             state = await validateSnapshotState(
               reg.snapshotStateSchema,

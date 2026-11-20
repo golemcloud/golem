@@ -121,14 +121,14 @@ pub(super) async fn pending_promise(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("GolemHostApi", "promise-seed"))
+        .start_agent(&component.id, agent_key!("GolemHostApi", "promise-seed"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -141,21 +141,21 @@ pub(super) async fn pending_promise(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("GolemHostApi", "monthly-promise")
+        agent_key!("GolemHostApi", "monthly-promise")
     } else {
-        agent_id!("EphemeralPromise", "monthly-promise")
+        agent_key!("EphemeralPromise", "monthly-promise")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, METHOD))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        METHOD,
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -164,6 +164,8 @@ pub(super) async fn pending_promise(
         None,
         &InvocationContextStack::fresh(),
         callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(&executor, component.id, &name, durable, &key, METHOD),
     )
     .await?;
     let stored_key = executor.external_invocation_key(&id, &key, METHOD).await?;
@@ -183,7 +185,7 @@ pub(super) async fn pending_promise(
         let original = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if let Some(record) = history::promise_record(&entries, &stored_key, &id, false, 0)? {
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     info!(?entries, ?record, "Committed guest promise creation and open get-result Start under one unfinished method");
@@ -198,10 +200,13 @@ pub(super) async fn pending_promise(
         ensure!(worker.is_loaded().await);
         ensure!(!invocation.is_finished());
         let promises = worker.all().promise_service();
-        let pending = promises.poll(original.promise.clone()).await?;
+        let pending = promises.poll(context.default_environment_id, original.promise.clone()).await?;
         ensure!(!pending.is_ready().await && pending.get().await.is_none());
         if !durable {
-            ensure!(physical != name && original.promise.agent_id == id);
+            ensure!(
+                id != crate::agent::keyed_agent_id(component.environment_id, &name).agent_id
+                    && original.promise.agent_id == id
+            );
         }
         let stop_started = std::time::Instant::now();
         // No promise completion is supplied until the accepted quota stop physically retires.
@@ -235,7 +240,7 @@ pub(super) async fn pending_promise(
                 "Typed quota stop physically unloaded promise Worker while service result stayed pending");
             Ok::<_, anyhow::Error>(())
         }).await.context("quota stop and physical settlement exceeded 8s bound")??;
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(history::promise_record(&stopped, &stored_key, &id, false, 0)? == Some(original.clone()));
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
@@ -259,7 +264,7 @@ pub(super) async fn pending_promise(
             }
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await??.is_err());
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(5)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(5)).await?;
         flush_stopped_usage(&limits, &registry, resource).await?;
         let settled = registry.applied_updates();
         check_accounting(&settled, resource, durable, admitted_revision + u64::from(resource == Resource::Storage), policy.period)?;
@@ -281,7 +286,7 @@ pub(super) async fn pending_promise(
         drop(pending);
         ensure!(retired_handle.upgrade().is_none(), "unloaded guest must release its resident promise handle");
         let pending_reads = storage_calls.calls("get-completed");
-        let pending = promises.poll(original.promise.clone()).await?;
+        let pending = promises.poll(context.default_environment_id, original.promise.clone()).await?;
         ensure!(!pending.is_ready().await && pending.get().await.is_none(), "re-hydrated service state must still be pending");
         ensure!(storage_calls.calls("get-completed") == pending_reads + 1, "cold promise poll must reach the observed dependency");
         let mut grant = policy;
@@ -293,11 +298,11 @@ pub(super) async fn pending_promise(
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
         if durable {
             ensure!(!pending.is_ready().await);
-            ensure!(promises.complete(original.promise.clone(), PAYLOAD.to_vec()).await?);
+            ensure!(promises.complete(context.default_environment_id, original.promise.clone(), PAYLOAD.to_vec()).await?);
             ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
             let resumed = tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("promise completion must resume the original invocation after the grant")???;
             ensure!(resumed.into_typed::<Vec<u8>>()? == PAYLOAD);
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(history::promise_record(&recovered, &stored_key, &id, true, 1)? == Some(original.clone()));
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             ensure!(recovered.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))).count() == 1);
@@ -321,7 +326,7 @@ pub(super) async fn pending_promise(
             let fresh_key = IdempotencyKey::fresh();
             let healthy = tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, "get_retry_policy_count", data_value!())).await??;
             let _ = healthy.into_typed::<u64>()?;
-            let replayed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let replayed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(history::promise_record(&replayed, &stored_key, &id, true, 1)? == Some(original.clone()));
             let stored_fresh_key = executor
                 .external_invocation_key(&id, &fresh_key, "get_retry_policy_count")
@@ -333,10 +338,10 @@ pub(super) async fn pending_promise(
             ensure!(calls_after_replay == calls_before_replay, "completed promise replay touched storage: {labels:?}: {calls_before_replay:?} -> {calls_after_replay:?}");
             info!(?resource, ?labels, ?calls_before_replay, ?calls_after_replay, "Completed promise history reconstructed without create, result-read or completion storage calls");
         } else {
-            ensure!(promises.complete(original.promise.clone(), PAYLOAD.to_vec()).await?);
+            ensure!(promises.complete(context.default_environment_id, original.promise.clone(), PAYLOAD.to_vec()).await?);
             ensure!(pending.is_ready().await && pending.get().await == Some(PAYLOAD.to_vec()));
             ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!())).await?.is_err());
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(history::promise_record(&failed, &stored_key, &id, false, 0)? == Some(original.clone()));
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
@@ -346,7 +351,7 @@ pub(super) async fn pending_promise(
         Ok::<_, anyhow::Error>(())
     }.await;
     if result.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&owned)).await;
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
             worker.join_accepted_stops_for_test(),

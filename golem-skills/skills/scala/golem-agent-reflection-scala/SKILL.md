@@ -13,9 +13,9 @@ Golem exposes four composable client approaches:
 - **Fully dynamic clients** use `DynamicAgentClient` or `DynamicToolClient` to transport caller-packed schema-native values without retaining a schema authority.
 
 The last three are reflection approaches. They are composable: discovery can
-select schemas and identities for a later fully dynamic call, and a durable
-`ParsedAgentId` can be rebound through a method-only, discovered, or fully
-dynamic client.
+select schemas and agent IDs for a later fully dynamic call, and the
+`golem.AgentId` of an existing durable agent can be rebound through a
+method-only, discovered, or fully dynamic client with `getById`.
 
 ## Discover and inspect schemas
 
@@ -31,7 +31,7 @@ val method = target.flatMap(
 ```
 
 Agent type names are unique in an environment. An `AgentType` exposes its
-current component ID, lifecycle mode, constructor
+lifecycle mode, constructor
 `SchemaRef`, and method `SchemaRef`s. `SchemaRef` validates `SchemaValue`, packs
 and unpacks canonical `zio.blocks.schema.json.Json`, and renders JSON Schema.
 An omitted option record field and an explicit `null` both decode as `None`;
@@ -63,17 +63,22 @@ val invocation = client.method("add").flatMap { add =>
 For explicit reflected packing, call `method.definition.input.packJson`, then
 `invokeValue`; after awaiting, call the output `SchemaRef.unpackJson`.
 
-For fully dynamic values, bind `agentId.dynamicClient` and manually construct the
-positional record:
+For fully dynamic values, get a `DynamicAgentClient` with
+`DynamicAgentClient.getById(agentId)` (the host resolves the agent type from the
+ID) or `DynamicAgentClient.upsert(typeName, constructorValue)` (the keyed agent),
+and manually construct the positional record:
 
 ```scala
+import golem.reflection.DynamicAgentClient
 import golem.schema.SchemaValue
 
-val call = agentId.dynamicClient.map(
-  _.method("add").invokeValue(
-    SchemaValue.RecordValue(List(SchemaValue.U32Value(5)))
-  )
-)
+val call = DynamicAgentClient.getById(agentId).flatMap {
+  case Left(error)   => Future.successful(Left(error))
+  case Right(client) =>
+    client.method("add").invokeValue(
+      SchemaValue.RecordValue(List(SchemaValue.U32Value(5)))
+    )
+}
 ```
 
 Fully dynamic clients never discover or validate schemas. Constructor and method
@@ -132,7 +137,7 @@ This non-streaming recipe owns no stream handles. For dynamic streaming calls,
 drain or close transferred streams and cancel a started invocation when it is
 abandoned.
 
-Reflected factories accept optional creation-time overrides: `get(json, config)` and `getValue(value, overrides)` use canonical JSON entries or schema-native `ConfigOverride` entries, respectively. The JSON entries are `ReflectedConfigJson(path, value)`. The reflected type checks declared paths, secret fields, and values before constructing RPC. `AgentType.bind(id, overrides)` accepts validated native entries for an existing identity.
+The reflected factory is `agentType.client`. `upsert(json)` and `upsertValue(value)` return a client of the keyed agent of the constructor parameters, which the host creates when it is missing. `create(json, keyed, config, env)` and `createValue(value, keyed, overrides, env)` create a durable agent and return a `Future`: without `keyed` the new agent has no key and a new agent ID; with `keyed = true` it is the keyed agent, and an existing one gives `GolemReflectError.Remote(AgentRpcError.Conflict(...))`. Their creation-time overrides are canonical JSON entries (`ReflectedConfigJson(path, value)`) or schema-native `ConfigOverride` entries, respectively; the reflected type checks declared paths, secret fields, and values before constructing RPC. `getById(agentId)` (also on `AgentType`) returns a `Future` of a client of the existing agent; an unknown ID, or the ID of an agent of another type, gives `AgentRpcError.NotFound`. Every client has `agentId(): Future[Either[GolemReflectError, AgentId]]`.
 
 All reflected and direct methods support awaited, trigger, and scheduled calls
 through `invokeValue`, `triggerValue`, and `scheduleValue`. Reflected live
@@ -146,8 +151,8 @@ stream.
 not discover remote schemas. `InputRecordCodec` and `OutputCodec` are the
 caller's schema authority.
 
-A method-only client definition contains methods only. It binds an existing durable
-`ParsedAgentId`, taking the name and constructor value from that identity:
+A method-only client definition contains methods only. It binds the existing durable
+agent with a `golem.AgentId`, of the agent type that the ID names:
 
 ```scala
 import golem.reflection._
@@ -161,8 +166,11 @@ val add = methods.method(
   OutputCodec.single[Int]
 )
 
-val counter = methods.bind(existingId)
-val result = counter.map(_.method(add).invoke(5))
+val counter = methods.getById(existingId) // Future[Either[GolemReflectError, CallerCodecAgentClient]]
+val result = counter.flatMap {
+  case Left(error)   => Future.successful(Left(error))
+  case Right(client) => client.method(add).invoke(5)
+}
 ```
 
 A full client adds the declared name, lifecycle mode, constructor codec,
@@ -177,40 +185,47 @@ val counter = AgentClientDefinition.full(
   constructor = InputRecordCodec.single[String]("name")
 )
 
-val ordinary = counter.client.get("main")
-val known = counter.client.getPhantom("main", phantomId)
-val fresh = counter.client.newPhantom("main")
-val id = counter.agentId("main", Some(phantomId))
-val bound = counter.bind(existingId)
+val keyed = counter.client.upsert("main")                 // the keyed agent
+val fresh = counter.client.create("main")                 // Future: a new agent without a key
+val keyedNew = counter.client.create("main", keyed = true) // Future: fails with a conflict when it exists
+val bound = counter.client.getById(existingId)            // Future: the existing agent
+val id = fresh.flatMap {
+  case Left(error)   => Future.successful(Left(error))
+  case Right(client) => client.agentId()
+}
 ```
 
-Fully defined factories also accept a typed config value as a second argument when the definition declares an `AgentConfigCodec`. Fully defined clients use `bindWithConfig(existingId, config)` for typed overrides; method-only clients use `bindWithOverrides(existingId, entries)` with raw `ConfigOverride` entries because they have no local declarations to validate against.
+When the definition declares an `AgentConfigCodec`, `create(input, config, keyed, env)` also takes a typed config value. `upsert` and `getById` take no overrides.
 
-Overrides are optional: component defaults can satisfy required local declarations. The host checks the effective config when it creates the worker and supplies secrets. An existing durable worker retains its persisted initial config, so passing overrides while binding its ID does not reconfigure it.
+Overrides are optional: component defaults can satisfy required local declarations. The host checks the effective config when it creates the agent and supplies secrets.
 
-Full durable binding checks both the declared name and the constructor value
-against the declared constructor codec before creating transport. Fully defined
-ephemeral definitions support logical-new and known-phantom factories and
-have no `CanBindAgentClient` capability, so generic binding is rejected at
+A full definition's `getById` binds the declared agent type; an ID of an agent of
+another type gives `AgentRpcError.NotFound`. Fully defined ephemeral definitions
+support only `upsert`, where every invocation runs on a new one-shot instance;
+`create` and `getById` fail with `GolemReflectError.Identity`, and they have no
+`CanBindAgentClient` capability, so `AgentClientDefinition.getById` is rejected at
 compile time. `AgentConfigCodec[C]` maps a typed config carrier to
 the existing typed `ConfigOverride` values; secret fields should not be exposed
 by that codec.
 
 ## Identity and lifecycle boundaries
 
-- Use a supplied `ParsedAgentId` directly or inspect it with `parts`.
-- Use `ParsedAgentId.create` for fully dynamic durable, known-phantom, or newly
-  generated phantom identities.
-- Discovered, normal RPC, and full caller-defined factories provide `get`
-  (durable only), known `getPhantom`, and `newPhantom`.
-- Use `DynamicAgentClient.ephemeral(typeName, constructorValue)`
-  for a raw ephemeral invocation address.
+- A `golem.AgentId` is an opaque UUID that Golem issues; `AgentId.parse(text)`
+  reads its text form. It does not hold the agent type or the constructor
+  parameters, so it cannot be computed offline: ask a client with `agentId()`,
+  or read it from agent metadata.
+- `Reflection.getAgentTypeFor(agentId)` returns the deployed agent type that the
+  type tag of an agent ID names.
+- Discovered, normal RPC, and full caller-defined factories provide `upsert`,
+  and for durable types also `create` and `getById`.
+- Use `DynamicAgentClient.upsert(typeName, constructorValue)` for a raw keyed
+  address; for an ephemeral type every invocation runs on a new one-shot instance.
 
 Method-only and fully dynamic agent clients do not expose lifecycle factories.
 Packed streams and owned handles still follow the Scala SDK's transfer and
 cleanup rules.
 
-An ephemeral address has no guaranteed reusable pre-invocation identity. The
-final identity comes from invocation metadata and must not be treated as a
-resumable durable identity or rebound. Durable identities from invocation
-metadata may be discovered later and rebound through a reflected client.
+An ephemeral address has no reusable agent ID. The agent ID of the one-shot
+instance that ran an invocation comes from invocation metadata and must not be
+treated as a resumable durable agent or rebound. Durable agent IDs from
+invocation metadata may be rebound later with `getById`.

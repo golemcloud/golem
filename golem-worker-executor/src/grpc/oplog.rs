@@ -17,8 +17,9 @@ use super::{
     HasComponentService, HasOplogService, HasWorkerService, OplogIndex, OwnedSemaphorePermit,
     PublicOplogPageLimits, SearchOplogRequest, SearchOplogResponse, Status, Stream, UsesAllDeps,
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, check_oplog_cursor_query,
-    extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page, golem, min,
-    oplog_page_cursor, oplog_page_start, search_public_oplog_page,
+    extract_owned_agent_id, get_public_oplog_entry, get_public_oplog_page,
+    get_public_oplog_range_page, golem, min, oplog_page_cursor, oplog_page_start,
+    oplog_range_allowance, search_public_oplog_page,
 };
 use golem_common::base_model::caller::ClaimVisibility;
 
@@ -73,6 +74,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let limits = self.oplog_query_limits(request.count)?;
+        let claims = ClaimVisibility::from_protobuf(request.claims)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if let Some(to) = request.to_oplog_index {
+            let allowance = oplog_range_allowance(
+                request.scan_allowance.map(Into::into),
+                self.services.config().limits.scan_budget,
+            );
+            let page = get_public_oplog_range_page(
+                component_service,
+                self.oplog_service(),
+                &owned_agent_id,
+                agent_mode,
+                identity.create_parameters().component_id,
+                identity.create_parameters().owner_kind,
+                agent_type_name.as_ref(),
+                cursor,
+                OplogIndex::from_u64(request.from_oplog_index),
+                OplogIndex::from_u64(to),
+                limits,
+                allowance,
+                claims,
+            )
+            .await?;
+            return Ok(GetOplogResponse {
+                result: Some(
+                    golem::workerexecutor::v1::get_oplog_response::Result::Success(
+                        golem::workerexecutor::v1::GetOplogSuccessResponse {
+                            entries: page.entries,
+                            next: page.next.map(Into::into),
+                            first_index_in_chunk: page.first_index_in_chunk.into(),
+                            last_index: page.last_index.into(),
+                            scan: Some(page.scan.into()),
+                        },
+                    ),
+                ),
+            });
+        }
         let (start, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
@@ -92,8 +130,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             start_component_revision,
             start,
             limits,
-            ClaimVisibility::from_protobuf(request.claims)
-                .map_err(WorkerExecutorError::invalid_request)?,
+            claims,
         )
         .await
         .map_err(WorkerExecutorError::unknown)?;
@@ -114,6 +151,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         next,
                         first_index_in_chunk: chunk.first_index_in_chunk.into(),
                         last_index: chunk.last_index.into(),
+                        scan: None,
                     },
                 ),
             ),

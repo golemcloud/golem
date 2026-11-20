@@ -283,7 +283,7 @@ async fn share_with(
 async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
-    use golem_client::api::{WorkerClient, WorkerError};
+    use golem_client::api::{AgentClient, WorkerClient, WorkerError};
     use golem_common::model::caller::{Pair, PublicPrincipal};
     use golem_common::model::oplog::{OplogInclude, OplogIndex};
     use golem_test_framework::config::TestDependencies;
@@ -304,10 +304,29 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
-    let agent_id = golem_common::model::AgentId {
-        component_id: agent.component_id,
-        agent_id: "PrincipalAgent(\"test-agent\")".to_string(),
-    };
+    // The agent that the route created, found by its key.
+    let key = golem_common::agent_key!("PrincipalAgent", "test-agent");
+    let reference = agent
+        .user
+        .deps
+        .worker_service()
+        .agent_http_client(&agent.user.token)
+        .await
+        .lookup_agent(
+            &agent.env_id.0,
+            "PrincipalAgent",
+            &golem_client::model::AgentKeyRequest {
+                parameters: golem_common::schema::ExternalSchemaValue::try_from(
+                    key.parameters.value().clone(),
+                )
+                .map_err(anyhow::Error::msg)?,
+            },
+        )
+        .await?;
+    let agent_id = golem_common::model::OwnedAgentId::new(
+        agent.env_id,
+        &golem_common::model::AgentId(reference.agent_id),
+    );
     let bob = Pair::new("http://test-idp.com", "bob");
 
     // The owner reads the oplog: bob in both roles, without claims.
@@ -330,7 +349,11 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     assert!(!callers.is_empty());
     for caller in &callers {
         for role in [&caller.original, &caller.immediate] {
-            assert_eq!(role.claims().unwrap().to_value().unwrap()["sub"], "bob", "{caller:?}");
+            assert_eq!(
+                role.claims().unwrap().to_value().unwrap()["sub"],
+                "bob",
+                "{caller:?}"
+            );
         }
     }
 
@@ -343,10 +366,11 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     let mut url = owner_client.context.base_url.clone();
     url.path_segments_mut().unwrap().extend([
         "v1",
-        "components",
-        &agent.component_id.0.to_string(),
-        "workers",
-        &agent_id.agent_id,
+        "runtime",
+        "envs",
+        &agent.env_id.0.to_string(),
+        "agents",
+        &agent_id.agent_id.to_string(),
         "oplog",
     ]);
     url.query_pairs_mut()
@@ -379,13 +403,17 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
         .await;
     let result = viewer_client
         .get_oplog(
-            &agent.component_id.0,
-            &agent_id.agent_id,
+            &agent.env_id.0,
+            &agent_id.agent_id.0,
             Some(1),
             100,
             None,
             None,
             Some(&OplogInclude::Claims),
+            None,
+            None,
+            None,
+            None,
         )
         .await;
     assert!(
@@ -419,13 +447,17 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
         .await;
     let page = reader_client
         .get_oplog(
-            &agent.component_id.0,
-            &agent_id.agent_id,
+            &agent.env_id.0,
+            &agent_id.agent_id.0,
             Some(1),
             100,
             None,
             None,
             Some(&OplogInclude::Claims),
+            None,
+            None,
+            None,
+            None,
         )
         .await?;
     let entries = page

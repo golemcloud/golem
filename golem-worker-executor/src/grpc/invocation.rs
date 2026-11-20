@@ -13,15 +13,17 @@
 // limitations under the License.
 
 use super::{
-    AgentMode, AgentStatusRecord, Arc, HasActiveAgents, HasAll, HasComponentService, Instrument,
+    AgentMode, AgentStatusRecord, Arc, HasActiveAgents, HasAll, Instrument,
     InvocationFreshnessDisposition, OwnedAgentId, ParsedAgentKey, UsesAllDeps, Worker, WorkerCtx,
     WorkerExecutorImpl, info_span,
 };
 use crate::worker::CreateIntent;
-use golem_common::base_model::{AgentId, IdempotencyKey};
+use crate::worker::target::ResolvedTarget;
+use golem_common::base_model::{AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
 use golem_common::model::AgentFingerprint;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTarget};
 use golem_common::model::caller::Caller;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -30,6 +32,15 @@ use tracing::warn;
 pub trait CanStartWorker {
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn agent_target(&self) -> Result<AgentTarget, WorkerExecutorError>;
+    /// The type and constructor parameters of an agent that an ID target creates when it is
+    /// missing.
+    fn constructor(&self) -> Result<Option<ParsedAgentKey>, WorkerExecutorError> {
+        Ok(None)
+    }
+    /// The component that implements the agent type, for a request that may create.
+    fn component_id(&self) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        Ok(None)
+    }
     fn env(&self) -> Option<Vec<(String, String)>>;
     fn config(&self) -> Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>;
     fn parent(&self) -> Option<AgentId>;
@@ -45,6 +56,19 @@ pub trait CanStartWorker {
 
 trait ProtobufInvocationDetails {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId>;
+    fn proto_agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
+        let agent_id = (*self.proto_agent_id())
+            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
+        AgentId::try_from(agent_id)
+            .map(AgentTarget::Id)
+            .map_err(WorkerExecutorError::invalid_request)
+    }
+    fn proto_constructor(&self) -> Result<Option<ParsedAgentKey>, WorkerExecutorError> {
+        Ok(None)
+    }
+    fn proto_component_id(&self) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        Ok(None)
+    }
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId>;
     fn proto_invocation_context(
         &self,
@@ -73,16 +97,15 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
     }
 
     fn agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
-        let agent_id = self
-            .proto_agent_id()
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
+        self.proto_agent_target()
+    }
 
-        AgentId::validate_length(&agent_id.name).map_err(WorkerExecutorError::invalid_request)?;
+    fn constructor(&self) -> Result<Option<ParsedAgentKey>, WorkerExecutorError> {
+        self.proto_constructor()
+    }
 
-        AgentId::try_from(agent_id)
-            .map(AgentTarget::Current)
-            .map_err(WorkerExecutorError::invalid_request)
+    fn component_id(&self) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        self.proto_component_id()
     }
 
     fn env(&self) -> Option<Vec<(String, String)>> {
@@ -107,7 +130,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         self.proto_invocation_context().as_ref().and_then(|ctx| {
             ctx.parent
                 .as_ref()
-                .and_then(|agent_id| agent_id.clone().try_into().ok())
+                .and_then(|agent_id| (*agent_id).try_into().ok())
         })
     }
 
@@ -168,7 +191,21 @@ impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest
 {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
-        &self.agent_id
+        &None
+    }
+
+    fn proto_agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
+        self.target
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("target not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
+    }
+
+    fn proto_component_id(&self) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        self.component_id
+            .map(|id| id.try_into().map_err(WorkerExecutorError::invalid_request))
+            .transpose()
     }
 
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
@@ -188,7 +225,28 @@ impl ProtobufInvocationDetails
 
 impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::InvocationStart {
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
-        &self.agent_id
+        &None
+    }
+
+    fn proto_agent_target(&self) -> Result<AgentTarget, WorkerExecutorError> {
+        self.target
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("target not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
+    }
+
+    fn proto_constructor(&self) -> Result<Option<ParsedAgentKey>, WorkerExecutorError> {
+        self.constructor
+            .clone()
+            .map(|key| ParsedAgentKey::try_from(key).map_err(WorkerExecutorError::invalid_request))
+            .transpose()
+    }
+
+    fn proto_component_id(&self) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        self.component_id
+            .map(|id| id.try_into().map_err(WorkerExecutorError::invalid_request))
+            .transpose()
     }
 
     fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
@@ -351,17 +409,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // The caller is decoded first, so a missing caller always gives the same error.
         request.caller()?;
         async {
-            let target = request.agent_target()?;
-            let AgentTarget::Current(agent_id) = &target;
-            let reserved = golem_common::model::agent::OwnerKind::is_reserved_instance_name(
-                &agent_id.agent_id,
-            );
-            let owned_agent_id = if reserved {
-                OwnedAgentId::new(request.environment_id()?, agent_id)
-            } else {
-                self.canonicalize_agent_target(request.environment_id()?, &target)
-                    .await?
-            };
+            let resolved = self.resolve_request_target(request).await?;
+            let owned_agent_id = resolved.owned_agent_id.clone();
+            let reserved = owned_agent_id.agent_id.type_tag() == RESERVED_TYPE_TAG;
             self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
             // The status comes from `get_latest_metadata`, which stays safe when a delete has
             // already stopped the resident worker's actors, and which rejects a failed agent
@@ -376,6 +426,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .ok_or_else(|| {
                         WorkerExecutorError::worker_not_found(owned_agent_id.agent_id())
                     })?;
+                if let Some(owner) = &resolved.new_owner {
+                    owner.ensure_owns_key(
+                        owned_agent_id.agent_id,
+                        metadata.agent_mode,
+                        metadata.canonical_key.as_deref(),
+                    )?;
+                }
                 if metadata.agent_mode != AgentMode::Ephemeral {
                     self.ensure_not_failed(
                         &owned_agent_id,
@@ -389,8 +446,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Worker::get_exact_existing_suspended(self, &owned_agent_id, request.caller()?)
                     .await?;
             if !reserved {
-                Self::not_found_if_deleting(&worker, worker.ensure_inspection_may_start().await)
-                    .await?;
+                Self::not_found_if_deleting(
+                    &worker,
+                    worker
+                        .ensure_inspection_may_start(resolved.new_owner.as_ref())
+                        .await,
+                )
+                .await?;
             }
             Self::not_found_if_deleting(&worker, Worker::start_if_needed(worker.clone()).await)
                 .await?;
@@ -405,6 +467,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn get_or_create_pending_for_lookup<Req: CanStartWorker>(
         &self,
         request: &Req,
+        resolved: &ResolvedTarget,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<
         Option<(
@@ -413,61 +476,26 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )>,
         WorkerExecutorError,
     > {
-        // The caller is decoded first, so a missing caller always gives the same error.
-        request.caller()?;
-        let target = request.agent_target()?;
-        let environment_id = request.environment_id()?;
-        let AgentTarget::Current(agent_id) = &target;
-        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
-            self.ensure_worker_belongs_to_this_executor(agent_id)?;
-            let owner = OwnedAgentId::new(environment_id, agent_id);
-            if expected_fingerprint.is_none()
-                && Worker::<Ctx>::get_latest_metadata(self, &owner)
-                    .await?
-                    .is_none()
-            {
-                return Ok(None);
-            }
-            return Worker::get_exact_existing_suspended_for_response(
-                self,
-                &owner,
-                request.caller()?,
-                expected_fingerprint,
-            )
-            .await
-            .map(Some);
-        }
-
-        let owned_agent_id = self
-            .canonicalize_agent_target(environment_id, &target)
-            .await?;
+        let owned_agent_id = resolved.owned_agent_id.clone();
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         if expected_fingerprint.is_some() {
-            return Worker::get_exact_existing_suspended_for_response(
+            let response = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
                 request.caller()?,
                 expected_fingerprint,
             )
-            .await
-            .map(Some);
+            .await?;
+            response.0.ensure_owns_key(resolved.new_owner.as_ref())?;
+            return Ok(Some(response));
         }
 
-        let component = self
-            .component_service()
-            .get_metadata(agent_id.component_id, None)
-            .await?;
-        let is_ephemeral =
-            ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                .ok()
-                .and_then(|parsed_agent_id| {
-                    component
-                        .metadata
-                        .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
-                })
-                .is_some_and(|agent_type| agent_type.mode == AgentMode::Ephemeral);
-        if is_ephemeral
+        // A lookup creates only a keyed durable agent. Any other missing agent has no result
+        // to look up.
+        let creates = resolved.new_owner.as_ref().is_some_and(|owner| owner.keyed)
+            && resolved.agent_mode == Some(AgentMode::Durable);
+        if !creates
             && Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
                 .await?
                 .is_none()
@@ -492,7 +520,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.caller()?,
             InvocationFreshnessDisposition::MayExist,
-            CreateIntent::UNKEYED_INVOCATION,
+            if creates {
+                resolved.invocation_intent(None)
+            } else {
+                CreateIntent::Existing
+            },
         )
         .await
         .map(Some)
@@ -503,6 +535,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn get_or_create_pending_with_freshness<Req: CanStartWorker>(
         &self,
         request: &Req,
+        resolved: &ResolvedTarget,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<
@@ -512,14 +545,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         ),
         WorkerExecutorError,
     > {
-        // The caller is decoded first, so a missing caller always gives the same error.
-        request.caller()?;
-        let target = request.agent_target()?;
-        let environment_id = request.environment_id()?;
-
-        let owned_agent_id = self
-            .canonicalize_agent_target(environment_id, &target)
-            .await?;
+        let owned_agent_id = resolved.owned_agent_id.clone();
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         if let Some(expected) = expected_fingerprint {
@@ -532,6 +558,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Some(expected),
             )
             .await?;
+            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
             if worker.agent_mode() != AgentMode::Ephemeral
                 && worker.pending_startup_attempt().is_none()
             {
@@ -553,6 +580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let failure_check = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else if let Some(worker) = self.active_agents().try_get(&owned_agent_id).await {
+            worker.ensure_owns_key(resolved.new_owner.as_ref())?;
             if worker.pending_startup_attempt().is_some() {
                 None
             } else {
@@ -564,7 +592,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
                 .await?
-                .map(|metadata| (metadata.agent_mode, Arc::new(metadata.last_known_status)))
+                .map(|metadata| -> Result<_, WorkerExecutorError> {
+                    if let Some(owner) = &resolved.new_owner {
+                        owner.ensure_owns_key(
+                            owned_agent_id.agent_id,
+                            metadata.agent_mode,
+                            metadata.canonical_key.as_deref(),
+                        )?;
+                    }
+                    Ok((metadata.agent_mode, Arc::new(metadata.last_known_status)))
+                })
+                .transpose()?
         };
 
         if let Some((agent_mode, status)) = &failure_check
@@ -589,9 +627,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.caller()?,
             freshness_disposition,
-            CreateIntent::Invocation {
-                idempotency_key: request.idempotency_key()?,
-            },
+            resolved.invocation_intent(request.idempotency_key()?),
         )
         .await
     }
@@ -631,13 +667,12 @@ mod tests {
         assert!(request.config().is_err());
     }
 
-    // `CreateIntent::Invocation` records the invocation's key only when the ephemeral target's
-    // phantom ID derives from it, and invocation-session clients derive that phantom from
-    // `request_key.owner_key(method)`, not from the raw key the public API also sends.
+    // The executor checks a KnownFresh ephemeral ID against the create key of the invocation,
+    // and invocation-session clients derive that ID from `request_key.owner_key(method)`, not from
+    // the raw key the public API also sends.
     #[test]
-    fn invocation_start_create_key_is_the_owner_key_its_phantom_derives_from() {
+    fn invocation_start_create_key_is_the_owner_key_its_ephemeral_id_derives_from() {
         use golem_common::model::account::AccountId;
-        use golem_common::model::agent::ephemeral_invocation_phantom_id;
         use golem_common::model::{IdempotencyKey, IdempotencyScope, InvocationRequestKey};
 
         let method = "handle";
@@ -655,7 +690,6 @@ mod tests {
             ),
         ];
         for (request_key, raw) in cases {
-            let phantom = ephemeral_invocation_phantom_id(&request_key.owner_key(method));
             let request = golem_api_grpc::proto::golem::worker::InvocationStart {
                 method_name: Some(method.to_string()),
                 request_key: Some(request_key.clone().into()),
@@ -663,12 +697,9 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(
-                request
-                    .idempotency_key()
-                    .unwrap()
-                    .map(|key| ephemeral_invocation_phantom_id(&key)),
-                Some(phantom),
-                "create key for {request_key:?} does not identify the derived phantom"
+                request.idempotency_key().unwrap(),
+                Some(request_key.owner_key(method)),
+                "create key for {request_key:?} is not its owner key"
             );
         }
     }
