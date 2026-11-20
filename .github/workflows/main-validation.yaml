@@ -175,7 +175,7 @@ jobs:
           # Keep ordinary workload failures out of the cache-owning job's status.
           # The result job requires this exit code as well as successful cache/report delivery.
           status=0
-          python3 .validation-control/.github/main-validation/progress.py observe -- cargo make --profile ci main-validation || status=$?
+          bun .validation-control/.github/main-validation/progress.ts observe -- cargo make --profile ci main-validation || status=$?
           printf 'exit_code=%s\n' "$status" >> "$GITHUB_OUTPUT"
       - name: Retain Linux reports even after failure
         if: always()
@@ -203,6 +203,9 @@ jobs:
         with:
           cache-shared-key: main-validation-apfs
           cache-save-if: 'true'
+      - uses: oven-sh/setup-bun@v2
+      - name: Install validation tooling
+        run: npm ci --ignore-scripts --prefix .github/main-validation
       - name: Execute same-source native APFS coverage
         env:
           MAIN_VALIDATION_REPORT_DIR: ${{ runner.temp }}/main-validation-apfs

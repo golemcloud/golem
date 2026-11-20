@@ -54,10 +54,10 @@ tasks = split ${MAIN_VALIDATION_TASKS} " "
 for task in ${tasks}
     if eq ${task} unit-tests-and-checks
         set_env TEST_R_BUILD_OPTS "--binaries-metadata ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json"
-        checks = exec --get-exit-code python3 .github/main-validation/progress.py run prepare ${task} -- cargo make --disable-check-for-updates --profile ci --skip-tasks test-component-middleware-unit-tests ${task}
+        checks = exec --get-exit-code bun .github/main-validation/progress.ts run prepare ${task} -- cargo make --disable-check-for-updates --profile ci --skip-tasks test-component-middleware-unit-tests ${task}
         writefile ${MAIN_VALIDATION_REPORT_DIR}/checks.status ${checks}
     else
-        exec --fail-on-error python3 .github/main-validation/progress.py run prepare ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
+        exec --fail-on-error bun .github/main-validation/progress.ts run prepare ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
     end
 end
 '''
@@ -114,7 +114,7 @@ temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 cycle = basename ${temporary}
 snapshot = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/frozen-${cycle}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt ${snapshot}
-exec --fail-on-error python3 .github/main-validation/freeze-binaries.py --metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --destination ${snapshot} --output ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+exec --fail-on-error bun .github/main-validation/freeze-binaries.ts --metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --destination ${snapshot} --output ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
 '''
 
 [tasks.main-validation-service-native]
@@ -141,7 +141,7 @@ set_env GOLEM_TS_PRESET quick
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-fixture-target
 root = pwd
 set_env GOLEM_FIXTURE_CACHE ${root}/.validation-cache/fixtures-v1/completed
-exec --fail-on-error python3 .github/main-validation/fixture-cache.py begin
+exec --fail-on-error bun .github/main-validation/fixture-cache.ts begin
 cd sdks/moonbit/golem_sdk_tools
 exec --fail-on-error moon update
 cd ${root}/test-components/tool-streaming-moonbit
@@ -159,7 +159,7 @@ different = exec --get-exit-code cmp --silent test-components/it_agent_update_v3
 if not eq ${different} 1
     trigger_error "Update v3/v4 fixtures must exist and have different contents"
 end
-exec --fail-on-error python3 .github/main-validation/fixture-cache.py publish
+exec --fail-on-error bun .github/main-validation/fixture-cache.ts publish
 '''
 
 # These wrappers collect ordinary failures and return normally so cargo-make joins
@@ -175,7 +175,7 @@ set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/exe
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
-    code = exec --get-exit-code python3 .github/main-validation/progress.py run worker ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-${group}
+    code = exec --get-exit-code bun .github/main-validation/progress.ts run worker ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-${group}
     writefile ${MAIN_VALIDATION_REPORT_DIR}/worker-${group}.status ${code}
     if not eq ${code} 0
         failed = set 1
@@ -189,7 +189,7 @@ private = true
 env = { MAIN_VALIDATION_TASKS = "main-validation-service-native" }
 script_runner = "@duckscript"
 script = '''
-code = exec --get-exit-code python3 .github/main-validation/progress.py run service-build main-validation-service-native -- cargo make --disable-check-for-updates --allow-private --profile ci main-validation-service-native
+code = exec --get-exit-code bun .github/main-validation/progress.ts run service-build main-validation-service-native -- cargo make --disable-check-for-updates --allow-private --profile ci main-validation-service-native
 writefile ${MAIN_VALIDATION_REPORT_DIR}/service-build.status ${code}
 if eq ${code} 0
     cm_run_task main-validation-service-and-cli
@@ -235,7 +235,7 @@ failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
     if not eq ${group} ${MAIN_VALIDATION_RECOVERY_GROUP}
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${group}
+        code = exec --get-exit-code bun .github/main-validation/progress.ts run service ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${group}
         writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${group}.status ${code}
         if not eq ${code} 0
             failed = set 1
@@ -254,7 +254,7 @@ script = '''
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 set_env TMPDIR ${temporary}/recovery
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
-code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${MAIN_VALIDATION_RECOVERY_GROUP} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${MAIN_VALIDATION_RECOVERY_GROUP}
+code = exec --get-exit-code bun .github/main-validation/progress.ts run service ${MAIN_VALIDATION_RECOVERY_GROUP} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${MAIN_VALIDATION_RECOVERY_GROUP}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${MAIN_VALIDATION_RECOVERY_GROUP}.status ${code}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/recovery.status ${code}
 '''
@@ -270,7 +270,7 @@ set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/ser
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
-    code = exec --get-exit-code python3 .github/main-validation/progress.py run cli ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|build-sdk-effect|ensure-builtin-artifacts)$" cli-integration-tests-${group}
+    code = exec --get-exit-code bun .github/main-validation/progress.ts run cli ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|build-sdk-effect|ensure-builtin-artifacts)$" cli-integration-tests-${group}
     writefile ${MAIN_VALIDATION_REPORT_DIR}/cli-${group}.status ${code}
     if not eq ${code} 0
         failed = set 1
@@ -295,9 +295,9 @@ for task in ${tasks}
         if eq ${task} main-validation-bash
             target = set ${target}/main-validation-bash-target
         end
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
+        code = exec --get-exit-code bun .github/main-validation/progress.ts run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
     else
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
+        code = exec --get-exit-code bun .github/main-validation/progress.ts run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
     end
     writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
     if not eq ${code} 0
@@ -400,7 +400,7 @@ exec --fail-on-error sbt -batch "++3.8.2; integrationTests/test"
 private = true
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error python3 .github/main-validation/freeze-binaries.py --verify ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+exec --fail-on-error bun .github/main-validation/freeze-binaries.ts --verify ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
 exec --fail-on-error integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh --self-test-initial-file-wasm
 metadata = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/xfs-binaries.json
 runner = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/cargo-test-r
@@ -438,8 +438,8 @@ script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
 build = exec --fail-on-error cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib --no-run --message-format=json-render-diagnostics
 writefile ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${build.stdout}
-exec --fail-on-error integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
-selection = exec --fail-on-error python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${CARGO_MAKE_WORKING_DIRECTORY} lib
+exec --fail-on-error bun test ./.github/main-validation/select-test-executables.test.ts
+selection = exec --fail-on-error bun .github/main-validation/select-test-executables.ts ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${CARGO_MAKE_WORKING_DIRECTORY} lib
 line = trim ${selection.stdout}
 fields = split ${line} "\t"
 kind = array_get ${fields} 0
