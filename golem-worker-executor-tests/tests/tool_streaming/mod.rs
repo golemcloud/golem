@@ -7216,7 +7216,8 @@ async fn rust_tool_trap_isolated_with_partial_effects_and_completed_replay(
 }
 
 // `exit(CODE)` in a tool body that returns `ProcessExitStatus` ends that call as a process exit
-// does: CODE is its status, its stdout and stderr are complete, and the owner stays healthy.
+// does: CODE is its status, its stdout and stderr are complete, and the owner stays healthy. This
+// holds also when the body finished and dropped its writers before the exit.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -7319,10 +7320,22 @@ async fn tool_body_exit_becomes_its_process_exit_status(
     assert_eq!(succeeded.exit_code, 0, "{succeeded:?}");
     assert_eq!(succeeded.stdout, b"out-0");
     assert!(succeeded.stderr.is_empty());
+    let closed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "tool-exit",
+        "process-exit",
+        "/",
+        vec!["3", "out-c", "err-c", "close"],
+    )
+    .await?;
+    assert_eq!(closed.exit_code, 3, "{closed:?}");
+    assert_eq!(closed.stdout, b"out-c");
+    assert_eq!(closed.stderr, b"err-c");
 
     let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let terminals = tool_terminals(&before);
-    assert_eq!(terminals.len(), 2, "{before:#?}");
+    assert_eq!(terminals.len(), 3, "{before:#?}");
     for terminal in &terminals {
         assert_eq!(
             terminal.body_execution,
@@ -7351,10 +7364,10 @@ async fn tool_body_exit_becomes_its_process_exit_status(
     let replayed = tool_terminals(&after);
     assert_eq!(
         replayed.len(),
-        3,
+        4,
         "replay must not append duplicate terminals"
     );
-    assert_eq!(&replayed[..2], terminals.as_slice());
+    assert_eq!(&replayed[..3], terminals.as_slice());
     assert_eq!(errors(&after), 0, "{after:#?}");
 
     Ok(())

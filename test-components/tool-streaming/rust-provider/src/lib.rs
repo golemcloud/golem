@@ -852,7 +852,8 @@ pub enum ProcessExitError {
 
 #[tool_definition(version = "1.0.0", requires_filesystem = true)]
 pub trait ProcessExit {
-    /// Write STDOUT and STDERR, then end the body with `exit(CODE)`.
+    /// Write STDOUT and STDERR, then end the body with `exit(CODE)`. With `close`, finish and
+    /// drop both writers and open a directory before the exit.
     #[arg(cwd = "option", default = "/", env = "PWD")]
     #[arg(args = "tail", separator = "--", verbatim = true)]
     #[arg(stderr, channel = "stderr")]
@@ -876,10 +877,14 @@ impl ProcessExit for ProcessExitImpl {
         mut stdout: OutputStream,
         mut stderr: OutputStream,
     ) -> Result<golem_rust::tool::ProcessExitStatus, ProcessExitError> {
-        let [code, out, err] = args.as_slice() else {
-            return Err(ProcessExitError::Usage {
-                reason: "usage: process-exit CODE STDOUT STDERR".to_string(),
-            });
+        let (code, out, err, close) = match args.as_slice() {
+            [code, out, err] => (code, out, err, false),
+            [code, out, err, close] if close == "close" => (code, out, err, true),
+            _ => {
+                return Err(ProcessExitError::Usage {
+                    reason: "usage: process-exit CODE STDOUT STDERR [close]".to_string(),
+                });
+            }
         };
         let code = code
             .parse::<i32>()
@@ -894,6 +899,12 @@ impl ProcessExit for ProcessExitImpl {
             .write(err.as_bytes().to_vec())
             .await
             .expect("write stderr");
+        if close {
+            stdout.finish().await.expect("finish stdout");
+            stderr.finish().await.expect("finish stderr");
+            let entries = std::fs::read_dir("/").expect("open directory");
+            std::mem::forget(entries);
+        }
         std::process::exit(code)
     }
 }

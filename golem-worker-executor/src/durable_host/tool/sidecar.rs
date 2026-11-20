@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::AttachmentWriter;
 use super::{
     AsContextMut, AttachmentController, ByteStreamFailure, DurabilityHost,
     DurableToolStdinProducer, EntityBodyOutcome, EntityCancellationEpochTask, EntityInvocationBody,
@@ -89,15 +90,17 @@ fn process_exit_status(
     .then_some(status)
 }
 
-/// Completes an exited tool body as a native process exit does: its output writers finish and
-/// the exit code becomes the returned status. The trapped Store only runs host work here.
+/// Completes an exited tool body as a native process exit does: the output writers the body still
+/// holds finish, and the exit code becomes the returned status. The trapped Store only runs host
+/// work here.
 async fn finish_process_exit<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     status: golem_common::schema::TypedSchemaValue,
-    writers: Option<[Option<u32>; 2]>,
+    writers: Option<[Option<(AttachmentWriter, AttachmentController)>; 2]>,
     output_contract: &ToolOutputContract,
 ) -> wasmtime::Result<HostResponseEntityInvocation> {
-    use wasmtime::component::{HasSelf, Resource};
+    use golem_common::model::oplog::host_functions::GolemToolOutputFinish;
+    use wasmtime::component::HasSelf;
     type Writers<Ctx> = HasSelf<crate::durable_host::DurableWorkerCtx<Ctx>>;
 
     let attribution = store.data().durable_ctx().attribution.clone();
@@ -106,14 +109,18 @@ async fn finish_process_exit<Ctx: WorkerCtx>(
         .as_context_mut()
         .run_concurrent(async move |accessor| {
             let accessor = accessor.with_getter::<Writers<Ctx>>(|ctx| ctx.durable_ctx_mut());
-            for rep in writers.into_iter().flatten().flatten() {
-                // A writer that already has a terminal keeps it; finish reports it as closed.
+            for (writer, controller) in writers.into_iter().flatten().flatten() {
+                // A writer the guest dropped keeps the terminal its disposal selected. One it
+                // still holds finishes; finish reports an earlier terminal as closed.
+                if !controller.producer_active() {
+                    continue;
+                }
+                let ordinal = writer.next_operation_ordinal();
                 let _ = attribution
                     .scoped(
                         Some(invocation_key),
-                        <Writers<Ctx> as crate::preview2::golem::tool::streams::HostToolOutputWriterWithStore<Ctx>>::finish(
-                            &accessor,
-                            Resource::new_borrow(rep),
+                        durability::finish::<GolemToolOutputFinish, _, _>(
+                            &accessor, writer, controller, ordinal,
                         ),
                     )
                     .await
@@ -438,6 +445,8 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         .map_err(WorkerExecutorError::runtime)?;
     let stdout_controller = stdout.as_ref().map(ToolOutputWriterEntry::controller);
     let stderr_controller = stderr.as_ref().map(ToolOutputWriterEntry::controller);
+    let output_writers = [stdout.as_ref(), stderr.as_ref()]
+        .map(|entry| entry.map(|entry| (entry.producer.writer(), entry.controller())));
     let stdout_observer = stdout_controller
         .as_ref()
         .map(AttachmentController::observer);
@@ -535,9 +544,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     let attribution = store.data().durable_ctx().attribution.clone();
     let invocation_key = store.data().durable_ctx().invocation_key();
     let exit_writers = match position.layer() {
-        golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
-            Some([stdout.as_ref(), stderr.as_ref()].map(|writer| writer.map(|writer| writer.rep())))
-        }
+        golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => Some(output_writers),
         _ => None,
     };
     let mut result = match position.layer() {

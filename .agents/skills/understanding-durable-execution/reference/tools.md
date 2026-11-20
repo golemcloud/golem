@@ -340,7 +340,7 @@ Its terminal is an ordinary `End` or `Cancelled` (cancellation). An allowlisted 
 instruction trap records `End` with `body_execution: Trapped` and `RemoteInternalError`; other
 trap paths retain owner recovery. A tool body (not middleware) whose result is
 `ProcessExitStatus` and whose result and error types hold no stream, and that settles with
-`wasi:cli/exit`, ends as a process exit does: the sidecar finishes its stdout and stderr writers on the exited Store and
+`wasi:cli/exit`, ends as a process exit does: the sidecar finishes the stdout and stderr writers the body still holds on the exited Store and
 returns the exit code as an ordinary result (`tool/sidecar.rs::process_exit_status`). Every host call the body makes records its own `Start` in the owner oplog
 with `parent_start_index` pointing at its enclosing scope — normally that entity `Start`
 (`durable_host/concurrent/call.rs`).

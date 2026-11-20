@@ -208,8 +208,9 @@ rather than replaced by a recorded result.
   (`LeaveIncompleteOnDrop`). An allowlisted permanent guest instruction trap records an `End`
   with `body_execution: Trapped` and `RemoteInternalError`; other trap paths leave recovery to
   the owner. A tool body (not middleware) whose result is `ProcessExitStatus` and whose result and
-  error types hold no stream, and that settles with `wasi:cli/exit`, is a process exit: the sidecar finishes its
-  stdout and stderr writers and returns the exit code as that result
+  error types hold no stream, and that settles with `wasi:cli/exit`, is a process exit: the sidecar finishes the
+  stdout and stderr writers the body still holds (a dropped writer keeps the terminal its
+  disposal selected) and returns the exit code as that result
   (`tool/sidecar.rs::process_exit_status`). There is no outer `call-tool` durable
   call around the entity invocation.
 - Completed replay (`InvocationExecutionMode::ReplayingCompleted`) re-executes the body's guest
