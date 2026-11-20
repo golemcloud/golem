@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::AttachmentWriter;
 use super::{
     AsContextMut, AttachmentController, ByteStreamFailure, DurabilityHost,
     DurableToolStdinProducer, EntityBodyOutcome, EntityCancellationEpochTask, EntityInvocationBody,
@@ -31,7 +32,8 @@ use super::{
 use crate::durable_host::attribution::Attributed;
 use crate::durable_host::stream_outcome::supervise_schema_outputs;
 use crate::worker::invocation::{
-    SettlementDeadline, run_guest_call_settled, run_guest_call_settled_at, run_tool_guest_call,
+    FailureCauses, SettlementDeadline, run_guest_call_settled, run_guest_call_settled_at,
+    run_tool_guest_call,
 };
 use futures::FutureExt;
 use wasmtime::component::Accessor;
@@ -59,6 +61,92 @@ async fn replay_disposal_termination<T>(
         ));
     }
     result
+}
+
+/// The `ProcessExitStatus` result of a tool body that ended with `wasi:cli/exit`, when the tool
+/// declares that result.
+fn process_exit_status(
+    result: &Result<wasmtime::Result<HostResponseEntityInvocation>, GuestCallSettlementError>,
+    contract: &ToolOutputContract,
+) -> Option<golem_common::schema::TypedSchemaValue> {
+    use golem_common::schema::IntoTypedSchemaValue;
+
+    let (Ok(Err(error)) | Err(GuestCallSettlementError::Trap(error))) = result else {
+        return None;
+    };
+    let code = error.causes::<wasmtime_wasi::I32Exit>().next()?.0;
+    let status = golem_common::schema::tool::ProcessExitStatus {
+        exit_code: u8::try_from(code).unwrap_or(u8::MAX),
+    }
+    .into_typed_schema_value()
+    .ok()?;
+    let declared = contract.result.as_ref()?;
+    golem_common::schema::validation::is_equivalent_cross_graph(
+        status.graph(),
+        &status.graph().root,
+        declared,
+        &declared.root,
+    )
+    .then_some(status)
+}
+
+/// Completes an exited tool body as a native process exit does: the output writers the body still
+/// holds finish, and the exit code becomes the returned status. The trapped Store only runs host
+/// work here.
+async fn finish_process_exit<Ctx: WorkerCtx>(
+    store: &mut wasmtime::StoreContextMut<'_, Ctx>,
+    status: golem_common::schema::TypedSchemaValue,
+    writers: [Option<(AttachmentWriter, AttachmentController)>; 2],
+    output_contract: &ToolOutputContract,
+) -> wasmtime::Result<HostResponseEntityInvocation> {
+    use golem_common::model::oplog::host_functions::GolemToolOutputFinish;
+    use wasmtime::component::HasSelf;
+    type Writers<Ctx> = HasSelf<crate::durable_host::DurableWorkerCtx<Ctx>>;
+
+    let attribution = store.data().durable_ctx().attribution.clone();
+    let invocation_key = store.data().durable_ctx().invocation_key();
+    store
+        .as_context_mut()
+        .run_concurrent(async move |accessor| {
+            let accessor = accessor.with_getter::<Writers<Ctx>>(|ctx| ctx.durable_ctx_mut());
+            for (writer, controller) in writers.into_iter().flatten() {
+                // A writer the guest dropped keeps the terminal its disposal selected. One it
+                // still holds finishes; finish reports an earlier terminal as closed.
+                if !controller.producer_active() {
+                    continue;
+                }
+                let ordinal = writer.next_operation_ordinal();
+                let _ = attribution
+                    .scoped(
+                        Some(invocation_key),
+                        durability::finish::<GolemToolOutputFinish, _, _>(
+                            &accessor, writer, controller, ordinal,
+                        ),
+                    )
+                    .await
+                    .map_err(wasmtime::Error::from_anyhow)?;
+            }
+            Ok::<_, wasmtime::Error>(())
+        })
+        .await??;
+    let ctx = store.data_mut().durable_ctx_mut();
+    let result = encode_typed_tool_value(&status, ctx).map_err(wasmtime::Error::msg)?;
+    ctx.attribution
+        .clone()
+        .scoped(
+            Some(invocation_key),
+            materialize_returned_tool_response(
+                ctx,
+                Ok(golem_common::schema::tool::wit::wire::InvocationResult {
+                    result: Some(result),
+                    stdout: None,
+                    stderr: None,
+                }),
+                output_contract,
+                false,
+            ),
+        )
+        .await
 }
 
 impl<Ctx: WorkerCtx> EntityInvocationBody<Ctx, HostResponseEntityInvocation> for ToolSidecarBody {
@@ -357,6 +445,8 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         .map_err(WorkerExecutorError::runtime)?;
     let stdout_controller = stdout.as_ref().map(ToolOutputWriterEntry::controller);
     let stderr_controller = stderr.as_ref().map(ToolOutputWriterEntry::controller);
+    let output_writers = [stdout.as_ref(), stderr.as_ref()]
+        .map(|entry| entry.map(|entry| (entry.producer.writer(), entry.controller())));
     let stdout_observer = stdout_controller
         .as_ref()
         .map(AttachmentController::observer);
@@ -453,6 +543,10 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     }
     let attribution = store.data().durable_ctx().attribution.clone();
     let invocation_key = store.data().durable_ctx().invocation_key();
+    let tool_body_writers = match position.layer() {
+        golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => Some(output_writers),
+        _ => None,
+    };
     let mut result = match position.layer() {
         golem_common::model::entity::EntityInvocationPlanLayer::Tool { .. } => {
             let indices =
@@ -613,6 +707,23 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         operation.claim_local_cancellation_interruption();
         drop(cancellation_epoch);
         return Ok(EntityBodyOutcome::Cancelled);
+    }
+    if matches!(deadline, SettlementDeadline::RootReturned)
+        && let Some(writers) = tool_body_writers
+        && let Some(status) = process_exit_status(&result, &output_contract)
+        && store
+            .data()
+            .durable_ctx()
+            .owner_execution
+            .tool_operations()
+            .selected_owner_failure()
+            .is_none()
+        && !operation.has_pending_live_admission_rejection().await
+    {
+        result = match finish_process_exit(&mut store, status, writers, &output_contract).await {
+            Ok(response) => Ok(Ok(response)),
+            Err(error) => Err(GuestCallSettlementError::Trap(error)),
+        };
     }
     let permanent_trap = match &result {
         Ok(Err(error)) | Err(GuestCallSettlementError::Trap(error)) => {

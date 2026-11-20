@@ -55,7 +55,9 @@ Tool isolation is limited to the fixed Wasm instruction-trap allowlist and uncau
 exceptions in `worker/invocation.rs::permanent_tool_guest_trap`. A trapped tool records
 `body_execution: Trapped` with `RemoteInternalError`; typed quotas, policy exhaustion,
 `WorkerOutOfMemory`, infrastructure and lifecycle failures retain owner recovery even when
-their retry decision is exhausted. Destroy the physical Wasmtime Store but retain its original
+their retry decision is exhausted. The one exception is `wasi:cli/exit` in a non-streaming tool
+body whose result is `ProcessExitStatus`: its exit code becomes that result, with its stdout and
+stderr complete (`durable_host/tool/sidecar.rs`). Destroy the physical Wasmtime Store but retain its original
 `Ctx` for cleanup. Independent supervisors settle failed parents and cancel their descendants
 without replacing selected outcomes or cancelling unrelated siblings. Replay re-executes trapped
 bodies and their recorded host calls to rebuild shared filesystem effects and partial stdout,
