@@ -85,6 +85,10 @@ inherit_test_dep!(
     #[tagged_as("http_update_effect")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("constructor_parameter_echo")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 pub struct F1Blocker {
@@ -4527,6 +4531,131 @@ async fn manual_update_on_idle_with_failing_load(
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
 
+    Ok(())
+}
+
+/// A save hook that runs out of memory fails the manual update. A second manual update requested
+/// right after it, with no invocation, interrupt or eviction in between, takes its snapshot and
+/// succeeds. The server that the save hook asks makes only the first save run out of memory.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_manual_update_after_a_save_hook_ran_out_of_memory_succeeds(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let saves = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let fault_server = spawn({
+        let saves = saves.clone();
+        async move {
+            let route = Router::new().route(
+                "/save-fault",
+                axum::routing::get(move || {
+                    let first = saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                    async move { if first { "oom" } else { "ok" } }
+                }),
+            );
+            axum::serve(listener, route).await.unwrap();
+        }
+    });
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(256 * 1024 * 1024);
+                config.memory.worker_memory_ratio = 1.0;
+                config.memory.component_size_coefficient = 0.0;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SaveFaultAgent", "resident");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "setFaultPort",
+            data_value!(port as f64),
+        )
+        .await?;
+    for _ in 0..2 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
+            .await?;
+    }
+    let target = executor
+        .update_component(&component.id, "golem_it_constructor_parameter_echo")
+        .await?;
+
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let failed = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let failure = failed
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert_eq!(
+        failure,
+        "failed to get a snapshot for manual update: Out of memory"
+    );
+
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let settled = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            let (pending, successful, failed) = update_counts(&metadata);
+            if pending == 0 && successful + failed == 2 {
+                break anyhow::Ok(metadata);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    let failures: Vec<_> = settled
+        .updates
+        .iter()
+        .filter_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .collect();
+    let saves = saves.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        update_counts(&settled),
+        (0, 1, 1),
+        "{failures:?}, saves: {saves}"
+    );
+    assert_eq!(settled.component_revision, target.revision);
+    assert_eq!(saves, 2);
+
+    let count = executor
+        .invoke_and_await_agent(&component, &agent_id, "get", data_value!())
+        .await?;
+    assert_eq!(count.into_typed::<f64>()?, 2.0);
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    fault_server.abort();
     Ok(())
 }
 

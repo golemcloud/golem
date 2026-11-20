@@ -140,3 +140,48 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
         },
     },
 });
+
+// `save` asks the server at `faultPort` whether to fail. On "oom" it allocates until the executor
+// refuses to grow the memory of the agent. The save runs in snapshotting mode, so this request is
+// neither recorded nor replayed: the server alone decides each attempt.
+export const SaveFaultAgent = defineAgent({
+    name: 'SaveFaultAgent',
+    id: { id: z.string() },
+    snapshotting: { everyNInvocations: 1000 },
+    methods: {
+        setFaultPort: method({ input: { port: z.number() }, returns: z.void() }),
+        increment: method({ input: {}, returns: z.number() }),
+        get: method({ input: {}, returns: z.number() }),
+    },
+});
+
+export const SaveFaultAgentImpl = SaveFaultAgent.implement({
+    init: () => ({ count: 0, faultPort: 0 }),
+    methods: {
+        async setFaultPort({ port }) {
+            this.faultPort = port;
+        },
+        async increment() {
+            this.count += 1;
+            return this.count;
+        },
+        async get() {
+            return this.count;
+        },
+    },
+    snapshot: {
+        async save() {
+            const fault = await (await fetch(`http://localhost:${this.faultPort}/save-fault`)).text();
+            if (fault === 'oom') {
+                const chunks: Uint8Array[] = [];
+                for (;;) {
+                    chunks.push(new Uint8Array(4 * 1024 * 1024).fill(1));
+                }
+            }
+            return new TextEncoder().encode(JSON.stringify({ count: this.count, faultPort: this.faultPort }));
+        },
+        load(bytes) {
+            return JSON.parse(new TextDecoder().decode(bytes)) as { count: number; faultPort: number };
+        },
+    },
+});
