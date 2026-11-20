@@ -5,6 +5,7 @@ use golem_common::model::agent::OwnedAgentId;
 use golem_common::model::{AgentFilter, FilterComparator};
 use golem_test_framework::config::EnvBasedTestDependencies;
 use reqwest::{Body, Method, StatusCode};
+use std::error::Error as _;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep, timeout};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -328,12 +329,34 @@ async fn raw_router_reports_response_body_failures(
             .client
             .get(raw_router_context.base_url.join(path)?)
             .send()
-            .await?;
-        assert_eq!(response.status(), StatusCode::OK, "{path}");
-        assert!(
-            response.bytes().await.is_err(),
-            "{path} body unexpectedly succeeded"
-        );
+            .await;
+        match response {
+            Ok(response) => {
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                assert!(
+                    response.bytes().await.is_err(),
+                    "{path} body unexpectedly succeeded"
+                );
+            }
+            Err(error) => {
+                // An immediate body error can abort before Hyper flushes the head.
+                let mut source = error.source();
+                let mut incomplete_message = false;
+                while let Some(cause) = source {
+                    if let Some(cause) = cause.downcast_ref::<hyper::Error>() {
+                        incomplete_message |= cause.is_incomplete_message();
+                    }
+                    source = cause.source();
+                }
+                assert!(
+                    error.is_request()
+                        && !error.is_connect()
+                        && !error.is_timeout()
+                        && incomplete_message,
+                    "{path}: unexpected send failure: {error:?}"
+                );
+            }
+        }
     }
 
     let (release_failure, wait_for_response) = tokio::sync::oneshot::channel::<()>();

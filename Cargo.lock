@@ -6037,6 +6037,7 @@ dependencies = [
  "h2",
  "headers",
  "http 1.5.0",
+ "hyper",
  "indoc",
  "opentelemetry",
  "opentelemetry_sdk",
