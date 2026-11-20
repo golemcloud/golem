@@ -727,7 +727,10 @@ impl TestWorkerExecutor {
             .finalize(
                 *agent_id,
                 expected_fingerprint,
-                &format!("tool:{tool_name}/{}", command_path.join("/")),
+                &golem_common::model::InvocationOperation::tool_operation(
+                    &tool_name,
+                    &command_path,
+                ),
             )
             .id();
         worker
@@ -1207,6 +1210,28 @@ impl TestWorkerExecutor {
                 metadata.initial_worker_metadata.fingerprint,
                 &status,
                 &indexes.into_iter().collect(),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Evicts the cached status of the agent, and with it its persisted result index, as an
+    /// archive does. The oplog stays.
+    pub async fn evict_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        worker_service
+            .remove_cached_status(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
             )
             .await?;
         Ok(())
@@ -7807,17 +7832,10 @@ impl AdditionalTestDeps {
         agent_id: AgentId,
     ) -> AgentInitializationEnqueueGateHandle {
         fn is_initialization_enqueue(entry: &OplogEntry) -> bool {
-            let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
-                return false;
-            };
-            let payload = match payload {
-                OplogPayload::Inline(payload) => Some(payload.as_ref()),
-                OplogPayload::SerializedInline { cached, .. }
-                | OplogPayload::External { cached, .. } => cached.as_deref(),
-            };
             matches!(
-                payload,
-                Some(golem_common::model::AgentInvocationPayload::AgentInitialization { .. })
+                entry,
+                OplogEntry::PendingAgentInvocation { operation, .. }
+                    if **operation == golem_common::model::InvocationRequestOperation::AgentInitialization
             )
         }
         self.gate_next_append(agent_id, is_initialization_enqueue)

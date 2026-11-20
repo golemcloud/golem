@@ -2562,11 +2562,21 @@ impl WorkerService {
             let component = self
                 .creating_component(environment_id, component_id)
                 .await?;
-            let owner_key = request_key.owner_key(&format!(
-                "tool:{}/{}",
-                tool.tool_name,
-                tool.command_path.join("/")
-            ));
+            let command_path = self
+                .canonical_tool_command_path(
+                    &component,
+                    &ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
+                    &tool.tool_name,
+                    &tool.command_path,
+                )
+                .await?;
+            let owner_key =
+                request_key.owner_key(&golem_common::model::InvocationOperation::tool_operation(
+                    &tool.tool_name,
+                    &command_path,
+                ));
             let target = RoutedTarget::fresh_tool_owner(
                 AgentId::external_tool_owner(environment_id, component.id, &owner_key),
                 component.id,
@@ -2576,6 +2586,9 @@ impl WorkerService {
                 &agent_owner(&component, target.agent_id, None),
                 &[permission],
             )?;
+            if let Some(tool) = start.external_tool.as_mut() {
+                tool.command_path = command_path;
+            }
             (target, component)
         } else {
             let constructor = start
@@ -3158,20 +3171,20 @@ impl WorkerService {
         let env_name = EnvironmentName::try_from(start.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let operation = format!("tool:{}/{}", start.tool_name, start.command_path.join("/"));
         let (agent_id, component_id) = match start.target {
             PublicNativeToolTarget::Agent { agent_id } => (Some(agent_id), None),
             PublicNativeToolTarget::Component { component_id } => {
                 (None, Some(ComponentId(component_id)))
             }
         };
-        let (routed, component, expected_callee_fingerprint, fresh_owner) = self
+        let (routed, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 start.environment_id,
                 agent_id,
                 component_id,
                 &request_key,
-                &operation,
+                &start.tool_name,
+                &start.command_path,
                 false,
                 AgentVerb::Invoke,
                 &auth,
@@ -3202,7 +3215,7 @@ impl WorkerService {
         };
         let target = SessionInvocationTarget::ExternalTool {
             tool_name: start.tool_name.clone(),
-            command_path: start.command_path.clone(),
+            command_path: command_path.clone(),
         };
         let identity = SessionAgentIdentity {
             component_id: component_id.0,
@@ -3238,7 +3251,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: start.tool_name,
-                command_path: start.command_path,
+                command_path,
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
@@ -3744,7 +3757,8 @@ impl WorkerService {
 
     /// The target of a tool call: an existing agent, or a fresh owner on a component of the
     /// environment. Returns the target, the component, the expected fingerprint of an
-    /// existing agent, and whether the owner is fresh.
+    /// existing agent, whether the owner is fresh, and the canonical form of the command path,
+    /// from which the invocation ID and a fresh owner's agent ID are derived.
     #[allow(clippy::too_many_arguments)]
     async fn tool_target(
         &self,
@@ -3752,11 +3766,18 @@ impl WorkerService {
         agent_id: Option<AgentId>,
         component_id: Option<ComponentId>,
         request_key: &InvocationRequestKey,
-        operation: &str,
+        tool_name: &str,
+        command_path: &[String],
         lookup: bool,
         verb: AgentVerb,
         auth: &AuthCtx,
-    ) -> WorkerResult<(RoutedTarget, Component, Option<AgentFingerprint>, bool)> {
+    ) -> WorkerResult<(
+        RoutedTarget,
+        Component,
+        Option<AgentFingerprint>,
+        bool,
+        Vec<String>,
+    )> {
         match (agent_id, component_id) {
             (Some(agent_id), None) => {
                 let agent = self
@@ -3773,18 +3794,47 @@ impl WorkerService {
                             .to_string(),
                     ));
                 }
+                let owner = match (&agent.metadata.owner_kind, &agent.metadata.agent_type_name) {
+                    (OwnerKind::ComponentAgent, Some(agent_type_name)) => {
+                        ToolBindingOwner::AgentType {
+                            agent_type_name: agent_type_name.clone(),
+                        }
+                    }
+                    _ => ToolBindingOwner::ComponentBaseline {
+                        component_id: agent.component.id,
+                    },
+                };
+                let command_path = self
+                    .canonical_tool_command_path(&agent.component, &owner, tool_name, command_path)
+                    .await?;
                 let fingerprint = agent.metadata.fingerprint;
-                Ok((agent.routed(), agent.component, Some(fingerprint), false))
+                Ok((
+                    agent.routed(),
+                    agent.component,
+                    Some(fingerprint),
+                    false,
+                    command_path,
+                ))
             }
             (None, Some(component_id)) if !lookup => {
                 let component = self
                     .creating_component(environment_id, Some(component_id))
                     .await?;
+                let command_path = self
+                    .canonical_tool_command_path(
+                        &component,
+                        &ToolBindingOwner::ComponentBaseline { component_id },
+                        tool_name,
+                        command_path,
+                    )
+                    .await?;
+                let operation =
+                    golem_common::model::InvocationOperation::tool_operation(&tool_name, &command_path);
                 let target = RoutedTarget::fresh_tool_owner(
                     AgentId::external_tool_owner(
                         environment_id,
                         component_id,
-                        &request_key.owner_key(operation),
+                        &request_key.owner_key(&operation),
                     ),
                     component_id,
                 );
@@ -3793,7 +3843,7 @@ impl WorkerService {
                     &agent_owner(&component, target.agent_id, None),
                     &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
                 )?;
-                Ok((target, component, None, true))
+                Ok((target, component, None, true, command_path))
             }
             _ => Err(WorkerServiceError::TypeChecker(
                 "exactly one of agent_id and component_id is required, and a lookup names the agent"
@@ -3853,18 +3903,14 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
             }
         };
-        let operation = format!(
-            "tool:{}/{}",
-            request.tool_name,
-            request.command_path.join("/")
-        );
-        let (target, component, expected_callee_fingerprint, fresh_owner) = self
+        let (target, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 environment_id,
                 request.agent_id,
                 request.component_id,
                 &request_key,
-                &operation,
+                &request.tool_name,
+                &request.command_path,
                 lookup,
                 agent_verb_for_invocation_mode(proto_mode),
                 &auth,
@@ -3912,7 +3958,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: request.tool_name,
-                command_path: request.command_path,
+                command_path,
                 input,
                 stdin: false,
                 stdout: false,
@@ -3933,30 +3979,7 @@ impl WorkerService {
             .ok_or_else(|| WorkerServiceError::Internal("Missing idempotency key".to_string()))?;
         let result = match output.result {
             golem_common::model::AgentInvocationResult::ExternalTool { result } => {
-                Some(match result {
-                    Ok(success) => NativeToolResult::Success(NativeToolSuccess {
-                        result: success
-                            .result
-                            .map(|value| (*value).try_into().map(Box::new))
-                            .transpose()
-                            .map_err(|error| {
-                                WorkerServiceError::Internal(format!(
-                                    "external tool result cannot cross the external JSON boundary: {error}"
-                                ))
-                            })?,
-                    }),
-                    Err(error) => {
-                        if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) = &error
-                            && let golem_common::model::tool::SerializableToolError::CustomError(value) = tool_error.as_ref()
-                        {
-                            golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
-                                .map_err(|error| WorkerServiceError::Internal(format!(
-                                    "external tool error cannot cross the external JSON boundary: {error}"
-                                )))?;
-                        }
-                        NativeToolResult::Failure(NativeToolFailure { error })
-                    }
-                })
+                Some(native_tool_result(result)?)
             }
             _ if proto_mode
                 != golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32 =>
@@ -4037,6 +4060,24 @@ impl WorkerService {
                 ));
             }
         };
+        let (definition, deployment_revision) = self
+            .effective_tool_definition(&component, &owner, &request.tool_name)
+            .await?;
+        Ok(NativeToolDefinition {
+            definition,
+            component_revision: component.revision,
+            deployment_revision,
+        })
+    }
+
+    /// The definition of the tool named `tool_name` as `owner` of `component` sees it, with the
+    /// deployment revision that selected it.
+    async fn effective_tool_definition(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+    ) -> WorkerResult<(golem_common::schema::tool::Tool, DeploymentRevision)> {
         let state = self
             .component_service
             .get_tool_deployment_state(component.environment_id, component.id, component.revision)
@@ -4046,14 +4087,13 @@ impl WorkerService {
                     "no tool deployment is active for the target".to_string(),
                 )
             })?;
-        let tool_name = ToolName::try_from(request.tool_name.as_str())
-            .map_err(WorkerServiceError::TypeChecker)?;
+        let tool_name = ToolName::try_from(tool_name).map_err(WorkerServiceError::TypeChecker)?;
         let registered = state.registered_tools.get(&tool_name).ok_or_else(|| {
             WorkerServiceError::TypeChecker(format!("tool '{tool_name}' is not registered"))
         })?;
         if !state
             .tool_bindings
-            .get(&owner)
+            .get(owner)
             .is_some_and(|bindings| bindings.contains_key(&tool_name))
         {
             return Err(WorkerServiceError::TypeChecker(format!(
@@ -4062,15 +4102,33 @@ impl WorkerService {
         }
         let definition = state
             .tool_middleware_chains
-            .get(&owner)
+            .get(owner)
             .and_then(|chains| chains.get(&tool_name))
             .map(|chain| chain.effective_definition.clone())
             .unwrap_or_else(|| registered.registration.definition.clone());
-        Ok(NativeToolDefinition {
-            definition,
-            component_revision: component.revision,
-            deployment_revision: state.deployment_revision,
-        })
+        Ok((definition, state.deployment_revision))
+    }
+
+    /// The canonical form of `command_path` in the tool named `tool_name` as `owner` of
+    /// `component` sees it. Invocation IDs are derived from the canonical form, so an alias and
+    /// the name of a command give the same ID.
+    async fn canonical_tool_command_path(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+        command_path: &[String],
+    ) -> WorkerResult<Vec<String>> {
+        let (definition, _) = self
+            .effective_tool_definition(component, owner, tool_name)
+            .await?;
+        definition
+            .canonical_command_path(command_path)
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(format!(
+                    "command path {command_path:?} does not name a command of tool '{tool_name}'"
+                ))
+            })
     }
 
     /// REST invoke: on the agent with `agentId`, which must have the type, or on the agent of
@@ -4254,39 +4312,15 @@ impl WorkerService {
                 let decode_revision = output
                     .component_revision
                     .unwrap_or(invocation_component.revision);
-                let component_metadata_for_decode = self
-                    .component_service
-                    .get_revision(invocation_component.id, decode_revision)
+                let typed_output = self
+                    .agent_method_output_to_external(
+                        invocation_component.id,
+                        decode_revision,
+                        agent_type_name,
+                        &method_name,
+                        output_value,
+                    )
                     .await?;
-                let decode_agent_type = component_metadata_for_decode
-                    .metadata
-                    .find_agent_type_by_name_ref(agent_type_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent type {agent_type_name} not found in component metadata at revision {decode_revision}",
-                        ))
-                    })?;
-                let decode_method = decode_agent_type
-                    .methods
-                    .iter()
-                    .find(|m| m.name == method_name)
-                    .ok_or_else(|| {
-                        WorkerServiceError::Internal(format!(
-                            "Agent method {method_name} not found in agent type {agent_type_name} at revision {decode_revision}",
-                        ))
-                    })?;
-                let mut output_graph = decode_agent_type.schema.clone();
-                output_graph.root = decode_method
-                    .output_schema
-                    .schema()
-                    .cloned()
-                    .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
-                let typed_output = TypedSchemaValue::new(output_graph, output_value);
-                let typed_output = typed_output.try_into().map_err(|error| {
-                    WorkerServiceError::Internal(format!(
-                        "Agent method result cannot cross the external JSON boundary: {error}"
-                    ))
-                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -4302,7 +4336,94 @@ impl WorkerService {
             }),
         }
     }
+
+    /// Decodes an agent method's result with the method's output schema at the revision that
+    /// produced it, so a method that a later revision removed still decodes.
+    async fn agent_method_output_to_external(
+        &self,
+        component_id: ComponentId,
+        revision: ComponentRevision,
+        agent_type_name: &AgentTypeName,
+        method_name: &str,
+        output_value: golem_common::schema::SchemaValue,
+    ) -> WorkerResult<golem_common::schema::ExternalTypedSchemaValue> {
+        let component = self
+            .component_service
+            .get_revision(component_id, revision)
+            .await?;
+        let agent_type = component
+            .metadata
+            .find_agent_type_by_name_ref(agent_type_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent type {agent_type_name} not found in component metadata at revision {revision}",
+                ))
+            })?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|m| m.name == method_name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method {method_name} not found in agent type {agent_type_name} at revision {revision}",
+                ))
+            })?;
+        let mut output_graph = agent_type.schema.clone();
+        output_graph.root = method
+            .output_schema
+            .schema()
+            .cloned()
+            .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
+        TypedSchemaValue::new(output_graph, output_value)
+            .try_into()
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!(
+                    "Agent method result cannot cross the external JSON boundary: {error}"
+                ))
+            })
+    }
 }
+
+/// Converts a tool invocation's result to its REST form.
+fn native_tool_result(
+    result: Result<
+        golem_common::model::tool::SerializableToolInvocationResult,
+        golem_common::model::tool::SerializableToolRpcError,
+    >,
+) -> WorkerResult<NativeToolResult> {
+    Ok(match result {
+        Ok(success) => NativeToolResult::Success(NativeToolSuccess {
+            result: success
+                .result
+                .map(|value| (*value).try_into().map(Box::new))
+                .transpose()
+                .map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "external tool result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?,
+        }),
+        Err(error) => {
+            if let golem_common::model::tool::SerializableToolRpcError::RemoteToolError(tool_error) =
+                &error
+                && let golem_common::model::tool::SerializableToolError::CustomError(value) =
+                    tool_error.as_ref()
+            {
+                golem_common::schema::ExternalTypedSchemaValue::try_from(value.payload.clone())
+                    .map_err(|error| {
+                        WorkerServiceError::Internal(format!(
+                            "external tool error cannot cross the external JSON boundary: {error}"
+                        ))
+                    })?;
+            }
+            NativeToolResult::Failure(NativeToolFailure { error })
+        }
+    })
+}
+
+mod invocations;
+
+pub use invocations::InvocationListQuery;
 
 #[cfg(test)]
 mod tests {
@@ -4764,13 +4885,15 @@ mod tests {
             environment_id: EnvironmentId,
             component_id: ComponentId,
             revision: ComponentRevision,
-        ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError>
-        {
+        ) -> Result<
+            Option<Arc<golem_common::model::tool::ToolDeploymentState>>,
+            ComponentServiceError,
+        > {
             self.tool_queries
                 .lock()
                 .unwrap()
                 .push((environment_id, component_id, revision));
-            Ok(self.tool_state.clone())
+            Ok(self.tool_state.clone().map(Arc::new))
         }
 
         async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
@@ -4877,6 +5000,8 @@ mod tests {
         deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
         oplog_entry_reads: Mutex<Vec<(OplogIndex, Option<ComponentRevision>)>>,
+        invocation_summary:
+            Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
         revert_resolution_error: Mutex<Option<String>>,
     }
 
@@ -4911,6 +5036,7 @@ mod tests {
                 deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
                 oplog_entry_reads: Mutex::new(Vec::new()),
+                invocation_summary: Mutex::new(None),
                 revert_resolution_error: Mutex::new(None),
             }
         }
@@ -5390,6 +5516,40 @@ mod tests {
             Ok(true)
         }
 
+        async fn get_invocation(
+            &self,
+            _: &AgentId,
+            _: &golem_common::model::InvocationId,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            Ok(self.invocation_summary.lock().unwrap().clone())
+        }
+
+        async fn list_invocations(
+            &self,
+            _: &AgentId,
+            _: golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsRequest,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::ListInvocationsSuccess>
+        {
+            unimplemented!()
+        }
+
+        async fn lookup_invocations(
+            &self,
+            _: &AgentId,
+            _: &IdempotencyKey,
+            _: Option<String>,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
+        {
+            unimplemented!()
+        }
+
         async fn invoke_agent(
             &self,
             target: &RoutedTarget,
@@ -5493,7 +5653,12 @@ mod tests {
                 let operation = start
                     .external_tool
                     .as_ref()
-                    .map(|tool| format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/")))
+                    .map(|tool| {
+                        golem_common::model::InvocationOperation::tool_operation(
+                            &tool.tool_name,
+                            &tool.command_path,
+                        )
+                    })
                     .unwrap_or_else(|| start.method_name.clone().unwrap_or_default());
                 prepared
                     .finalize(*agent_id, self.fingerprint, &operation)
@@ -5573,6 +5738,53 @@ mod tests {
         ))
     }
 
+    /// The harness's tool `weather`: one subcommand `current`, with the alias `now`.
+    fn weather_tool_definition() -> golem_common::schema::tool::Tool {
+        use golem_common::schema::tool::{
+            CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Tool,
+        };
+        let body = CommandBody {
+            positionals: Default::default(),
+            options: vec![],
+            flags: vec![],
+            constraints: vec![],
+            stdin: None,
+            stdout: None,
+            stderr: None,
+            result: None,
+            errors: vec![],
+            annotations: None,
+        };
+        Tool {
+            version: "1.0.0".into(),
+            requires_filesystem: false,
+            http_mount: None,
+            schema: SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![
+                    CommandNode {
+                        name: "weather".into(),
+                        aliases: vec![],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![CommandIndex(1)],
+                        body: None,
+                    },
+                    CommandNode {
+                        name: "current".into(),
+                        aliases: vec!["now".into()],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![],
+                        body: Some(body),
+                    },
+                ],
+            },
+        }
+    }
+
     impl RestHarness {
         fn new(mode: AgentMode) -> Self {
             Self::new_with_method_schema(mode, InputSchema::Parameters(vec![]), OutputSchema::Unit)
@@ -5646,12 +5858,23 @@ mod tests {
                 Duration::from_secs(60),
             ));
             let agent_types = agent_type_resolver(registry);
+            let tool_state = crate::service::component::tests::tool_deployment_state(
+                &component,
+                "weather",
+                weather_tool_definition(),
+                [
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type_name.clone(),
+                    },
+                ],
+            );
 
             Self {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService {
                         components: vec![component],
-                        tool_state: None,
+                        tool_state: Some(tool_state),
                         tool_queries: Mutex::new(vec![]),
                     }),
                     Arc::new(AllowAllAuthService),
@@ -9279,7 +9502,8 @@ mod tests {
     #[test]
     async fn native_tool_fresh_owner_uses_reserved_identity_and_native_wire_shape() {
         let harness = RestHarness::new(AgentMode::Durable);
-        let request = harness.tool_request();
+        let mut request = harness.tool_request();
+        request.command_path = vec!["now".to_string()];
         let key = RestHarness::tool_key();
         harness
             .worker_client
@@ -9343,6 +9567,7 @@ mod tests {
         assert!(tool.fresh_owner);
         assert!(!tool.stdin && !tool.stdout);
         assert_eq!(tool.tool_name, "weather");
+        assert_eq!(tool.command_path, ["current"]);
         assert!(matches!(
             response.result,
             Some(NativeToolResult::Success(_))
@@ -9512,5 +9737,71 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    fn invocation_summary_proto(
+        invocation_id: golem_common::model::InvocationId,
+        state: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState,
+        kind: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationKind,
+        operation: Option<String>,
+    ) -> golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary {
+            invocation_id: Some(invocation_id.0.into()),
+            state: state as i32,
+            kind: kind as i32,
+            operation,
+            changed_at: Some(::prost_types::Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A completed method result whose operation is not known cannot be decoded, so the read
+    /// answers the summary with no result instead of failing.
+    #[test]
+    async fn a_completed_invocation_with_an_unknown_operation_keeps_its_summary() {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind as ProtoKind, InvocationLifecycleState as ProtoState,
+        };
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let invocation_id = golem_common::model::InvocationId(Uuid::new_v4());
+        let owned = golem_common::model::OwnedInvocationId::new(
+            harness.some_agent_id().agent_id,
+            invocation_id,
+        );
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            invocation_id,
+            ProtoState::Completed,
+            ProtoKind::Unspecified,
+            None,
+        ));
+        harness
+            .worker_client
+            .set_invocation_output(AgentInvocationOutput {
+                result: golem_common::model::AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::Tuple { elements: vec![] },
+                },
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: Some(harness.component_revision),
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+            });
+
+        let got = harness
+            .worker_service
+            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+            .await;
+        let got = got.unwrap_or_else(|error| {
+            panic!("get of a completed invocation with unknown operation failed: {error}")
+        });
+        assert!(got.result.is_none());
     }
 }

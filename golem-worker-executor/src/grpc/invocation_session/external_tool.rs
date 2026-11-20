@@ -60,7 +60,10 @@ where
         };
         let owned = OwnedAgentId::new(request.environment_id()?, &agent_id);
         self.ensure_worker_belongs_to_this_executor(&owned.agent_id)?;
-        let operation = format!("tool:{}/{}", tool.tool_name, tool.command_path.join("/"));
+        let operation = golem_common::model::InvocationOperation::tool_operation(
+            &tool.tool_name,
+            &tool.command_path,
+        );
         if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG {
             return Err(WorkerExecutorError::invalid_request(
                 "existing tool target must be a real agent",
@@ -187,6 +190,9 @@ where
                     output.invocation_status = Some(InvocationStatus::Complete);
                     response = output;
                 }
+                LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled)) => {
+                    response.invocation_status = Some(InvocationStatus::Cancelled)
+                }
                 LookupResult::Complete(Err(error)) => return Err(error),
                 LookupResult::Pending => {
                     response.invocation_status = Some(InvocationStatus::Pending)
@@ -304,6 +310,11 @@ where
                     .transpose()
                     .map_err(WorkerExecutorError::invalid_request)?,
                 activation.registered_tool.deployment_revision,
+            )?;
+            crate::worker::require_canonical_command_path(
+                &activation,
+                &tool_name,
+                &tool.command_path,
             )?;
             let at = DateTime::from_timestamp(
                 timestamp.seconds,

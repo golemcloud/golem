@@ -2,6 +2,8 @@ use super::*;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
 use async_trait::async_trait;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::card::{
     AgentCardHolder, Card, CardHolder, CardId, InvocationWalletPin, StoredCard, WalletVersionToken,
 };
@@ -21,7 +23,7 @@ use golem_common::model::oplog::{
     HostStreamKind, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, AgentInvocationPayload, ForkResult, Timestamp};
+use golem_common::model::{AgentId, ForkResult, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
@@ -264,7 +266,8 @@ fn invocation_started_for(
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id,
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+        operation: Box::new(InvocationRequestOperation::SaveSnapshot),
+        payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
             caller: golem_common::model::caller::Caller::anonymous(),
         })),
         trace_id: TraceId::generate(),

@@ -14,6 +14,8 @@
 
 use crate::Tracing;
 use futures::poll;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::agent::{AgentMode, InvocationFreshnessDisposition, ParsedAgentKey};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentDto;
@@ -1072,7 +1074,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
             _ => None,
         })
         .expect("the constructor reservation must be recorded");
-    assert_eq!(status.current_idempotency_key.as_ref(), Some(&init_key));
+    assert_eq!(status.current_idempotency_key(), Some(&init_key));
     let error_index = *status
         .invocation_results
         .get(&init_key)
@@ -1117,7 +1119,7 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         .await?;
     let status = worker.get_last_known_status().await;
     assert_eq!(status.status, AgentStatus::Interrupted);
-    assert_eq!(status.current_idempotency_key.as_ref(), Some(&init_key));
+    assert_eq!(status.current_idempotency_key(), Some(&init_key));
     assert_eq!(status.invocation_results.get(&init_key), Some(&error_index));
     let interrupted = executor.stored_oplog(&id.agent_id).await;
     assert!(
@@ -2448,8 +2450,11 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             .values()
             .filter_map(|entry| match entry {
                 OplogEntry::PendingAgentInvocation {
-                    payload, trace_id, ..
-                } => Some((payload, trace_id)),
+                    operation,
+                    payload,
+                    trace_id,
+                    ..
+                } => Some(((operation, payload), trace_id)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -2457,7 +2462,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
         let AgentInvocationPayload::AgentInitialization {
             caller: recorded, ..
         } = oplog
-            .download_payload(pending[0].0.clone())
+            .download_request(pending[0].0.0.as_ref().clone(), pending[0].0.1.clone())
             .await
             .map_err(anyhow::Error::msg)?
         else {
@@ -2602,22 +2607,28 @@ async fn restart_initializes_a_partially_created_agent_as_its_recorded_creator(
             .values()
             .filter_map(|entry| match entry {
                 OplogEntry::PendingAgentInvocation {
+                    operation,
                     payload,
                     trace_id,
                     trace_states,
                     invocation_context,
                     ..
-                } => Some((payload, trace_id, trace_states, invocation_context)),
+                } => Some((
+                    (operation, payload),
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                )),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(pending.len(), 1, "{loader}");
-        let (payload, trace_id, trace_states, invocation_context) = pending[0];
+        let ((operation, payload), trace_id, trace_states, invocation_context) = pending[0];
         let AgentInvocationPayload::AgentInitialization {
             caller: recorded, ..
         } = worker
             .oplog()
-            .download_payload(payload.clone())
+            .download_request(operation.as_ref().clone(), payload.clone())
             .await
             .map_err(anyhow::Error::msg)?
         else {
@@ -2730,10 +2741,13 @@ async fn cancelled_creator_keeps_original_context_and_serializes_existing_only(
     let mut initializations = 0;
     for entry in entries.values() {
         if let OplogEntry::PendingAgentInvocation {
-            payload, trace_id, ..
+            operation,
+            payload,
+            trace_id,
+            ..
         } = entry
             && let AgentInvocationPayload::AgentInitialization { caller, .. } = oplog
-                .download_payload(payload.clone())
+                .download_request(operation.as_ref().clone(), payload.clone())
                 .await
                 .map_err(anyhow::Error::msg)?
         {
@@ -2920,8 +2934,10 @@ async fn prepare_session(
 ) -> anyhow::Result<StreamSessionKey> {
     let oplog = worker.oplog();
     let pending_index = oplog.current_oplog_index().await.next().next();
-    let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+    let operation = InvocationRequestOperation::AgentMethod {
         method_name: "increment".into(),
+    };
+    let payload = OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
         input: data_value!().value().clone(),
         caller: callers::anonymous(),
         scope_card: None,
@@ -2999,6 +3015,7 @@ async fn prepare_session(
                     .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
                         None,
                         idempotency_key,
+                        Box::new(operation.clone()),
                         payload.clone(),
                         trace_id.clone(),
                         trace_states.clone(),
@@ -3015,6 +3032,7 @@ async fn prepare_session(
             .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: idempotency_key,
+                operation: Box::new(operation),
                 payload,
                 trace_id,
                 trace_states,
@@ -3059,8 +3077,10 @@ async fn completion_receipt_precedes_fifo_status_fold(
     let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
     let metadata = worker.get_initial_worker_metadata();
     let idempotency_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+    let operation = InvocationRequestOperation::AgentMethod {
         method_name: "increment".into(),
+    };
+    let payload = OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
         input: data_value!().value().clone(),
         caller: callers::anonymous(),
         scope_card: None,
@@ -3072,6 +3092,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
         .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
             None,
             idempotency_key,
+            Box::new(operation.clone()),
             payload.clone(),
             context.trace_id.clone(),
             context.trace_states.clone(),
@@ -3083,6 +3104,7 @@ async fn completion_receipt_precedes_fifo_status_fold(
         .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: idempotency_key,
+            operation: Box::new(operation),
             payload,
             trace_id: context.trace_id,
             trace_states: context.trace_states,
@@ -3219,8 +3241,10 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
         .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: key,
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+            operation: Box::new(InvocationRequestOperation::AgentMethod {
                 method_name: "increment".into(),
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
                 input: data_value!().value().clone(),
                 caller: callers::anonymous(),
                 scope_card: None,
@@ -3377,12 +3401,16 @@ async fn jump_projection_finishes_without_its_producer(
             .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
                 timestamp: Timestamp::now_utc(),
                 invocation_id: key,
-                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                operation: Box::new(InvocationRequestOperation::AgentMethod {
                     method_name: "increment".into(),
-                    input: data_value!().value().clone(),
-                    caller: callers::anonymous(),
-                    scope_card: None,
-                })),
+                }),
+                payload: OplogPayload::Inline(Box::new(
+                    StoredAgentInvocationPayload::AgentMethod {
+                        input: data_value!().value().clone(),
+                        caller: callers::anonymous(),
+                        scope_card: None,
+                    },
+                )),
                 invocation_context: context.to_oplog_data(),
                 trace_id: context.trace_id,
                 trace_states: context.trace_states,
