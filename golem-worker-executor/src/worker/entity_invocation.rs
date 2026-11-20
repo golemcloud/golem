@@ -1369,6 +1369,7 @@ mod tests {
                     error,
                     retry_from,
                     semantic_trap_retry_override,
+                    ..
                 })) = owner.selected_owner_failure()
                 else {
                     panic!("cleanup must elect its typed trap before transport conversion");

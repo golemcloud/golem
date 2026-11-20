@@ -97,6 +97,7 @@ macro_rules! create_oplog_entry {
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }))
     };
 }
@@ -6697,6 +6698,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }),
     }
     .rounded();
@@ -6869,6 +6871,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }),
     }
     .rounded();
@@ -13936,6 +13939,7 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
             golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
     .rounded();
 
@@ -14136,6 +14140,7 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }))
         .rounded()
     };

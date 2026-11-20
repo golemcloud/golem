@@ -53,6 +53,7 @@ impl ReplayState {
                             };
                             if same_store {
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                    tx.cursor.last_replayed_index().next(),
                                     "runtime-card audit before the next operation from its Store",
                                     format!("missing audit for {card}"),
                                 ));
@@ -74,6 +75,7 @@ impl ReplayState {
             "cancelled native stream read cannot retain its recorded guest delivery at {index}"
         );
         let error = WorkerExecutorError::unexpected_oplog_entry(
+            index,
             "recorded consumer stream observation",
             reason,
         );
@@ -252,6 +254,7 @@ impl ReplayState {
 
             if self.at_replay_tail() {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    marker_index,
                     match start_index {
                         Some(start_index) => format!(
                             "CompletionDelivered {{ start_index: {start_index} }} at {marker_index}"
@@ -336,6 +339,7 @@ impl ReplayState {
         match self.await_resolution_outcome(handle).await? {
             ResolutionOutcome::Resolved(resolution) => Ok(resolution),
             ResolutionOutcome::Incomplete => Err(WorkerExecutorError::unexpected_oplog_entry(
+                start_idx,
                 "End or Cancelled",
                 format!(
                     "end of replay: durable call Start at {start_idx} has no matching End/Cancelled"

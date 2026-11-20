@@ -975,6 +975,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         local_agent_config: Vec::new(),
         original_phantom_id: Some(Uuid::new_v4()),
         instance_id: Uuid::new_v4(),
+        never_live: true,
     };
     let public = PublicOplogEntry::from_enrichment_entry(
         OplogIndex::INITIAL,
@@ -1013,6 +1014,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     );
     assert_eq!(public.original_phantom_id, projection.original_phantom_id);
     assert_eq!(public.instance_id, projection.instance_id);
+    assert!(public.never_live);
     assert_eq!(public.initial_active_plugins.len(), 1);
     assert_eq!(
         public.initial_active_plugins.first().unwrap().plugin_name,
@@ -1032,6 +1034,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         wire.owner_kind,
         crate::preview2::golem_api_1_x::oplog::OwnerKind::OplogProcessor
     ));
+    assert!(wire.never_live);
 }
 
 fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {

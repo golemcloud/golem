@@ -22,6 +22,7 @@ use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
     HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
+    ReplayDivergence, ReplayHostCall, ReplayStep, StartIdentityField,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{

@@ -106,6 +106,8 @@ pub enum Readiness {
     Busy,
     /// The agent has failed or exited and runs no more commands.
     Failed,
+    /// The agent is a never-live sandbox and runs no commands.
+    Sandboxed,
     /// The status could not be read.
     Unknown,
 }
@@ -306,6 +308,7 @@ impl Block {
             Readiness::Ready => (114, 92, '\u{25cf}'),
             Readiness::Busy => (221, 93, '\u{25cf}'),
             Readiness::Failed => (203, 91, '\u{25cf}'),
+            Readiness::Sandboxed => (141, 95, '\u{25cf}'),
             // A hollow dot, not a colour that could pass for a status.
             Readiness::Unknown => (250, 97, '\u{25cb}'),
         };
@@ -1018,6 +1021,7 @@ mod tests {
             (Readiness::Ready, "38;5;114m\u{25cf}", "92m\u{25cf}"),
             (Readiness::Busy, "38;5;221m\u{25cf}", "93m\u{25cf}"),
             (Readiness::Failed, "38;5;203m\u{25cf}", "91m\u{25cf}"),
+            (Readiness::Sandboxed, "38;5;141m\u{25cf}", "95m\u{25cf}"),
             // An unread status is a hollow dot, not a colour that could pass for one.
             (Readiness::Unknown, "38;5;250m\u{25cb}", "97m\u{25cb}"),
         ] {

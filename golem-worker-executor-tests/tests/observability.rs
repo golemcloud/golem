@@ -15,12 +15,12 @@
 use crate::Tracing;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_common::model::IdempotencyKey;
 use golem_common::model::caller::{ClaimVisibility, PublicCaller};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
+use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::debug_render::debug_render_oplog_entry;
@@ -134,6 +134,59 @@ async fn get_oplog_1(
         "Expected at least 3 AgentInvocationStarted entries with AgentMethodInvocation, got {invoke_count}"
     );
 
+    Ok(())
+}
+
+/// An ordinary agent's Create entry records no never-live mark, and the agent reports its folded
+/// status with no underlying status, also after the executor restarts and the agent is
+/// reconstructed from its oplog.
+#[test]
+#[timeout("2m")]
+async fn ordinary_agent_is_not_never_live_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GolemHostApi", "ordinary-not-never-live");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "generate_idempotency_keys",
+            data_value!(),
+        )
+        .await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "generate_idempotency_keys",
+            data_value!(),
+        )
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let PublicOplogEntry::Create(create) = &oplog[0].entry else {
+        panic!("the first entry is not Create: {:?}", oplog[0].entry);
+    };
+    assert!(!create.never_live);
+
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(metadata.status, AgentStatus::Idle);
+    assert_eq!(metadata.underlying_status, None);
     Ok(())
 }
 

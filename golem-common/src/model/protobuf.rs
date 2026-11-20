@@ -459,6 +459,7 @@ impl From<AgentStatus> for golem::worker::AgentStatus {
             AgentStatus::Retrying => golem::worker::AgentStatus::Retrying,
             AgentStatus::Failed => golem::worker::AgentStatus::Failed,
             AgentStatus::Exited => golem::worker::AgentStatus::Exited,
+            AgentStatus::Sandboxed => golem::worker::AgentStatus::Sandboxed,
         }
     }
 }

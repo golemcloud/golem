@@ -61,6 +61,9 @@ pub struct CreateParameters {
     pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
     pub create_request: CreateRequest,
+    /// Whether the owner is a never-live sandbox. A marked owner reports the `Sandboxed` status.
+    /// The mark never changes after the `Create` entry.
+    pub never_live: bool,
 }
 
 /// The request that created an owner: its kind, its idempotency key, and the caller and
@@ -143,6 +146,7 @@ pub struct CreateProjectionParameters {
     pub local_agent_config: Vec<UntypedAgentConfigEntry>,
     pub original_phantom_id: Option<Uuid>,
     pub instance_id: Uuid,
+    pub never_live: bool,
 }
 
 impl From<CreateParameters> for CreateProjectionParameters {
@@ -166,6 +170,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             original_phantom_id,
             instance_id,
             create_request: _,
+            never_live,
         } = value;
         Self {
             agent_id,
@@ -182,6 +187,7 @@ impl From<CreateParameters> for CreateProjectionParameters {
             local_agent_config,
             original_phantom_id,
             instance_id,
+            never_live,
         }
     }
 }

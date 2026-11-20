@@ -16,6 +16,7 @@ pub mod attachment;
 pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
+mod replay_divergence;
 
 use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::component::ComponentRevision;
@@ -33,6 +34,7 @@ use crate::model::card::{CardId, PublicCardHolder, PublicInvocationWalletPin};
 use crate::oplog_entry;
 use crate::schema::TypedSchemaValue;
 pub use public_types::*;
+pub use replay_divergence::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -94,7 +96,8 @@ oplog_entry! {
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>,
-            instance_id: Uuid
+            instance_id: Uuid,
+            never_live: bool
         }
     },
     /// Marks the start of a durable host call (or scope such as a batched-write).
@@ -393,12 +396,19 @@ oplog_entry! {
             snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
             snapshot_fault: Option<SnapshotFault>,
+            /// Why the update failed.
+            failure_class: UpdateFailureClass,
+            /// The first divergence from the recorded history, when the replay of the target
+            /// diverged at a recorded entry.
+            divergence: Option<Box<ReplayDivergence>>,
         }
         public {
             target_revision: ComponentRevision,
             details: Option<String>,
             snapshot_assisted_details: Option<PublicFailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
+            failure_class: UpdateFailureClass,
+            divergence: Option<Box<ReplayDivergence>>,
         }
     },
     /// Increased allocated linear memory and GC heap capacity

@@ -124,6 +124,7 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 owner_kind
                     .validate_instance_name(&agent_id.agent_id)
@@ -189,6 +190,7 @@ impl WorkerService for DefaultWorkerService {
                             ..Default::default()
                         },
                         agent_mode,
+                        never_live,
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,

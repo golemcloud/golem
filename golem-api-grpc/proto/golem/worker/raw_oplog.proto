@@ -182,6 +182,7 @@ message RawCreateParameters {
   optional string agent_type_name = 16;
   optional string canonical_key = 17;
   RawCreateRequest create_request = 18;
+  bool never_live = 19;
 }
 
 enum RawCreateRequestKind {
@@ -364,6 +365,8 @@ message RawFailedUpdateParameters {
   optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
   optional uint64 update_attempt_index = 4;
   optional RawSnapshotFault snapshot_fault = 5;
+  UpdateFailureClass failure_class = 6;
+  optional ReplayDivergence divergence = 7;
 }
 
 // Whether a failed update is about the record that the update selected.
