@@ -467,6 +467,7 @@ fn tar_with(path: &str, kind: tar::EntryType, link: &str, repeat: bool) -> Vec<u
 
 #[test]
 fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
+    let digest = format!("sha256:{:x}", Sha256::digest(b"manifest"));
     for (path, kind, link, repeat) in [
         ("/escape", tar::EntryType::Regular, "", false),
         ("blobs/../escape", tar::EntryType::Regular, "", false),
@@ -482,24 +483,44 @@ fn refuses_unsafe_or_duplicate_entries_and_missing_index() {
         } else {
             path
         };
-        let error = format!(
-            "{:#}",
-            read(&tar_with(path, kind, link, repeat)[..]).unwrap_err()
-        );
+        let tar = tar_with(path, kind, link, repeat);
+        let error = format!("{:#}", read(&tar[..]).unwrap_err());
         assert!(error.contains(name), "{error}");
+        let error = verify_manifest_digest(std::io::Cursor::new(&tar), &digest).unwrap_err();
+        assert!(format!("{error:#}").contains(name));
     }
+}
+
+#[test]
+fn streaming_manifest_check_hashes_the_bytes_not_just_the_index() {
+    let (config, layers) = sample();
+    let (digest, archive) = pack(&config, &layers).unwrap();
+    verify_manifest_digest(std::io::Cursor::new(&archive), &digest).unwrap();
+
+    let mut entries = archive_entries(&archive[..]).unwrap();
+    // Keep the index, the blob path, and the length unchanged.
+    entries.get_mut(&blob_path(&digest).unwrap()).unwrap()[0] ^= 1;
+    let modified = write_tar(&entries).unwrap();
+    let error = verify_manifest_digest(std::io::Cursor::new(&modified), &digest).unwrap_err();
+    assert!(format!("{error:#}").contains("Digest mismatch"));
 }
 
 #[test]
 fn refuses_a_layer_whose_bytes_do_not_match_its_digest() {
     let (config, layers) = sample();
-    let (_, archive) = pack(&config, &layers).unwrap();
+    let (digest, archive) = pack(&config, &layers).unwrap();
     let mut entries = archive_entries(&archive[..]).unwrap();
     let path = blob_path(&config.components.values().next().unwrap().wasm).unwrap();
     entries.get_mut(&path).unwrap()[0] ^= 1;
     let broken = write_tar(&entries).unwrap();
     let error = format!("{:#}", read(&broken[..]).unwrap_err());
     assert!(error.contains(&path), "{error}");
+    let error = verify_manifest_digest(std::io::Cursor::new(&broken), &digest).unwrap_err();
+    assert!(format!("{error:#}").contains(&format!("Digest mismatch for {path}")));
+    entries.remove(&path);
+    let missing = write_tar(&entries).unwrap();
+    let error = verify_manifest_digest(std::io::Cursor::new(&missing), &digest).unwrap_err();
+    assert!(format!("{error:#}").contains(&format!("Missing package entry {path}")));
 }
 
 #[test]
@@ -555,13 +576,15 @@ fn refuses_broken_initial_file_sets() {
                 })
                 .collect(),
         });
-        // The writer runs the reader on what it produced, including if the blob digest is intact.
-        let error = format!("{:#}", pack(&config, &blobs).unwrap_err());
+        let (digest, tar) = pack_archive(&config, &blobs).unwrap();
+        let error = format!("{:#}", read(tar.as_slice()).unwrap_err());
         assert!(error.contains(expected), "{error}");
         assert!(
             error.contains(&blob_path(&descriptor.digest).unwrap()),
             "{error}"
         );
+        let error = verify_manifest_digest(std::io::Cursor::new(&tar), &digest).unwrap_err();
+        assert!(format!("{error:#}").contains(expected));
     }
 }
 

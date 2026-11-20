@@ -24,20 +24,23 @@ use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::NaiveDateTime;
+use futures::stream::BoxStream;
 use sqlx::Connection;
+use std::io::Read;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::ptr::NonNull;
 
-struct ReadBlob<'a> {
+struct IncrementalBlob<'a> {
     raw: NonNull<libsqlite3_sys::sqlite3_blob>,
     _connection: PhantomData<&'a mut ()>,
 }
 
-impl<'a> ReadBlob<'a> {
+impl<'a> IncrementalBlob<'a> {
     fn open(
         handle: &'a mut sqlx::sqlite::LockedSqliteHandle<'_>,
         rowid: i64,
+        writable: bool,
     ) -> Result<Self, Error> {
         let mut raw = std::ptr::null_mut();
         // SAFETY: SQLx excludes concurrent connection access while locked. The returned
@@ -49,7 +52,7 @@ impl<'a> ReadBlob<'a> {
                 c"blob_storage".as_ptr(),
                 c"value".as_ptr(),
                 rowid,
-                0,
+                i32::from(writable),
                 &mut raw,
             )
         };
@@ -88,9 +91,26 @@ impl<'a> ReadBlob<'a> {
         );
         Ok(Bytes::from(bytes))
     }
+
+    fn write(&mut self, offset: i32, bytes: &[u8]) -> Result<(), Error> {
+        // SAFETY: the blob is live and exclusively owned, and SQLite checks the range.
+        let result = unsafe {
+            libsqlite3_sys::sqlite3_blob_write(
+                self.raw.as_ptr(),
+                bytes.as_ptr().cast(),
+                i32::try_from(bytes.len())?,
+                offset,
+            )
+        };
+        anyhow::ensure!(
+            result == libsqlite3_sys::SQLITE_OK,
+            "SQLite blob write failed ({result})"
+        );
+        Ok(())
+    }
 }
 
-impl Drop for ReadBlob<'_> {
+impl Drop for IncrementalBlob<'_> {
     fn drop(&mut self) {
         // SAFETY: close exactly once, before releasing the borrowed connection lock.
         unsafe {
@@ -135,6 +155,7 @@ impl SqliteBlobStorage {
 
     fn namespace(namespace: BlobStorageNamespace) -> String {
         match namespace {
+            BlobStorageNamespace::PublishedBlobs => "published_blobs".to_string(),
             BlobStorageNamespace::CompilationCache { environment_id } => {
                 format!("compilation_cache-{environment_id}")
             }
@@ -180,6 +201,85 @@ impl SqliteBlobStorage {
 
 #[async_trait]
 impl BlobStorageBackend for SqliteBlobStorage {
+    async fn put_published_file_if_absent_at(
+        &self,
+        path: &NormalizedBlobPath<'_>,
+        file: tempfile::NamedTempFile,
+    ) -> Result<PutIfAbsent, Error> {
+        let namespace = Self::namespace(BlobStorageNamespace::PublishedBlobs);
+        let parent = path.parent_text()?;
+        let name = path.file_name_text()?;
+        let mut connection = self.pool.acquire_blob_writer().await?;
+        let runtime = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            let mut file = file.reopen()?;
+            let size = i32::try_from(file.metadata()?.len())?;
+            let mut tx = runtime.block_on(connection.begin_with("BEGIN IMMEDIATE"))?;
+            let rowid: Option<(i64,)> = runtime.block_on(
+                sqlx::query_as(
+                    "INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
+                 VALUES (?, ?, ?, zeroblob(?), ?, FALSE)
+                 ON CONFLICT(namespace, parent, name, is_directory) DO NOTHING RETURNING rowid",
+                )
+                .bind(namespace)
+                .bind(parent)
+                .bind(name)
+                .bind(size)
+                .bind(size)
+                .fetch_optional(&mut *tx),
+            )?;
+            if let Some((rowid,)) = rowid {
+                if size > 0 {
+                    let mut handle = runtime.block_on(tx.lock_handle())?;
+                    let mut blob = IncrementalBlob::open(&mut handle, rowid, true)?;
+                    let mut chunk = vec![0; BLOB_STREAM_CHUNK_SIZE];
+                    let mut offset = 0;
+                    while offset < size {
+                        let count = (size - offset).min(BLOB_STREAM_CHUNK_SIZE as i32);
+                        let bytes = &mut chunk[..count as usize];
+                        file.read_exact(bytes)?;
+                        blob.write(offset, bytes)?;
+                        offset += count;
+                    }
+                }
+                runtime.block_on(tx.commit())?;
+                Ok(PutIfAbsent::Written)
+            } else {
+                runtime.block_on(tx.rollback())?;
+                Ok(PutIfAbsent::AlreadyExists)
+            }
+        })
+        .await?
+    }
+
+    async fn get_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        if namespace != BlobStorageNamespace::PublishedBlobs {
+            return Ok(self
+                .get_raw_at(target_label, op_label, namespace, path)
+                .await?
+                .map(|data| {
+                    Box::pin(futures::stream::iter([Ok(Bytes::from(data))]))
+                        as BoxStream<'static, _>
+                }));
+        }
+        let Some(metadata) = self
+            .get_metadata_at(target_label, op_label, namespace.clone(), path)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(self
+            .get_range_stream_at(target_label, op_label, namespace, path, 0, metadata.size)
+            .await?
+            .map(|result| result.stream))
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,
@@ -232,7 +332,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                 };
                 // Keep one read snapshot from rowid lookup through the last chunk.
                 let mut handle = runtime.block_on(transaction.lock_handle())?;
-                let mut blob = ReadBlob::open(&mut handle, rowid)?;
+                let mut blob = IncrementalBlob::open(&mut handle, rowid, false)?;
                 let total_size = blob.size();
                 validate_range(offset, length, total_size)?;
                 if ready.take().unwrap().send(Ok(Some(total_size))).is_err() {

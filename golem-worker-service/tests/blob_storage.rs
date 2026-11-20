@@ -32,6 +32,7 @@ use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, memory, s3};
 use golem_test_framework::components::s3::{DockerRustFs, S3Server};
 use pretty_assertions::assert_eq;
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -840,6 +841,201 @@ async fn get_put_get_new_dir_streaming(
 
     assert!(result1.is_none());
     assert_eq!(result2, data.to_vec());
+}
+
+#[test]
+async fn published_package_blob_is_verified_and_created_once(
+    #[dimension(layout_storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let bytes = vec![42; 3 * BLOB_STREAM_CHUNK_SIZE + 17];
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let input = || {
+        futures::stream::iter(
+            bytes
+                .chunks(BLOB_STREAM_CHUNK_SIZE)
+                .map(|chunk| Ok(Bytes::copy_from_slice(chunk))),
+        )
+        .boxed()
+    };
+    let bad_input = || futures::stream::iter([Ok(Bytes::from_static(b"wrong"))]).boxed();
+
+    assert!(
+        storage
+            .store_published_blob(&digest, bad_input())
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let (first, second) = tokio::join!(
+        storage.store_published_blob(&digest, input()),
+        storage.store_published_blob(&digest, input()),
+    );
+    let (_, first) = first.unwrap();
+    let (_, second) = second.unwrap();
+    assert_ne!(first, second);
+    assert!(
+        storage
+            .store_published_blob(&digest, bad_input())
+            .await
+            .is_err()
+    );
+    let mut output = storage.read_published_blob(&digest).await.unwrap().unwrap();
+    let mut hash = Sha256::new();
+    let mut chunks = 0;
+    while let Some(chunk) = output.try_next().await.unwrap() {
+        chunks += 1;
+        hash.update(chunk);
+    }
+    assert!(
+        chunks > 1,
+        "The backend returned the entire object as one chunk"
+    );
+    assert_eq!(format!("sha256:{:x}", hash.finalize()), digest);
+}
+
+#[test]
+async fn published_package_blob_rejects_generic_mutation() {
+    let storage = memory::InMemoryBlobStorage::new();
+    let bytes = Bytes::from_static(b"verified bytes");
+    let hex = format!("{:x}", Sha256::digest(&bytes));
+    let path = Path::new(&hex);
+    let digest = format!("sha256:{hex}");
+    let published = BlobStorageNamespace::PublishedBlobs;
+    let other = BlobStorageNamespace::Components {
+        environment_id: EnvironmentId(Uuid::new_v4()),
+    };
+    let target = Path::new("other");
+    let stream = vec![1]
+        .map_item(|item| item.map_err(widen_infallible))
+        .map_error(widen_infallible)
+        .erased();
+    let label = "published_blobs_test";
+    let (_, outcome) = storage
+        .store_published_blob(&digest, futures::stream::iter([Ok(bytes)]).boxed())
+        .await
+        .unwrap();
+    assert_eq!(outcome, PutIfAbsent::Written);
+    storage
+        .put_raw(label, "seed", other.clone(), target, b"overwrite")
+        .await
+        .unwrap();
+
+    assert!(
+        storage
+            .put_raw(label, "put", published.clone(), path, b"overwrite")
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .put_raw_if_absent(
+                label,
+                "put_if_absent",
+                published.clone(),
+                target,
+                b"overwrite"
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .put_stream(label, "put_stream", published.clone(), path, &stream)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .create_dir(label, "mkdir", published.clone(), target)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .delete_dir(label, "rmdir", published.clone(), Path::new("."))
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .delete(label, "delete", published.clone(), path)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .delete_many(
+                label,
+                "delete_many",
+                published.clone(),
+                &[path.to_path_buf()]
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .copy(label, "copy", published.clone(), path, target)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .copy_between(
+                label,
+                "copy_between",
+                other,
+                target,
+                published.clone(),
+                path
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .r#move(label, "move", published, path, target)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&digest)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+async fn published_package_blob_streams_large_archive() {
+    let root = tempdir().unwrap();
+    let storage = fs::FileSystemBlobStorage::new(root.path()).await.unwrap();
+    // The 256 MiB input never exists as a single buffer, even in the test fixture.
+    let block = Bytes::from(vec![0x4a; BLOB_STREAM_CHUNK_SIZE]);
+    let block_count = 4096;
+    let mut expected = Sha256::new();
+    for _ in 0..block_count {
+        expected.update(&block);
+    }
+    let digest = format!("sha256:{:x}", expected.finalize());
+    let input = futures::stream::iter((0..block_count).map(|_| Ok(block.clone()))).boxed();
+    let (_, result) = storage.store_published_blob(&digest, input).await.unwrap();
+    assert_eq!(result, PutIfAbsent::Written);
+    let mut read = storage.read_published_blob(&digest).await.unwrap().unwrap();
+    let mut actual = Sha256::new();
+    while let Some(chunk) = read.try_next().await.unwrap() {
+        assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+        actual.update(chunk);
+    }
+    assert_eq!(format!("sha256:{:x}", actual.finalize()), digest);
 }
 
 #[test]
@@ -2846,6 +3042,9 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
         },
         BlobStorageNamespace::Components { .. } => {
             BlobStorageNamespace::Components { environment_id }
+        }
+        BlobStorageNamespace::PublishedBlobs => {
+            panic!("Published blobs do not belong to an environment")
         }
         BlobStorageNamespace::FilesystemSnapshots {
             agent_id,

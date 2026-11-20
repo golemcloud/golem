@@ -260,6 +260,50 @@ impl std::fmt::Debug for CommitGate {
 
 #[async_trait]
 impl BlobStorageBackend for FileSystemBlobStorage {
+    async fn create_published_staging_file(&self) -> Result<tempfile::NamedTempFile, Error> {
+        let staging = self.root.join(STAGING_DIRECTORY);
+        Ok(tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&staging)?;
+            staged_put_file(&staging)
+        })
+        .await??)
+    }
+
+    async fn put_published_file_if_absent_at(
+        &self,
+        path: &NormalizedBlobPath<'_>,
+        staged: tempfile::NamedTempFile,
+    ) -> Result<PutIfAbsent, Error> {
+        let target = self.blob_of(&BlobStorageNamespace::PublishedBlobs, path)?;
+        self.ensure_path_is_inside_root(&target)?;
+        #[cfg(unix)]
+        let root = self.root.clone();
+        self.unless_dropped(move |commit| {
+            commit.go_on()?;
+            staged.as_file().sync_all()?;
+            let result = match persist_in_directory_of(commit, staged, &target, |file| {
+                file.persist_noclobber(&target)
+            }) {
+                Ok(_) => PutIfAbsent::Written,
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                    PutIfAbsent::AlreadyExists
+                }
+                Err(error) => return Err(error),
+            };
+            // A concurrent writer can see the file before its directory is synced. Sync the
+            // directory chain on both outcomes before a version can refer to the blob.
+            #[cfg(unix)]
+            for directory in target.ancestors().skip(1) {
+                std::fs::File::open(directory)?.sync_all()?;
+                if directory == root {
+                    break;
+                }
+            }
+            Ok(result)
+        })
+        .await
+    }
+
     async fn get_raw_at(
         &self,
         _target_label: &'static str,

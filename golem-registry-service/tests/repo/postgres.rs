@@ -80,6 +80,11 @@ inherit_test_dep!(Tracing);
 
 define_matrix_dimension!(postgres_variant: Deps -> "postgres", "postgres_tls");
 
+#[test]
+async fn package_version_repository(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::package_version_repository_contract(deps).await;
+}
+
 const SERVER_CERT_PEM: &[u8] = include_bytes!("tls/server.crt");
 const SERVER_KEY_PEM: &[u8] = include_bytes!("tls/server.key");
 

@@ -503,6 +503,121 @@ fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
     }
 }
 
+pub async fn package_version_repository_contract(deps: &Deps) {
+    use futures::StreamExt;
+    use golem_common::model::agent::extraction::ExtractedComponentMetadata;
+    use golem_common::model::component::ComponentName;
+    use golem_package::{PackageComponent, PackageConfig, PackageIdentity};
+    use golem_registry_service::repo::package::{
+        DbPackageRepo, InsertPackageVersionError, NewPackageVersion, PackageRepo,
+        StoredPackageArchive,
+    };
+    use sha2::{Digest, Sha256};
+
+    deps.setup().await;
+    let publisher = deps.create_account().await.revision.account_id;
+    let other = deps.create_account().await.revision.account_id;
+    let repo: Box<dyn PackageRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Box::new(DbPackageRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Box::new(DbPackageRepo::new(pool.clone())),
+    };
+    let mut layers = std::collections::BTreeMap::new();
+    let wasm = golem_package::add_blob(&mut layers, golem_package::WASM, vec![1, 2, 3]);
+    let config = PackageConfig {
+        application: "test".into(),
+        package: PackageIdentity {
+            name: "my-package".into(),
+            version: "2.4.1".into(),
+        },
+        components: [(
+            ComponentName("example".into()),
+            PackageComponent {
+                wasm: wasm.digest,
+                metadata: ExtractedComponentMetadata {
+                    agent_types: vec![],
+                    tools: vec![],
+                    tool_middlewares: vec![],
+                },
+                config_schema: Default::default(),
+                provision: Default::default(),
+                agents: Default::default(),
+                tools: Default::default(),
+                tool_middlewares: Default::default(),
+            },
+        )]
+        .into(),
+    };
+    let (manifest_digest, bytes) = golem_package::pack(&config, &layers).unwrap();
+    let bytes = bytes::Bytes::from(bytes);
+    let archive_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let input = || futures::stream::iter([Ok(bytes.clone())]).boxed();
+    let storage = deps.blob_storage.as_ref();
+    assert!(
+        StoredPackageArchive::store(storage, &archive_digest, &archive_digest, input())
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&archive_digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let archive = StoredPackageArchive::store(storage, &archive_digest, &manifest_digest, input())
+        .await
+        .unwrap();
+    let mut version = NewPackageVersion {
+        package_path: format!("/test-{publisher}/my-package"),
+        publisher_account_id: publisher,
+        version: "2.4.1".to_string(),
+        description: Some("Example package".to_string()),
+        callables: vec!["first".to_string(), "second".to_string()],
+    };
+    assert!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    repo.insert_version(&version, &archive).await.unwrap();
+    let stored = repo
+        .get_version(&version.package_path, &version.version)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.publisher_account_id, publisher);
+    assert_eq!(stored.manifest_digest, manifest_digest);
+    assert_eq!(stored.archive_digest, archive_digest);
+    assert_eq!(stored.description, version.description);
+    assert_eq!(stored.callables.0, version.callables);
+    assert_eq!(stored.lifecycle, 0);
+
+    version.description = None;
+    let duplicate = repo.insert_version(&version, &archive).await.unwrap_err();
+    assert!(matches!(duplicate, InsertPackageVersionError::Repo(err) if err.is_unique_violation()));
+    assert_eq!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap(),
+        Some(stored)
+    );
+    version.version = "2.5.0".to_string();
+    version.publisher_account_id = other;
+    assert!(matches!(
+        repo.insert_version(&version, &archive).await,
+        Err(InsertPackageVersionError::PublisherMismatch)
+    ));
+    assert!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    version.publisher_account_id = publisher;
+    repo.insert_version(&version, &archive).await.unwrap();
+}
+
 pub async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
     let services = environment_service_deps(deps);
     let parent_ids = vec![CardId::new(), CardId::new()];

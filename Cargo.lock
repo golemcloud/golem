@@ -4462,6 +4462,7 @@ dependencies = [
  "golem-common",
  "golem-mcp-import",
  "golem-native-tool",
+ "golem-package",
  "golem-schema",
  "golem-service-base",
  "golem-worker-executor-test-utils",
