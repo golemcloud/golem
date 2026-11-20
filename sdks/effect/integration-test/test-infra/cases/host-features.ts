@@ -63,14 +63,18 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
     "HostFeatures.idempotencyKey returns canonical UUID",
   )
 
-  // Self metadata — must include agentName / componentRevision /
-  // status / retryCount fields and the agentName must be our name.
+  // Self metadata — must include agentId / agentTypeName / componentRevision /
+  // status / retryCount fields. The agent ID is a UUID; the type name is ours.
   const meta = yield* liftCliError(cli.invoke(r, "selfMetadata"))
-  yield* expectMatch(meta.stdout, /agentName/i, "selfMetadata has agentName field")
+  yield* expectMatch(
+    meta.stdout,
+    /agentId[^\n]+[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-/i,
+    "selfMetadata.agentId is a UUIDv8",
+  )
   yield* expectMatch(meta.stdout, /componentRevision/i, "selfMetadata has componentRevision")
   yield* expectMatch(meta.stdout, /status/i, "selfMetadata has status")
   yield* expectMatch(meta.stdout, /retryCount/i, "selfMetadata has retryCount")
-  yield* expectMatch(meta.stdout, new RegExp(name), "selfMetadata.agentName matches instance")
+  yield* expectMatch(meta.stdout, /HostFeatures/, "selfMetadata.agentTypeName matches the type")
 
   // Fork — running side returns "original".
   const forked = yield* liftCliError(cli.invoke(r, "forkSelf"))

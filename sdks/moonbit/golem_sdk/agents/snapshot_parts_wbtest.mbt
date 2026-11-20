@@ -40,7 +40,7 @@ test "multipart framing preserves payload tails and exact delimiter near misses"
       guard decode_multipart_snapshot(
           wire, "multipart/mixed; boundary=fixture-boundary",
         )
-        is Ok((_, saved)) else {
+        is Ok(saved) else {
         fail("valid wire rejected")
       }
       assert_eq(
@@ -66,19 +66,12 @@ test "multipart carrier roundtrip Unicode dynamic names and all bytes" {
     "__proto__": { bytes: b"", content_type: "image/png", },
     "Index-2.1": { bytes: b"\xff\x00", content_type: "image/jpeg", },
   })
-  let principal = principal_from_json(
-    @json.parse(
-      "{\"tag\":\"oidc\",\"val\":{\"sub\":\"用户 🦀\",\"issuer\":\"发行者\",\"claims\":\"{}\"}}",
-    ),
-  )
-  guard encode_multipart_snapshot(saved, principal) is Ok((wire, mime)) else {
+  guard encode_multipart_snapshot(saved) is Ok((wire, mime)) else {
     fail("save failed")
   }
-  guard decode_multipart_snapshot(wire, mime)
-    is Ok((restored_principal, restored)) else {
+  guard decode_multipart_snapshot(wire, mime) is Ok(restored) else {
     fail("restore failed")
   }
-  assert_eq(restored_principal, principal)
   let restored_state : Result[SnapshotSavedState, String] = restored.decode_state()
   assert_eq(restored_state, Ok(state))
   assert_eq(restored.parts.length(), 3)
@@ -99,12 +92,11 @@ test "multipart carrier roundtrip Unicode dynamic names and all bytes" {
 ///|
 test "multipart empty bundle stays multipart and boundary collisions regenerate" {
   let empty = MultipartSnapshot::from_state(Json::null(), Map([]))
-  guard encode_multipart_snapshot(empty, @common.Principal::Anonymous)
-    is Ok((wire, mime)) else {
+  guard encode_multipart_snapshot(empty) is Ok((wire, mime)) else {
     fail("save failed")
   }
   assert_true(mime.has_prefix("multipart/mixed"))
-  guard decode_multipart_snapshot(wire, mime) is Ok((_, restored)) else {
+  guard decode_multipart_snapshot(wire, mime) is Ok(restored) else {
     fail("restore failed")
   }
   assert_eq(restored, empty)
@@ -115,12 +107,11 @@ test "multipart empty bundle stays multipart and boundary collisions regenerate"
     let saved = MultipartSnapshot::from_state(Json::null(), {
       "x": { bytes, content_type: "application/octet-stream", },
     })
-    guard encode_multipart_snapshot(saved, @common.Principal::Anonymous)
-      is Ok((wire, mime)) else {
+    guard encode_multipart_snapshot(saved) is Ok((wire, mime)) else {
       fail("save failed")
     }
     assert_true(mime.contains("golem-snapshot-1"))
-    guard decode_multipart_snapshot(wire, mime) is Ok((_, restored)) else {
+    guard decode_multipart_snapshot(wire, mime) is Ok(restored) else {
       fail("restore failed")
     }
     assert_eq(restored, saved)
@@ -204,9 +195,7 @@ test "multipart rejects malformed framing structural headers names MIME and name
       Json::null(),
       Map([(name, { bytes: b"", content_type: "text/plain", })]),
     )
-    assert_true(
-      encode_multipart_snapshot(saved, @common.Principal::Anonymous) is Err(_),
-    )
+    assert_true(encode_multipart_snapshot(saved) is Err(_))
   }
   let quoted = snapshot_test_wire([state], boundary="b:c")
   assert_true(

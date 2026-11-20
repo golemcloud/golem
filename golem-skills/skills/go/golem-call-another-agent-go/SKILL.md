@@ -7,14 +7,14 @@ description: "Calling one Go agent from another via typed RPC. Use when the user
 
 ## Overview
 
-Agents talk to each other through the callee's **definition** package. You get a typed client from `Agent.Get(id)` and call a method descriptor on it. The caller imports only the callee's **definition** package (its `ID`, its method descriptors) — never its `impl` — so the two implementations never form a Go import cycle.
+Agents talk to each other through the callee's **definition** package. You get a typed client from `Agent.Upsert(id)` and call a method descriptor on it. The caller imports only the callee's **definition** package (its `ID`, its method descriptors) — never its `impl` — so the two implementations never form a Go import cycle.
 
 Calls are durable: results are recorded in the oplog and replayed after a restart rather than re-issued.
 
 ## Steps
 
 1. **Import the callee's definition package** (e.g. `myapp/agents/ledger`).
-2. **Get a client** for a specific instance: `ledger.Agent.Get(ledger.ID{Region: "eu"})`.
+2. **Get a client** for a specific instance: `ledger.Agent.Upsert(ledger.ID{Region: "eu"})` addresses the keyed agent of these constructor parameters, and creates it when it does not exist.
 3. **Call a method descriptor** on the client: `ledger.Record.MustCall(client, ledger.RecordIn{Amount: 10})`, or `Call` to get `(Out, error)` back.
 4. If the method returns a `golem.Result`, unwrap it (`.MustOk()` or inspect it).
 
@@ -36,8 +36,8 @@ var agent = rpccaller.Agent.Implement(func(rpccaller.ID) *state { return &state{
 
 func init() {
 	agent.Handle(rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
-		// Get a client for the ledger instance identified by region.
-		c := ledger.Agent.Get(ledger.ID{Region: in.Region})
+		// Get a client for the keyed ledger agent of this region.
+		c := ledger.Agent.Upsert(ledger.ID{Region: in.Region})
 		// MustCall returns the method's Out; here Out is a golem.Result, unwrapped with MustOk.
 		return ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 	})
@@ -141,7 +141,7 @@ Import it and call through the typed client:
 ```go
 import weather "golem.local/bridge/weather-agent-guest-client"
 
-client, err := weather.GetWeatherAgent(weather.WeatherAgentID{City: "London"})
+client, err := weather.UpsertWeatherAgent(weather.WeatherAgentID{City: "London"})
 if err != nil {
 	return err.Error() // the weather component is not deployed
 }
@@ -151,22 +151,23 @@ receipt := client.MustTriggerForecast(3)              // enqueue, don't wait
 pending := client.ForecastAsync(3)                    // *golem.Future[Out]
 ```
 
-- `Get<Agent>` and `NewPhantom<Agent>` return an error when the host cannot resolve the target, as the callee lives in another component that may not be deployed. `MustGet<Agent>` and `MustNewPhantom<Agent>` panic instead.
+- `Upsert<Agent>(id)` addresses the keyed agent of the constructor parameters and creates it when it does not exist. `Create<Agent>(id, opts...)` creates a new agent and `Get<Agent>ByID(agentID)` addresses an existing agent by its `golem.AgentID` (an unknown ID is a `*golem.RemoteCallError` of kind `golem.RemoteNotFound`). They return an error when the host cannot resolve the target, as the callee lives in another component that may not be deployed. `MustUpsert<Agent>`, `MustCreate<Agent>` and `MustGet<Agent>ByID` panic instead. An ephemeral callee has only the `Upsert<Agent>` forms.
+- `client.AgentID()` returns the `golem.AgentID` of the client's agent, as `(golem.AgentID, error)`; `MustAgentID()` panics on a failure.
 - Each method has the forms of a same-component `MethodDef`: `<M>` (`MethodDef.Call`: `(Out, error)`, only `error` without output), `Trigger<M>`, `Schedule<M>(at, …)`, each with a `Must` form, and `<M>Async` (`CallAsync`). A failed call returns the SDK's own `*golem.RemoteCallError`, exactly as a same-component call does. Methods that take or return a stream have no trigger or schedule form.
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
 - Methods that take or return streams are included, with each stream spelled `golem.AgentStream[T]` (see `golem-streaming-agent-go`).
-- `Get<Agent>` and `NewPhantom<Agent>` take `golem.ClientOpt`s. When the callee declares local configuration, the client also has a `<Agent>Config` struct, with one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`), and a `With<Agent>Config` option. Only the fields you set are sent; the rest keep their provisioned values:
+- `Create<Agent>` takes `golem.CreateOpt`s. Without `golem.Keyed()` it creates a new agent with a new agent ID and no key; with it, it creates the keyed agent of the constructor parameters and fails with a `*golem.RemoteCallError` of kind `golem.RemoteConflict` when that agent exists. `golem.WithEnv(name, value)` adds an environment variable. When the callee declares local configuration, the client also has a `<Agent>Config` struct, with one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`), and a `With<Agent>Config` option. Only the fields you set are sent; the rest keep their provisioned values. `Upsert<Agent>` takes no options: an agent it creates gets its provisioned configuration.
 
 ```go
-counter, err := counters.GetCounterAgent(counters.CounterAgentID{Name: "fast"},
+counter, err := counters.CreateCounterAgent(counters.CounterAgentID{Name: "fast"}, golem.Keyed(),
 	counters.WithCounterAgentConfig(counters.CounterAgentConfig{Step: golem.Some[uint32](5)}))
 ```
 
 ## Key Constraints
 
 - You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule`, `CallAsync` and the `Must` forms.
-- The client comes from the **definition** (`Def.Agent.Get(id)`); the ID is encoded from the `ID` type, so the caller does not need the callee locally registered.
+- The client comes from the **definition** (`Def.Agent.Upsert(id)`); the constructor parameters are encoded from the `ID` type, so the caller does not need the callee locally registered.
 - Don't hold a `*golem.Future` across invocations — await it (`Get()` / `MustGet()`) within the same handler.
 
 ### Related Skills
@@ -175,6 +176,6 @@ counter, err := counters.GetCounterAgent(counters.CounterAgentID{Name: "fast"},
 |-------|--------------|
 | `golem-fire-and-forget-go` | Enqueue a call without awaiting a result (`Trigger`) |
 | `golem-recurring-task-go` | An agent messages itself / schedules future work |
-| `golem-multi-instance-agent-go` | Address a specific instance (or a phantom) by ID |
+| `golem-multi-instance-agent-go` | Address a specific instance by key or agent ID, or create agents without a key |
 | `golem-add-agent-go` | Define the agent being called |
 | `golem-agent-reflection-go` | Call agents without their Go definition (runtime discovery, remote declarations, agent ids) |

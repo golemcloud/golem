@@ -22,6 +22,7 @@ runs:
         distribution: temurin
         java-version: '21'
     - uses: sbt/setup-sbt@v1
+    - uses: ./.validation-control/.github/actions/setup-mill
     - uses: hustcer/setup-moonbit@v1
       with:
         version: '0.10.18+6c83a7f62'

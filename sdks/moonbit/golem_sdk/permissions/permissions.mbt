@@ -373,7 +373,7 @@ pub extend KernelModule with Debug::{to_repr}
 pub(all) enum Holder {
   Account(@schema.Uuid)
   App(@schema.Uuid)
-  Agent(@types.AgentId)
+  Agent(@schema.AgentId)
 } derive(Eq, Debug)
 
 ///|
@@ -387,7 +387,7 @@ fn Holder::to_raw(self : Holder) -> @raw.Holder {
   match self {
     Account(uuid) => Account(uuid.to_wit())
     App(uuid) => App(uuid.to_wit())
-    Agent(agent_id) => Agent(agent_id)
+    Agent(agent_id) => Agent(agent_id.to_wit())
   }
 }
 

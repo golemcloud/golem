@@ -29,7 +29,7 @@ When an invocation reaches an agent, a new span is created containing the follow
 - `name`: span's name (`invoke-exported-function`)
 - `idempotency_key`: unique identifier of the invocation
 - `function_name`: the fully qualified function name
-- `worker_id`: agent's ID (consists of component ID and agent name)
+- `agent_id`: the agent ID, a UUID
 - `agent_type`: the agent type of this agent
 - `agent_parameters`: constructor parameter values of the agent
 

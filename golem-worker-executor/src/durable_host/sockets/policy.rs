@@ -23,10 +23,11 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::resolve_current_observational_owner;
 use crate::durable_host::durability::GuestTaskContext;
-use crate::durable_host::sockets::resolved_names::{ResolvedNames, SharedResolvedNames};
+use crate::durable_host::sockets::resolved_names::SharedResolvedNames;
 use crate::services::golem_config::GolemConfig;
 use crate::workerctx::WorkerCtx;
 use golem_common::base_model::address_class::{AddressClass, embedded_ipv4};
+use golem_common::model::agent::ResolvedNames;
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::network_target::socket_target;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -120,7 +121,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Whether a completed lookup of this Store links its addresses. Only a lookup that replay
     /// returns again links: neither a lookup in snapshotting mode, which is not recorded, nor a
     /// physical call of the custom durable invocation `custom_invocation`, which replay does not
-    /// claim, does. So live execution, replay and the rebuild after a snapshot agree on the links.
+    /// claim, does. So live execution and the status fold agree on the links.
     pub(crate) fn lookup_links(
         &mut self,
         custom_invocation: Option<&GuestTaskContext>,
@@ -131,17 +132,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Links the addresses that a completed P2 lookup of `name` returned to its hostname, when
     /// [`Self::lookup_links`] allows it. A P2 lookup has no delivery marker: its result reaches
-    /// the guest when the call returns.
+    /// the guest when the call returns. `recorded` tells whether the call recorded its `End`
+    /// now rather than replaying it.
     pub(crate) fn link_resolved_addresses(
         &mut self,
         custom_invocation: Option<&GuestTaskContext>,
         name: &str,
         addresses: impl IntoIterator<Item = IpAddr>,
+        recorded: bool,
     ) -> Result<(), WorkerExecutorError> {
         if self.lookup_links(custom_invocation)? {
-            self.state
-                .resolved_names
-                .with(|names| names.insert(name, addresses));
+            self.state.resolved_names.link(name, addresses, recorded);
         }
         Ok(())
     }

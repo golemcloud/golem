@@ -82,11 +82,14 @@ package golem:tool@0.1.0;
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, schema-value-tree,
     typed-schema-value, tool-error};
+  use golem:core/http@2.0.0.{http-method, path-segment, query-variable,
+    header-variable, file-response-header, http-route-mode, durable-stream-route-options};
 
   // Top level
   record tool {
     version:  string,
     requires-filesystem: bool,
+    http-mount: option<tool-http-mount>,
     commands: command-tree,
     /// Self-contained type-node pool holding every type referenced from
     /// this tool's commands. Command bodies reference entries by
@@ -132,9 +135,34 @@ interface common {
     name:        string,
     aliases:     list<string>,
     doc:         doc,
+    http:        option<command-http>,
     globals:     globals,
     subcommands: list<command-index>,
     body:        option<command-body>,
+  }
+
+  record tool-http-mount {
+    path-prefix: list<path-segment>,
+  }
+
+  variant command-http {
+    endpoint(tool-http-endpoint),
+    prefix(tool-http-prefix),
+  }
+
+  record tool-http-prefix {
+    path-suffix: list<path-segment>,
+  }
+
+  record tool-http-endpoint {
+    route-id: option<string>,
+    http-method: http-method,
+    path-suffix: list<path-segment>,
+    query-vars: list<query-variable>,
+    header-vars: list<header-variable>,
+    response-headers: list<file-response-header>,
+    mode: option<http-route-mode>,
+    durable-streams: option<durable-stream-route-options>,
   }
 
   record globals {

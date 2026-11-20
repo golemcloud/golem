@@ -208,7 +208,7 @@ fn build_parsed_agent_id(
             fields: vec![params_value],
         },
     );
-    ParsedAgentKey::new(AgentTypeName(agent_type.to_string()), typed, None)
+    ParsedAgentKey::new(AgentTypeName(agent_type.to_string()), typed)
 }
 
 #[test]
@@ -217,26 +217,6 @@ fn render_agent_id_format() {
     assert_eq!(
         render_agent_id(&parsed, &SourceLanguage::Rust),
         "my-agent(42)"
-    );
-}
-
-#[test]
-fn render_agent_id_with_phantom() {
-    let typed = TypedSchemaValue::new(
-        SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
-            name: "p".into(),
-            body: SchemaType::u32(),
-            metadata: Default::default(),
-        }])),
-        SchemaValue::Record {
-            fields: vec![SchemaValue::U32(42)],
-        },
-    );
-    let uuid = uuid::Uuid::parse_str("12345678-1234-1234-1234-123456789012").unwrap();
-    let parsed = ParsedAgentKey::new(AgentTypeName("my-agent".to_string()), typed, Some(uuid));
-    assert_eq!(
-        render_agent_id(&parsed, &SourceLanguage::Rust),
-        "my-agent(42)[12345678-1234-1234-1234-123456789012]"
     );
 }
 
@@ -819,27 +799,23 @@ fn capability_values_render_as_redacted_in_every_language() {
     }
 }
 
-/// The host fills an auto-injected principal, so an agent id carries only the
-/// user-supplied constructor parameters.
+/// An agent id carries every declared constructor parameter.
 #[test]
-fn agent_id_params_skip_the_auto_injected_principal() {
+fn agent_id_params_are_every_declared_field() {
     let input_schema = InputSchema::parameters(vec![
         NamedField::user_supplied("name", SchemaType::string()),
-        NamedField::auto_injected(
-            "owner",
-            golem_common::schema::agent::AutoInjectedKind::Principal,
-            SchemaType::record(vec![]),
-        ),
+        NamedField::user_supplied("owner", SchemaType::u32()),
     ]);
     let graph = SchemaGraph::anonymous(SchemaType::string());
     let parsed =
-        parse_agent_id_params("\"a\"", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
+        parse_agent_id_params("\"a\",7", &graph, &input_schema, &SourceLanguage::Rust).unwrap();
     assert_eq!(
         parsed,
         SchemaValue::Record {
-            fields: vec![SchemaValue::String("a".to_string())]
+            fields: vec![SchemaValue::String("a".to_string()), SchemaValue::U32(7)]
         }
     );
+    assert!(parse_agent_id_params("\"a\"", &graph, &input_schema, &SourceLanguage::Rust).is_err());
 }
 
 // ── Go ───────────────────────────────────────────────────────────────────────

@@ -69,10 +69,10 @@ complete_promise_json(&promise_id, MyResponse { status: "approved".into() }).unw
 
 ## PromiseId Structure
 
-A `PromiseId` contains an `agent_id`, a `fingerprint` and an `oplog_idx`. The `fingerprint` is a UUID that identifies the agent incarnation that created the promise: after the agent is deleted and created again, the old ID no longer completes anything. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. The external caller then sends:
+A `PromiseId` contains an `agent_id`, a `fingerprint` and an `oplog_idx`. The `agent_id` is the agent ID, a UUID. The `fingerprint` is a UUID that identifies the agent incarnation that created the promise: after the agent is deleted and created again, the old ID no longer completes anything. To let an external system complete the promise via the Golem REST API, the agent must expose all three fields. The external caller also needs the ID of the agent's environment, and then sends:
 
 ```
-POST /v1/components/{component_id}/workers/{agent_name}/complete
+POST /v1/runtime/envs/{environment_id}/agents/{agent_id}/complete
 Authorization: Bearer <GOLEM_TOKEN>
 Content-Type: application/json
 
@@ -118,7 +118,7 @@ impl WorkflowAgent for WorkflowAgentImpl {
         let promise_id = create_promise();
 
         // Publish the full ID to an approval service before waiting.
-        // That service maps agent_id to the component/worker REST path.
+        // That service puts agent_id into the agent REST path of the environment.
         let request = golem_rust::http::Request::post("https://approvals.example.com/register")
             .header("Content-Type", "application/json")
             .body(serde_json::to_vec(&promise_id).map_err(|e| e.to_string())?)
@@ -149,13 +149,13 @@ impl WorkflowAgent for WorkflowAgentImpl {
 The external service completes the promise through the authenticated REST API, for example:
 
 ```shell
-curl -X POST "$GOLEM_BASE_URL/v1/components/$COMPONENT_ID/workers/$AGENT_NAME_ENCODED/complete" \
+curl -X POST "$GOLEM_BASE_URL/v1/runtime/envs/$ENVIRONMENT_ID/agents/$AGENT_ID/complete" \
   -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
   --data "{\"oplogIdx\":$OPLOG_IDX,\"fingerprint\":\"$FINGERPRINT\",\"data\":[34,65,112,112,114,111,118,101,100,34]}"
 ```
 
-The bytes encode the JSON string `"Approved"`. URL-encode the agent name in the path. Malformed
+The bytes encode the JSON string `"Approved"`. `$AGENT_ID` is the UUID of the promise's `agent_id`. Malformed
 JSON returns a domain error in the example; a later completion cannot repair the first payload.
 
 - **Human-in-the-loop**: Pause a workflow until a human approves or rejects

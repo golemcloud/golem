@@ -33,7 +33,6 @@ use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
@@ -166,13 +165,13 @@ impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
 
     async fn enqueue_exact_existing(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         if let ExactExistingDelivery::CompletePromise(id) = delivery {
             self.promise_service
-                .complete_without_wakeup(id, vec![])
+                .complete_without_wakeup(owned_agent_id.environment_id, id, vec![])
                 .await?;
         }
         Ok(true)
@@ -365,7 +364,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
 
     async fn enqueue_exact_existing(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
@@ -385,7 +384,7 @@ impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
             ExactExistingDelivery::Resume => "resume",
             ExactExistingDelivery::CompletePromise(id) => {
                 self.promise_service
-                    .complete_without_wakeup(id, vec![])
+                    .complete_without_wakeup(owned_agent_id.environment_id, id, vec![])
                     .await?;
                 "complete_promise"
             }
@@ -446,13 +445,13 @@ impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
 
     async fn enqueue_exact_existing(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         _target_worker_fingerprint: AgentFingerprint,
         delivery: ExactExistingDelivery,
     ) -> Result<bool, WorkerExecutorError> {
         if let ExactExistingDelivery::CompletePromise(id) = delivery {
             self.promise_service
-                .complete_without_wakeup(id, vec![])
+                .complete_without_wakeup(owned_agent_id.environment_id, id, vec![])
                 .await?;
         }
         self.attempts.fetch_add(1, Ordering::SeqCst);
@@ -884,10 +883,7 @@ async fn schedule_size_is_observed_once_for_duplicates_and_terminal_failures() {
 }
 
 fn agent(name: &str) -> AgentId {
-    AgentId {
-        component_id: ComponentId(Uuid::new_v4()),
-        agent_id: name.to_string(),
-    }
+    crate::test_agent_id(name)
 }
 
 fn complete_promise_action(promise_id: PromiseId) -> ScheduledAction {
@@ -903,7 +899,7 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
     let environment_id = EnvironmentId::new();
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent("scheduled-action"));
     vec![
-        complete_promise_action(promise(owned_agent_id.agent_id.clone(), 101)),
+        complete_promise_action(promise(owned_agent_id.agent_id, 101)),
         ScheduledAction::ArchiveOplog {
             account_id: AccountId::new(),
             owned_agent_id: owned_agent_id.clone(),
@@ -1974,7 +1970,7 @@ fn exact_actions(
         ScheduledAction::CompletePromise {
             account_id: AccountId::new(),
             environment_id: owned_agent_id.environment_id,
-            promise_id: promise(owned_agent_id.agent_id.clone(), 101),
+            promise_id: promise(owned_agent_id.agent_id, 101),
             target_worker_fingerprint: fingerprint,
         },
     ]
@@ -2025,7 +2021,7 @@ async fn all_exact_deliveries_acknowledge_missing_stale_and_matching_targets() {
                 promise_service
                     .all_completed()
                     .await
-                    .contains(&promise(owned_agent_id.agent_id.clone(), 101))
+                    .contains(&promise(owned_agent_id.agent_id, 101))
             );
         } else {
             assert_eq!(count.load(Ordering::SeqCst), 0);
@@ -2090,7 +2086,7 @@ async fn all_exact_deliveries_retry_failures_and_acknowledge_successful_retry() 
                     promise_service
                         .all_completed()
                         .await
-                        .contains(&promise(owned_agent_id.agent_id.clone(), 101))
+                        .contains(&promise(owned_agent_id.agent_id, 101))
                 );
             }
         }

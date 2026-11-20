@@ -28,7 +28,7 @@ impl InvocationContextAgent for InvocationContextAgentImpl {
     async fn test1(&mut self) {
         broadcast_current_invocation_context("test1a").await;
 
-        let mut client = InvocationContextAgentClient::get("w2".to_string());
+        let mut client = InvocationContextAgentClient::upsert("w2".to_string());
         client.test2().await;
     }
 
@@ -42,7 +42,7 @@ impl InvocationContextAgent for InvocationContextAgentImpl {
         let span2 = start_span("custom2");
         span2.set_attribute("z", &AttributeValue::String("3".to_string()));
 
-        let mut client = InvocationContextAgentClient::get("w1".to_string());
+        let mut client = InvocationContextAgentClient::upsert("w1".to_string());
         client.test3().await;
     }
 

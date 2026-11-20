@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use assert2::let_assert;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -90,7 +90,7 @@ async fn rpc_provided_config_overrides_defaults(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcLocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("RpcLocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
@@ -173,7 +173,7 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
         .store()
         .await?;
 
-    let agent_id = agent_id!("RpcLocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("RpcLocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
@@ -260,10 +260,10 @@ async fn rpc_does_not_override_values_of_existing_agent(
         .store()
         .await?;
 
-    user.start_agent(&component.id, agent_id!("LocalConfigAgent", "test-agent"))
+    user.start_agent(&component.id, agent_key!("LocalConfigAgent", "test-agent"))
         .await?;
 
-    let agent_id = agent_id!("RpcLocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("RpcLocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user

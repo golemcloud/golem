@@ -848,6 +848,7 @@ mod tests {
             metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
             created_at: chrono::Utc::now(),
             wasm_hash: golem_common::model::diff::Hash::new(blake3::hash(b"wasm-hash")),
+            package_metadata: None,
             object_store_key: "test-object".to_string(),
         }
     }

@@ -3,8 +3,8 @@
 //     shared, deduplicated def pool,
 //   * each schema root is installed as a `type-node-index` into that pool
 //     (`NamedField.schema`, `OutputSchema::Single`, config `value_type`),
-//   * auto-injected parameters encode as an empty-record placeholder and carry
-//     the `AutoInjected` field source,
+//   * every input parameter is user-supplied (the invocation context is injected
+//     by the SDK and is not part of the input schema),
 //   * `schema.root` is a structural placeholder, not a semantic root.
 
 ///|
@@ -48,10 +48,7 @@ fn sample_agent_type() -> @common.AgentType raise {
       name: None,
       description: "ctor",
       prompt_hint: None,
-      input: [
-        { name: "foo", source: UserSupplied(foo_graph()), },
-        { name: "principal", source: AutoInjected(PRINCIPAL), },
-      ],
+      input: [{ name: "foo", source: UserSupplied(foo_graph()), }],
     },
     methods: [
       {
@@ -98,7 +95,7 @@ test "merged def pool deduplicates shared types by id" {
 test "constructor input installs type-node-indices and field sources" {
   let at = sample_agent_type()
   let @common.InputSchema::Parameters(fields) = at.constructor_.input_schema
-  debug_inspect(fields.length(), content="2")
+  debug_inspect(fields.length(), content="1")
   debug_inspect(
     fields[0].name,
     content=(
@@ -106,15 +103,7 @@ test "constructor input installs type-node-indices and field sources" {
     ),
   )
   debug_inspect(fields[0].source, content="UserSupplied")
-  debug_inspect(
-    fields[1].name,
-    content=(
-      #|"principal"
-    ),
-  )
-  debug_inspect(fields[1].source, content="AutoInjected(PRINCIPAL)")
   // Distinct roots get distinct indices into the shared pool.
-  debug_inspect(fields[0].schema != fields[1].schema, content="true")
 }
 
 ///|
@@ -127,11 +116,6 @@ test "all installed indices point into the single shared pool" {
   for f in fields {
     assert_true(in_range(f.schema))
   }
-  // The auto-injected parameter encodes an empty-record placeholder node.
-  debug_inspect(
-    at.schema.type_nodes[fields[1].schema].body,
-    content="RecordType([])",
-  )
   // The graph's own root is a structural empty-record sentinel (not a semantic root).
   assert_true(in_range(at.schema.root))
   debug_inspect(

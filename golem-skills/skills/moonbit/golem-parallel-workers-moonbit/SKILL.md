@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 Golem agents process invocations **sequentially**. Async work within one invocation can overlap cooperatively, but this does not provide CPU-thread parallelism. Distribute independent CPU work across **multiple agent instances**. This skill covers two approaches:
 
-1. **Child agents via `AgentClient::scoped`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via `AgentClient::scoped_upsert`** — spawn separate agent instances, dispatch work, and collect results
 2. **`@api.fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -18,7 +18,7 @@ Spawn child agents, dispatch work via fire-and-forget triggers, and collect resu
 
 Import `"moonbitlang/core/encoding/utf8" @utf8` in `moon.pkg`.
 Raw `@types.PromiseId` has no `IntoWire` implementation. Transport its primitive
-fields (component ID, agent ID, fingerprint and oplog index) across RPC, then
+fields (agent ID, fingerprint and oplog index) across RPC, then
 reconstruct the host record in the worker. The fingerprint identifies the agent
 incarnation that created the promise, so carry it unchanged.
 
@@ -42,14 +42,13 @@ pub async fn Coordinator::fan_out(self : Self, items : Array[String]) -> Array[S
 
   // Fire-and-forget: trigger each child with its promise ID
   for i, item in items {
-    WorkerClient::scoped(i.to_uint64(), async fn(child) {
+    WorkerClient::scoped_upsert(i.to_uint64(), async fn(child) {
       let pid = promise_ids[i]
-      let uuid = pid.agent_id.component_id.uuid
+      let uuid = pid.agent_id.uuid
       child.trigger_process(
         item,
         uuid.high_bits,
         uuid.low_bits,
-        pid.agent_id.agent_id,
         pid.fingerprint.high_bits,
         pid.fingerprint.low_bits,
         pid.oplog_idx,
@@ -79,18 +78,14 @@ fn Worker::new(id : UInt64) -> Worker { { id, } }
 pub fn Worker::process(
   self : Self,
   data : String,
-  component_high : UInt64,
-  component_low : UInt64,
-  agent_name : String,
+  agent_high : UInt64,
+  agent_low : UInt64,
   fingerprint_high : UInt64,
   fingerprint_low : UInt64,
   oplog_idx : UInt64,
 ) -> Unit {
   let promise_id = @types.PromiseId::{
-    agent_id: {
-      component_id: { uuid: { high_bits: component_high, low_bits: component_low } },
-      agent_id: agent_name,
-    },
+    agent_id: { uuid: { high_bits: agent_high, low_bits: agent_low } },
     fingerprint: { high_bits: fingerprint_high, low_bits: fingerprint_low },
     oplog_idx,
   }
@@ -119,13 +114,12 @@ pub async fn Coordinator::fan_out_chunked(
     for i = offset; i < end; i = i + 1 {
       let pid = @api.create_promise()
       promise_ids.push(pid)
-      WorkerClient::scoped(i.to_uint64(), async fn(child) {
-        let uuid = pid.agent_id.component_id.uuid
+      WorkerClient::scoped_upsert(i.to_uint64(), async fn(child) {
+        let uuid = pid.agent_id.uuid
         child.trigger_process(
           items[i],
           uuid.high_bits,
           uuid.low_bits,
-          pid.agent_id.agent_id,
           pid.fingerprint.high_bits,
           pid.fingerprint.low_bits,
           pid.oplog_idx,
@@ -144,7 +138,7 @@ pub async fn Coordinator::fan_out_chunked(
 
 ## Approach 2: `@api.fork()`
 
-`@api.fork()` clones the current agent at the current execution point, creating a new agent instance with the same state but a unique phantom ID. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
+`@api.fork()` clones the current agent at the current execution point, creating a new agent instance with the same state, a new agent ID and no key. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
 
 ### Basic Fork Pattern
 
@@ -220,7 +214,7 @@ pub async fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
 |----------|-------------|---------------|
 | Work is **independent** and stateless | ✅ Best fit | Works but overkill |
 | Need to **share current state** with workers | ❌ Must pass via args | ✅ Forked copy inherits state |
-| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a generated phantom ID |
+| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a new agent ID and no key |
 | Number of parallel tasks is **dynamic** | ✅ Spawn as many as needed | ✅ Fork in a loop |
 | Need **simple error isolation** | ✅ Child failure doesn't crash parent | ⚠️ Forked agent shares oplog lineage |
 
@@ -230,5 +224,5 @@ pub async fn ForkAgent::multi_fork(self : Self, n : UInt64) -> Array[String] {
 - **Durability**: All RPC calls, promises, and fork operations are durably recorded — work survives crashes
 - **Deadlock avoidance**: Never have two agents awaiting each other synchronously — use `trigger_` to break cycles
 - **Cleanup**: Child agents persist after the coordinator finishes; delete them explicitly if they hold unwanted state
-- **Scoped clients**: Always prefer `AgentClient::scoped` over manual `get`/`drop` for client lifecycle management
+- **Scoped clients**: Always prefer `AgentClient::scoped_upsert` over manual `upsert`/`drop` for client lifecycle management
 - **Aggregation**: Collect results by iterating over promise IDs and calling `@api.await_promise` for each

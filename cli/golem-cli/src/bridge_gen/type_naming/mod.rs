@@ -15,9 +15,7 @@
 use crate::bridge_gen::type_naming::builder::{Builder, RootOwner};
 use crate::bridge_gen::type_naming::schema_type_ext::SchemaTypeExt;
 use anyhow::bail;
-use golem_common::schema::agent::{
-    AgentTypeSchema, FieldSource, InputSchema, NamedField, OutputSchema,
-};
+use golem_common::schema::agent::{AgentTypeSchema, InputSchema, NamedField, OutputSchema};
 use golem_common::schema::graph::{SchemaGraph, SchemaTypeDef};
 use golem_common::schema::metadata::TypeId;
 use golem_common::schema::multimodal::multimodal_variant_cases;
@@ -617,20 +615,10 @@ impl<TN: TypeName> TypeNaming<TN> {
     }
 }
 
-/// The user-supplied fields of an [`InputSchema`], in declaration order.
-///
-/// Auto-injected fields (e.g. the host-provided
-/// [`Principal`](golem_common::schema::agent::AutoInjectedKind::Principal))
-/// are filled in by the host at invocation time, never by the generated
-/// client, so the bridge generators omit them from the generated parameter
-/// surface and from the encoded request record — matching the legacy
-/// the old input model, which had no notion of auto-injected fields.
+/// The fields of an [`InputSchema`], in declaration order: the generated client takes every
+/// one of them.
 pub(crate) fn user_supplied_fields(input: &InputSchema) -> Vec<&NamedField> {
-    input
-        .fields()
-        .iter()
-        .filter(|f| matches!(f.source, FieldSource::UserSupplied))
-        .collect()
+    input.fields().iter().collect()
 }
 
 /// Determine the `(owner, name)` pair to use for a named type definition.

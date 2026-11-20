@@ -16,10 +16,8 @@
 
 package golem.runtime.rpc
 
-import golem.Datetime
-import java.util.UUID
-import golem.config.ConfigOverride
-import golem.FutureInterop
+import golem.{AgentId, Datetime, FutureInterop}
+import golem.host.js.JsAgentId
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.rpc.host.WasmRpcApi
@@ -31,9 +29,13 @@ import scala.scalajs.js.JavaScriptException
 
 final case class RemoteAgentClient(
   agentTypeName: String,
-  agentId: String,
   rpc: RpcInvoker
 ) {
+
+  /** The ID of the target agent; see [[RpcInvoker.agentId]]. */
+  def agentId(): Future[AgentId] =
+    rpc.agentId()
+
   def invokeAndAwait(
     functionName: String,
     input: JsSchemaValueTree,
@@ -114,25 +116,27 @@ final case class RemoteAgentClient(
 }
 
 object RemoteAgentClient {
-  def resolve(agentTypeName: String, constructorPayload: JsSchemaValueTree): Either[String, RemoteAgentClient] =
-    resolve(agentTypeName, constructorPayload, phantom = None)
 
-  def resolve(
-    agentTypeName: String,
-    constructorPayload: JsSchemaValueTree,
-    phantom: Option[UUID]
-  ): Either[String, RemoteAgentClient] =
-    resolve(agentTypeName, constructorPayload, phantom, configOverrides = Nil)
+  /**
+   * `knownAgentId` is the ID the host reported when it made the client; without
+   * it, [[agentId]] asks the host through the client.
+   */
+  private[rpc] final class WasmRpcInvoker(client: WasmRpcClient, knownAgentId: Option[AgentId]) extends RpcInvoker {
+    private var cachedAgentId: Option[AgentId] = knownAgentId
 
-  def resolve(
-    agentTypeName: String,
-    constructorPayload: JsSchemaValueTree,
-    phantom: Option[UUID],
-    configOverrides: List[ConfigOverride]
-  ): Either[String, RemoteAgentClient] =
-    AgentIdentity.resolve(agentTypeName, constructorPayload, phantom, configOverrides)
-
-  private[rpc] final class WasmRpcInvoker(client: WasmRpcClient) extends RpcInvoker {
+    override def agentId(): Future[AgentId] =
+      cachedAgentId match {
+        case Some(id) => Future.successful(id)
+        case None     =>
+          implicit val ec = scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+          client.agentId().flatMap {
+            case Right(raw) =>
+              val id = JsAgentId.toAgentId(raw)
+              cachedAgentId = Some(id)
+              Future.successful(id)
+            case Left(error) => Future.failed(AgentRpcException(AgentRpcError.fromRpcError(error)))
+          }
+      }
 
     /**
      * Borrows the scope card for one host call. A moved card throws

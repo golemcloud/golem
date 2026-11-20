@@ -1,11 +1,13 @@
-import { Effect, Schema, Stream } from "effect"
+import { Effect, Result, Schema, Stream } from "effect"
 import {
-  AgentIdentity,
+  Client,
+  BridgeTool,
   defineAgent,
   defineAgentClient,
+  DynamicClient,
   InvocationId,
   method,
-  Principal,
+  InvocationContext,
   Quota,
   Reflection,
   Tool,
@@ -24,6 +26,13 @@ const tsTool = Tool.toolDefinition("ts-cross-streaming").body((body) =>
     .returns(Schema.String),
 )
 const tsToolClient = Tool.client(tsTool)
+
+const successfulCollection = <A, E, O>(collected: BridgeTool.CollectedToolInvocation<A, E, O>) => {
+  if (Result.isFailure(collected.result)) return Effect.fail(collected.result.failure)
+  if (Result.isFailure(collected.stdout)) return Effect.fail(collected.stdout.failure)
+  if (Result.isFailure(collected.stderr)) return Effect.fail(collected.stderr.failure)
+  return Effect.succeed({ result: collected.result.success, stdout: collected.stdout.success })
+}
 
 const TsPeer = defineAgent({
   name: "TsPeer",
@@ -54,7 +63,7 @@ const RustPeer = defineAgent({
 
 const TsPrincipalPeer = defineAgent({
   name: "TsPrincipalPeer",
-  id: { tenant: Schema.String, caller: Principal.PrincipalSchema },
+  id: { tenant: Schema.String, owner: InvocationContext.PrincipalRefSchema },
   methods: { value: method({ input: {}, success: Schema.String }) },
 })
 
@@ -88,8 +97,8 @@ defineAgent({
     roundTrip: ({ value }) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const ts = yield* TsPeer.client.get({ name })
-          const rust = yield* RustPeer.client.get({ name })
+          const ts = yield* TsPeer.client.upsert({ name })
+          const rust = yield* RustPeer.client.upsert({ name })
           const tsResult = yield* ts.echo({ value })
           const rustResult = yield* rust.echo({ value })
           return `${tsResult.language}:${tsResult.value}|${rustResult}`
@@ -103,17 +112,18 @@ defineAgent({
           const echo = reflected.method("echo")
           if (echo === undefined) return "missing:echo"
           if (!echo.input.validateJson({ value }).success) return "invalid:echo-input"
-          const client = yield* reflected.client.get({ name })
+          const client = yield* reflected.client.upsert({ name })
           const method = yield* client.method("echo")
           const result = yield* method.invoke({ value })
           const output = result.value as { language: string; value: string }
-          const identity = yield* AgentIdentity.parse(result.metadata.agentId)
-          const byId = yield* Reflection.getAgentTypeByAgentId(identity)
+          const agentId = result.metadata.agentId
+          if ((yield* client.agentId).uuid !== agentId.uuid) return "agent-id-mismatch"
+          const byId = yield* Reflection.getAgentTypeByAgentId(agentId)
           const all = yield* Reflection.getAllAgentTypes
           if (byId?.name !== "TsPeer" || !all.some((type) => type.name === "RustPeer")) {
             return "discovery-mismatch"
           }
-          const dynamic = yield* identity.dynamicClient()
+          const dynamic = yield* DynamicClient.bind(agentId)
           const dynamicResult = yield* dynamic.method("echo").invoke(echo.input.packJson({ value }))
           if (echo.output === undefined || dynamicResult.value === undefined) {
             return "missing:dynamic-output"
@@ -129,23 +139,20 @@ defineAgent({
       Effect.scoped(
         Effect.gen(function* () {
           const tenant = `principal-effect-${name}`
+          const owner = new InvocationContext.PrincipalRef("https://cross-sdk.example", "effect")
           const reflected = yield* Reflection.getAgentType("TsPrincipalPeer")
           if (reflected === undefined || reflected.mode !== "durable")
             return "missing-principal-type"
-          const client = yield* reflected.client.get({ tenant })
+          const client = yield* reflected.client.upsert({ tenant })
           const first = yield* (yield* client.method("value")).invoke({})
-          const identity = yield* AgentIdentity.parse(first.metadata.agentId)
-          if (
-            identity.typeName !== "TsPrincipalPeer" ||
-            identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value")
-              .length !== 1
-          ) {
-            return "principal-in-id"
-          }
-          const localId = yield* TsPrincipalPeer.agentId({ tenant })
-          if (localId.encoded !== identity.encoded) return "identity-mismatch"
-          const full = yield* identity.client(TsPrincipalPeer)
-          const methodOnly = yield* identity.client(
+          const agentId = first.metadata.agentId
+          const byId = yield* Reflection.getAgentTypeByAgentId(agentId)
+          if (byId?.name !== "TsPrincipalPeer") return "type-mismatch"
+          const local = yield* TsPrincipalPeer.client.upsert({ tenant })
+          if ((yield* local.agentId).uuid !== agentId.uuid) return "principal-in-key"
+          const full = yield* Client.bind(agentId, TsPrincipalPeer)
+          const methodOnly = yield* Client.bind(
+            agentId,
             defineAgentClient({ methods: TsPrincipalPeer.methods }),
           )
           const second = yield* full.value({})
@@ -158,10 +165,10 @@ defineAgent({
         Effect.gen(function* () {
           const reflected = yield* Reflection.getAgentType("TsEphemeralPeer")
           if (reflected === undefined || reflected.mode !== "ephemeral") return "missing:ephemeral"
-          const client = yield* reflected.client.newPhantom({ request: name })
+          const client = yield* reflected.client.upsert({ request: name })
           const echo = yield* client.method("echo")
           const result = yield* echo.invoke({ value })
-          return `${result.metadata.agentId}:${String(result.value)}`
+          return `${reflected.name}:${result.metadata.agentId.uuid}:${String(result.value)}`
         }),
       ),
     nonfiniteReflection: () =>
@@ -171,7 +178,7 @@ defineAgent({
           for (const peer of ["TsPeer", "RustPeer"]) {
             const reflected = yield* Reflection.getAgentType(peer)
             if (reflected === undefined || reflected.mode !== "durable") return `missing:${peer}`
-            const client = yield* reflected.client.get({ name })
+            const client = yield* reflected.client.upsert({ name })
             const method = yield* client.method("nonfinite")
             const native = yield* method.invokeValue({
               root: 0,
@@ -194,7 +201,7 @@ defineAgent({
     nestedStreamRoundTrip: () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const peer = yield* GeneratedTsPeer.get(name)
+          const peer = yield* GeneratedTsPeer.upsert(name)
           let pulled = 0
           let readerClosed = false
           const source = Stream.fromIterable([
@@ -228,7 +235,7 @@ defineAgent({
         Effect.gen(function* () {
           const reflected = yield* Reflection.getAgentType("TsPeer")
           if (reflected === undefined || reflected.mode !== "durable") return "missing:TsPeer"
-          const client = yield* reflected.client.get({ name })
+          const client = yield* reflected.client.upsert({ name })
           const echo = yield* client.method("echo")
           const invoked = yield* echo.invoke({ value: "metadata" })
           const mark = yield* client.method("markScheduled")
@@ -239,7 +246,7 @@ defineAgent({
           yield* scheduled.cancel
           yield* Effect.sleep("2500 millis")
           const count = yield* (yield* client.method("scheduledCount")).invoke({})
-          return `${invoked.metadata.agentId}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.metadata.agentId}:${String(count.value)}`
+          return `${reflected.name}:${invoked.metadata.agentId.uuid}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.metadata.agentId.uuid}:${String(count.value)}`
         }),
       ),
     callTsTool: ({ payload }) =>
@@ -263,18 +270,8 @@ defineAgent({
         Effect.gen(function* () {
           const input = Stream.make(new TextEncoder().encode(payload))
           const invocation = yield* TsCrossStreamingClient.create().ts_cross_streaming(name, input)
-          const [result, stdout] = yield* Effect.all(
-            [
-              invocation.result,
-              invocation.stdout.pipe(
-                Stream.decodeText(),
-                Stream.runCollect,
-                Effect.map((chunks) => Array.from(chunks).join("")),
-              ),
-            ],
-            { concurrency: "unbounded" },
-          )
-          return `${result}|${stdout}`
+          const collected = yield* invocation.collect.pipe(Effect.flatMap(successfulCollection))
+          return `${collected.result}|${new TextDecoder().decode(collected.stdout)}`
         }),
       ).pipe(Effect.orDie),
     reflectedTsTool: ({ payload }) =>
@@ -287,12 +284,12 @@ defineAgent({
             { label: name },
             Stream.succeed(new TextEncoder().encode(payload)),
           )
-          const json = yield* started.collect
+          const json = yield* started.collect.pipe(Effect.flatMap(successfulCollection))
           const nativeCall = yield* command.startValue(
             command.inputSchema!.packJson({ label: name }),
             Stream.succeed(new TextEncoder().encode(payload)),
           )
-          const native = yield* nativeCall.collect
+          const native = yield* nativeCall.collect.pipe(Effect.flatMap(successfulCollection))
           const codec = yield* WitCodec.compile(Schema.Struct({ label: Schema.String }))
           const dynamicCall = yield* new Reflection.DynamicToolClient("ts-cross-streaming").start(
             [],
@@ -300,7 +297,7 @@ defineAgent({
             Stream.succeed(new TextEncoder().encode(payload)),
             true,
           )
-          const dynamic = yield* dynamicCall.collect
+          const dynamic = yield* dynamicCall.collect.pipe(Effect.flatMap(successfulCollection))
           const invalidRejected = yield* command.startJson({ label: 7 }).pipe(
             Effect.as(false),
             Effect.catch((error) =>
@@ -341,7 +338,7 @@ defineAgent({
       Effect.scoped(
         Effect.gen(function* () {
           const token = yield* Quota.acquireQuotaToken("cross-sdk-quota", 2n)
-          const peer = yield* TsPeer.client.get({ name })
+          const peer = yield* TsPeer.client.upsert({ name })
           const returned = yield* peer.echoQuota({ token })
           const value = yield* Quota.withReservation(returned, 1n, () =>
             Effect.succeed({ used: 1n, value: "reserved-after-ts" }),

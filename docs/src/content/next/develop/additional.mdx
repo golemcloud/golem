@@ -69,8 +69,12 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
      * Metadata about an agent
      */
     export type AgentMetadata = {
-      /** The agent ID, consists of the component ID, agent type and agent parameters */
+      /** The agent ID, a UUID that Golem issues */
       agentId: AgentId;
+      /** The name of the agent's type. Owners without an agent type have none. */
+      agentTypeName?: string;
+      /** The incarnation of the agent: a deleted and re-created agent keeps its ID but gets a new fingerprint */
+      fingerprint: Uuid;
       /** Command line arguments seen by the agent */
       args: string[];
       /** Environment variables seen by the agent */
@@ -102,8 +106,12 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     /** Metadata about an agent */
     export type AgentMetadata = {
-      /** The agent ID, consists of the component ID, agent type and agent parameters */
+      /** The agent ID, a UUID that Golem issues */
       agentId: Agents.AgentId;
+      /** The name of the agent's type. Owners without an agent type have none. */
+      agentTypeName?: string;
+      /** The incarnation of the agent: a deleted and re-created agent keeps its ID but gets a new fingerprint */
+      fingerprint: Agents.Uuid;
       /** Command line arguments seen by the agent */
       args: string[];
       /** Environment variables seen by the agent */
@@ -131,8 +139,12 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     ```rust
     /// Metadata about an agent
     pub struct AgentMetadata {
-      /// The agent ID, consists of the component ID, agent type and agent parameters
+      /// The agent ID, a UUID that Golem issues
       pub agent_id: AgentId,
+      /// The name of the agent's type. Owners without an agent type have none.
+      pub agent_type_name: Option<String>,
+      /// The incarnation of the agent: a deleted and re-created agent keeps its ID but gets a new fingerprint
+      pub fingerprint: Uuid,
       /// Command line arguments seen by the agent
       pub args: Vec<String>,
       /// Environment variables seen by the agent
@@ -158,20 +170,20 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     </Tabs.Tab>
     <Tabs.Tab>
     ```scala
-    import golem.HostApi
+    import golem.{AgentId, HostApi}
     import golem.host.js.JsEnvironmentId
+    import java.util.UUID
 
     final case class AgentMetadata(
-      agentId: HostApi.AgentIdLiteral,
+      agentId: AgentId,
+      agentTypeName: Option[String],
+      fingerprint: UUID,
       args: List[String],
       env: Map[String, String],
       config: Map[String, String],
       status: HostApi.AgentStatus,
       componentRevision: BigInt,
       retryCount: BigInt,
-      agentType: String,
-      agentName: String,
-      componentId: HostApi.ComponentIdLiteral,
       environmentId: JsEnvironmentId
     )
     ```
@@ -179,7 +191,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     There are two exported functions to query agent metadata:
 
     - `HostApi.getSelfMetadata()` returns the metadata for the current agent
-    - `HostApi.getAgentMetadata(agentId: HostApi.AgentIdLiteral)` returns `Some(HostApi.AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
+    - `HostApi.getAgentMetadata(agentId: golem.AgentId)` returns `Some(HostApi.AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
 
     </Tabs.Tab>
     <Tabs.Tab>
@@ -189,6 +201,8 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     /// Metadata about an agent
     pub(all) struct AgentMetadata {
       agent_id : @rpcTypes.AgentId
+      agent_type_name : String?
+      fingerprint : @rpcTypes.Uuid
       args : Array[String]
       env : Array[(String, String)]
       config : Array[(String, String)]
@@ -202,7 +216,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     There are two exported functions to query agent metadata:
 
     - `@api.get_self_metadata()` returns the metadata for the current agent
-    - `@api.get_agent_metadata(agent_id : @rpcTypes.AgentId)` returns `Some(@api.AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
+    - `@api.get_agent_metadata(agent_id : @schema.AgentId)` returns `Some(@api.AgentMetadata)` for a specific agent given by its `AgentId`, or `None` if it does not exist
 
     </Tabs.Tab>
 
@@ -211,8 +225,13 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
     ```go
     // AgentMetadata describes an agent as the host sees it.
     type AgentMetadata struct {
-      // The agent ID, consists of the component ID and the agent id string (agent type and agent parameters)
+      // The agent ID, a UUID that Golem issues
       AgentID           AgentID
+      // The name of the agent's type. Owners without an agent type have none.
+      AgentTypeName     Option[string]
+      // The incarnation of the agent: a deleted and re-created agent keeps its ID
+      // but gets a new fingerprint
+      Fingerprint       UUID
       // Command line arguments seen by the agent
       Args              []string
       // Environment variables seen by the agent
@@ -243,7 +262,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 Agent enumeration is a feature of Golem available both through the public HTTP API and using the SDK.
 
 <Callout type="warning">
-    Enumerating agents of a component is a slow operation and should not be used as part of the application logic.
+    Enumerating agents of an agent type is a slow operation and should not be used as part of the application logic.
 </Callout>
 
 The following example demonstrates how to use the agent enumeration API:
@@ -252,7 +271,6 @@ The following example demonstrates how to use the agent enumeration API:
     <Tabs.Tab>
 ```typescript
 import {
-  ComponentId,
   GetAgents,
   AgentAnyFilter,
   AgentMetadata,
@@ -275,9 +293,8 @@ const filter: AgentAnyFilter = {
   ],
 }
 
-declare const componentId: ComponentId
 const agents: AgentMetadata[] = []
-const getter = new GetAgents(componentId, filter, true)
+const getter = new GetAgents("CounterAgent", filter, true)
 
 let batch: AgentMetadata[] | undefined
 while ((batch = getter.getNext()) !== undefined) {
@@ -291,8 +308,8 @@ while ((batch = getter.getNext()) !== undefined) {
 import { Stream } from "effect"
 import { Agents } from "@golemcloud/effect-golem"
 
-const enumerateAgents = (componentId: Agents.ComponentId) =>
-  Agents.getAgents({ componentId, precise: true }).pipe(Stream.runCollect)
+const enumerateAgents = (agentTypeName: string) =>
+  Agents.getAgents({ agentTypeName, precise: true }).pipe(Stream.runCollect)
 ```
     </Tabs.Tab>
 
@@ -300,10 +317,8 @@ const enumerateAgents = (componentId: Agents.ComponentId) =>
 ```rust
 use golem_rust::{
     AgentAllFilter, AgentAnyFilter, AgentMetadata, AgentPropertyFilter, AgentStatus,
-    AgentStatusFilter, ComponentId, FilterComparator, GetAgents,
+    AgentStatusFilter, FilterComparator, GetAgents,
 };
-
-let component_id: ComponentId = /* ... */;
 
 let filter = AgentAnyFilter {
     filters: vec![AgentAllFilter {
@@ -314,7 +329,7 @@ let filter = AgentAnyFilter {
     }],
 };
 
-let getter = GetAgents::new(component_id, Some(&filter), true);
+let getter = GetAgents::new("CounterAgent", Some(&filter), true);
 
 let mut agents: Vec<AgentMetadata> = vec![];
 
@@ -340,8 +355,7 @@ val filter: HostApi.AgentAnyFilter = HostApi.AgentAnyFilter(
   )
 )
 
-val componentId: HostApi.ComponentIdLiteral = ???
-val handle = HostApi.getAgents(componentId, Some(filter), precise = true)
+val handle = HostApi.getAgents("CounterAgent", Some(filter), precise = true)
 
 var agents: List[HostApi.AgentMetadata] = Nil
 var batch = HostApi.nextAgentBatch(handle)
@@ -354,7 +368,7 @@ while (batch.isDefined) {
     </Tabs.Tab>
 
     <Tabs.Tab>
-    Assuming the `golemcloud/golem_sdk/api` package is imported as `@api` and `golemcloud/golem_sdk/interface/golem/core/types` is imported as `@rpcTypes`:
+    Assuming the `golemcloud/golem_sdk/api` package is imported as `@api`:
 
 ```moonbit
 let filter : @api.AgentAnyFilter = @api.AgentAnyFilter::{
@@ -370,9 +384,8 @@ let filter : @api.AgentAnyFilter = @api.AgentAnyFilter::{
   ],
 }
 
-let component_id : @rpcTypes.ComponentId = abort("provide a component ID")
 let agents : Array[@api.AgentMetadata] = []
-let pager = @api.get_agents(component_id, Some(filter), true)
+let pager = @api.get_agents("CounterAgent", Some(filter), true)
 defer pager.drop()
 
 while true {
@@ -388,10 +401,8 @@ while true {
 ```go
 import "github.com/golemcloud/golem/sdks/go/golem"
 
-var componentID golem.UUID = /* ... */
-
 var agents []golem.AgentMetadata
-for md, err := range golem.GetAgents(componentID, golem.GetAgentsOptions{
+for md, err := range golem.GetAgents("CounterAgent", golem.GetAgentsOptions{
 	Filter:  golem.AgentStatusFilter(golem.FilterEqual, golem.AgentStatusIdle),
 	Precise: true,
 }) {

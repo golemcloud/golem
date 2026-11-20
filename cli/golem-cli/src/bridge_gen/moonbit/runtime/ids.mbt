@@ -13,11 +13,10 @@
 // limitations under the License.
 
 ///|
-/// Identity of a deployed agent, as returned by the create-agent and
-/// invoke-agent endpoints.
+/// The ID of an agent: an opaque UUID that Golem issues. `Show` prints the
+/// lowercase hyphenated UUID, which is also its JSON form.
 pub(all) struct AgentId {
-  component_id : String
-  agent_id : String
+  uuid : Uuid
 } derive(Debug, Eq)
 
 ///|
@@ -27,10 +26,20 @@ pub extend AgentId with Debug::{to_repr}
 pub extend AgentId with Eq::{equal, not_equal}
 
 ///|
+pub extend AgentId with Show::{to_string, output}
+
+///|
+pub impl Show for AgentId with fn output(self, logger) {
+  self.uuid.output(logger)
+}
+
+///|
+/// Parses the text form of an agent ID, a hyphenated UUID.
+pub fn AgentId::parse(value : String) -> AgentId raise BridgeError {
+  { uuid: Uuid::parse(value) }
+}
+
+///|
 fn AgentId::from_json(j : Json) -> AgentId raise {
-  let m = expect_object(j)
-  {
-    component_id: expect_string(get_field(m, "componentId")),
-    agent_id: expect_string(get_field(m, "agentId")),
-  }
+  { uuid: Uuid::parse_canonical(expect_string(j)) }
 }

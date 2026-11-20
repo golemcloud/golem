@@ -11,56 +11,58 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export function getAgentType(agentTypeName: string): RegisteredAgentType | undefined;
   /**
-   * Gets the registered agent type used by an existing agent, identified by its agent ID.
+   * Gets the deployed agent type that the type tag of an agent ID names. Returns `none`
+   * when no deployed agent type has that tag.
    */
-  export function getAgentTypeByAgentId(agentId: string): RegisteredAgentType | undefined;
-  /**
-   * Constructs a string agent-id from the agent type and its constructor parameters
-   * and an optional phantom ID.
-   * `input` is a value tree whose root encodes the constructor's parameter list.
-   * @throws AgentError
-   */
-  export function makeAgentId(agentTypeName: string, input: SchemaValueTree, phantomId: Uuid | undefined): string;
-  /**
-   * Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
-   * and an optional phantom ID.
-   * The constructor parameters are returned as a self-contained typed value
-   * (graph + value tree) so the receiver can interpret them without an
-   * external schema registry.
-   * @throws AgentError
-   */
-  export function parseAgentId(agentId: string): [string, TypedSchemaValue, Uuid | undefined];
+  export function getAgentTypeByAgentId(agentId: AgentId): RegisteredAgentType | undefined;
   /**
    * @throws WebhookError
    */
   export function createWebhook(promiseId: PromiseId): string;
+  /**
+   * Gets the ID of the keyed agent of the given type and constructor parameters, or
+   * `none` when no such agent exists. Never creates the agent.
+   * `input` is a value tree whose root encodes the constructor's parameter list.
+   * @throws RpcError
+   */
+  export function lookupAgentId(agentTypeName: string, input: SchemaValueTree): AgentId | undefined;
   /**
    * @throws ConfigValueError
    */
   export function getConfigValue(key: string[], expected: SchemaGraph): SchemaValueTree;
   export class WasmRpc {
     /**
-     * Creates an RPC client connecting to the given target agent.
+     * Creates an RPC client connecting to the keyed agent of the given type and
+     * constructor parameters.
      * For durable targets, creates the target if missing and returns after successful
      * initialization. An initialized target is reused without rerunning its constructor.
      * Use `bind-self` to schedule on self from inside an unfinished constructor.
+     * For ephemeral targets, each invocation runs on a new one-shot instance.
      * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list. This fail-fast form traps if the client
-     * cannot be created and is intended for statically generated clients.
-     */
-    constructor(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]);
-    /**
-     * Creates an RPC client connecting to the given target agent.
-     * For durable targets, creates the target if missing and returns after successful
-     * initialization. An initialized target is reused without rerunning its constructor.
-     * Use `bind-self` to schedule on self from inside an unfinished constructor.
-     * `constructor` is a value tree whose root encodes the target agent
-     * constructor's parameter list. This fallible form returns an RPC error
-     * if the client cannot be created and is intended for reflective and
-     * other dynamic clients.
+     * constructor's parameter list.
      * @throws RpcError
      */
-    static create(agentTypeName: string, constructor: SchemaValueTree, phantomId: Uuid | undefined, agentConfig: TypedAgentConfigValue[]): WasmRpc;
+    static upsert(agentTypeName: string, constructor: SchemaValueTree): WasmRpc;
+    /**
+     * Creates an RPC client connecting to the existing agent with the given ID. Never
+     * creates the agent. Fails with `not-found` when no agent of the given type has the ID.
+     * @throws RpcError
+     */
+    static getById(agentTypeName: string, agentId: AgentId): WasmRpc;
+    /**
+     * Creates a durable agent of the given type, and returns after its successful
+     * initialization. The creation is durable: replay returns the same agent.
+     * `constructor` is a value tree whose root encodes the target agent
+     * constructor's parameter list.
+     * @throws RpcError
+     */
+    static create(agentTypeName: string, constructor: SchemaValueTree, options: CreateOptions): Promise<Created>;
+    /**
+     * The ID of the agent this client connects to. On a client of `upsert` it creates the
+     * agent when it is missing, without invoking a method.
+     * @throws RpcError
+     */
+    agentId(): Promise<AgentId>;
     /**
      * Binds the current durable agent incarnation without creating it or waiting
      * for its constructor to finish.
@@ -75,7 +77,7 @@ declare module 'golem:agent/host@2.0.0' {
      * connection preserve the recorded incarnation during replay.
      * @throws RpcError
      */
-    static bindSelf(): [string, WasmRpc];
+    static bindSelf(): [AgentId, WasmRpc];
     /**
      * Invokes a remote method with the given parameters, and awaits the result.
      * `input` encodes the method's parameter list. The returned result is
@@ -129,11 +131,10 @@ declare module 'golem:agent/host@2.0.0' {
      */
     cancel(): void;
   }
-  export type Uuid = golemCore200Types.Uuid;
+  export type AgentId = golemCore200Types.AgentId;
   export type PromiseId = golemCore200Types.PromiseId;
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
-  export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type PermissionCard = golemCore200Types.PermissionCard;
   export type InvocationId = golemCore200Types.InvocationId;
   export type Datetime = wasiClocks030SystemClock.Instant;
@@ -186,13 +187,35 @@ declare module 'golem:agent/host@2.0.0' {
   {
     tag: 'remote-agent-error'
     val: AgentError
+  } |
+  /**
+   * A keyed create found an agent that already has the key, or the agent at the ID
+   * that a key derives has another key
+   */
+  {
+    tag: 'conflict'
+    val: string
+  };
+  /**
+   * Options of `wasm-rpc.create`
+   */
+  export type CreateOptions = {
+    /**
+     * Creates the keyed agent of the constructor parameters, and fails with `conflict`
+     * when it already exists. Otherwise the new agent has no key and a new ID.
+     */
+    keyed: boolean;
+    /** Overrides of the agent type's local configuration values */
+    agentConfig: TypedAgentConfigValue[];
+    /** Environment variables added to the ones the manifest defines */
+    env: [string, string][];
   };
   /**
    * Final identity allocated for one remote invocation. For an ephemeral
-   * target, `agent-id` contains the generated one-shot phantom ID.
+   * target, `agent-id` is the ID of the one-shot instance that ran it.
    */
   export type InvocationMetadata = {
-    agentId: string;
+    agentId: AgentId;
     invocationId: InvocationId;
   };
   /**
@@ -207,6 +230,13 @@ declare module 'golem:agent/host@2.0.0' {
    */
   export type ScheduledInvocationReceipt = {
     metadata: InvocationMetadata;
+  };
+  /**
+   * An agent created by `wasm-rpc.create`
+   */
+  export type Created = {
+    client: WasmRpc;
+    agentId: AgentId;
   };
   /**
    * Asynchronous invocation handle together with its final identity, when

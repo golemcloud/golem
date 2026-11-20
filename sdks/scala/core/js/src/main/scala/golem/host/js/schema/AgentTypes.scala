@@ -19,7 +19,6 @@ package golem.host.js.schema
 import golem.host.js.{
   JsAgentConfigSource,
   JsAgentMode,
-  JsComponentId,
   JsHttpEndpointDetails,
   JsHttpMountDetails,
   JsReadOnlyConfig,
@@ -46,19 +45,12 @@ import scala.scalajs.js
 //   - `agent-error.custom-error` carries a `typed-schema-value`.
 // ---------------------------------------------------------------------------
 
-/** `auto-injected-kind` is a plain string enum (`"principal"`). */
-object JsAutoInjectedKind {
-  val principal: String = "principal"
-}
-
 @js.native
 sealed trait JsFieldSource extends js.Object {
   def tag: String = js.native
 }
 object JsFieldSource {
-  def userSupplied: JsFieldSource               = JsShape.tagOnly[JsFieldSource]("user-supplied")
-  def autoInjected(kind: String): JsFieldSource = JsShape.tagged[JsFieldSource]("auto-injected", kind)
-  def autoInjectedPrincipal: JsFieldSource      = autoInjected(JsAutoInjectedKind.principal)
+  def userSupplied: JsFieldSource = JsShape.tagOnly[JsFieldSource]("user-supplied")
 }
 
 @js.native
@@ -258,14 +250,11 @@ object JsTypedAgentConfigValue {
  */
 @js.native
 sealed trait JsRegisteredAgentType extends js.Object {
-  def agentType: JsAgentType       = js.native
-  def implementedBy: JsComponentId = js.native
+  def agentType: JsAgentType = js.native
 }
 object JsRegisteredAgentType {
-  def apply(agentType: JsAgentType, implementedBy: JsComponentId): JsRegisteredAgentType =
-    js.Dynamic
-      .literal("agentType" -> agentType, "implementedBy" -> implementedBy)
-      .asInstanceOf[JsRegisteredAgentType]
+  def apply(agentType: JsAgentType): JsRegisteredAgentType =
+    js.Dynamic.literal("agentType" -> agentType).asInstanceOf[JsRegisteredAgentType]
 }
 
 @js.native

@@ -103,6 +103,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
     let requires_filesystem = ir.requires_filesystem;
+    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref(), &plan.tool_name);
     let standalone = if needs_composition(ir) {
         quote! { #ident(&mut golem_rust::agentic::ToolBuildCtx::new(), __golem_wire_schema) }
     } else {
@@ -110,7 +111,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
             #[allow(unused_mut)]
             let mut commands = ::std::vec![#root];
             #(#links)*
-            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, commands })
+            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, http_mount: #http_mount, commands })
         }
     };
     Ok(quote! {
@@ -134,7 +135,7 @@ pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStrea
                 let name = commands[0].name.clone();
                 golem_rust::agentic::reconcile_command_inherited_globals(&mut commands[0], ctx.inherited_globals(), &name)?;
                 #(#links)*
-                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, commands };
+                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, requires_filesystem: #requires_filesystem, http_mount: #http_mount, commands };
                 if ctx.is_outermost_descriptor() {
                     golem_rust::agentic::normalize_inherited_globals(&mut tool)?;
                 }
@@ -157,6 +158,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
         None => quote! { env!("CARGO_PKG_VERSION").to_string() },
     };
     let requires_filesystem = ir.requires_filesystem;
+    let http_mount = crate::tool::http::mount_tokens(ir.mount.as_deref(), &plan.tool_name);
 
     // Index 0 is always the root command.
     let root_node = build_root_node(ir, &plan, DescriptorRepr::Dynamic)?;
@@ -185,6 +187,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
             ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType {
                 version: #version,
                 requires_filesystem: #requires_filesystem,
+                http_mount: #http_mount,
                 commands,
             })
         }
@@ -246,6 +249,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
                 let mut __tool = golem_rust::agentic::ExtendedToolType {
                     version: #version,
                     requires_filesystem: #requires_filesystem,
+                    http_mount: #http_mount,
                     commands,
                 };
                 // A nested subtree child descriptor returns its raw tree with
@@ -311,7 +315,7 @@ fn schema_checks(ir: &ToolDefinitionIr) -> TokenStream {
     let mut types = Vec::new();
     for cmd in &ir.commands {
         for param in &cmd.params {
-            if is_auto_injected_principal_type(&param.ty) || is_stream_type(&param.ty) {
+            if is_injected_context_type(&param.ty) || is_stream_type(&param.ty) {
                 continue;
             }
             types.push(unwrap_generic1(&param.ty, "Option").unwrap_or(&param.ty));
@@ -564,6 +568,7 @@ fn build_root_node(
                 name: #name.to_string(),
                 aliases: ::std::vec![ #(#aliases),* ],
                 doc: #doc,
+                http: None,
                 globals: golem_rust::agentic::ExtendedGlobals {
                     options: ::std::vec![ #(#options),* ],
                     flags: ::std::vec![ #(#flags),* ],
@@ -615,6 +620,7 @@ fn build_subtree_link(
         .name_override
         .clone()
         .unwrap_or_else(|| expected_name.clone());
+    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref(), &grafted_name)?;
 
     let override_name = match &subtree.name_override {
         Some(n) => quote! { ::std::option::Option::Some(#n.to_string()) },
@@ -728,6 +734,7 @@ fn build_subtree_link(
                 #override_doc,
                 #override_aliases,
                 ::std::option::Option::None,
+                #http,
             )?;
             let __off = golem_rust::agentic::append_grafted_subtree(&mut commands, __graft);
             commands[0].subcommands.push(__off);
@@ -764,6 +771,7 @@ fn build_command_node(
     repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let name = command_name(cmd, tool_name, is_root);
+    let http = crate::tool::http::command_http_tokens(cmd.http.as_ref(), &name)?;
     let doc = doc_tokens(&cmd.doc);
     let aliases = cmd.aliases.iter().map(|a| quote! { #a.to_string() });
 
@@ -800,7 +808,7 @@ fn build_command_node(
         .enumerate()
         .rev()
         .find_map(|(idx, param)| {
-            if is_auto_injected_principal_type(&param.ty) {
+            if is_injected_context_type(&param.ty) {
                 return None;
             }
             let arg = arg_for(cmd, &param.ident);
@@ -826,7 +834,7 @@ fn build_command_node(
         .enumerate()
         .rev()
         .find_map(|(idx, param)| {
-            if is_auto_injected_principal_type(&param.ty) {
+            if is_injected_context_type(&param.ty) {
                 return None;
             }
             let arg = arg_for(cmd, &param.ident);
@@ -840,11 +848,11 @@ fn build_command_node(
         });
 
     for (idx, param) in cmd.params.iter().enumerate() {
-        if is_auto_injected_principal_type(&param.ty) {
+        if is_injected_context_type(&param.ty) {
             if let Some(arg) = arg_for(cmd, &param.ident) {
                 return Err(Error::new(
                     arg.param.span(),
-                    "auto-injected Principal parameters cannot have #[arg] attributes because they are not part of the tool input schema",
+                    "auto-injected InvocationContext parameters cannot have #[arg] attributes because they are not part of the tool input schema",
                 ));
             }
             continue;
@@ -1046,6 +1054,7 @@ fn build_command_node(
             name: #name.to_string(),
             aliases: ::std::vec![ #(#aliases),* ],
             doc: #doc,
+            http: #http,
             globals: golem_rust::agentic::ExtendedGlobals {
                 options: ::std::vec![ #(#global_options),* ],
                 flags: ::std::vec![ #(#global_flags),* ],
@@ -1203,7 +1212,7 @@ fn vec_tail_spec(
 /// them like any other parameter and the runtime (`reinfer_body_tail`) decides
 /// which candidates survive.
 fn is_positional_candidate(param: &crate::tool::ir::ParamIr, arg: Option<&ArgIr>) -> bool {
-    if is_stream_type(&param.ty) || is_auto_injected_principal_type(&param.ty) {
+    if is_stream_type(&param.ty) || is_injected_context_type(&param.ty) {
         return false;
     }
     match arg.and_then(|a| a.placement) {
@@ -2915,7 +2924,7 @@ fn type_last_ident(ty: &Type) -> Option<String> {
     }
 }
 
-fn is_auto_injected_principal_type(ty: &Type) -> bool {
+fn is_injected_context_type(ty: &Type) -> bool {
     let Type::Path(tp) = ty else {
         return false;
     };
@@ -2928,16 +2937,8 @@ fn is_auto_injected_principal_type(ty: &Type) -> bool {
     let segments = segments.iter().map(String::as_str).collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["golem_rust", "agentic" | "tool", "Principal"]
-            | ["golem_native_tool" | "crate", "Principal"]
-            | [
-                "golem_rust",
-                "golem_agentic",
-                "golem",
-                "agent",
-                "common",
-                "Principal"
-            ]
+        ["golem_rust", "agentic" | "tool", "InvocationContext"]
+            | ["golem_native_tool" | "crate", "Caller"]
     )
 }
 

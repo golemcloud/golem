@@ -91,7 +91,7 @@ type SummarizeIn struct {
 	Quota golem.QuotaToken
 }
 
-summary := summarizer.Summarize.MustCall(summarizer.Agent.Get(id), summarizer.SummarizeIn{
+summary := summarizer.Summarize.MustCall(summarizer.Agent.Upsert(id), summarizer.SummarizeIn{
 	Text: text, Quota: tok.Split(200),
 })
 ```

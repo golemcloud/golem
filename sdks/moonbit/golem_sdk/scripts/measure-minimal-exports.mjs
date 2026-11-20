@@ -120,6 +120,7 @@ if (!Number(agents)) {
     const mime = "not/a-snapshot";
     const state = e["[async-lift]golem:api/load-snapshot@1.5.0#load"](
       lowerString(payload), payload.length * 2, lowerString(mime), mime.length,
+      e.cabi_realloc(0, 0, 8, 32), 1, 0,
     );
     assert.equal(state, 0, "absent load must resolve immediately without a callback");
     assert.equal(snapshotLoad, "Component defines no agents");

@@ -19,25 +19,23 @@ import (
 	"fmt"
 
 	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 )
 
-// The worker service's agent REST API, as openapi/golem-service.yaml defines
+// The worker service's runtime REST API, as openapi/golem-service.yaml defines
 // it. Two shapes cross it and they are not the same:
 //
-//   - method parameters and results are schema-native SchemaValue nodes, the
-//     {kind, value} wire form;
+//   - method and constructor parameters and results are schema-native
+//     SchemaValue nodes, the {kind, value} wire form;
 //   - a configuration override is a NormalizedJsonValue, which is ordinary
 //     canonical JSON. The server holds configuration as plain JSON and applies
 //     the schema itself.
 //
 // Sending one where the other belongs is accepted by neither side.
 
-// AgentID identifies a resolved agent: the component it belongs to, and its id
-// within that component.
-type AgentID struct {
-	ComponentID string `json:"componentId"`
-	AgentID     string `json:"agentId"`
-}
+// AgentID is the ID of an agent: an opaque UUID that Golem issues, whose text
+// form is the UUID. See [values.AgentID].
+type AgentID = values.AgentID
 
 // ConfigEntry overrides one agent configuration value. Value is canonical JSON
 // — a string, a number, a map — not a schema.SchemaValue.
@@ -58,25 +56,26 @@ const (
 )
 
 type createAgentRequest struct {
-	AppName       string           `json:"appName"`
-	EnvName       string           `json:"envName"`
-	AgentTypeName string           `json:"agentTypeName"`
-	Parameters    json.RawMessage  `json:"parameters"`
-	PhantomID     *string          `json:"phantomId,omitempty"`
-	Config        []configEntryDTO `json:"config"`
+	Parameters json.RawMessage   `json:"parameters"`
+	Config     []configEntryDTO  `json:"config"`
+	Env        map[string]string `json:"env"`
+	Keyed      bool              `json:"keyed"`
 }
 
+// agentKeyRequest names the keyed agent of the constructor parameters.
+type agentKeyRequest struct {
+	Parameters json.RawMessage `json:"parameters"`
+}
+
+// invokeAgentRequest names the agent by exactly one of AgentID or Parameters.
 type invokeAgentRequest struct {
-	AppName          string           `json:"appName"`
-	EnvName          string           `json:"envName"`
-	AgentTypeName    string           `json:"agentTypeName"`
-	Parameters       json.RawMessage  `json:"parameters"`
-	PhantomID        *string          `json:"phantomId,omitempty"`
-	Config           []configEntryDTO `json:"config"`
-	MethodName       string           `json:"methodName"`
-	MethodParameters json.RawMessage  `json:"methodParameters"`
-	Mode             InvocationMode   `json:"mode"`
-	ScheduleAt       *string          `json:"scheduleAt,omitempty"`
+	AgentID             *AgentID        `json:"agentId,omitempty"`
+	Parameters          json.RawMessage `json:"parameters,omitempty"`
+	Method              string          `json:"method"`
+	MethodParameters    json.RawMessage `json:"methodParameters"`
+	Mode                InvocationMode  `json:"mode"`
+	ScheduleAt          *string         `json:"scheduleAt,omitempty"`
+	ExpectedFingerprint string          `json:"expectedFingerprint,omitempty"`
 }
 
 type configEntryDTO struct {
@@ -84,9 +83,41 @@ type configEntryDTO struct {
 	Value any      `json:"value"`
 }
 
-type createAgentResponse struct {
-	AgentID           AgentID `json:"agentId"`
-	ComponentRevision *uint64 `json:"componentRevision"`
+// agentReference is the server's AgentReference: an agent and the
+// incarnation that a create, upsert or lookup reached.
+type agentReference struct {
+	AgentID          AgentID `json:"agentId"`
+	AgentFingerprint string  `json:"agentFingerprint"`
+}
+
+// agentMetadata is the part of the server's AgentMetadataDto that GetByID
+// checks.
+type agentMetadata struct {
+	AgentTypeName *string `json:"agentTypeName"`
+	Fingerprint   string  `json:"fingerprint"`
+}
+
+// currentToken is the part of the registry's Token that names the account the
+// token belongs to.
+type currentToken struct {
+	AccountID string `json:"accountId"`
+}
+
+// visibleEnvironments is the part of the registry's page of visible
+// environments that names each environment's ID, names, and owning account.
+type visibleEnvironments struct {
+	Values []struct {
+		Environment struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"environment"`
+		Application struct {
+			Name string `json:"name"`
+		} `json:"application"`
+		Account struct {
+			ID string `json:"id"`
+		} `json:"account"`
+	} `json:"values"`
 }
 
 type invokeAgentResponse struct {

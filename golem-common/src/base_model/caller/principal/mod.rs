@@ -17,7 +17,7 @@ use crate::base_model::account::AccountId;
 use crate::base_model::agent::AgentTypeName;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
-use crate::base_model::{AgentFingerprint, Timestamp};
+use crate::base_model::{AgentFingerprint, AgentId, Timestamp};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use std::collections::HashSet;
@@ -60,6 +60,8 @@ impl Display for Kind {
 /// identity proof.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum Principal {
     User(UserPrincipal),
     Account(AccountPrincipal),
@@ -114,6 +116,8 @@ impl Principal {
 /// `(issuer, subject)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct UserPrincipal {
     pub pair: Pair,
     pub claims: Claims,
@@ -124,6 +128,8 @@ pub struct UserPrincipal {
 /// sign-in. The pair is `(Golem issuer, account:<account-id>)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AccountPrincipal {
     pub issuer: String,
     pub account_id: AccountId,
@@ -145,6 +151,8 @@ impl AccountPrincipal {
 /// How an account authenticated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub enum AccountAuthentication {
     ApiToken,
     BootstrapToken,
@@ -156,16 +164,38 @@ pub enum AccountAuthentication {
 /// proof of that installation proved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct AgentPrincipal {
     pub issuer: String,
-    /// The agent's 2.0 ID, never its key.
+    /// The agent's UUID, never its key.
     pub agent_id: Uuid,
+    /// The typed address used to route requests to this agent.
+    pub address: AgentId,
     pub fingerprint: AgentFingerprint,
     pub agent_type: AgentTypeName,
     pub environment_id: EnvironmentId,
 }
 
 impl AgentPrincipal {
+    /// The only constructor that the executor uses. It keeps `agent_id` and `address` in step.
+    pub fn of_agent(
+        issuer: String,
+        address: AgentId,
+        fingerprint: AgentFingerprint,
+        agent_type: AgentTypeName,
+        environment_id: EnvironmentId,
+    ) -> Self {
+        Self {
+            issuer,
+            agent_id: agent_subject_uuid(&address),
+            address,
+            fingerprint,
+            agent_type,
+            environment_id,
+        }
+    }
+
     pub fn subject(&self) -> GolemSubject {
         GolemSubject::Agent {
             agent_id: self.agent_id,
@@ -178,10 +208,17 @@ impl AgentPrincipal {
     }
 }
 
+/// The UUID that names an agent in its Golem subject.
+pub fn agent_subject_uuid(agent_id: &AgentId) -> Uuid {
+    agent_id.as_uuid()
+}
+
 /// A tool. The pair is `(issuer, tool:<environment-id>/<tool-name>)`, with the issuer as for an
 /// agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct ToolPrincipal {
     pub issuer: String,
     pub environment_id: EnvironmentId,
@@ -326,10 +363,34 @@ pub enum ClaimsError {
     LoneSurrogate,
 }
 
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for Claims {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(&self.as_json(), context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for Claims {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let json = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        Claims::from_json(json).map_err(|error| {
+            desert_rust::Error::DeserializationFailure(format!("Invalid claims: {error}"))
+        })
+    }
+}
+
 /// A token that the request presented at the entry point, with its maker. It names the token by
 /// its ID and never holds the token's value.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
 pub struct TokenProvenance {
     pub id: Uuid,
     pub maker: Option<PrincipalRef>,
@@ -344,6 +405,124 @@ pub struct Caller {
     pub original: Principal,
     pub immediate: Principal,
     pub tokens: Vec<TokenProvenance>,
+}
+
+/// The stored form of a [`Caller`]: the immediate principal is absent when it is the same record
+/// as the original one, so that the claims of an entry-point caller are stored once.
+#[cfg(feature = "full")]
+#[derive(desert_rust::BinaryCodec)]
+#[desert(evolution())]
+struct CallerRecord {
+    original: Principal,
+    immediate: Option<Principal>,
+    tokens: Vec<TokenProvenance>,
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for Caller {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        desert_rust::BinarySerializer::serialize(
+            &CallerRecord {
+                original: self.original.clone(),
+                immediate: (!self.original.same_record(&self.immediate))
+                    .then(|| self.immediate.clone()),
+                tokens: self.tokens.clone(),
+            },
+            context,
+        )
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for Caller {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let record: CallerRecord = desert_rust::BinaryDeserializer::deserialize(context)?;
+        Ok(Self {
+            immediate: record.immediate.unwrap_or_else(|| record.original.clone()),
+            original: record.original,
+            tokens: record.tokens,
+        })
+    }
+}
+
+#[cfg(feature = "full")]
+impl Caller {
+    /// A digest of the whole caller record, claims and tokens included, over its stored
+    /// encoding. Two callers have the same digest only when they are the same record. The
+    /// executor's read-only result cache and the worker service's HTTP validators both use it, so
+    /// a cached result and a validator always belong to the same caller.
+    pub fn digest(&self) -> [u8; 32] {
+        let bytes =
+            desert_rust::serialize_to_byte_vec(self).expect("Caller serialization is infallible");
+        *blake3::hash(&bytes).as_bytes()
+    }
+}
+
+impl Caller {
+    /// The caller at an entry point: one principal in both roles, and no tokens.
+    pub fn entry(principal: Principal) -> Self {
+        Self {
+            original: principal.clone(),
+            immediate: principal,
+            tokens: Vec::new(),
+        }
+    }
+
+    pub fn anonymous() -> Self {
+        Self::entry(Principal::Anonymous)
+    }
+}
+
+/// The same recorded caller: every field is equal, and claims are equal byte for byte.
+///
+/// This is not identity. Identity is [`Principal::equals`], which compares only pairs. A recorded
+/// request and its retry are the same request exactly when their callers are the same record.
+impl PartialEq for Caller {
+    fn eq(&self, other: &Self) -> bool {
+        self.original.same_record(&other.original)
+            && self.immediate.same_record(&other.immediate)
+            && self.tokens == other.tokens
+    }
+}
+
+impl Eq for Caller {}
+
+impl Principal {
+    /// True exactly when every field of both principals is equal, claims byte for byte.
+    pub fn same_record(&self, other: &Principal) -> bool {
+        match (self, other) {
+            (Principal::User(a), Principal::User(b)) => {
+                a.pair == b.pair
+                    && a.claims.as_json() == b.claims.as_json()
+                    && a.authenticated_at == b.authenticated_at
+            }
+            (Principal::Account(a), Principal::Account(b)) => {
+                a.issuer == b.issuer
+                    && a.account_id == b.account_id
+                    && a.authentication == b.authentication
+            }
+            (Principal::Agent(a), Principal::Agent(b)) => {
+                a.issuer == b.issuer
+                    && a.agent_id == b.agent_id
+                    && a.address == b.address
+                    && a.fingerprint == b.fingerprint
+                    && a.agent_type == b.agent_type
+                    && a.environment_id == b.environment_id
+            }
+            (Principal::Tool(a), Principal::Tool(b)) => {
+                a.issuer == b.issuer
+                    && a.environment_id == b.environment_id
+                    && a.tool_name == b.tool_name
+            }
+            (Principal::Anonymous, Principal::Anonymous) => true,
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]

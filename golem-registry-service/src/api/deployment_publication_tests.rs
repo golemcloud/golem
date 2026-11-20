@@ -67,11 +67,13 @@ fn zeta_tool(alias: Option<&str>) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "zeta".to_string(),
                 aliases: alias.map(str::to_string).into_iter().collect(),
                 doc: Doc::default(),
+                http: None,
                 globals: Globals::default(),
                 subcommands: Vec::new(),
                 body: None,
@@ -122,6 +124,7 @@ async fn store_zeta_component(
             metadata: Blob::new(metadata),
             object_store_key: String::new(),
             binary_hash: SqlBlake3Hash::empty(),
+            package_metadata: None,
         },
         Vec::new(),
     )

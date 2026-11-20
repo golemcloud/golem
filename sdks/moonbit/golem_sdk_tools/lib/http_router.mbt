@@ -134,7 +134,7 @@ fn validate_http_router(
     }
     if agent.constructor_params.any(p => !is_config_type(p.1)) {
       http_fail(
-        "M01: router constructor cannot have identity or principal inputs: \{agent.name}",
+        "M01: router constructor cannot have identity or context inputs: \{agent.name}",
       )
     }
     if mount.phantom || !mount.filesystem_bindings.is_empty() {
@@ -202,7 +202,7 @@ fn validate_http_router(
         if is_config_type(param.1) {
           continue
         }
-        if is_principal_type(param.1) ||
+        if is_invocation_context_type(param.1) ||
           captures.filter(c => c == param.0).length() != 1 {
           http_fail(
             "M02: file owner identity must be bound exactly once: \{agent.name}.\{param.0}",

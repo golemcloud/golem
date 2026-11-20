@@ -12,8 +12,8 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::base_model::worker_filter::{AgentAndFilter, AgentModeFilter, FilterComparator};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -102,7 +102,8 @@ pub(crate) fn modes_from_filter(filter: &Option<AgentFilter>) -> Option<AgentMod
 pub trait RunningWorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
     ) -> Result<Vec<AgentMetadata>, WorkerExecutorError>;
 }
@@ -118,7 +119,8 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 {
     async fn get(
         &self,
-        component_id: &ComponentId,
+        environment_id: &EnvironmentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
     ) -> Result<Vec<AgentMetadata>, WorkerExecutorError> {
         info!(
@@ -140,8 +142,9 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
             else {
                 continue;
             };
-            if metadata.component_id == *component_id
-                && (metadata.last_known_status.status == AgentStatus::Running)
+            if metadata.environment_id == *environment_id
+                && metadata.agent_id.type_id() == Some(type_id)
+                && (metadata.last_known_status.reported_status() == AgentStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
             {
                 workers.push(metadata);
@@ -163,7 +166,7 @@ pub trait WorkerEnumerationService: Send + Sync {
     async fn get(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -208,7 +211,7 @@ impl DefaultWorkerEnumerationService {
     async fn get_internal(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -219,8 +222,8 @@ impl DefaultWorkerEnumerationService {
         let modes = modes_from_filter(&filter);
         let page = self
             .oplog_service
-            .scan_for_component(environment_id, component_id, modes, cursor, count)
-            .instrument(tracing::info_span!("scan_for_component"))
+            .scan_for_type(environment_id, type_id, modes, cursor, count)
+            .instrument(tracing::info_span!("scan_for_type"))
             .await?;
 
         for owned_agent_id in page.agent_ids {
@@ -259,7 +262,13 @@ impl DefaultWorkerEnumerationService {
                         // so it is listed as failed.
                         Err(error @ WorkerExecutorError::OplogFailed { .. }) => {
                             warn!(agent_id = %owned_agent_id, error = %error, "Listing an agent with an unreadable oplog as failed");
-                            let mut status = cached_status.unwrap_or_default();
+                            // The initial metadata carries the never-live mark from `Create`.
+                            let mut status = cached_status.unwrap_or_else(|| {
+                                worker_metadata
+                                    .initial_worker_metadata
+                                    .last_known_status
+                                    .clone()
+                            });
                             status.status = AgentStatus::Failed;
                             status
                         }
@@ -275,8 +284,15 @@ impl DefaultWorkerEnumerationService {
                         ..worker_metadata.initial_worker_metadata
                     }
                 } else {
+                    let last_known_status =
+                        worker_metadata.last_known_status.unwrap_or_else(|| {
+                            worker_metadata
+                                .initial_worker_metadata
+                                .last_known_status
+                                .clone()
+                        });
                     AgentMetadata {
-                        last_known_status: worker_metadata.last_known_status.unwrap_or_default(),
+                        last_known_status,
                         ..worker_metadata.initial_worker_metadata
                     }
                 };
@@ -320,7 +336,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,
         environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -330,7 +346,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
         info!(
             environment_id = %environment_id,
-            component_id = %component_id,
+            type_id = type_id.get(),
             filter = filter
                 .clone()
                 .map(|f| f.to_string())
@@ -355,7 +371,7 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
             let (next_cursor, workers_page, batch_scanned) = self
                 .get_internal(
                     environment_id,
-                    component_id,
+                    type_id,
                     filter.clone(),
                     new_cursor,
                     batch,
@@ -419,7 +435,7 @@ mod tests {
 
     #[test]
     fn and_with_no_mode_constraint_defaults_to_durable() {
-        let f = AgentFilter::new_and(vec![AgentFilter::new_name(
+        let f = AgentFilter::new_and(vec![AgentFilter::new_key(
             StringFilterComparator::Equal,
             "x".to_string(),
         )]);
@@ -429,7 +445,7 @@ mod tests {
     #[test]
     fn and_with_single_mode_equal_uses_it() {
         let f = AgentFilter::new_and(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string()),
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
         ]);
         assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Ephemeral));
@@ -484,12 +500,12 @@ mod tests {
 
     #[test]
     fn and_with_nested_or_containing_mode_returns_none() {
-        // And([ Or([ Mode(Equal, Ephemeral), Name(Equal, "x") ]) ])
+        // And([ Or([ Mode(Equal, Ephemeral), Key(Equal, "x") ]) ])
         // The Or can be satisfied by Ephemeral agents, so we must not narrow
         // the scan to Durable just because there's no top-level Mode child.
         let f = AgentFilter::new_and(vec![AgentFilter::new_or(vec![
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
-            AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string()),
         ])]);
         assert_eq!(modes_from_filter(&Some(f)), None);
     }
@@ -510,32 +526,32 @@ mod tests {
             AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Durable),
             AgentFilter::new_or(vec![
                 AgentFilter::new_mode(FilterComparator::Equal, AgentMode::Ephemeral),
-                AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string()),
+                AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string()),
             ]),
         ]);
         assert_eq!(modes_from_filter(&Some(f)), None);
     }
 
     #[test]
-    fn name_only_filter_defaults_to_durable() {
+    fn key_only_filter_defaults_to_durable() {
         // A filter that doesn't reference Mode at all defaults to Durable,
         // matching the no-filter behaviour.
-        let f = AgentFilter::new_name(StringFilterComparator::Equal, "x".to_string());
+        let f = AgentFilter::new_key(StringFilterComparator::Equal, "x".to_string());
         assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
     }
 
     #[test]
     fn or_without_mode_defaults_to_durable() {
         let f = AgentFilter::new_or(vec![
-            AgentFilter::new_name(StringFilterComparator::Equal, "a".to_string()),
-            AgentFilter::new_name(StringFilterComparator::Equal, "b".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "a".to_string()),
+            AgentFilter::new_key(StringFilterComparator::Equal, "b".to_string()),
         ]);
         assert_eq!(modes_from_filter(&Some(f)), Some(AgentMode::Durable));
     }
 
     #[test]
     fn not_without_mode_defaults_to_durable() {
-        let f = AgentFilter::new_not(AgentFilter::new_name(
+        let f = AgentFilter::new_not(AgentFilter::new_key(
             StringFilterComparator::Equal,
             "x".to_string(),
         ));

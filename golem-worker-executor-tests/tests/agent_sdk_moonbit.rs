@@ -21,12 +21,12 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::Query;
 use axum::routing::{any, post};
-use golem_common::model::AgentId;
+use golem_common::model::OwnedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
@@ -64,7 +64,7 @@ struct Fixture {
     executor: TestWorkerExecutor,
     component: ComponentDto,
     agent_id: golem_common::model::agent::ParsedAgentKey,
-    worker_id: AgentId,
+    worker_id: OwnedAgentId,
     server: tokio::task::JoinHandle<()>,
 }
 
@@ -85,7 +85,7 @@ async fn fixture(
         .component_dep(&context.default_environment_id, agent_sdk_moonbit)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurability", name);
+    let agent_id = agent_key!("CustomDurability", name);
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -457,7 +457,10 @@ async fn moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibl
         .in_current_span()
     });
     tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
-    fixture.executor.commit_oplog(&fixture.worker_id).await?;
+    fixture
+        .executor
+        .commit_oplog(&fixture.worker_id.agent_id)
+        .await?;
     let before = fixture
         .executor
         .get_oplog(&fixture.worker_id, OplogIndex::INITIAL)

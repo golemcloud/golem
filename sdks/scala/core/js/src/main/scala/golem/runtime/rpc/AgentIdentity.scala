@@ -10,68 +10,98 @@
 
 package golem.runtime.rpc
 
-import golem.config.{ConfigOverride, ConfigOverrideEncoder}
-import golem.host.js.schema.{JsSchemaValueTree, JsTypedAgentConfigValue, JsUuid}
+import golem.AgentId
+import golem.config.ConfigOverrideEncoder
+import golem.host.js.JsAgentId
+import golem.host.js.schema.JsSchemaValueTree
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
 
-import java.util.UUID
-import scala.scalajs.js
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.util.control.NonFatal
 
+/**
+ * Makes RPC clients through the `wasm-rpc` static functions. Every client uses
+ * the agent type name that the host registry reports for the requested name.
+ */
 private[golem] object AgentIdentity {
-  def make(
-    agentTypeName: String,
-    payload: JsSchemaValueTree,
-    phantom: Option[UUID]
-  ): Either[String, String] =
-    AgentHostApi.makeAgentId(agentTypeName, payload, phantom)
 
-  def parse(agentId: String): Either[String, AgentHostApi.AgentIdParts] =
-    AgentHostApi.parseAgentId(agentId)
-
+  /**
+   * Binds the current agent. The host registry names the agent type that the
+   * type tag of the returned ID belongs to; it must be `expectedTypeName`.
+   */
   def bindSelf(expectedTypeName: String): Either[String, RemoteAgentClient] =
     WasmRpcApi.bindSelf().left.map(_.toString).flatMap { case (id, rpc) =>
-      val result = parse(id).flatMap { parts =>
-        if (parts.agentTypeName != expectedTypeName)
-          Left(s"invalid-type: self binding expects $expectedTypeName, identity is ${parts.agentTypeName}")
-        else Right(RemoteAgentClient(parts.agentTypeName, id, new RemoteAgentClient.WasmRpcInvoker(rpc)))
+      val actual = AgentHostApi.registeredAgentTypeFor(id).map(_.agentType.typeName)
+      if (actual.contains(expectedTypeName))
+        Right(client(expectedTypeName, rpc, Some(JsAgentId.toAgentId(id))))
+      else {
+        rpc.drop()
+        Left(
+          s"invalid-type: self binding expects $expectedTypeName, identity is ${actual.getOrElse("an unknown agent type")}"
+        )
       }
-      if (result.isLeft) rpc.drop()
-      result
     }
 
-  def createConnection(
-    agentTypeName: String,
-    constructorPayload: JsSchemaValueTree,
-    phantom: Option[UUID],
-    configOverrides: List[ConfigOverride]
-  ): Either[WasmRpcApi.RpcError, WasmRpcApi.WasmRpcClient] = {
-    val phantomArg = phantom.fold[js.UndefOr[JsUuid]](js.undefined)(JsUuid.fromUuid)
-    WasmRpcApi.createClient(
-      agentTypeName,
-      constructorPayload,
-      phantomArg,
-      ConfigOverrideEncoder.encode(configOverrides)
-    )
-  }
+  /** A client of the keyed agent of the constructor parameters. */
+  def upsert(agentTypeName: String, constructorPayload: JsSchemaValueTree): Either[AgentRpcError, RemoteAgentClient] =
+    registeredTypeName(agentTypeName).flatMap { typeName =>
+      WasmRpcApi
+        .upsert(typeName, constructorPayload)
+        .left
+        .map(AgentRpcError.fromRpcError)
+        .map(client(typeName, _, None))
+    }
 
-  def resolve(
+  /**
+   * Creates a durable agent. Fails with [[AgentRpcException]]; a keyed create
+   * of an existing key fails with [[AgentRpcError.Conflict]].
+   */
+  def create(
     agentTypeName: String,
     constructorPayload: JsSchemaValueTree,
-    phantom: Option[UUID],
-    configOverrides: List[ConfigOverride]
-  ): Either[String, RemoteAgentClient] =
+    options: CreateOptions
+  ): Future[RemoteAgentClient] =
+    registeredTypeName(agentTypeName) match {
+      case Left(error)     => Future.failed(AgentRpcException(error))
+      case Right(typeName) =>
+        (try
+          WasmRpcApi.create(
+            typeName,
+            constructorPayload,
+            options.keyed,
+            ConfigOverrideEncoder.encode(options.config),
+            options.env
+          )
+        catch { case NonFatal(error) => Future.failed(error) }).flatMap {
+          case Right((id, rpc)) => Future.successful(client(typeName, rpc, Some(JsAgentId.toAgentId(id))))
+          case Left(error)      => Future.failed(AgentRpcException(AgentRpcError.fromRpcError(error)))
+        }
+    }
+
+  /**
+   * A client of the existing agent with the given ID. An unknown ID, or the ID
+   * of an agent of another type, fails with [[AgentRpcError.NotFound]].
+   */
+  def getById(agentTypeName: String, agentId: AgentId): Future[RemoteAgentClient] =
+    Future.fromTry(scala.util.Try {
+      registeredTypeName(agentTypeName)
+        .flatMap(typeName =>
+          WasmRpcApi
+            .getById(typeName, JsAgentId.fromAgentId(agentId))
+            .left
+            .map(AgentRpcError.fromRpcError)
+            .map(client(typeName, _, Some(agentId)))
+        )
+        .fold(error => throw AgentRpcException(error), identity)
+    })
+
+  private def registeredTypeName(agentTypeName: String): Either[AgentRpcError, String] =
     AgentHostApi
       .registeredAgentType(agentTypeName)
-      .toRight(s"Agent type '$agentTypeName' is not registered on this host")
-      .flatMap { agentType =>
-        val displayTypeName = agentType.agentType.typeName
-        make(displayTypeName, constructorPayload, phantom).map { id =>
-          val phantomArg: js.UndefOr[JsUuid] = phantom.fold[js.UndefOr[JsUuid]](js.undefined)(JsUuid.fromUuid)
-          val jsConfig                       =
-            if (configOverrides.isEmpty) js.Array[JsTypedAgentConfigValue]()
-            else ConfigOverrideEncoder.encode(configOverrides)
-          val rpcClient = WasmRpcApi.newClient(displayTypeName, constructorPayload, phantomArg, jsConfig)
-          RemoteAgentClient(displayTypeName, id, new RemoteAgentClient.WasmRpcInvoker(rpcClient))
-        }
-      }
+      .map(_.agentType.typeName)
+      .toRight(AgentRpcError.NotFound(s"Agent type '$agentTypeName' is not registered on this host"))
+
+  private def client(typeName: String, rpc: WasmRpcApi.WasmRpcClient, knownId: Option[AgentId]): RemoteAgentClient =
+    RemoteAgentClient(typeName, new RemoteAgentClient.WasmRpcInvoker(rpc, knownId))
 }

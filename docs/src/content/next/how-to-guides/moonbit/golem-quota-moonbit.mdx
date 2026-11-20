@@ -100,7 +100,8 @@ Split a portion of your quota to pass to a child agent:
 
 ```moonbit
 let child_token = self.token.split(200UL)
-let child_agent = SummarizerAgent::new_phantom()
+// A new child agent without a key; `create` is async.
+let child_agent = SummarizerAgentClient::create()
 child_agent.summarize(text, child_token)
 ```
 

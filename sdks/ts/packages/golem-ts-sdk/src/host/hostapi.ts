@@ -17,9 +17,8 @@ import {
   getPromise,
   generateIdempotencyKey as rawGenerateIdempotencyKey,
   resolveComponentId as rawResolveComponentId,
-  resolveAgentId as rawResolveAgentId,
-  resolveAgentIdStrict as rawResolveAgentIdStrict,
   fork as rawFork,
+  forkAgent as rawForkAgent,
   ForkResult as RawForkResult,
   getSelfMetadata as rawGetSelfMetadata,
   getAgentMetadata as rawGetAgentMetadata,
@@ -34,8 +33,7 @@ import {
   RevertAgentTarget,
   OplogIndex,
 } from 'golem:api/host@1.5.0';
-import { ComponentId as RawComponentId } from 'golem:core/types@2.0.0';
-import { ParsedAgentId } from '../agentId';
+import { AgentId } from '../agentId';
 import { awaitAbortable } from '../internal/pollableUtils';
 import * as wasiEnv from 'wasi:cli/environment@0.3.0';
 import { Uuid } from '../uuid';
@@ -49,7 +47,6 @@ export {
   oplogCommit,
   trap,
   updateAgent,
-  forkAgent,
   revertAgent,
 } from 'golem:api/host@1.5.0';
 
@@ -65,7 +62,7 @@ export type {
   FilterComparator,
   StringFilterComparator,
   AgentStatus,
-  AgentNameFilter,
+  AgentKeyFilter,
   AgentStatusFilter,
   AgentVersionFilter,
   AgentCreatedAtFilter,
@@ -81,20 +78,20 @@ export type {
 // Re-export rich types, shadowing raw WIT types
 export { Uuid } from '../uuid';
 export { ComponentId, AccountId, EnvironmentId } from '../ids';
-
-/**
- * Represents a Golem agent, consisting of a component ID and the agent's string identifier.
- */
-export type AgentId = {
-  componentId: ComponentId;
-  agentId: string;
-};
+export { AgentId } from '../agentId';
 
 /**
  * Metadata about an agent.
  */
 export type AgentMetadata = {
   agentId: AgentId;
+  /** The name of the agent's type. Owners without an agent type have none. */
+  agentTypeName?: string;
+  /**
+   * The incarnation of the agent: a deleted and re-created agent keeps its ID but gets a new
+   * fingerprint.
+   */
+  fingerprint: Uuid;
   args: string[];
   env: [string, string][];
   config: [string, string][];
@@ -104,16 +101,11 @@ export type AgentMetadata = {
   environmentId: EnvironmentId;
 };
 
-function wrapAgentId(raw: RawAgentId): AgentId {
-  return {
-    componentId: ComponentId.from(raw.componentId),
-    agentId: raw.agentId,
-  };
-}
-
 function wrapAgentMetadata(raw: RawAgentMetadata): AgentMetadata {
   return {
-    agentId: wrapAgentId(raw.agentId),
+    agentId: AgentId.from(raw.agentId),
+    ...(raw.agentTypeName === undefined ? {} : { agentTypeName: raw.agentTypeName }),
+    fingerprint: Uuid.from(raw.fingerprint),
     args: raw.args,
     env: raw.env,
     config: raw.config,
@@ -141,27 +133,6 @@ export function resolveComponentId(componentReference: string): ComponentId | un
 }
 
 /**
- * Resolve an agent reference without checking that the concrete agent exists.
- * Returns `undefined` only when the component reference cannot be resolved.
- */
-export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined {
-  const raw = rawResolveAgentId(componentReference, agentName);
-  return raw ? wrapAgentId(raw) : undefined;
-}
-
-/**
- * Resolve an agent reference and require the concrete agent to exist.
- * Returns `undefined` when either the component or the agent cannot be found.
- */
-export function resolveAgentIdStrict(
-  componentReference: string,
-  agentName: string,
-): AgentId | undefined {
-  const raw = rawResolveAgentIdStrict(componentReference, agentName);
-  return raw ? wrapAgentId(raw) : undefined;
-}
-
-/**
  * Get the current agent's metadata.
  * Requires view permission on the running agent. Stored env/config fields
  * are not filtered by the per-key permissions used for WASI reads.
@@ -179,13 +150,22 @@ export function getAgentMetadata(agentId: RawAgentId): AgentMetadata | undefined
 }
 
 /**
- * Agent enumeration with enriched metadata.
+ * Forks an agent at a given oplog index into a new agent of the same type, and returns the ID
+ * that Golem issued for the new agent. The new agent has no key.
+ */
+export function forkAgent(sourceAgentId: RawAgentId, oplogIdxCutOff: OplogIndex): AgentId {
+  return AgentId.from(rawForkAgent(sourceAgentId, oplogIdxCutOff));
+}
+
+/**
+ * Enumeration of the agents of one agent type in the current environment, with enriched
+ * metadata.
  */
 export class GetAgents {
   private readonly inner: RawGetAgents;
 
-  constructor(componentId: RawComponentId, filter: AgentAnyFilter | undefined, precise: boolean) {
-    this.inner = new RawGetAgents(componentId, filter, precise);
+  constructor(agentTypeName: string, filter: AgentAnyFilter | undefined, precise: boolean) {
+    this.inner = new RawGetAgents(agentTypeName, filter, precise);
   }
 
   getNext(): AgentMetadata[] | undefined {
@@ -209,14 +189,14 @@ type FilterNode =
  * (union); {@link toRaw} compiles to the WIT `agent-any-filter`.
  *
  * @example
- * Filter.status('equal', 'idle').and(Filter.name('starts-with', 'worker-'))
+ * Filter.status('equal', 'idle').and(Filter.key('starts-with', 'Counter('))
  */
 export class Filter {
   private constructor(private readonly node: FilterNode) {}
 
-  /** Match by agent name. */
-  static name(comparator: StringFilterComparator, value: string): Filter {
-    return Filter.leaf({ tag: 'name', val: { comparator, value } });
+  /** Match by the canonical key of keyed agents. An agent without a key never matches. */
+  static key(comparator: StringFilterComparator, value: string): Filter {
+    return Filter.leaf({ tag: 'key', val: { comparator, value } });
   }
   /** Match by agent status. */
   static status(comparator: FilterComparator, value: AgentStatus): Filter {
@@ -289,17 +269,17 @@ function toDnf(node: FilterNode): AgentPropertyFilter[][] {
 }
 
 /**
- * Enumerate a component's agents, optionally filtered. Lazily pages through the
- * host `get-agents` resource, yielding enriched {@link AgentMetadata}. Collect
- * with `[...getAgents(id, filter)]` or iterate directly.
+ * Enumerate the agents of an agent type in the current environment, optionally filtered. Lazily
+ * pages through the host `get-agents` resource, yielding enriched {@link AgentMetadata}. Collect
+ * with `[...getAgents(agentTypeName, filter)]` or iterate directly.
  */
 export function* getAgents(
-  componentId: ComponentId,
+  agentTypeName: string,
   filter?: Filter | AgentAnyFilter,
   precise = false,
 ): Generator<AgentMetadata> {
   const raw = filter instanceof Filter ? filter.toRaw() : filter;
-  const pager = new GetAgents(componentId, raw, precise);
+  const pager = new GetAgents(agentTypeName, raw, precise);
   let page = pager.getNext();
   while (page !== undefined) {
     yield* page;
@@ -323,7 +303,7 @@ export const RevertTarget = {
  * Details about the fork result.
  */
 export type ForkDetails = {
-  forkedPhantomId: Uuid;
+  forkedAgentId: AgentId;
 };
 
 /**
@@ -334,13 +314,14 @@ export type ForkResult =
   | { tag: 'forked'; val: ForkDetails };
 
 /**
- * Forks the current agent. Returns enriched ForkResult with rich Uuid phantom IDs.
+ * Forks the current agent. The new agent has the same type, a new ID that Golem issues and no
+ * key; both sides receive its ID.
  */
 export function fork(): ForkResult {
   const raw: RawForkResult = rawFork();
   return {
     tag: raw.tag,
-    val: { forkedPhantomId: Uuid.from(raw.val.forkedPhantomId) },
+    val: { forkedAgentId: AgentId.from(raw.val.forkedAgentId) },
   };
 }
 
@@ -364,12 +345,12 @@ export async function awaitAbortablePromise(
 }
 
 /**
- * Returns the raw string agent ID of the current agent.
+ * Returns the ID of the current agent, which Golem sets in `GOLEM_AGENT_ID`.
  *
- * The ID comes from the `GOLEM_AGENT_ID` environment variable, which the agent can read only
- * when its permission card allows `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`.
+ * The agent can read `GOLEM_AGENT_ID` only when its permission card allows
+ * `env(?agent) @ ?agent : read : GOLEM_AGENT_ID`.
  */
-export function getRawSelfAgentId(): ParsedAgentId {
+export function getSelfAgentId(): AgentId {
   const env = wasiEnv.getEnvironment();
   const agentId: [string, string] | undefined = env.find(([key]) => key === 'GOLEM_AGENT_ID');
   if (!agentId) {
@@ -377,5 +358,5 @@ export function getRawSelfAgentId(): ParsedAgentId {
       "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
     );
   }
-  return new ParsedAgentId(agentId[1]);
+  return AgentId.parse(agentId[1]);
 }

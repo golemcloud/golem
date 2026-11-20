@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::agent::AgentListCursor;
 use anyhow::anyhow;
 use chrono::{DateTime, Utc};
-use golem_client::model::ScanCursor;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::split_config_path;
@@ -110,8 +110,8 @@ fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)
     Err(anyhow!("expected unescaped '=' separating key and value"))
 }
 
-pub fn parse_cursor(cursor: &str) -> anyhow::Result<ScanCursor> {
-    Ok(ScanCursor::new(cursor.to_string()))
+pub fn parse_cursor(cursor: &str) -> anyhow::Result<AgentListCursor> {
+    AgentListCursor::decode(cursor)
 }
 
 pub fn parse_instant(

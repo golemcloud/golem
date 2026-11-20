@@ -69,12 +69,12 @@ pub fn is_static_method(sig: &syn::Signature) -> bool {
     sig.receiver().is_none()
 }
 
-/// Whether a typed parameter's type is the auto-injected `Principal`.
-pub fn is_principal_param(pat_type: &syn::PatType) -> bool {
+/// Whether a typed parameter's type is the injected `InvocationContext`.
+pub fn is_invocation_context_param(pat_type: &syn::PatType) -> bool {
     matches!(
         &*pat_type.ty,
         Type::Path(type_path)
-            if type_path.path.segments.last().map(|s| s.ident == "Principal").unwrap_or(false)
+            if type_path.path.segments.last().map(|s| s.ident == "InvocationContext").unwrap_or(false)
     )
 }
 

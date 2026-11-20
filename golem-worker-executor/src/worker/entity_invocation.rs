@@ -579,9 +579,7 @@ impl<Ctx: WorkerCtx> RetainedEntityStore for RetainedDisposedContext<Ctx> {
                     .drain_interruptibly(interrupt)
                     .await?;
             }
-            self.context
-                .durable_ctx_mut()
-                .set_invocation_principal(None);
+            self.context.durable_ctx_mut().set_invocation_caller(None);
             self.context.set_entity_invocation_scope(None)?;
             self.prepared = true;
             Ok(())
@@ -667,7 +665,7 @@ impl<Ctx: WorkerCtx> RetainedNativeContext<Ctx> {
         crate::durable_host::tool::durability::finish_producer_disposals(&mut self.context.shared)
             .await?;
         self.context.shared.with_worker_ctx(|ctx| {
-            ctx.durable_ctx_mut().set_invocation_principal(None);
+            ctx.durable_ctx_mut().set_invocation_caller(None);
             ctx.set_entity_invocation_scope(None)
         })?;
         self.parent_end_prepared = true;
@@ -1371,6 +1369,7 @@ mod tests {
                     error,
                     retry_from,
                     semantic_trap_retry_override,
+                    ..
                 })) = owner.selected_owner_failure()
                 else {
                     panic!("cleanup must elect its typed trap before transport conversion");
@@ -1458,10 +1457,7 @@ mod tests {
 
         let (owner, operation) = cleanup_operation();
         let fence = crate::services::oplog::OplogFence {
-            agent_id: AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "cleanup-fenced".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, 1),
             expected_epoch: golem_common::model::ShardEpoch(7),
             actual_epoch: Some(golem_common::model::ShardEpoch(8)),
         };
@@ -1661,10 +1657,7 @@ mod tests {
         let close = control.block("close");
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "active-cleanup".into(),
-            },
+            &AgentId::from_parts(7, 2),
         ));
         let permit = lane
             .enter_primary(OplogIndex::from_u64(1))
@@ -1750,10 +1743,7 @@ mod tests {
     async fn pre_acquired_body_does_not_repeat_lane_await_after_parent_end() {
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".to_string(),
-            },
+            &AgentId::from_parts(7, 3),
         ));
         let inactive_parent = OwnerInvocationId::Agent(OplogIndex::from_u64(1));
 
@@ -1820,10 +1810,7 @@ mod tests {
         use golem_common::model::tool::{SecretKeyScope, ToolFilesystemAccess};
         let owner = golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".into(),
-            },
+            &AgentId::from_parts(7, 4),
         );
         let activation = Arc::new(
             EntityActivation::new(
@@ -1850,11 +1837,7 @@ mod tests {
             EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
             OplogIndex::from_u64(1),
             activation,
-            golem_common::model::agent::Principal::Agent(
-                golem_common::model::agent::AgentPrincipal {
-                    agent_id: owner.agent_id,
-                },
-            ),
+            crate::test_callers::agent_principal(owner.agent_id),
             InvocationExecutionMode::Live,
             InvocationId(Uuid::new_v4()),
             false,
@@ -1991,10 +1974,7 @@ mod tests {
 
         let lane = OwnerLane::new(golem_common::model::OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "cleanup".into(),
-            },
+            &AgentId::from_parts(7, 5),
         ));
         let permit = lane
             .enter_primary(OplogIndex::from_u64(1))

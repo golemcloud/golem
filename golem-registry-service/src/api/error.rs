@@ -619,7 +619,9 @@ impl From<ComponentError> for ApiError {
     fn from(value: ComponentError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            ComponentError::ComponentProcessingError(_) => Self::BadRequest(Json(ErrorsBody {
+            ComponentError::ComponentProcessingError(_)
+            | ComponentError::PackageLayerDigestMismatch(_)
+            | ComponentError::PackageMetadataWithoutWasm(_) => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
                 cause: None,

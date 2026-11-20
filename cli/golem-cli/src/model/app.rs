@@ -73,7 +73,7 @@ use std::str::FromStr;
 use strum::IntoEnumIterator;
 use url::Url;
 
-const TEMP_DIR: &str = "golem-temp";
+pub(crate) const TEMP_DIR: &str = "golem-temp";
 const APP_ENV_PRESET_PREFIX: &str = "app-env:";
 
 #[derive(Clone, Debug, Default)]
@@ -141,6 +141,7 @@ pub struct ApplicationConfig {
 #[derive(Debug, Clone)]
 pub struct LoadedRawApps {
     pub app_root_dir: PathBuf,
+    pub root_manifest: PathBuf,
     pub calling_working_dir: PathBuf,
     pub raw_apps: Vec<app_raw::ApplicationWithSource>,
 }
@@ -1461,6 +1462,11 @@ impl Application {
                         .layer_properties()
                         .config_layers
                         .clone(),
+                    config: self
+                        .component(component_name)
+                        .layer_properties()
+                        .config
+                        .clone(),
                 },
             })
             .map_err(|err| anyhow!(err.to_string()))
@@ -1471,139 +1477,143 @@ impl Application {
                 )
             })?;
 
-        let target_id =
-            if let Some(agent) = self.agents.get(agent_type_name).map(|agent| &agent.value) {
-                let component = self.component(component_name);
-                let template_apply_ctx = ComponentLayerApplyContext::new(
-                    Some(component_name.clone()),
-                    Some(self.app_root_dir_str.clone()),
-                    Some(self.golem_temp_dir_str.clone()),
-                    fs::path_to_str(component.component_dir())
-                        .ok()
-                        .map(|s| s.to_string()),
-                    fs::path_to_str(component.component_dir())
-                        .ok()
-                        .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
-                );
+        let target_id = if let Some(WithSource {
+            value: agent,
+            source,
+        }) = self.agents.get(agent_type_name)
+        {
+            let component = self.component(component_name);
+            let template_apply_ctx = ComponentLayerApplyContext::new(
+                Some(component_name.clone()),
+                Some(self.app_root_dir_str.clone()),
+                Some(self.golem_temp_dir_str.clone()),
+                fs::path_to_str(component.component_dir())
+                    .ok()
+                    .map(|s| s.to_string()),
+                fs::path_to_str(component.component_dir())
+                    .ok()
+                    .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
+            );
 
-                let template_names = agent.templates.clone().into_vec();
-                check_template_list_ancestry(
-                    &self.component_layer_store,
-                    &format!("agent {}", agent_type_name.0),
-                    &template_names,
-                )?;
+            let template_names = agent.templates.clone().into_vec();
+            check_template_list_ancestry(
+                &self.component_layer_store,
+                &format!("agent {}", agent_type_name.0),
+                &template_names,
+            )?;
 
-                let mut latest_parent_id = base_component_id.clone();
-                for template_name in template_names {
-                    let template_layer_id =
-                        ComponentLayerId::TemplateCustomPresets(template_name.clone());
-                    let template_layer_props = self
-                        .component_layer_store
-                        .value(
-                            &template_layer_id,
-                            &self.component_preset_selector,
-                            &template_apply_ctx,
+            let mut latest_parent_id = base_component_id.clone();
+            for template_name in template_names {
+                let template_layer_id =
+                    ComponentLayerId::TemplateCustomPresets(template_name.clone());
+                let template_layer_props = self
+                    .component_layer_store
+                    .value(
+                        &template_layer_id,
+                        &self.component_preset_selector,
+                        &template_apply_ctx,
+                    )
+                    .map_err(|err| anyhow!(err.to_string()))
+                    .with_context(|| {
+                        format!(
+                            "Failed to resolve template layer '{}' for agent '{}'",
+                            template_layer_id, agent_type_name.0
                         )
-                        .map_err(|err| anyhow!(err.to_string()))
-                        .with_context(|| {
-                            format!(
-                                "Failed to resolve template layer '{}' for agent '{}'",
-                                template_layer_id, agent_type_name.0
-                            )
-                        })?;
+                    })?;
 
-                    let template_agent_props = app_raw::AgentLayerProperties {
-                        config: template_layer_props.config.value().clone(),
-                        initial_card: template_layer_props.initial_card.value().clone(),
-                        env_merge_mode: None,
-                        env: Some(template_layer_props.env.value().clone()),
-                        plugins_merge_mode: None,
-                        plugins: Some(template_layer_props.plugins.value().clone()),
-                        files_merge_mode: None,
-                        files: Some(template_layer_props.files.value().clone()),
-                        tools_merge_mode: None,
-                        tools: None,
-                    };
+                let template_agent_props = app_raw::AgentLayerProperties {
+                    config: template_layer_props.config.value().clone(),
+                    initial_card: template_layer_props.initial_card.value().clone(),
+                    env_merge_mode: None,
+                    env: Some(template_layer_props.env.value().clone()),
+                    plugins_merge_mode: None,
+                    plugins: Some(template_layer_props.plugins.value().clone()),
+                    files_merge_mode: None,
+                    files: Some(template_layer_props.files.value().clone()),
+                    tools_merge_mode: None,
+                    tools: None,
+                };
 
-                    let template_id =
-                        AgentLayerId::AgentTemplate(agent_type_name.clone(), template_name);
-                    agent_layer_store
-                        .add_layer(AgentLayer {
-                            id: template_id.clone(),
-                            parents: vec![latest_parent_id],
-                            source: self.agents[agent_type_name].source.clone(),
-                            properties: AgentLayerPropertiesKind::ComponentTemplate {
-                                properties: Box::new(template_agent_props),
-                                tool_bindings: template_layer_props.tool_bindings.clone(),
-                                config_layers: template_layer_props.config_layers.clone(),
-                            },
-                        })
-                        .map_err(|err| anyhow!(err.to_string()))
-                        .with_context(|| {
-                            format!("Failed to add agent template layer '{}'", template_id)
-                        })?;
-
-                    latest_parent_id = template_id;
-                }
-
-                let partitioned = PartitionedAgentPresets::new(agent.presets.clone());
-
-                let common_id = AgentLayerId::AgentCommon(agent_type_name.clone());
+                let template_id =
+                    AgentLayerId::AgentTemplate(agent_type_name.clone(), template_name);
                 agent_layer_store
                     .add_layer(AgentLayer {
-                        id: common_id.clone(),
+                        id: template_id.clone(),
                         parents: vec![latest_parent_id],
-                        source: self.agents[agent_type_name].source.clone(),
-                        properties: AgentLayerPropertiesKind::Common(Box::new(
-                            agent.agent_layer_properties(),
-                        )),
-                    })
-                    .map_err(|err| anyhow!(err.to_string()))
-                    .with_context(|| format!("Failed to add agent common layer '{}'", common_id))?;
-
-                let env_id = AgentLayerId::AgentEnvironmentPresets(agent_type_name.clone());
-                agent_layer_store
-                    .add_layer(AgentLayer {
-                        id: env_id.clone(),
-                        parents: vec![common_id],
-                        source: self.agents[agent_type_name].source.clone(),
-                        properties: if partitioned.env_presets.is_empty() {
-                            AgentLayerPropertiesKind::Empty
-                        } else {
-                            AgentLayerPropertiesKind::Presets {
-                                presets: partitioned.env_presets,
-                                default_preset: EMPTY_STR.to_string(),
-                            }
+                        source: source.clone(),
+                        properties: AgentLayerPropertiesKind::ComponentTemplate {
+                            properties: Box::new(template_agent_props),
+                            tool_bindings: template_layer_props.tool_bindings.clone(),
+                            config_layers: template_layer_props.config_layers.clone(),
+                            config: template_layer_props.config,
                         },
                     })
                     .map_err(|err| anyhow!(err.to_string()))
                     .with_context(|| {
-                        format!("Failed to add agent environment preset layer '{}'", env_id)
+                        format!("Failed to add agent template layer '{}'", template_id)
                     })?;
 
-                let custom_id = AgentLayerId::AgentCustomPresets(agent_type_name.clone());
-                agent_layer_store
-                    .add_layer(AgentLayer {
-                        id: custom_id.clone(),
-                        parents: vec![env_id],
-                        source: self.agents[agent_type_name].source.clone(),
-                        properties: match partitioned.default_custom_preset {
-                            Some(default_custom_preset) => AgentLayerPropertiesKind::Presets {
-                                presets: partitioned.custom_presets,
-                                default_preset: default_custom_preset,
-                            },
-                            None => AgentLayerPropertiesKind::Empty,
+                latest_parent_id = template_id;
+            }
+
+            let partitioned = PartitionedAgentPresets::new(agent.presets.clone());
+
+            let common_id = AgentLayerId::AgentCommon(agent_type_name.clone());
+            agent_layer_store
+                .add_layer(AgentLayer {
+                    id: common_id.clone(),
+                    parents: vec![latest_parent_id],
+                    source: source.clone(),
+                    properties: AgentLayerPropertiesKind::Common(Box::new(
+                        agent.agent_layer_properties(),
+                    )),
+                })
+                .map_err(|err| anyhow!(err.to_string()))
+                .with_context(|| format!("Failed to add agent common layer '{}'", common_id))?;
+
+            let env_id = AgentLayerId::AgentEnvironmentPresets(agent_type_name.clone());
+            agent_layer_store
+                .add_layer(AgentLayer {
+                    id: env_id.clone(),
+                    parents: vec![common_id],
+                    source: source.clone(),
+                    properties: if partitioned.env_presets.is_empty() {
+                        AgentLayerPropertiesKind::Empty
+                    } else {
+                        AgentLayerPropertiesKind::Presets {
+                            presets: partitioned.env_presets,
+                            default_preset: EMPTY_STR.to_string(),
+                        }
+                    },
+                })
+                .map_err(|err| anyhow!(err.to_string()))
+                .with_context(|| {
+                    format!("Failed to add agent environment preset layer '{}'", env_id)
+                })?;
+
+            let custom_id = AgentLayerId::AgentCustomPresets(agent_type_name.clone());
+            agent_layer_store
+                .add_layer(AgentLayer {
+                    id: custom_id.clone(),
+                    parents: vec![env_id],
+                    source: source.clone(),
+                    properties: match partitioned.default_custom_preset {
+                        Some(default_custom_preset) => AgentLayerPropertiesKind::Presets {
+                            presets: partitioned.custom_presets,
+                            default_preset: default_custom_preset,
                         },
-                    })
-                    .map_err(|err| anyhow!(err.to_string()))
-                    .with_context(|| {
-                        format!("Failed to add agent custom preset layer '{}'", custom_id)
-                    })?;
+                        None => AgentLayerPropertiesKind::Empty,
+                    },
+                })
+                .map_err(|err| anyhow!(err.to_string()))
+                .with_context(|| {
+                    format!("Failed to add agent custom preset layer '{}'", custom_id)
+                })?;
 
-                custom_id
-            } else {
-                base_component_id
-            };
+            custom_id
+        } else {
+            base_component_id
+        };
 
         let resolved = AgentLayerProperties::from_store(
             &target_id,
@@ -2732,9 +2742,12 @@ impl Layer for ComponentLayer {
                 value.node_http_routers_origin = Some((self.source.clone(), id.clone(), preset));
             }
 
-            value
-                .config
-                .apply_layer(id, selection, properties.config.value().clone());
+            value.config.apply_sourced(
+                id,
+                selection,
+                properties.config.value().clone(),
+                &self.source,
+            );
 
             value.env.apply_layer(
                 id,
@@ -2826,6 +2839,10 @@ impl<'a> Agent<'a> {
 
     pub fn config_layers(&self) -> &[ConfigLayer] {
         &self.resolved.layer_properties.config_layers
+    }
+
+    pub fn config_source_at(&self, path: &[String]) -> Option<&Path> {
+        self.resolved.layer_properties.config.source_at(path)
     }
 
     pub fn initial_card(&self) -> Option<&app_raw::ManifestInitialCard> {
@@ -3589,12 +3606,14 @@ enum AgentLayerPropertiesKind {
         tool_bindings: ToolBindingsProperty<AgentLayer>,
         #[serde(skip)]
         config_layers: Vec<ConfigLayer>,
+        config: JsonProperty<ComponentLayer>,
     },
     ComponentTemplate {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<ComponentLayer>,
         #[serde(skip)]
         config_layers: Vec<ConfigLayer>,
+        config: JsonProperty<ComponentLayer>,
     },
     Common(Box<app_raw::AgentLayerProperties>),
     Presets {
@@ -3630,6 +3649,7 @@ impl Layer for AgentLayer {
                 properties,
                 tool_bindings,
                 config_layers,
+                ..
             } => {
                 value.tool_bindings = tool_bindings.clone();
                 value.config_layers.extend(config_layers.clone());
@@ -3639,6 +3659,7 @@ impl Layer for AgentLayer {
                 properties,
                 tool_bindings,
                 config_layers,
+                ..
             } => {
                 value.tool_bindings.apply_template(&self.id, tool_bindings);
                 value.config_layers.extend(config_layers.clone());
@@ -3728,9 +3749,18 @@ impl Layer for AgentLayer {
                     value: config.clone(),
                 });
             }
-            value
-                .config
-                .apply_layer(id, selection, properties.config.clone());
+            match &self.properties {
+                AgentLayerPropertiesKind::ComponentBase { config, .. }
+                | AgentLayerPropertiesKind::ComponentTemplate { config, .. } => {
+                    value.config.apply_inherited(id, selection, config);
+                }
+                _ => value.config.apply_sourced(
+                    id,
+                    selection,
+                    properties.config.clone(),
+                    &self.source,
+                ),
+            }
             value
                 .initial_card
                 .apply_layer(id, selection, properties.initial_card.clone());

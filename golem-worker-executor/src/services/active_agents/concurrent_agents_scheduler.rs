@@ -303,7 +303,7 @@ impl ConcurrentAgentsScheduler {
                         // permits). Fall through to the slow path.
                         let (tx, rx) = tokio::sync::oneshot::channel();
                         state.ready_queue.push_back(QueuedAgent {
-                            agent_id: agent_id.clone(),
+                            agent_id,
                             waker: tx,
                         });
                         AcquireDecision::Queued(rx)
@@ -313,7 +313,7 @@ impl ConcurrentAgentsScheduler {
                 // Slow path: enqueue and wait.
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 state.ready_queue.push_back(QueuedAgent {
-                    agent_id: agent_id.clone(),
+                    agent_id,
                     waker: tx,
                 });
 
@@ -466,7 +466,6 @@ mod release_tests {
     use super::*;
     use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
     use futures::FutureExt;
-    use golem_common::model::component::ComponentId;
     use test_r::test;
     use uuid::Uuid;
 
@@ -481,11 +480,8 @@ mod release_tests {
                     Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, limit)),
                 )
                 .await;
-            let agent = AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "physical-release".to_owned(),
-            };
-            let mut permit = scheduler.acquire(account, agent.clone()).await;
+            let agent = AgentId::from_parts(7, 1);
+            let mut permit = scheduler.acquire(account, agent).await;
             let metrics = TestMetrics::new();
             let scope = metrics.scope();
             permit.observe_release(&scope);
@@ -495,7 +491,7 @@ mod release_tests {
             assert_eq!(metrics.pending("unload", "permit_released"), 1.0);
             assert_eq!(metrics.count("unload", "permit_released", "released"), 0.0);
             metrics.advance(500);
-            let next = scheduler.acquire(account, agent.clone());
+            let next = scheduler.acquire(account, agent);
             tokio::pin!(next);
             if limit == 1 {
                 assert!(futures::poll!(next.as_mut()).is_pending());

@@ -1196,10 +1196,10 @@ uu_builtin!(Uname, "uname", "print system information", uu_uname::uumain);
 /// domain part to strip). Every other option, and setting a new hostname, is refused, rather
 /// than silently ignored or answered with a made-up value.
 fn hostname_uumain(args: impl uucore::Args) -> i32 {
-    // GOLEM's own answer to "what is this agent" is its worker name, which is a much more
+    // GOLEM's own answer to "what is this agent" is its agent ID, which is a much more
     // useful `hostname` for a script than a constant would be, and matches the spirit of the
     // OSTYPE/UID identity choices already made for this sandbox.
-    let name = std::env::var("GOLEM_WORKER_NAME").unwrap_or_else(|_| "localhost".to_owned());
+    let name = std::env::var("GOLEM_AGENT_ID").unwrap_or_else(|_| "localhost".to_owned());
     let mut argv = args.skip(1);
     match argv.next() {
         None => println!("{name}"),

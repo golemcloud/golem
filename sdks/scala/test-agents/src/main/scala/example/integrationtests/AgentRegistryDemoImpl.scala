@@ -20,7 +20,6 @@ import example.templates.CounterClient
 import golem.HostApi
 import golem.runtime.annotations.agentImplementation
 
-import java.util.UUID
 import scala.annotation.unused
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -50,16 +49,10 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
       sb.append(s"  type: ${t.typeName}\n")
     }
 
-    // parseAgentId
+    // registeredAgentTypeFor
     val selfMeta = HostApi.getSelfMetadata()
-    val parsed   = HostApi.parseAgentId(selfMeta.agentName)
-    sb.append(s"parseAgentId('${selfMeta.agentName}')=$parsed\n")
-    parsed.foreach { parts =>
-      sb.append(s"  agentTypeName=${parts.agentTypeName}, phantom=${parts.phantom}\n")
-    }
-
-    val badParse = HostApi.parseAgentId("invalid-id-format")
-    sb.append(s"parseAgentId('invalid-id-format')=$badParse\n")
+    val selfType = HostApi.registeredAgentTypeFor(selfMeta.agentId)
+    sb.append(s"registeredAgentTypeFor('${selfMeta.agentId}')=$selfType\n")
 
     // resolveComponentId
     try {
@@ -67,21 +60,6 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
       sb.append(s"resolveComponentId('self')=$componentId\n")
     } catch {
       case e: Throwable => sb.append(s"resolveComponentId('self') error: ${e.getMessage}\n")
-    }
-
-    // resolveAgentId / resolveAgentIdStrict
-    try {
-      val agentId = HostApi.resolveAgentId("self", "test-agent")
-      sb.append(s"resolveAgentId('self','test-agent')=$agentId\n")
-    } catch {
-      case e: Throwable => sb.append(s"resolveAgentId error: ${e.getMessage}\n")
-    }
-
-    try {
-      val strictId = HostApi.resolveAgentIdStrict("self", "test-agent-strict")
-      sb.append(s"resolveAgentIdStrict('self','test-agent-strict')=$strictId\n")
-    } catch {
-      case e: Throwable => sb.append(s"resolveAgentIdStrict error: ${e.getMessage}\n")
     }
 
     sb.result()
@@ -93,8 +71,8 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
 
     // getSelfMetadata
     val self = HostApi.getSelfMetadata()
-    sb.append(s"self.agentType=${self.agentType}\n")
-    sb.append(s"self.agentName=${self.agentName}\n")
+    sb.append(s"self.agentType=${self.agentTypeName.getOrElse("")}\n")
+    sb.append(s"self.agentId=${self.agentId}\n")
     sb.append(s"self.retryCount=${self.retryCount}\n")
     sb.append(s"self.componentRevision=${self.componentRevision}\n")
     sb.append(s"self.args=${self.args}\n")
@@ -103,17 +81,17 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
 
     // getAgentMetadata for self
     val selfAgentMeta = HostApi.getAgentMetadata(self.agentId)
-    sb.append(s"getAgentMetadata(self.agentId)=${selfAgentMeta.map(_.agentName)}\n")
+    sb.append(s"getAgentMetadata(self.agentId)=${selfAgentMeta.map(_.agentId)}\n")
 
     // getAgents + nextAgentBatch
     try {
-      val handle = HostApi.getAgents(self.componentId, None, false)
+      val handle = HostApi.getAgents(self.agentTypeName.getOrElse(""), None, false)
       sb.append(s"getAgents handle obtained\n")
       val batch = HostApi.nextAgentBatch(handle)
       sb.append(s"nextAgentBatch count=${batch.map(_.size).getOrElse(0)}\n")
       batch.foreach { agents =>
         agents.take(3).foreach { a =>
-          sb.append(s"  agent: ${a.agentName} (type=${a.agentType})\n")
+          sb.append(s"  agent: ${a.agentId} (type=${a.agentTypeName.getOrElse("")})\n")
         }
         if (agents.size > 3) sb.append(s"  ... and ${agents.size - 3} more\n")
       }
@@ -147,12 +125,8 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
 
     // forkAgent (may not work locally)
     try {
-      val key        = HostApi.generateIdempotencyKey()
-      val targetUuid = HostApi.UuidLiteral(key)
-      val targetCid  = HostApi.ComponentIdLiteral(targetUuid)
-      val targetAid  = HostApi.AgentIdLiteral(targetCid, "fork-target")
-      HostApi.forkAgent(self.agentId, targetAid, BigInt(2))
-      sb.append("forkAgent: succeeded\n")
+      val forkedId = HostApi.forkAgent(self.agentId, BigInt(2))
+      sb.append(s"forkAgent: succeeded, forked agent $forkedId\n")
     } catch {
       case e: Throwable => sb.append(s"forkAgent: ${e.getMessage}\n")
     }
@@ -168,25 +142,26 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
     sb.result()
   }
 
-  override def phantomDemo(): Future[String] = {
+  override def createDemo(): Future[String] = {
     val sb = new StringBuilder
-    sb.append("=== Phantom RPC Demo ===\n")
+    sb.append("=== Create and getById RPC Demo ===\n")
 
-    val phantomId = UUID.fromString("00000000-0000-002a-0000-000000000063")
-    sb.append(s"creating phantom counter with UUID $phantomId\n")
-
-    try {
-      val counter = CounterClient.getPhantom("phantom-counter-instance", phantomId)
-      sb.append(s"counter proxy created via getPhantom\n")
-
-      counter.increment().map { result =>
-        sb.append(s"counter.increment() = $result\n")
-        sb.result()
-      }
-    } catch {
-      case e: Throwable =>
-        sb.append(s"phantom creation error: ${e.getMessage}\n")
-        Future.successful(sb.result())
+    val result = for {
+      created <- CounterClient.create("created-counter-instance")
+      id      <- created.agentId()
+      _        = sb.append(s"created counter $id\n")
+      first   <- created.increment()
+      again   <- CounterClient.getById(id)
+      second  <- again.increment()
+    } yield {
+      sb.append(s"counter.increment() = $first\n")
+      sb.append(s"getById counter.increment() = $second\n")
+      sb.result()
+    }
+    result.recover { case e: Throwable =>
+      sb.append(s"create error: ${e.getMessage}\n")
+      sb.result()
     }
   }
+
 }

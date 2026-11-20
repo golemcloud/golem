@@ -15,6 +15,8 @@
 package golem
 
 import (
+	"fmt"
+
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -24,15 +26,14 @@ import (
 // The wasm build binds the generated host calls (hostops_wasm.go); a native
 // build has no host, so tests install their own.
 type agentHost interface {
-	fork() (forked bool, phantomID UUID, err error)
+	fork() (forked bool, forkedID AgentID, err error)
 	getSelfMetadata() (apiHost.AgentMetadata, error)
 	getAgentMetadata(id types.AgentId) (apiHost.AgentMetadata, bool)
-	getAgents(component types.ComponentId, filter witTypes.Option[apiHost.AgentAnyFilter], precise bool) agentPages
+	getAgents(agentTypeName string, filter witTypes.Option[apiHost.AgentAnyFilter], precise bool) agentPages
 	updateAgent(id types.AgentId, revision uint64, mode uint8) error
 	revertAgent(id types.AgentId, target apiHost.RevertAgentTarget) error
-	forkAgent(source, target types.AgentId, cutOff uint64) error
+	forkAgent(source types.AgentId, cutOff uint64) (types.AgentId, error)
 	resolveComponentID(reference string) (types.ComponentId, bool)
-	resolveAgentID(reference, agentName string, strict bool) (types.AgentId, bool)
 }
 
 // agentPages yields the pages of an agent listing.
@@ -41,10 +42,31 @@ type agentPages interface {
 	close()
 }
 
-// agentIDEnvVar is how the executor tells the guest which agent instance it is.
-const agentIDEnvVar = "GOLEM_AGENT_ID"
+// agentIDEnvVar is how the executor tells the guest which agent instance it
+// is, as the agent ID's UUID text; agentTypeEnvVar names its agent type.
+const (
+	agentIDEnvVar   = "GOLEM_AGENT_ID"
+	agentTypeEnvVar = "GOLEM_AGENT_TYPE"
+)
 
-// agentIDNotReadable is the error for an agent that cannot read agentIDEnvVar.
-// The executor shows the variable only when the agent's permission card allows
-// the agent to read it.
-const agentIDNotReadable = agentIDEnvVar + " is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : " + agentIDEnvVar
+// envVarNotReadable is the error for an agent that cannot read a variable that
+// Golem sets. The executor shows such a variable only when the agent's
+// permission card allows the agent to read it.
+func envVarNotReadable(name string) string {
+	return name + " is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : " + name
+}
+
+// selfAgentID reads the running agent's ID. It is the zero AgentID when the
+// agent cannot read GOLEM_AGENT_ID. A malformed value is an SDK invariant and
+// panics.
+func selfAgentID() AgentID {
+	text := selfEnv(agentIDEnvVar)
+	if text == "" {
+		return AgentID{}
+	}
+	u, err := ParseUUID(text)
+	if err != nil {
+		panic(fmt.Errorf("golem: %s is %q, not an agent ID: %w", agentIDEnvVar, text, err))
+	}
+	return AgentIDFromUUID(u)
+}

@@ -286,7 +286,7 @@ async fn recover_concurrent_post(
     if before_first_chunk {
         env.insert("WAIT_BEFORE_RESPONSE_READ".to_string(), "true".to_string());
     }
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -357,7 +357,7 @@ async fn recover_concurrent_post(
     if corrupt_recording && !before_first_chunk {
         timeout(Duration::from_secs(20), async {
             loop {
-                executor.commit_oplog(&worker_id).await?;
+                executor.commit_oplog(&worker_id.agent_id).await?;
                 let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
                 if !partition_starts(&entries, "http::types::response::consume-body-chunk")
                     .incomplete
@@ -371,50 +371,57 @@ async fn recover_concurrent_post(
         .await??;
     }
 
-    let outage_payload =
-        if inject_payload_outage {
-            use golem_common::model::oplog::payload::{
-                HostRequestP3HttpClientRequestBodyFrame, OplogPayload,
-            };
-            use golem_common::model::oplog::types::SerializableP3HttpRequestBodyFrame;
-            use golem_common::model::oplog::{HostStreamKind, OplogEntry};
-            use golem_common::schema::FromSchema;
-            let parent = before_crash
-                .iter()
-                .find_map(|entry| match &entry.entry {
-                    PublicOplogEntry::HostStreamFrame(params)
-                        if params.kind == HostStreamKind::P3HttpRequestBody =>
-                    {
-                        let frame = HostRequestP3HttpClientRequestBodyFrame::from_value(
-                            params.payload.value(),
-                        )
-                        .expect("request-body frames must decode through their public schema");
-                        matches!(frame.frame, SerializableP3HttpRequestBodyFrame::Data { .. })
-                            .then_some(params.parent_start_index)
-                    }
+    let outage_payload = if inject_payload_outage {
+        use golem_common::model::oplog::payload::{
+            HostRequestP3HttpClientRequestBodyFrame, OplogPayload,
+        };
+        use golem_common::model::oplog::types::SerializableP3HttpRequestBodyFrame;
+        use golem_common::model::oplog::{HostStreamKind, OplogEntry};
+        use golem_common::schema::FromSchema;
+        let parent = before_crash
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::HostStreamFrame(params)
+                    if params.kind == HostStreamKind::P3HttpRequestBody =>
+                {
+                    let frame =
+                        HostRequestP3HttpClientRequestBodyFrame::from_value(params.payload.value())
+                            .expect("request-body frames must decode through their public schema");
+                    matches!(frame.frame, SerializableP3HttpRequestBodyFrame::Data { .. })
+                        .then_some(params.parent_start_index)
+                }
+                _ => None,
+            })
+            .expect("the POST must have recorded request-body data");
+        Some(
+            executor
+                .stored_oplog(&worker_id.agent_id)
+                .await
+                .into_iter()
+                .find_map(|entry| match entry {
+                    OplogEntry::HostStreamFrame {
+                        parent_start_index,
+                        kind: HostStreamKind::P3HttpRequestBody,
+                        payload: OplogPayload::External { payload_id, .. },
+                        ..
+                    } if parent_start_index == parent => Some(payload_id),
                     _ => None,
                 })
-                .expect("the POST must have recorded request-body data");
-            Some(executor.stored_oplog(&worker_id).await.into_iter().find_map(|entry| match entry {
-            OplogEntry::HostStreamFrame {
-                parent_start_index,
-                kind: HostStreamKind::P3HttpRequestBody,
-                payload: OplogPayload::External { payload_id, .. },
-                ..
-            } if parent_start_index == parent => Some(payload_id),
-            _ => None,
-        }).expect("the request body must have an external payload to exercise the backend outage"))
-        } else {
-            None
-        };
+                .expect(
+                    "the request body must have an external payload to exercise the backend outage",
+                ),
+        )
+    } else {
+        None
+    };
     drop(executor);
     let executor =
         golem_worker_executor_test_utils::start_with_overrides(deps, &context, overrides()).await?;
     if let Some(payload) = outage_payload {
         if corrupt_recording {
-            executor.set_oplog_download_corruption(&worker_id, payload);
+            executor.set_oplog_download_corruption(&worker_id.agent_id, payload);
         } else {
-            executor.set_oplog_download_outage_for_payload(&worker_id, payload);
+            executor.set_oplog_download_outage_for_payload(&worker_id.agent_id, payload);
         }
     }
     let result = {
@@ -428,7 +435,10 @@ async fn recover_concurrent_post(
         tokio::pin!(invocation);
         if inject_payload_outage && !corrupt_recording {
             let hit = async {
-                while executor.oplog_download_outage_hits(&worker_id).is_empty() {
+                while executor
+                    .oplog_download_outage_hits(&worker_id.agent_id)
+                    .is_empty()
+                {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             };
@@ -441,7 +451,7 @@ async fn recover_concurrent_post(
                 1,
                 "storage recovery must precede the resend"
             );
-            executor.set_oplog_download_outage(&worker_id, false);
+            executor.set_oplog_download_outage(&worker_id.agent_id, false);
         }
         timeout(Duration::from_secs(60), &mut invocation)
             .await?
@@ -613,7 +623,7 @@ async fn reconstruct_upload_completion(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -887,7 +897,7 @@ async fn retained_upload_reader_reconstructs_after_delivery_in_later_invocation(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -1320,7 +1330,7 @@ async fn incomplete_send_resumes_a_body_kept_open_until_response_read(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -1424,7 +1434,7 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent = agent_id!("HttpClient4");
+    let agent = agent_key!("HttpClient4");
     let worker = executor
         .start_agent_with(
             &component.id,
@@ -1443,13 +1453,13 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
     })
     .await?;
     let (entered, release_end) = executor.gate_next_oplog_function_end(
-        &worker,
+        &worker.agent_id,
         HostFunctionName::P3HttpClientConsumeBody,
         true,
     );
     release_headers.add_permits(1);
     timeout(Duration::from_secs(20), entered).await??;
-    executor.commit_oplog(&worker).await?;
+    executor.commit_oplog(&worker.agent_id).await?;
     let before = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
     let parent = partition_starts(&before, "http::types::response::consume-body").incomplete[0];
     let last_child = before
@@ -1491,7 +1501,7 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
         })
         .unwrap();
     let payload = executor
-        .stored_oplog(&worker)
+        .stored_oplog(&worker.agent_id)
         .await
         .into_iter()
         .find_map(|entry| match entry {
@@ -1504,10 +1514,10 @@ async fn parent_only_response_repair_reports_loss_after_delivered_eof(
             _ => None,
         })
         .unwrap();
-    executor.set_oplog_download_corruption(&worker, payload);
+    executor.set_oplog_download_corruption(&worker.agent_id, payload);
     // The Store cannot unwind while the consume-body task waits for the gated End receipt.
     // Signal the crash first, so the refused End is observed as process loss, not as a trap.
-    let crashed = executor.signal_simulated_crash(&worker).await?;
+    let crashed = executor.signal_simulated_crash(&worker.agent_id).await?;
     release_end.send(()).unwrap();
     timeout(Duration::from_secs(20), crashed).await??;
     let result = timeout(
@@ -1617,7 +1627,7 @@ async fn cancelling_response_reconstruction_does_not_wait_for_peer_headers(
         .component_dep(&context.default_environment_id, http_tests)
         .store()
         .await?;
-    let agent = agent_id!("HttpClient4");
+    let agent = agent_key!("HttpClient4");
     let worker = executor
         .start_agent_with(
             &component.id,
@@ -1637,7 +1647,7 @@ async fn cancelling_response_reconstruction_does_not_wait_for_peer_headers(
     );
     timeout(Duration::from_secs(20), async {
         loop {
-            executor.commit_oplog(&worker).await?;
+            executor.commit_oplog(&worker.agent_id).await?;
             let entries = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
             if partition_starts(&entries, "http::types::response::consume-body-chunk")
                 .incomplete

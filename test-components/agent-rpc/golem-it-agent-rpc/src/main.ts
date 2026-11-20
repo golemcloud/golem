@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  ParsedAgentId,
   AgentStream,
   awaitPromise,
   createPromise,
@@ -22,10 +21,7 @@ const EnvVar = z.object({ key: z.string(), value: z.string() });
 // explicit Standard Schema so it can be returned by a method.
 const PromiseIdSchema = z.object({
   agentId: z.object({
-    componentId: z.object({
-      uuid: z.object({ highBits: s.u64(), lowBits: s.u64() }),
-    }),
-    agentId: z.string(),
+    uuid: z.object({ highBits: s.u64(), lowBits: s.u64() }),
   }),
   fingerprint: z.object({ highBits: s.u64(), lowBits: s.u64() }),
   oplogIdx: s.u64(),
@@ -152,14 +148,14 @@ export const TestAgentImpl = TestAgent.implement({
       for (const chunk of chunks) {
         console.log(`Processing chunk ${chunk}`);
         const promises = chunk.map(
-          async (id) => await ChildAgent.client.get({ id }).process(),
+          async (id) => await ChildAgent.client.upsert({ id }).process(),
         );
         result.push(...(await Promise.all(promises)));
       }
       return result;
     },
     async envVarTest() {
-      const child = await ChildAgent.client.get({ id: 0 }).envVars();
+      const child = await ChildAgent.client.upsert({ id: 0 }).envVars();
       const parent = Object.entries(process.env).map(([key, value]) => ({
         key,
         value: value ?? "",
@@ -170,36 +166,31 @@ export const TestAgentImpl = TestAgent.implement({
       };
     },
     async longRpcCall({ durationInMillis }) {
-      await ChildAgent.client.get({ id: 1000 }).longRpcCall({
+      await ChildAgent.client.upsert({ id: 1000 }).longRpcCall({
         durationInMillis,
       });
     },
     async ephemeralReuseTest() {
       const first = await EphemeralSingleUseAgent.client
-        .newPhantom({ value: "captured" })
+        .upsert({ value: "captured" })
         .capture();
-      const finalAgentId = new ParsedAgentId(first.metadata.agentId);
+      const finalAgentId = first.metadata.agentId;
 
       try {
-        await finalAgentId.client(EphemeralReuseContract).capture();
+        await (await EphemeralReuseContract.getById(finalAgentId)).capture();
         throw new Error("ephemeral agent identity was unexpectedly reusable");
       } catch (error) {
         if (!isRemoteCallError(error)) throw error;
-        if (error.cause.tag !== "remote-agent-error") {
-          throw new Error(
-            `expected remote-agent-error, got ${error.cause.tag}`,
-          );
-        }
-        if (error.cause.error.tag === "custom-error") {
-          throw new Error("expected a structured invalid-input error");
+        if (error.cause.tag !== "not-found") {
+          throw new Error(`expected not-found, got ${error.cause.tag}`);
         }
         return {
           value: first.value,
-          agentId: first.metadata.agentId,
+          agentId: finalAgentId.toString(),
           invocationId: first.metadata.invocationId.toString(),
           category: error.cause.tag,
-          errorTag: error.cause.error.tag,
-          details: error.cause.error.details,
+          errorTag: error.cause.tag,
+          details: error.cause.details,
         };
       }
     },
@@ -212,30 +203,30 @@ export const TestAgentImpl = TestAgent.implement({
       const method = reflected.method("get_value");
       if (!method) throw new Error("Counter.get_value was not discovered");
 
-      const missingAgentId = reflected.agentId({
-        id: `${targetName}-missing`,
-      });
-      const missingAgentIdResult =
-        getAgentTypeByAgentId(missingAgentId) === undefined;
+      // The ID of this agent names another agent type, so a Counter lookup by it finds nothing.
+      let missingAgentIdResult = false;
+      try {
+        await reflected.client.getById(this.getId());
+      } catch (error) {
+        missingAgentIdResult =
+          isRemoteCallError(error) && error.cause.tag === "not-found";
+      }
 
-      const first = await reflected.client
-        .get({ id: targetName })
-        .method("get_value")
-        .invoke({});
+      const firstClient = reflected.client.upsert({ id: targetName });
+      const first = await firstClient.method("get_value").invoke({});
       if (typeof first.value !== "string") {
         throw new Error(
           "expected reflected Counter.get_value to return a string",
         );
       }
 
-      const concreteAgentId = reflected.agentId({ id: targetName });
+      const concreteAgentId = await firstClient.agentId();
       const byAgentId = getAgentTypeByAgentId(concreteAgentId);
       if (!byAgentId) {
         throw new Error("existing Counter type was not resolved");
       }
 
-      const second = await concreteAgentId
-        .client(byAgentId)
+      const second = await (await byAgentId.client.getById(concreteAgentId))
         .method("get_value")
         .invoke({});
       if (typeof second.value !== "string") {
@@ -263,8 +254,14 @@ export const TestAgentImpl = TestAgent.implement({
         );
       }
 
-      const fresh = reflected.client.newPhantom({ value: "reflected" });
-      const proxyHasAgentId = "agentId" in fresh;
+      const fresh = reflected.client.upsert({ value: "reflected" });
+      let proxyHasAgentId = true;
+      try {
+        await fresh.agentId();
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        proxyHasAgentId = false;
+      }
       if ("client" in fresh) {
         throw new Error("ephemeral reflection returned a durable wrapper");
       }
@@ -278,7 +275,7 @@ export const TestAgentImpl = TestAgent.implement({
 
       return {
         value: invocation.value,
-        agentId: invocation.metadata.agentId,
+        agentId: invocation.metadata.agentId.toString(),
         invocationId: invocation.metadata.invocationId.toString(),
         proxyHasAgentId,
       };
@@ -319,7 +316,7 @@ export const SelfRpcAgentImpl = SelfRpcAgent.implement({
       return;
     },
     async selfRpc() {
-      return SelfRpcAgent.client.get({ name: this.name }).doWork();
+      return SelfRpcAgent.client.upsert({ name: this.name }).doWork();
     },
   },
 });
@@ -411,7 +408,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
      * short delay, and returns "aborted" if the AbortError is caught.
      */
     async testAbortBeforeAwait({ counterName }) {
-      const counter = TsCounter.client.get({ name: counterName });
+      const counter = TsCounter.client.upsert({ name: counterName });
       const controller = new AbortController();
 
       // Abort after 100ms — slowIncBy takes 5000ms so it is still pending.
@@ -436,7 +433,7 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
      * Returns the counter value.
      */
     async testAbortAfterComplete({ counterName }) {
-      const counter = TsCounter.client.get({ name: counterName });
+      const counter = TsCounter.client.upsert({ name: counterName });
       const controller = new AbortController();
 
       // Completes quickly.
@@ -466,7 +463,7 @@ export const TsCancelCallerAgentImpl = TsCancelCallerAgent.implement({
   init: ({ id }) => ({ name: id.name, lastOutcome: "none" }),
   methods: {
     async callAndAbort({ targetName, delayMs }) {
-      const blocker = TsBlockingAgent.client.get({ name: targetName });
+      const blocker = TsBlockingAgent.client.upsert({ name: targetName });
       const controller = new AbortController();
 
       const timer = setTimeout(
@@ -659,7 +656,7 @@ export const TsStreamingRpcCallerImpl = TsStreamingRpcCaller.implement({
   init: ({ id }) => ({ name: id.name }),
   methods: {
     async run() {
-      const target = TsStreamingRpcTarget.client.get({ name: this.name });
+      const target = TsStreamingRpcTarget.client.upsert({ name: this.name });
 
       const inputOnly = await target.consume({
         input: AgentStream.from([1, 2, 3]),
@@ -723,7 +720,7 @@ export const TsStreamingRpcCallerImpl = TsStreamingRpcCaller.implement({
       };
     },
     async earlyOutputDropThenPing() {
-      const target = TsStreamingRpcTarget.client.get({ name: this.name });
+      const target = TsStreamingRpcTarget.client.upsert({ name: this.name });
       const input = AgentStream.from(
         (async function* () {
           for (let value = 0; value < 100_000; value++) {
@@ -742,13 +739,13 @@ export const TsStreamingRpcCallerImpl = TsStreamingRpcCaller.implement({
     async callProducerError() {
       return collect(
         await TsStreamingRpcTarget.client
-          .get({ name: this.name })
+          .upsert({ name: this.name })
           .produceError(),
       );
     },
     async callStreamFree() {
       return TsStreamingRpcTarget.client
-        .get({ name: this.name })
+        .upsert({ name: this.name })
         .incrementScalar();
     },
   },
@@ -834,7 +831,7 @@ export const TsGcSnapshotDriverImpl = TsGcSnapshotDriver.implement({
         if (i === collectAt) {
           await collectGarbage();
         }
-        const client = TsCounter.client.get(targetId);
+        const client = TsCounter.client.upsert(targetId);
         const cycle: { client: typeof client; self?: unknown } = { client };
         cycle.self = cycle;
         await client.incBy({ value: 1 });
@@ -874,7 +871,7 @@ interface InputGcState {
 
 async function retainInputCycle(state: InputGcState, reads: number) {
   const stream = await TsStreamingRpcTarget.client
-    .get({ name: state.name })
+    .upsert({ name: state.name })
     .produce({ values: [20, 21, 22] });
   for (let index = 0; index < reads; index++) {
     const item = await stream.next();
@@ -936,7 +933,7 @@ export const TsInputGcImpl = TsInputGc.implement({
     async continuation() {
       return collect(
         await TsStreamingRpcTarget.client
-          .get({ name: this.name })
+          .upsert({ name: this.name })
           .produce({ values: [30, 31, 32] }),
       );
     },

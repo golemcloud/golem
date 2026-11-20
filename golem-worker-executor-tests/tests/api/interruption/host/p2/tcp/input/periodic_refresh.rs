@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 #[test]
@@ -61,15 +62,15 @@ async fn periodic_refresh_stops_overage_tcp(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "periodic-refresh-seed"),
+            agent_key!("Networking", "periodic-refresh-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL)
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL)
         .await
         .context("seed initialization")?;
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -94,25 +95,21 @@ async fn periodic_refresh_stops_overage_tcp(
     let baseline_updates = registry.applied_updates().len();
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("Networking", "periodic-policy-refresh")
+        agent_key!("Networking", "periodic-policy-refresh")
     } else {
-        agent_id!("EphemeralNetworking", "periodic-policy-refresh")
+        agent_key!("EphemeralNetworking", "periodic-policy-refresh")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                Operation::Read.method(),
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        Operation::Read.method(),
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -120,7 +117,16 @@ async fn periodic_refresh_stops_overage_tcp(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            Operation::Read.method(),
+        ),
     )
     .await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -148,7 +154,7 @@ async fn periodic_refresh_stops_overage_tcp(
         let (initial, connect_start) = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if let Ok(start) = completed_setup(&entries) {
                     break Ok::<_, anyhow::Error>((entries, start));
                 }
@@ -185,7 +191,7 @@ async fn periodic_refresh_stops_overage_tcp(
             worker.retained_cleanup_for_test().await
         }).await??;
         ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "stop changed the full committed prefix");
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(completed_setup(&stopped)? == connect_start);
         let raw_entries = read_stored().await?;
         let errors: Vec<_> = raw_entries.values().filter_map(|entry| match entry { OplogEntry::Error { error, .. } => Some(error), _ => None }).collect();
@@ -221,11 +227,11 @@ async fn periodic_refresh_stops_overage_tcp(
         }).await??;
         drop(updates);
         if durable {
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let (mut peer, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await??;
             peer.write_all(b"x").await?;
             Operation::Read.assert_result(join_request(&mut invocation, "durable continuation").await??)?;
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(completed_setup(&recovered)? == connect_start);
             ensure!(read_stored().await?.range(..=last).eq(prefix.iter()), "recovery changed the full committed prefix");
             ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));

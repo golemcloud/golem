@@ -25,7 +25,7 @@ var Charge = Payment.Method[ChargeIn, int64]("charge")
 
 func main() {
 	// A client for the ORDER agent — Client[OrderID].
-	orderClient := Order.Get(OrderID{Number: "o-1"})
+	orderClient := Order.Upsert(OrderID{Number: "o-1"})
 
 	// ERROR: Charge is MethodDef[PaymentID, …]; Call wants Client[PaymentID],
 	// but orderClient is Client[OrderID]. Type-check must reject this.

@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRejection, ForkStreamSlotRequest, ForkStreamSlotResponse, ForkStreamSlotSuccess,
     fork_stream_slot_rejection::Reason, fork_stream_slot_response,
 };
-use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamExportFork, StreamExportForkInitializedRecord,
     StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
@@ -105,12 +105,10 @@ async fn execute<Ctx: WorkerCtx>(
 ) -> Result<ForkStreamSlotSuccess, Error> {
     let source_id: AgentId = request
         .source_agent_id
-        .clone()
         .and_then(|id| id.try_into().ok())
         .ok_or_else(|| WorkerExecutorError::invalid_request("missing source agent"))?;
     let target_id: AgentId = request
         .target_agent_id
-        .clone()
         .and_then(|id| id.try_into().ok())
         .ok_or_else(|| WorkerExecutorError::invalid_request("missing target agent"))?;
     let environment_id = request
@@ -126,18 +124,19 @@ async fn execute<Ctx: WorkerCtx>(
     let fork_request = CreateRequest::new(
         CreateRequestKind::Fork,
         None,
-        request
-            .principal
-            .clone()
-            .and_then(|principal| principal.try_into().ok())
-            .unwrap_or_else(Principal::anonymous),
+        crate::grpc::extract_caller(&request.caller)?,
         &InvocationContextStack::fresh(),
     );
     let source = OwnedAgentId::new(environment_id, &source_id);
     let target = OwnedAgentId::new(environment_id, &target_id);
     golem_common::model::durable_stream::validate_durable_stream_route_scope(&request.route_scope)
         .map_err(WorkerExecutorError::invalid_request)?;
-    if source_id.component_id != target_id.component_id || source == target {
+    if OwnerKind::ComponentAgent
+        .validate_agent_id(&target_id)
+        .is_err()
+        || source_id.type_id() != target_id.type_id()
+        || source == target
+    {
         return Err(reject(Reason::Conflict));
     }
     service.shard_service.check_worker(&source_id)?;
@@ -146,7 +145,7 @@ async fn execute<Ctx: WorkerCtx>(
         // The immutable target receipt is authoritative for a retry. Do not consult current
         // source state: the source may have advanced, expired or been deleted after publication.
         let success = receipt_answer(&receipt, request, &source_id, Reason::NotFound)?;
-        resume(service, &target_id, &auth).await?;
+        resume(service, &target, &auth).await?;
         return Ok(success);
     }
     let source_metadata = service
@@ -252,7 +251,7 @@ async fn execute<Ctx: WorkerCtx>(
         && let Some(receipt) = creation_receipt(service.oplog_service.as_ref(), &target).await?
     {
         let success = receipt_answer(&receipt, request, &source_id, Reason::NotFound)?;
-        resume(service, &target_id, &auth).await?;
+        resume(service, &target, &auth).await?;
         return Ok(success);
     }
     let mut stage_id = Uuid::new_v4();
@@ -286,7 +285,7 @@ async fn execute<Ctx: WorkerCtx>(
         }
         let admission = worker
             .reserve_export_fork(
-                target_id.clone(),
+                target_id,
                 hash.to_vec(),
                 candidate.clone(),
                 request.max_forks_per_session,
@@ -376,7 +375,7 @@ async fn execute<Ctx: WorkerCtx>(
         };
         candidate.target_session_key = prepared
             .finalize(
-                target_id.clone(),
+                target_id,
                 target_fingerprint,
                 &candidate.export.expected_method,
             )
@@ -455,7 +454,7 @@ async fn execute<Ctx: WorkerCtx>(
         .await;
     let success = result?;
     cleanup.map_err(WorkerExecutorError::runtime)?;
-    resume(service, &target_id, &auth).await?;
+    resume(service, &target, &auth).await?;
     Ok(success)
 }
 
@@ -568,7 +567,7 @@ fn missing_baseline_answer(
 
 async fn resume<Ctx: WorkerCtx>(
     service: &DefaultWorkerFork<Ctx>,
-    target: &AgentId,
+    target: &OwnedAgentId,
     auth: &AuthCtx,
 ) -> Result<(), WorkerExecutorError> {
     match service.worker_proxy.resume(target, true, auth).await {
@@ -578,7 +577,7 @@ async fn resume<Ctx: WorkerCtx>(
             | WorkerExecutorError::PreviousInvocationExited,
         )) => Ok(()),
         Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-            target.clone(),
+            target.agent_id,
             error.into(),
         )),
     }
@@ -836,7 +835,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         .await?;
     Ok(Candidate {
         export: StreamExportFork {
-            source: source.agent_id.clone(),
+            source: source.agent_id,
             source_environment_id: source.environment_id,
             source_fingerprint: fingerprint,
             source_path: request.source_path.clone(),
@@ -1119,10 +1118,7 @@ mod tests {
 
     /// A creation receipt of no export, which is `live` or not.
     fn receipt(live: bool) -> CreationReceipt {
-        let agent = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "target".to_string(),
-        };
+        let agent = AgentId::from_parts(7, 1);
         CreationReceipt {
             cut: StreamForkCutRecord {
                 format_version: 1,
@@ -1171,10 +1167,7 @@ mod tests {
     #[test]
     fn a_receipt_that_is_not_live_gives_its_reason_and_a_live_one_of_another_request_conflicts() {
         let request = ForkStreamSlotRequest::default();
-        let source = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source".to_string(),
-        };
+        let source = AgentId::from_parts(7, 2);
 
         assert_eq!(
             [
@@ -1208,10 +1201,7 @@ mod tests {
     #[test]
     fn only_a_missing_snapshot_of_the_source_baseline_refuses_and_a_receipt_gives_its_answer() {
         let request = ForkStreamSlotRequest::default();
-        let source = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source".to_string(),
-        };
+        let source = AgentId::from_parts(7, 3);
         let name = FilesystemSnapshotName::update();
         let answer = |checked: Option<(&FilesystemSnapshotName, bool)>,
                       receipt: Option<&CreationReceipt>| {
@@ -1255,10 +1245,7 @@ mod tests {
     #[test]
     fn a_missing_baseline_without_a_receipt_names_the_cut_and_a_receipt_gives_its_answer() {
         let request = ForkStreamSlotRequest::default();
-        let source = AgentId {
-            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
-            agent_id: "source".to_string(),
-        };
+        let source = AgentId::from_parts(7, 4);
         let name = FilesystemSnapshotName::update();
         let answer = |receipt: Option<&CreationReceipt>| match missing_baseline_answer(
             receipt,

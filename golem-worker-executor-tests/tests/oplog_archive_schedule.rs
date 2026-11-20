@@ -18,7 +18,7 @@
 
 use crate::Tracing;
 
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
@@ -72,9 +72,14 @@ async fn ephemeral_invocations_schedule_no_oplog_archive(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("EphemeralCounter", "archive-schedule");
+    let agent_id = agent_key!("EphemeralCounter", "archive-schedule");
     executor
-        .start_agent(&component.id, agent_id.clone())
+        .create_unkeyed_agent(
+            &component.id,
+            None,
+            agent_id.clone(),
+            std::collections::HashMap::new(),
+        )
         .await?;
 
     for _ in 0..INVOCATIONS {
@@ -93,7 +98,7 @@ async fn ephemeral_invocations_schedule_no_oplog_archive(
     );
 
     // The control: `Counter` is durable and in the same component, so only the agent mode differs.
-    let durable_agent_id = agent_id!("Counter", "archive-schedule-durable");
+    let durable_agent_id = agent_key!("Counter", "archive-schedule-durable");
     executor
         .start_agent(&component.id, durable_agent_id.clone())
         .await?;
@@ -138,9 +143,14 @@ async fn disabling_the_sweep_restores_the_ephemeral_archive_registration(
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("EphemeralCounter", "archive-schedule-sweep-off");
+    let agent_id = agent_key!("EphemeralCounter", "archive-schedule-sweep-off");
     executor
-        .start_agent(&component.id, agent_id.clone())
+        .create_unkeyed_agent(
+            &component.id,
+            None,
+            agent_id.clone(),
+            std::collections::HashMap::new(),
+        )
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())

@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"sync"
 
 	"github.com/golemcloud/golem/sdks/go/core/schema"
 )
@@ -30,24 +32,115 @@ import (
 // Go error.
 const maxErrorBody = 4096
 
-func createAgent(ctx context.Context, a *Agent) (AgentID, error) {
+// environmentKey names one resolution of an environment: the same names can
+// resolve to different environments on another server or for another token.
+type environmentKey struct {
+	url, token, appName, envName string
+}
+
+func environmentKeyOf(c Configuration) environmentKey {
+	return environmentKey{url: c.Server.URL(), token: c.Server.Token(), appName: c.AppName, envName: c.EnvName}
+}
+
+// environmentIDs caches resolved environment IDs by environmentKey for every
+// client in the process.
+var environmentIDs sync.Map
+
+// environmentID resolves the configuration's application and environment
+// names to the ID of the environment the runtime API is scoped by: the one in
+// the account of the token. Environments that other accounts share with that
+// account are visible too and may have the same names; they are never used.
+func environmentID(ctx context.Context, a *Agent) (string, error) {
+	c := *a.configuration
+	key := environmentKeyOf(c)
+	if id, ok := environmentIDs.Load(key); ok {
+		return id.(string), nil
+	}
+	var token currentToken
+	if err := send(ctx, c, http.MethodGet, "token", "/v1/me/token", nil, &token); err != nil {
+		return "", err
+	}
+	query := url.Values{"app_name": {c.AppName}, "env_name": {c.EnvName}}
+	var page visibleEnvironments
+	if err := send(ctx, c, http.MethodGet, "visible-environments", "/v1/me/visible-environments?"+query.Encode(), nil, &page); err != nil {
+		return "", err
+	}
+	for _, candidate := range page.Values {
+		if candidate.Account.ID == token.AccountID &&
+			candidate.Application.Name == c.AppName &&
+			candidate.Environment.Name == c.EnvName {
+			id := candidate.Environment.ID
+			environmentIDs.Store(key, id)
+			return id, nil
+		}
+	}
+	return "", &Error{Endpoint: "visible-environments", Err: fmt.Errorf("%w: environment %s of application %s does not exist in the account of the token", ErrNotFound, c.EnvName, c.AppName)}
+}
+
+// agentTypePath is the runtime path of the agent's type under its environment.
+func agentTypePath(ctx context.Context, a *Agent) (string, error) {
+	env, err := environmentID(ctx, a)
+	if err != nil {
+		return "", err
+	}
+	return "/v1/runtime/envs/" + url.PathEscape(env) + "/agent-types/" + url.PathEscape(a.typeName), nil
+}
+
+func createAgent(ctx context.Context, a *Agent, keyed bool, config []ConfigEntry, env map[string]string) (agentReference, error) {
 	parameters, err := schema.MarshalWireValue(a.parameters)
 	if err != nil {
-		return AgentID{}, fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+		return agentReference{}, fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+	}
+	base, err := agentTypePath(ctx, a)
+	if err != nil {
+		return agentReference{}, err
+	}
+	if env == nil {
+		env = map[string]string{}
 	}
 	request := createAgentRequest{
-		AppName:       a.configuration.AppName,
-		EnvName:       a.configuration.EnvName,
-		AgentTypeName: a.typeName,
-		Parameters:    parameters,
-		PhantomID:     a.phantomID,
-		Config:        configEntriesToDTO(a.config),
+		Parameters: parameters,
+		Config:     configEntriesToDTO(config),
+		Env:        env,
+		Keyed:      keyed,
 	}
-	var response createAgentResponse
-	if err := post(ctx, *a.configuration, "create-agent", request, &response); err != nil {
-		return AgentID{}, err
+	var response agentReference
+	if err := send(ctx, *a.configuration, http.MethodPost, "create-agent", base+"/agents", request, &response); err != nil {
+		return agentReference{}, err
 	}
-	return response.AgentID, nil
+	return response, nil
+}
+
+func upsertAgent(ctx context.Context, a *Agent) (agentReference, error) {
+	if a.parameters == nil {
+		return agentReference{}, fmt.Errorf("golem: %s: the agent has no constructor arguments to upsert", a.typeName)
+	}
+	parameters, err := schema.MarshalWireValue(a.parameters)
+	if err != nil {
+		return agentReference{}, fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+	}
+	base, err := agentTypePath(ctx, a)
+	if err != nil {
+		return agentReference{}, err
+	}
+	var response agentReference
+	if err := send(ctx, *a.configuration, http.MethodPost, "upsert-agent", base+"/agents/upsert", agentKeyRequest{Parameters: parameters}, &response); err != nil {
+		return agentReference{}, err
+	}
+	return response, nil
+}
+
+func getAgent(ctx context.Context, a *Agent, id AgentID) (agentMetadata, error) {
+	env, err := environmentID(ctx, a)
+	if err != nil {
+		return agentMetadata{}, err
+	}
+	path := "/v1/runtime/envs/" + url.PathEscape(env) + "/agents/" + id.String()
+	var response agentMetadata
+	if err := send(ctx, *a.configuration, http.MethodGet, "get-agent", path, nil, &response); err != nil {
+		return agentMetadata{}, err
+	}
+	return response, nil
 }
 
 func invokeAgent(
@@ -58,34 +151,34 @@ func invokeAgent(
 	mode InvocationMode,
 	scheduleAt *string,
 ) (Result, error) {
-	constructorArgs, err := schema.MarshalWireValue(a.parameters)
-	if err != nil {
-		return Result{}, fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
-	}
 	methodArgs, err := schema.MarshalWireValue(parameters)
 	if err != nil {
 		return Result{}, fmt.Errorf("golem: %s.%s arguments: %w", a.typeName, method, err)
 	}
 	request := invokeAgentRequest{
-		AppName:          a.configuration.AppName,
-		EnvName:          a.configuration.EnvName,
-		AgentTypeName:    a.typeName,
-		Parameters:       constructorArgs,
-		PhantomID:        a.phantomID,
-		Config:           configEntriesToDTO(a.config),
-		MethodName:       method,
+		Method:           method,
 		MethodParameters: methodArgs,
 		Mode:             mode,
 		ScheduleAt:       scheduleAt,
 	}
-	var response invokeAgentResponse
-	if err := post(ctx, *a.configuration, "invoke-agent", request, &response); err != nil {
+	if a.byID {
+		request.AgentID = a.id.Load()
+		request.ExpectedFingerprint = a.fingerprint
+	} else {
+		constructorArgs, err := schema.MarshalWireValue(a.parameters)
+		if err != nil {
+			return Result{}, fmt.Errorf("golem: %s constructor arguments: %w", a.typeName, err)
+		}
+		request.Parameters = constructorArgs
+	}
+	base, err := agentTypePath(ctx, a)
+	if err != nil {
 		return Result{}, err
 	}
-	// The identity is learned from the first call, so a phantom or ephemeral
-	// agent that was never created explicitly still reports one afterwards.
-	id := response.AgentID
-	a.id.Store(&id)
+	var response invokeAgentResponse
+	if err := send(ctx, *a.configuration, http.MethodPost, "invoke-agent", base+"/invoke", request, &response); err != nil {
+		return Result{}, err
+	}
 
 	result := Result{AgentID: response.AgentID, IdempotencyKey: response.IdempotencyKey}
 	if response.Result == nil {
@@ -113,23 +206,31 @@ func invokeAgent(
 	return result, nil
 }
 
-func post(
+// send makes one REST call. request is nil for a call without a body.
+func send(
 	ctx context.Context,
 	configuration Configuration,
+	httpMethod string,
 	endpoint string,
+	path string,
 	request any,
 	response any,
 ) error {
-	body, err := json.Marshal(request)
+	var body io.Reader
+	if request != nil {
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			return &Error{Endpoint: endpoint, Err: err}
+		}
+		body = bytes.NewReader(encoded)
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, httpMethod, configuration.Server.URL()+path, body)
 	if err != nil {
 		return &Error{Endpoint: endpoint, Err: err}
 	}
-	url := configuration.Server.URL() + "/v1/agents/" + endpoint
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return &Error{Endpoint: endpoint, Err: err}
+	if request != nil {
+		httpRequest.Header.Set("Content-Type", "application/json")
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+configuration.Server.Token())
 
 	httpResponse, err := configuration.client().Do(httpRequest)
@@ -146,11 +247,13 @@ func post(
 			Body:     string(text),
 		}
 	}
-	// The response is held to the same strict JSON as a session message.
+	// An answer that does not arrive in full did not arrive, so it has no status.
 	data, err := io.ReadAll(httpResponse.Body)
-	if err == nil {
-		err = schema.CheckWireJSON(data)
+	if err != nil {
+		return &Error{Endpoint: endpoint, Err: fmt.Errorf("could not read the response: %w", err)}
 	}
+	// The response is held to the same strict JSON as a session message.
+	err = schema.CheckWireJSON(data)
 	if err == nil {
 		err = json.Unmarshal(data, response)
 	}

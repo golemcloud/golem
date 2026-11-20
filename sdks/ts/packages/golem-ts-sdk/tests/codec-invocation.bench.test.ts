@@ -18,9 +18,9 @@ for (const size of [1, 64]) {
   const value = Array.from({ length: size }, (_, i) => ({ name: `item-${i}`, count: i + 7 }));
   const input = schemaValueToWit(v.record([codec.toValue(value)]));
   const operations = {
-    decode: () => runtime.read(input, { tag: 'anonymous' }),
+    decode: () => runtime.read(input),
     encode: () => runtime.write(value),
-    invoke: () => runtime.write(runtime.read(input, { tag: 'anonymous' }).items),
+    invoke: () => runtime.write(runtime.read(input).items),
   };
   for (const [name, operation] of Object.entries(operations)) {
     it.skipIf(!process.env.CODEC_BENCH)(

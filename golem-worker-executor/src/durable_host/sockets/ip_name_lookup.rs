@@ -84,6 +84,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await
             .map_err(SocketError::trap)?;
 
+        // Whether this call records its `End` now, which is where a P2 lookup links.
+        let mut recorded = true;
         let result = 'resp: {
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
@@ -106,7 +108,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
                 ResolvedCall::Replay(mut handle) => {
                     match handle.replay(self).await? {
-                        CallReplayOutcome::Replayed(response) => break 'resp response,
+                        CallReplayOutcome::Replayed(response) => {
+                            recorded = false;
+                            break 'resp response;
+                        }
                         CallReplayOutcome::Incomplete(live) => handle = live,
                     }
                     handle
@@ -153,6 +158,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     custom_invocation.as_deref(),
                     &name,
                     addresses.0.iter().cloned().map(std::net::IpAddr::from),
+                    recorded,
                 )
                 .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
                 let addresses = addresses.0.into_iter().map(|a| a.into()).collect();

@@ -16,7 +16,7 @@ use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::command::shared_args::{ForceBuildArg, PostDeployArgs};
 use crate::error::service::ServiceError;
 use crate::log::{LogColorize, logln};
-use crate::model::agent::{AgentActionError, RawAgentId};
+use crate::model::agent::AgentActionError;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::component::{
     render_agent_constructor, render_input_schema, render_output_schema,
@@ -33,6 +33,7 @@ use crate::model::text_format::{
 use colored::Colorize;
 use golem_client::model::{AgentSecretDto, Deployment, RetryPolicyDto};
 use golem_common::base_model::json::NormalizedJsonValue;
+use golem_common::model::AgentId;
 use golem_common::model::agent::{
     AgentConfigSource, HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment,
 };
@@ -1426,7 +1427,7 @@ impl TextOutput for TryUpdateAllWorkersView {
 #[serde(rename_all = "camelCase")]
 pub struct AgentUpdateMeta {
     pub component_name: ComponentName,
-    pub agent_id: RawAgentId,
+    pub agent_id: AgentId,
     pub from_revision: ComponentRevision,
     pub revision: ComponentRevision,
 }
@@ -1641,6 +1642,9 @@ impl TextOutput for DeploymentDiff {
                             ));
                             if diff.wasm_changed {
                                 logln("    - binary");
+                            }
+                            if diff.package_metadata_changed {
+                                logln("    - package metadata");
                             }
                             if !diff.agent_type_changes.is_empty() {
                                 logln("    - agent type declarations");

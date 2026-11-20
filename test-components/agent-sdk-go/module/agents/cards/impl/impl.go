@@ -152,7 +152,7 @@ func init() {
 		// 4. Lend scope cards to awaited calls; the receiver holds their
 		// grants for those invocations only. A card attached to the call
 		// takes precedence over the client's default.
-		recv := cards.Receiver.Get(cards.ReceiverId{Name: in.Receiver})
+		recv := cards.Receiver.Upsert(cards.ReceiverId{Name: in.Receiver})
 		note("receiver-before", cards.Observe.MustCall(recv, golem.Unit{}))
 		scope := golem.MustDeriveScope(only, source)
 		empty := golem.MustDeriveScope(golem.Bounds{}, scope)
@@ -163,12 +163,12 @@ func init() {
 		note("receiver-call-scope-over-default", cards.Observe.WithScopeCard(empty).MustCall(recv.WithScopeCard(scope), golem.Unit{}))
 		note("receiver-call-scope-over-empty-default", cards.Observe.WithScopeCard(scope).MustCall(recv.WithScopeCard(empty), golem.Unit{}))
 
-		reflected, known := reflection.DiscoverAgentTypeByID(recv.AgentID())
+		reflected, known := reflection.DiscoverAgentTypeByID(recv.MustAgentID())
 		if !known {
 			note("reflected", "no agent type")
 			return out
 		}
-		rc := golem.Must(reflected.Bind(recv.AgentID()))
+		rc := golem.Must(reflected.GetByID(recv.MustAgentID()))
 		reflectedObserve := func(c *reflection.AgentClient, opts ...reflection.CallOpt) any {
 			got, _, err := c.Call("observe", map[string]any{}, opts...)
 			if err != nil {
@@ -178,7 +178,7 @@ func init() {
 		}
 		note("reflected-default-scope", reflectedObserve(rc.WithScopeCard(scope)))
 		note("reflected-call-scope-over-default", reflectedObserve(rc.WithScopeCard(scope), reflection.CallScopeCard(empty)))
-		dc := golem.Must(reflection.BindAgentID(recv.AgentID()))
+		dc := golem.Must(reflection.GetByID(recv.MustAgentID()))
 		method, _ := reflected.Method("observe")
 		input := golem.Must(method.Input().PackJSON(map[string]any{}))
 		dynamicObserve := func(c *reflection.DynamicAgentClient, opts ...reflection.CallOpt) string {
@@ -212,8 +212,7 @@ func init() {
 		ctx.State.receiver, ctx.State.stale = in.Receiver, scope
 
 		// 5. Install the child on the receiver.
-		self := golem.MustGetSelfMetadata().AgentID
-		target := golem.AgentHolder(golem.AgentID{ComponentID: self.ComponentID, AgentID: recv.AgentID()})
+		target := golem.AgentHolder(recv.MustAgentID())
 		note("install", errorKind(child.Install(target)))
 		note("child-moved-by-install", moved(child))
 		note("receiver-after-install", cards.Observe.MustCall(recv, golem.Unit{}))
@@ -241,7 +240,7 @@ func init() {
 		return out
 	})
 	issuer.Handle(cards.UseStaleScope, func(ctx *golem.Context[issuerState], _ golem.Unit) []string {
-		recv := cards.Receiver.Get(cards.ReceiverId{Name: ctx.State.receiver})
+		recv := cards.Receiver.Upsert(cards.ReceiverId{Name: ctx.State.receiver})
 		_, err := cards.Observe.WithScopeCard(ctx.State.stale).Call(recv, golem.Unit{})
 		out := []string{"attach=" + errorKind(err)}
 		_, err = golem.DeriveScope(golem.Bounds{}, ctx.State.stale)

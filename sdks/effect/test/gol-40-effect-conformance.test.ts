@@ -12,8 +12,10 @@ import {
   type ProviderObservation,
 } from "./fixtures/gol-40-effect-conformance.js"
 import { ToolClient } from "../src/host/ToolClient.js"
+import { userPrincipal } from "./callers.js"
 
-const principal = { tag: "oidc", val: { subject: "alice", claims: [] } } as const
+const principal = userPrincipal("alice")
+const callerText = `user ("https://example.test","alice")`
 const input = {
   region: "us-east-1" as const,
   trace: true,
@@ -106,12 +108,12 @@ describe("GOL-40 Effect conformance fixture", () => {
     expect([...generatedStderr]).toEqual(proxyStderr)
     expect(generatedStatus).toBe(proxyStatus)
     expect(
-      observations.map(({ path, principal, stdinClosed }) => ({ path, principal, stdinClosed })),
+      observations.map(({ path, caller, stdinClosed }) => ({ path, caller, stdinClosed })),
     ).toEqual([
-      { path: "render/execute", principal, stdinClosed: true },
-      { path: "render/execute", principal, stdinClosed: true },
-      { path: "render/status", principal, stdinClosed: true },
-      { path: "render/status", principal, stdinClosed: true },
+      { path: "render/execute", caller: callerText, stdinClosed: true },
+      { path: "render/execute", caller: callerText, stdinClosed: true },
+      { path: "render/status", caller: callerText, stdinClosed: true },
+      { path: "render/status", caller: callerText, stdinClosed: true },
     ])
   })
 
@@ -176,7 +178,7 @@ describe("GOL-40 Effect conformance fixture", () => {
     expect(String(generatedExit)).toContain("invalid-request")
     expect(String(reflectedExit)).toContain("invalid-request")
     expect(observations).toHaveLength(2)
-    expect(observations.every((entry) => entry.principal === principal && entry.stdinClosed)).toBe(
+    expect(observations.every((entry) => entry.caller === callerText && entry.stdinClosed)).toBe(
       true,
     )
   })

@@ -107,7 +107,7 @@ async fn moonbit_guest_streams_context() -> TestContext {
             fn nested(&self, input: AgentStream<AgentStream<StreamItem>>) -> AgentStream<AgentStream<StreamItem>> { input }
             async fn malformed(&self) -> AgentStream<u32> {
                 let gate = golem_rust::create_promise();
-                StreamGateClient::get(self.name.clone()).arm(gate.clone()).await;
+                StreamGateClient::upsert(self.name.clone()).arm(gate.clone()).await;
                 let (mut writer, stream) = golem_rust::schema::wit::new_schema_value_stream();
                 let (completion, outcome) = golem_rust::schema::wit::new_schema_stream_outcome();
                 spawn_local(async move {

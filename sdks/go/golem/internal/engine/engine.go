@@ -78,9 +78,11 @@ type Engine struct {
 	// one schema name, so each is reported once.
 	nameClashes map[reflect.Type]bool
 
-	// PrincipalType is the type the host fills from the invocation: a struct
-	// field of it carries no value, and it is invalid anywhere else.
-	PrincipalType reflect.Type
+	// IsLive reports the types that are live values and never data (a
+	// principal, a caller): they are invalid anywhere in a signature or a value
+	// type. LiveMessage says so.
+	IsLive      func(reflect.Type) bool
+	LiveMessage string
 	// Composites recognise the SDK's own struct types that are not plain
 	// records (secrets, streams, quota tokens, permission cards). Each fills c
 	// and returns true when zero is one of its types.
@@ -88,7 +90,7 @@ type Engine struct {
 }
 
 // New returns an engine with the SDK's own types registered.
-func New(principalType reflect.Type, composites ...func(e *Engine, c *Codec, zero any) bool) *Engine {
+func New(isLive func(reflect.Type) bool, liveMessage string, composites ...func(e *Engine, c *Codec, zero any) bool) *Engine {
 	e := &Engine{
 		Variants:      map[reflect.Type]*VariantDef{},
 		Enums:         map[reflect.Type]*EnumDef{},
@@ -96,7 +98,8 @@ func New(principalType reflect.Type, composites ...func(e *Engine, c *Codec, zer
 		Unions:        map[reflect.Type]*UnionDef{},
 		Pins:          map[reflect.Type]string{},
 		Codecs:        map[reflect.Type]*Codec{},
-		PrincipalType: principalType,
+		IsLive:        isLive,
+		LiveMessage:   liveMessage,
 		Composites:    composites,
 	}
 	// The modalities of a basic multimodal list are the SDK's own variant.

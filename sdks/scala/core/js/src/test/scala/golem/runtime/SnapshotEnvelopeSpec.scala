@@ -16,235 +16,103 @@
 
 package golem.runtime
 
-import golem.Principal
-import golem.host.js.PrincipalConverter
 import golem.runtime.guest.Guest
 import zio.blocks.schema.json.Json
 import zio.test._
 
 object SnapshotEnvelopeSpec extends ZIOSpecDefault {
 
-  private val testPrincipal = Principal.Oidc(
-    sub = "user-42",
-    issuer = "https://auth.example.com",
-    claims = """{"role":"admin"}""",
-    email = Some("user@example.com")
-  )
+  // The principals that 1.6 wrote into a snapshot, in their JSON form.
+  private val legacyOidc =
+    """{"tag":"oidc","val":{"sub":"user-42","issuer":"https://auth.example.com","email":"user@example.com","name":null,"emailVerified":null,"givenName":null,"familyName":null,"picture":null,"preferredUsername":null,"claims":"{\"role\":\"admin\"}"}}"""
+  private val legacyAgent =
+    """{"tag":"agent","val":{"componentId":"550e8400-e29b-41d4-a716-446655440000","agentId":"agent-1"}}"""
+  private val legacyUser      = """{"tag":"golem-user","val":{"accountId":"550e8400-e29b-41d4-a716-446655440000"}}"""
+  private val legacyAnonymous = """{"tag":"anonymous"}"""
 
-  private val testAgentPrincipal = Principal.Agent(
-    componentId = new java.util.UUID(123456789012345678L, 987654321098765432L),
-    agentId = "agent-1"
-  )
+  private def state(bytes: Array[Byte]): String = new String(bytes, "UTF-8")
 
-  private def buildJsonEnvelope(principal: Principal, stateJson: String): Array[Byte] = {
-    val principalJsonStr = new String(PrincipalConverter.toJson(principal), "UTF-8")
-    val envelope         = s"""{"version":1,"principal":$principalJsonStr,"state":$stateJson}"""
-    envelope.getBytes("UTF-8")
-  }
-
-  private def parseJsonEnvelope(bytes: Array[Byte]): (Principal, String) =
+  private def decodeJson(text: String): Either[String, String] =
     Guest
-      .decodeSnapshotPayload(bytes, "application/json")
-      .fold(
-        error => throw new RuntimeException(error),
-        result => (result._1, new String(result._2.asInstanceOf[SnapshotPayload].bytes, "UTF-8"))
-      )
+      .decodeSnapshotPayload(text.getBytes("UTF-8"), "application/json")
+      .map(data => state(data.asInstanceOf[SnapshotPayload].bytes))
 
-  private def buildBinaryEnvelopeV2(principal: Principal, stateBytes: Array[Byte]): Array[Byte] = {
-    val principalBytes = PrincipalConverter.toJson(principal)
-    val totalLength    = 1 + 4 + principalBytes.length + stateBytes.length
-    val fullSnapshot   = new Array[Byte](totalLength)
-    fullSnapshot(0) = 2.toByte
-    fullSnapshot(1) = ((principalBytes.length >>> 24) & 0xff).toByte
-    fullSnapshot(2) = ((principalBytes.length >>> 16) & 0xff).toByte
-    fullSnapshot(3) = ((principalBytes.length >>> 8) & 0xff).toByte
-    fullSnapshot(4) = (principalBytes.length & 0xff).toByte
-    System.arraycopy(principalBytes, 0, fullSnapshot, 5, principalBytes.length)
-    System.arraycopy(stateBytes, 0, fullSnapshot, 5 + principalBytes.length, stateBytes.length)
-    fullSnapshot
+  private def printed(json: String): String = Json.parse(json).map(_.print).getOrElse("")
+
+  /**
+   * A 1.6 binary envelope: `0x02`, the principal length, the principal JSON,
+   * then the state.
+   */
+  private def legacyBinary(principalJson: String, stateBytes: Array[Byte]): Array[Byte] = {
+    val principalBytes = principalJson.getBytes("UTF-8")
+    val out            = new Array[Byte](1 + 4 + principalBytes.length + stateBytes.length)
+    out(0) = 2.toByte
+    out(1) = ((principalBytes.length >>> 24) & 0xff).toByte
+    out(2) = ((principalBytes.length >>> 16) & 0xff).toByte
+    out(3) = ((principalBytes.length >>> 8) & 0xff).toByte
+    out(4) = (principalBytes.length & 0xff).toByte
+    System.arraycopy(principalBytes, 0, out, 5, principalBytes.length)
+    System.arraycopy(stateBytes, 0, out, 5 + principalBytes.length, stateBytes.length)
+    out
   }
 
-  private def parseBinaryEnvelopeV2(bytes: Array[Byte]): (Principal, Array[Byte]) =
+  private def decodeBinary(bytes: Array[Byte]): Either[String, Seq[Byte]] =
     Guest
       .decodeSnapshotPayload(bytes, "application/octet-stream")
-      .fold(
-        error => throw new RuntimeException(error),
-        result => (result._1, result._2.asInstanceOf[SnapshotPayload].bytes)
-      )
+      .map(_.asInstanceOf[SnapshotPayload].bytes.toSeq)
 
   def spec = suite("SnapshotEnvelopeSpec")(
     suite("JSON envelope")(
-      test("roundtrip with Oidc principal") {
-        val stateJson          = """{"counter":42,"label":"hello"}"""
-        val envelope           = buildJsonEnvelope(testPrincipal, stateJson)
-        val (principal, state) = parseJsonEnvelope(envelope)
-        val stateRoundtrip     = Json.parse(stateJson).map(_.print).getOrElse("")
-        assertTrue(
-          principal == testPrincipal,
-          state == stateRoundtrip
-        )
+      test("reads the 2.0 envelope, which holds no principal") {
+        val stateJson = """{"counter":42,"label":"hello"}"""
+        assertTrue(decodeJson(s"""{"version":2,"state":$stateJson}""") == Right(printed(stateJson)))
       },
-      test("roundtrip with Anonymous principal") {
-        val stateJson          = """{"value":1}"""
-        val envelope           = buildJsonEnvelope(Principal.Anonymous, stateJson)
-        val (principal, state) = parseJsonEnvelope(envelope)
-        val stateRoundtrip     = Json.parse(stateJson).map(_.print).getOrElse("")
-        assertTrue(
-          principal == Principal.Anonymous,
-          state == stateRoundtrip
-        )
+      test("reads a 1.6 envelope and drops its principal") {
+        val stateJson = """{"x":"y"}"""
+        val forms     = List(legacyOidc, legacyAgent, legacyUser, legacyAnonymous)
+        assertTrue(forms.forall { principal =>
+          decodeJson(s"""{"version":1,"principal":$principal,"state":$stateJson}""") == Right(printed(stateJson))
+        })
       },
-      test("roundtrip with Agent principal") {
-        val stateJson          = """{"x":"y"}"""
-        val envelope           = buildJsonEnvelope(testAgentPrincipal, stateJson)
-        val (principal, state) = parseJsonEnvelope(envelope)
-        val stateRoundtrip     = Json.parse(stateJson).map(_.print).getOrElse("")
-        assertTrue(
-          principal == testAgentPrincipal,
-          state == stateRoundtrip
-        )
-      },
-      test("envelope contains version field") {
-        val envelope = buildJsonEnvelope(Principal.Anonymous, """{}""")
-        val parsed   = Json.parse(envelope)
-        val version  = parsed.flatMap(_.get("version").one)
-        assertTrue(version.isRight)
-      },
-      test("loader rejects missing version, principal, and state") {
-        val noVersion = Guest.decodeSnapshotPayload(
-          """{"principal":{"tag":"anonymous"},"state":{}}""".getBytes("UTF-8"),
-          "application/json"
-        )
-        val noPrincipal =
-          Guest.decodeSnapshotPayload("""{"version":1,"state":{}}""".getBytes("UTF-8"), "application/json")
-        val noState = Guest.decodeSnapshotPayload(
-          """{"version":1,"principal":{"tag":"anonymous"}}""".getBytes("UTF-8"),
-          "application/json"
-        )
+      test("loader rejects missing version, principal and state") {
+        val noVersion   = decodeJson("""{"state":{}}""")
+        val noPrincipal = decodeJson("""{"version":1,"state":{}}""")
+        val noState     = decodeJson("""{"version":2}""")
         assertTrue(
           noVersion.left.exists(_.contains("version")),
           noPrincipal.left.exists(_.contains("principal")),
           noState.left.exists(_.contains("state"))
         )
       },
-      test("loader rejects invalid principal and unsupported JSON version") {
-        val invalidPrincipal = Guest.decodeSnapshotPayload(
-          """{"version":1,"principal":{"tag":"unknown"},"state":{}}""".getBytes("UTF-8"),
-          "application/json"
-        )
-        val wrongVersion = Guest.decodeSnapshotPayload(
-          """{"version":2,"principal":{"tag":"anonymous"},"state":{}}""".getBytes("UTF-8"),
-          "application/json"
-        )
+      test("loader rejects a malformed 1.6 principal and an unsupported version") {
+        val invalidPrincipal = decodeJson("""{"version":1,"principal":{"tag":"unknown"},"state":{}}""")
+        val wrongVersion     = decodeJson("""{"version":3,"state":{}}""")
         assertTrue(invalidPrincipal.isLeft, wrongVersion.left.exists(_.contains("version")))
-      },
-      test("Agent principal JSON matches Rust format") {
-        val componentId = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000")
-        val principal   = Principal.Agent(componentId, "MyAgent(\"x\")")
-        val jsonStr     = new String(PrincipalConverter.toJson(principal), "UTF-8")
-        assertTrue(
-          jsonStr == """{"tag":"agent","val":{"componentId":"550e8400-e29b-41d4-a716-446655440000","agentId":"MyAgent(\"x\")"}}"""
-        )
-      },
-      test("Anonymous principal JSON matches Rust format") {
-        val jsonStr = new String(PrincipalConverter.toJson(Principal.Anonymous), "UTF-8")
-        assertTrue(jsonStr == """{"tag":"anonymous"}""")
-      },
-      test("GolemUser principal JSON matches Rust format") {
-        val accountId = java.util.UUID.fromString("550e8400-e29b-41d4-a716-446655440000")
-        val principal = Principal.GolemUser(accountId)
-        val jsonStr   = new String(PrincipalConverter.toJson(principal), "UTF-8")
-        assertTrue(
-          jsonStr == """{"tag":"golem-user","val":{"accountId":"550e8400-e29b-41d4-a716-446655440000"}}"""
-        )
-      },
-      test("Oidc principal JSON matches Rust format") {
-        val principal = Principal.Oidc(sub = "user-1", issuer = "https://auth.example.com", claims = "{}")
-        val jsonStr   = new String(PrincipalConverter.toJson(principal), "UTF-8")
-        assertTrue(
-          jsonStr == """{"tag":"oidc","val":{"sub":"user-1","issuer":"https://auth.example.com","email":null,"name":null,"emailVerified":null,"givenName":null,"familyName":null,"picture":null,"preferredUsername":null,"claims":"{}"}}"""
-        )
       }
     ),
-    suite("Binary envelope v2")(
-      test("roundtrip with Oidc principal") {
-        val stateBytes         = Array[Byte](1, 2, 3, 4, 5)
-        val envelope           = buildBinaryEnvelopeV2(testPrincipal, stateBytes)
-        val (principal, state) = parseBinaryEnvelopeV2(envelope)
+    suite("Binary envelope")(
+      test("reads the 2.0 envelope: the version byte 3, then the state") {
+        assertTrue(decodeBinary(Array[Byte](3, 1, 2, 3)) == Right(Seq[Byte](1, 2, 3)))
+      },
+      test("reads an empty 2.0 state") {
+        assertTrue(decodeBinary(Array[Byte](3)) == Right(Seq.empty[Byte]))
+      },
+      test("reads a 1.6 binary v2 envelope and drops its principal") {
+        val forms = List(legacyOidc, legacyAgent, legacyUser, legacyAnonymous)
         assertTrue(
-          principal == testPrincipal,
-          state.toSeq == stateBytes.toSeq
+          forms.forall(principal => decodeBinary(legacyBinary(principal, Array[Byte](9, 8))) == Right(Seq[Byte](9, 8)))
         )
       },
-      test("roundtrip with Anonymous principal") {
-        val stateBytes         = Array[Byte](10, 20, 30)
-        val envelope           = buildBinaryEnvelopeV2(Principal.Anonymous, stateBytes)
-        val (principal, state) = parseBinaryEnvelopeV2(envelope)
-        assertTrue(
-          principal == Principal.Anonymous,
-          state.toSeq == stateBytes.toSeq
-        )
-      },
-      test("roundtrip with Agent principal") {
-        val stateBytes         = Array[Byte](0, 127, -128, 1)
-        val envelope           = buildBinaryEnvelopeV2(testAgentPrincipal, stateBytes)
-        val (principal, state) = parseBinaryEnvelopeV2(envelope)
-        assertTrue(
-          principal == testAgentPrincipal,
-          state.toSeq == stateBytes.toSeq
-        )
-      },
-      test("envelope starts with version byte 2") {
-        val envelope = buildBinaryEnvelopeV2(Principal.Anonymous, Array[Byte](1))
-        assertTrue(envelope(0) == 2.toByte)
-      },
-      test("roundtrip with empty state") {
-        val stateBytes         = Array.emptyByteArray
-        val envelope           = buildBinaryEnvelopeV2(testPrincipal, stateBytes)
-        val (principal, state) = parseBinaryEnvelopeV2(envelope)
-        assertTrue(
-          principal == testPrincipal,
-          state.isEmpty
-        )
-      },
-      test("roundtrip with GolemUser principal") {
-        val p = Principal.GolemUser(
-          accountId = new java.util.UUID(111222333444555666L, 777888999000111222L)
-        )
-        val stateBytes         = Array[Byte](42)
-        val envelope           = buildBinaryEnvelopeV2(p, stateBytes)
-        val (principal, state) = parseBinaryEnvelopeV2(envelope)
-        assertTrue(
-          principal == p,
-          state.toSeq == stateBytes.toSeq
-        )
-      }
-    ),
-    suite("Binary envelope validation")(
-      test("legacy v1 remains principal-less and restores as anonymous") {
-        val decoded = Guest.decodeSnapshotPayload(Array[Byte](1, 10, 20), "application/octet-stream")
-        assertTrue(
-          decoded.exists { case (principal, state) =>
-            principal == Principal.Anonymous && state.asInstanceOf[SnapshotPayload].bytes.toSeq == Seq[Byte](10, 20)
-          }
-        )
+      test("legacy v1 stays principal-less") {
+        assertTrue(decodeBinary(Array[Byte](1, 10, 20)) == Right(Seq[Byte](10, 20)))
       },
       test("rejects empty, truncated, oversized, invalid-principal, and unknown envelopes") {
         val empty            = Guest.decodeSnapshotPayload(Array.emptyByteArray, "application/octet-stream")
         val truncated        = Guest.decodeSnapshotPayload(Array[Byte](2, 0), "application/octet-stream")
         val oversized        = Guest.decodeSnapshotPayload(Array[Byte](2, 0, 0, 0, 2, 1), "application/octet-stream")
-        val invalidPrincipal = Guest.decodeSnapshotPayload(
-          Array[Byte](2, 0, 0, 0, 1, 0),
-          "application/octet-stream"
-        )
-        val unknown = Guest.decodeSnapshotPayload(Array[Byte](3), "application/octet-stream")
-        assertTrue(
-          empty.isLeft,
-          truncated.isLeft,
-          oversized.isLeft,
-          invalidPrincipal.isLeft,
-          unknown.isLeft
-        )
+        val invalidPrincipal = Guest.decodeSnapshotPayload(Array[Byte](2, 0, 0, 0, 1, 0), "application/octet-stream")
+        val unknown          = Guest.decodeSnapshotPayload(Array[Byte](4), "application/octet-stream")
+        assertTrue(empty.isLeft, truncated.isLeft, oversized.isLeft, invalidPrincipal.isLeft, unknown.isLeft)
       }
     )
   )

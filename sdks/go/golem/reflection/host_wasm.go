@@ -26,9 +26,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	clock "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_clocks_0_3_0_system_clock"
 
-	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
-	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -50,24 +48,36 @@ func hostDiscoverAgentType(name string) (AgentType, bool) {
 	return newAgentType(found.Some().AgentType), true
 }
 
-func hostDiscoverAgentTypeByID(agentID string) (AgentType, bool) {
-	found := host.GetAgentTypeByAgentId(agentID)
+func hostDiscoverAgentTypeByID(id golem.AgentID) (AgentType, bool) {
+	found := host.GetAgentTypeByAgentId(agentIDToWit(id))
 	if found.IsNone() {
 		return AgentType{}, false
 	}
 	return newAgentType(found.Some().AgentType), true
 }
 
+func agentIDToWit(id golem.AgentID) types.AgentId {
+	return types.AgentId{Uuid: engine.UUIDToWit(id.UUID())}
+}
+
 // witRPC invokes through the host's RPC resource.
 type witRPC struct {
-	rpc    *host.WasmRpc
+	conn   identity.Connection
 	target string
+}
+
+func (w witRPC) agentID() (golem.AgentID, error) {
+	id, failure := identity.AgentID(w.conn)
+	if failure != nil {
+		return golem.AgentID{}, link.RemoteCallError(w.target, "<agent-id>", failure.RPCError)
+	}
+	return golem.AgentIDFromUUID(engine.UUIDFromWit(id.Uuid)), nil
 }
 
 // start invokes through the asynchronous import, for the same reason
 // [golem.MethodDef.Call] does: it is the form a suspended caller is resumed into.
 func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
-	inv := w.rpc.AsyncInvokeAndAwait(method, input, scopeCard)
+	inv := w.conn.RPC.AsyncInvokeAndAwait(method, input, scopeCard)
 	return pendingRPC{
 		metadata: asyncInvocationMetadata(inv.Metadata),
 		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
@@ -86,7 +96,7 @@ func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard witT
 }
 
 func (w witRPC) trigger(method string, input types.SchemaValueTree) (golem.InvocationMetadata, error) {
-	res := w.rpc.Invoke(method, input, noScopeCard())
+	res := w.conn.RPC.Invoke(method, input, noScopeCard())
 	if res.IsErr() {
 		return golem.InvocationMetadata{}, link.RemoteCallError(w.target, method, res.Err())
 	}
@@ -94,7 +104,7 @@ func (w witRPC) trigger(method string, input types.SchemaValueTree) (golem.Invoc
 }
 
 func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error) {
-	res := w.rpc.ScheduleCancelableInvocation(instantFrom(at), method, input, noScopeCard())
+	res := w.conn.RPC.ScheduleCancelableInvocation(instantFrom(at), method, input, noScopeCard())
 	if res.IsErr() {
 		return nil, link.RemoteCallError(w.target, method, res.Err())
 	}
@@ -102,134 +112,78 @@ func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTre
 	return link.ScheduledInvocation(receipt.Metadata, receipt.CancellationToken).(*golem.ScheduledInvocation), nil
 }
 
-func (r AgentType) hostGet(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
-	o := applyOpts(opts)
-	if r.Mode() == golem.Ephemeral && o.phantomID.IsNone() {
-		return nil, fmt.Errorf("golem: %s is ephemeral and has no durable identity; use NewPhantom", r.Name())
+// newAgentClient is a reflected client of a connection.
+func newAgentClient(r AgentType, conn identity.Connection) *AgentClient {
+	id := &agentIDCell{}
+	if conn.AgentID.IsSome() {
+		id = knownAgentID(golem.AgentIDFromUUID(engine.UUIDFromWit(conn.AgentID.Some().Uuid)))
+	}
+	return &AgentClient{agentType: r, id: id, rpc: witRPC{conn: conn, target: r.Name()}}
+}
+
+func (r AgentType) hostUpsert(ctorArgs map[string]any) (*AgentClient, error) {
+	ctor, err := r.packConstructor(ctorArgs)
+	if err != nil {
+		return nil, fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
+	}
+	conn, failure := identity.Upsert(r.Name(), ctor)
+	if failure != nil {
+		return nil, link.RemoteCallError(r.Name(), "<upsert>", failure.RPCError)
+	}
+	return newAgentClient(r, conn), nil
+}
+
+func (r AgentType) hostCreate(ctorArgs map[string]any, opts ...CreateOpt) (*AgentClient, error) {
+	if r.Mode() == golem.Ephemeral {
+		return nil, fmt.Errorf("golem: %s is ephemeral and is not created; address it with Upsert", r.Name())
 	}
 	ctor, err := r.packConstructor(ctorArgs)
 	if err != nil {
 		return nil, fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
 	}
-	agentConfig, cfgErr := reflectedAgentConfig(r, o)
-	if cfgErr != nil {
-		return nil, cfgErr
+	options, err := r.createOptions(opts)
+	if err != nil {
+		return nil, err
 	}
-	// The fallible form is the reflective one: a caller that built its
-	// constructor from a snapshot should get an error, not a trap, when the
-	// deployment has moved on.
-	connected, failure := identity.Construct(r.Name(), ctor, o.phantomID, agentConfig)
+	conn, failure := identity.Create(r.Name(), ctor, options)
 	if failure != nil {
-		if failure.Stage == identity.ConstructStage {
-			return nil, fmt.Errorf("golem: %s: %w", r.Name(), link.AgentError(failure.AgentError))
-		}
-		return nil, link.RemoteCallError(r.Name(), "<constructor>", failure.RPCError)
+		return nil, link.RemoteCallError(r.Name(), "<create>", failure.RPCError)
 	}
-	return &AgentClient{
-		agentType: r,
-		agentID:   connected.AgentID,
-		rpc:       witRPC{rpc: connected.RPC, target: r.Name()},
-	}, nil
+	return newAgentClient(r, conn), nil
 }
 
-func (r AgentType) hostNewPhantom(ctorArgs map[string]any, opts ...ClientOpt) (*AgentClient, error) {
-	return r.Get(ctorArgs, append(opts, WithPhantomID(engine.UUIDFromWit(apiHost.GenerateIdempotencyKey())))...)
-}
-
-func (r AgentType) hostBind(agentID string, opts ...ClientOpt) (*AgentClient, error) {
+func (r AgentType) hostGetByID(id golem.AgentID) (*AgentClient, error) {
 	if r.Mode() == golem.Ephemeral {
-		return nil, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent id cannot be bound", r.Name())
+		return nil, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent's ID cannot be addressed", r.Name())
 	}
-	parsed, err := ParseRawAgentID(agentID)
-	if err != nil {
-		return nil, err
+	conn, failure := identity.GetByID(r.Name(), agentIDToWit(id))
+	if failure != nil {
+		return nil, link.RemoteCallError(id.String(), "<get-by-id>", failure.RPCError)
 	}
-	if parsed.TypeName != r.Name() {
-		return nil, fmt.Errorf("golem: agent id %q names %s, not %s", agentID, parsed.TypeName, r.Name())
-	}
-	o := applyOpts(opts)
-	if o.phantomID.IsSome() {
-		return nil, fmt.Errorf("golem: %s: an agent id already names its phantom; WithPhantomID does not apply to Bind", r.Name())
-	}
-	agentConfig, err := reflectedAgentConfig(r, o)
-	if err != nil {
-		return nil, err
-	}
-	rpc, err := bindRPC(agentID, parsed, agentConfig)
-	if err != nil {
-		return nil, err
-	}
-	return &AgentClient{agentType: r, agentID: agentID, rpc: rpc}, nil
+	return newAgentClient(r, conn), nil
 }
 
-func (r AgentType) hostAgentID(ctorArgs map[string]any, phantom golem.Option[golem.UUID]) (string, error) {
+func (r AgentType) hostLookupID(ctorArgs map[string]any) (golem.Option[golem.AgentID], error) {
 	ctor, err := r.packConstructor(ctorArgs)
 	if err != nil {
-		return "", fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
+		return golem.None[golem.AgentID](), fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
 	}
-	return makeAgentID(r.Name(), ctor, phantom)
-}
-
-// reflectedAgentConfig resolves creation-time configuration overrides against
-// the snapshot's declarations.
-func reflectedAgentConfig(r AgentType, o clientOpts) ([]common.TypedAgentConfigValue, error) {
-	return r.configValues(o.overrides)
-}
-
-func hostParseRawAgentID(agentID string) (RawAgentID, error) {
-	parsed, failure := identity.Parse(agentID)
+	found, failure := identity.Lookup(r.Name(), ctor)
 	if failure != nil {
-		return RawAgentID{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, link.AgentError(failure.AgentError))
+		return golem.None[golem.AgentID](), link.RemoteCallError(r.Name(), "<lookup>", failure.RPCError)
 	}
-	phantom := golem.None[golem.UUID]()
-	if parsed.PhantomID.IsSome() {
-		phantom = golem.Some(engine.UUIDFromWit(parsed.PhantomID.Some()))
+	if found.IsNone() {
+		return golem.None[golem.AgentID](), nil
 	}
-	return RawAgentID{TypeName: parsed.TypeName, Constructor: link.TypedValue(parsed.Constructor).(golem.TypedValue), PhantomID: phantom}, nil
+	return golem.Some(golem.AgentIDFromUUID(engine.UUIDFromWit(found.Some().Uuid))), nil
 }
 
-func hostBindAgentID(agentID string) (*DynamicAgentClient, error) {
-	parsed, err := ParseRawAgentID(agentID)
-	if err != nil {
-		return nil, err
-	}
-	rpc, err := bindRPC(agentID, parsed, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &DynamicAgentClient{agentID: agentID, parsed: parsed, rpc: rpc}, nil
-}
-
-func hostMakeAgentID(typeName string, constructor golem.TypedValue, phantom golem.Option[golem.UUID]) (string, error) {
-	return makeAgentID(typeName, link.TypedValueWit(constructor).Value, phantom)
-}
-
-func makeAgentID(typeName string, ctor types.SchemaValueTree, phantom golem.Option[golem.UUID]) (string, error) {
-	p := witTypes.None[types.Uuid]()
-	if u, has := phantom.Get(); has {
-		p = witTypes.Some(engine.UUIDToWit(u))
-	}
-	resolved, failure := identity.Render(typeName, ctor, p)
+func hostGetDynamicByID(id golem.AgentID) (*DynamicAgentClient, error) {
+	conn, failure := identity.GetAnyByID(agentIDToWit(id))
 	if failure != nil {
-		return "", fmt.Errorf("golem: %s: %w", typeName, link.AgentError(failure.AgentError))
+		return nil, link.RemoteCallError(id.String(), "<get-by-id>", failure.RPCError)
 	}
-	return resolved, nil
-}
-
-func bindRPC(agentID string, parsed RawAgentID, agentConfig []common.TypedAgentConfigValue) (witRPC, error) {
-	phantom := witTypes.None[types.Uuid]()
-	if id, present := parsed.PhantomID.Get(); present {
-		phantom = witTypes.Some(engine.UUIDToWit(id))
-	}
-	connected, failure := identity.Bind(agentID, identity.Parsed{
-		TypeName:    parsed.TypeName,
-		Constructor: link.TypedValueWit(parsed.Constructor),
-		PhantomID:   phantom,
-	}, agentConfig)
-	if failure != nil {
-		return witRPC{}, link.RemoteCallError(parsed.TypeName, "<bind>", failure.RPCError)
-	}
-	return witRPC{rpc: connected.RPC, target: parsed.TypeName}, nil
+	return &DynamicAgentClient{agentID: id, typeName: conn.TypeName, rpc: witRPC{conn: conn, target: id.String()}}, nil
 }
 
 // noScopeCard is the scope card of the invocations that do not wait for their

@@ -16,8 +16,9 @@ pub mod attachment;
 pub mod multipart;
 mod oplog_macro;
 pub(crate) mod public_types;
+mod replay_divergence;
 
-use crate::base_model::agent::{AgentMode, OwnerKind};
+use crate::base_model::agent::{AgentMode, AgentTypeName, OwnerKind};
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
@@ -33,6 +34,7 @@ use crate::model::card::{CardId, PublicCardHolder, PublicInvocationWalletPin};
 use crate::oplog_entry;
 use crate::schema::TypedSchemaValue;
 pub use public_types::*;
+pub use replay_divergence::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -82,6 +84,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
+            agent_type_name: Option<AgentTypeName>,
             owner_kind: OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
@@ -93,8 +96,8 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>,
-            instance_id: Uuid
+            instance_id: Uuid,
+            never_live: bool
         }
     },
     /// Marks the start of a durable host call (or scope such as a batched-write).
@@ -264,6 +267,12 @@ oplog_entry! {
             /// Optional semantic retry state. When present, this allows exact reconstruction
             /// of semantic retry policies without count-based replay.
             retry_policy_state: Option<RetryPolicyState>,
+            /// The wall-clock time the failed host call retries at, for an in-function retry.
+            /// Repair of the call's incomplete `Start` waits until this time before it runs again.
+            retry_at: Option<Timestamp>,
+            /// The `Start` of the host call that waits until `retry_at`. Its terminal ends the
+            /// deadline, which then applies to no other call of the same retry point.
+            retrying_start_index: Option<OplogIndex>,
         }
         public {
             kind: OplogErrorKind,
@@ -271,6 +280,8 @@ oplog_entry! {
             error: String,
             retry_from: OplogIndex,
             retry_policy_state: Option<PublicRetryPolicyState>,
+            retry_at: Option<Timestamp>,
+            retrying_start_index: Option<OplogIndex>,
         }
     },
     /// A previously failed startup or replay completed successfully.
@@ -385,12 +396,19 @@ oplog_entry! {
             snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
             snapshot_fault: Option<SnapshotFault>,
+            /// Why the update failed.
+            failure_class: UpdateFailureClass,
+            /// The first divergence from the recorded history, when the replay of the target
+            /// diverged at a recorded entry.
+            divergence: Option<Box<ReplayDivergence>>,
         }
         public {
             target_revision: ComponentRevision,
             details: Option<String>,
             snapshot_assisted_details: Option<PublicFailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
+            failure_class: UpdateFailureClass,
+            divergence: Option<Box<ReplayDivergence>>,
         }
     },
     /// Increased allocated linear memory and GC heap capacity

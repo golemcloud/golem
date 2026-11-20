@@ -140,15 +140,7 @@ async fn execute_preinitialize_js(
                 );
                 let _indent = LogIndent::new();
 
-                wasm_rquickjs::optimize_component_with_options(
-                    &input,
-                    &output,
-                    "wizer-initialize",
-                    &wasm_rquickjs::OptimizeOptions {
-                        hostcall_fuel: Some(512 * 1024 * 1024),
-                    },
-                )
-                .await
+                golem_common::javascript::preinitialize_js(&input, &output).await
             },
             || {
                 log_skipping_up_to_date(format!(

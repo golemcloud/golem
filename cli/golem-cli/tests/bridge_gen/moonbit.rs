@@ -115,10 +115,17 @@ impl GeneratedPackage {
     }
 
     fn test_native(&self) {
+        self.test_native_paths(&[]);
+    }
+
+    /// Runs the native tests of `paths` in the module, or of the whole module
+    /// when `paths` is empty.
+    fn test_native_paths(&self, paths: &[&str]) {
         let output = std::process::Command::new("moon")
             .arg("test")
             .arg("--target")
             .arg("native")
+            .args(paths)
             .current_dir(self.module_dir())
             .output()
             .expect("failed to run moon; is it installed?");
@@ -397,6 +404,7 @@ fn tool_node(name: &str) -> CommandNode {
         name: name.to_string(),
         aliases: vec![],
         doc: tool_doc(name),
+        http: None,
         globals: Globals::default(),
         subcommands: vec![],
         body: None,
@@ -554,6 +562,7 @@ fn schema_complete_tool() -> Tool {
     Tool {
         version: "1".into(),
         requires_filesystem: false,
+        http_mount: None,
         commands: CommandTree {
             nodes: vec![
                 root,
@@ -955,13 +964,20 @@ fn guest_mode_emits_native_agent_client_and_exact_config_graph() {
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
     assert!(source.contains("pub(all) struct ConfiguredCounterClient"));
-    assert!(source.contains("@rpc.AgentClient::get(\"ConfiguredCounter\", constructor_input)"));
-    assert!(source.contains("@rpc.AgentClient::new_phantom("));
-    assert!(source.contains("@rpc.AgentClient::get_phantom("));
+    assert!(source.contains("@rpc.AgentClient::upsert(\"ConfiguredCounter\", constructor_input)"));
+    assert!(source.contains(
+        "@rpc.AgentClient::create(\"ConfiguredCounter\", constructor_input, keyed~, config=agent_config, env~)"
+    ));
+    assert!(source.contains("@rpc.AgentClient::get_by_id(\"ConfiguredCounter\", agent_id)"));
+    assert!(source.contains(
+        "pub fn ConfiguredCounterClient::get_by_id(agent_id : @schema.AgentId) -> ConfiguredCounterClient raise {"
+    ));
     assert!(source.contains("pub async fn[T] ConfiguredCounterClient::scoped("));
+    assert!(source.contains("let client = ConfiguredCounterClient::upsert("));
     assert!(source.contains("scheduled_at : @systemClock.Instant"));
-    assert!(source.contains("pub fn ConfiguredCounterClient::get_agent_id("));
-    assert!(source.contains("pub fn ConfiguredCounterClient::phantom_id("));
+    assert!(source.contains(
+        "pub async fn ConfiguredCounterClient::agent_id(self : ConfiguredCounterClient) -> @schema.AgentId {"
+    ));
     assert!(source.contains("pub fn ConfiguredCounterClient::drop("));
     assert!(source.contains("self.client.invoke_and_await(\"read\", input, scope_card?).value"));
     assert!(source.contains(
@@ -1076,7 +1092,7 @@ fn guest_mode_attaches_scope_cards_to_awaited_calls_only() {
   scope : @permissions.ScopeCard,
   card : @permissions.PermissionCard,
 ) -> @permissions.PermissionCard {
-  let client = @client.DelegateClient::get()
+  let client = @client.DelegateClient::upsert()
   defer client.drop()
   client.set_default_scope_card(Some(scope))
   client.set_default_scope_card_2(scope_card=scope)
@@ -1132,7 +1148,7 @@ fn guest_mode_maps_polymorphic_permission_cards_to_template_cards() {
   template : @permissions.PolymorphicPermissionCard,
   card : @permissions.PermissionCard,
 ) -> @permissions.PermissionCard? {
-  let client = @client.TemplateHolderClient::get()
+  let client = @client.TemplateHolderClient::upsert()
   defer client.drop()
   let returned = client.exchange(template, card)
   client.templates([returned])
@@ -1148,7 +1164,7 @@ fn guest_mode_maps_polymorphic_permission_cards_to_template_cards() {
   template : @permissions.PolymorphicPermissionCard,
   card : @permissions.PermissionCard,
 ) -> Unit {
-  ignore(@client.TemplateHolderClient::get().exchange(card, template))
+  ignore(@client.TemplateHolderClient::upsert().exchange(card, template))
 }
 "#,
     )
@@ -1378,7 +1394,7 @@ fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
     assert_rejected(
         "  \"golemcloud/golem_sdk/permissions\",\n  \"card-holder-guest-client/client\" @client,",
         r#"pub async fn pass(card : @permissions.ScopeCard) -> Unit {
-  @client.CardHolderClient::get().keep(card)
+  @client.CardHolderClient::upsert().keep(card)
 }
 "#,
         "Expr Type Mismatch",
@@ -1386,7 +1402,7 @@ fn guest_mode_consumers_cannot_forge_or_serialize_permission_cards() {
     assert_rejected(
         "  \"golemcloud/golem_sdk/permissions\",\n  \"card-holder-guest-client/client\" @client,",
         r#"pub fn attach(card : @permissions.PermissionCard) -> Unit {
-  @client.CardHolderClient::get().set_default_scope_card(Some(card))
+  @client.CardHolderClient::upsert().set_default_scope_card(Some(card))
 }
 "#,
         "Expr Type Mismatch",
@@ -1412,7 +1428,8 @@ fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
                 None,
             ),
             method("schedule-cancelable-drop", vec![], None),
-            method("phantom-id", vec![], Some(SchemaType::string())),
+            method("agent-id", vec![], Some(SchemaType::string())),
+            method("get-by-id", vec![], None),
         ],
         vec![],
         AgentMode::Durable,
@@ -1421,7 +1438,8 @@ fn guest_mode_handles_helper_wrapper_and_local_name_collisions() {
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
     assert!(source.contains("pub async fn CollisionAgentClient::drop_2("));
-    assert!(source.contains("pub async fn CollisionAgentClient::phantom_id_2("));
+    assert!(source.contains("pub async fn CollisionAgentClient::agent_id_2("));
+    assert!(source.contains("pub async fn CollisionAgentClient::get_by_id_2("));
     assert!(source.contains("pub fn CollisionAgentClient::schedule_cancelable_drop_2("));
     assert!(source.contains("client_2 : String"));
     assert!(source.contains("constructor_input_2 : String"));
@@ -1519,7 +1537,7 @@ fn guest_mode_accepts_numeric_agent_type_names() {
 }
 
 #[test]
-fn ephemeral_guest_client_omits_get_and_scoped() {
+fn ephemeral_guest_client_offers_only_upsert() {
     let mut agent_type = agent(
         "EphemeralAgent",
         "moonbit",
@@ -1539,14 +1557,16 @@ fn ephemeral_guest_client_omits_get_and_scoped() {
     let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
 
-    assert!(!source.contains("pub fn EphemeralAgentClient::get("));
-    assert!(!source.contains("pub fn[T] EphemeralAgentClient::scoped("));
-    assert!(source.contains("pub fn EphemeralAgentClient::new_phantom("));
-    assert!(!source.contains("pub fn EphemeralAgentClient::get_phantom("));
-    assert!(!source.contains("pub fn EphemeralAgentClient::get_agent_id("));
-    assert!(!source.contains("pub fn EphemeralAgentClient::phantom_id("));
-    assert!(source.contains("@rpc.AgentClient::ephemeral("));
-    assert!(source.contains("@rpc.AgentClient::ephemeral_with_config("));
+    assert!(
+        source.contains("pub fn EphemeralAgentClient::upsert() -> EphemeralAgentClient raise {")
+    );
+    assert!(source.contains("@rpc.AgentClient::upsert(\"EphemeralAgent\", constructor_input)"));
+    assert!(!source.contains("EphemeralAgentClient::create("));
+    assert!(!source.contains("EphemeralAgentClient::get_by_id("));
+    assert!(!source.contains("EphemeralAgentClient::agent_id("));
+    assert!(!source.contains("pub async fn[T] EphemeralAgentClient::scoped("));
+    assert!(!source.contains("@rpc.AgentClient::create("));
+    assert!(!source.contains("@rpc.AgentClient::get_by_id("));
     assert!(source.contains("-> @rpc.InvocationResult[Unit]"));
     assert!(source.contains("-> @rpc.InvocationResult[String]"));
     assert!(source.contains("-> @rpc.InvocationMetadata"));
@@ -1580,8 +1600,9 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
         "moonbit",
         vec![],
         vec![
-            method("get", vec![], None),
-            method("get_with_config", vec![], None),
+            method("create", vec![], None),
+            method("get-by-id", vec![], None),
+            method("agent-id", vec![], None),
             method("scoped", vec![], None),
         ],
         vec![],
@@ -1596,8 +1617,9 @@ fn ephemeral_guest_methods_keep_names_of_absent_lifecycle_helpers() {
     let guest = generate_without_check(agent_type, MoonBitBridgeMode::GuestWasmRpc);
     let source = std::fs::read_to_string(guest.path().join("client/client.mbt")).unwrap();
     let expected_methods = [
-        "pub async fn EphemeralCollisionAgentClient::get(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
-        "pub async fn EphemeralCollisionAgentClient::get_with_config(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::create(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::get_by_id(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
+        "pub async fn EphemeralCollisionAgentClient::agent_id(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
         "pub async fn EphemeralCollisionAgentClient::scoped(self : EphemeralCollisionAgentClient, scope_card? : @permissions.ScopeCard)",
     ];
     let missing = expected_methods
@@ -1751,8 +1773,7 @@ fn external_uuid_agent_compiles_and_uses_the_runtime_uuid_type() {
     assert!(client.contains("primary : @runtime.Uuid"));
     assert!(client.contains("secondary : @runtime.Uuid?"));
     assert!(client.contains("all : Array[@runtime.Uuid]"));
-    assert!(client.contains("phantom : @runtime.Uuid"));
-    assert!(client.contains("@runtime.Uuid::random()"));
+    assert!(client.contains("get_by_id(agent_id : @runtime.AgentId)"));
     pkg.test_native();
 }
 
@@ -1763,7 +1784,7 @@ fn guest_uuid_agent_compiles_and_uses_the_sdk_uuid_type() {
     assert!(client.contains("owner : @schema.Uuid"));
     assert!(client.contains("id : @schema.Uuid"));
     assert!(client.contains("primary : @schema.Uuid"));
-    assert!(client.contains("phantom_id : @schema.Uuid"));
+    assert!(client.contains("get_by_id(agent_id : @schema.AgentId)"));
     assert!(client.contains("-> @schema.Uuid? {"));
     assert!(client.contains(".to_wit())"));
     assert!(client.contains("@schema.Uuid::from_wit(match "));
@@ -2376,14 +2397,28 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
         "pub fn Agent1::configure(server : @runtime.GolemServer, app_name : String, env_name : String, reconnect? : @runtime.ReconnectPolicy = @runtime.default_reconnect_policy) -> Unit {"
     ));
     assert!(client.contains("@runtime.configure(server, app_name, env_name, reconnect~)"));
-    assert!(client.contains("pub fn Agent1::agent_id(self : Agent1) -> @runtime.AgentId {"));
+    assert!(
+        client.contains("pub async fn Agent1::agent_id(self : Agent1) -> @runtime.AgentId raise {")
+    );
+    assert!(client.contains("@runtime.agent_id(self.resolved)"));
 
     // Durable constructors.
-    assert!(client.contains("pub async fn Agent1::get("));
-    assert!(client.contains("pub async fn Agent1::get_phantom("));
-    assert!(client.contains("pub async fn Agent1::new_phantom("));
-    assert!(client.contains("@runtime.create_agent(configuration, \"agent1\", parameters,"));
-    assert!(client.contains("@runtime.Uuid::random()"));
+    assert!(client.contains("pub fn Agent1::upsert("));
+    assert!(client.contains(
+        "@runtime.ResolvedAgent::new(configuration, \"agent1\", parameters=Some(parameters), target=None)"
+    ));
+    assert!(client.contains("pub async fn Agent1::create("));
+    assert!(client.contains("keyed? : Bool = false"));
+    assert!(client.contains("env? : Array[(String, String)] = []"));
+    assert!(client.contains(
+        "@runtime.create_agent(configuration, \"agent1\", parameters, keyed~, config=agent_config, env~)"
+    ));
+    assert!(
+        client.contains(
+            "pub async fn Agent1::get_by_id(agent_id : @runtime.AgentId) -> Agent1 raise {"
+        )
+    );
+    assert!(client.contains("@runtime.get_agent(configuration, \"agent1\", agent_id)"));
 
     // Per-method await / trigger / schedule wrappers, with the await result
     // decoded through the named-type codec.
@@ -2412,7 +2447,7 @@ fn generates_client_surface(#[tagged_as("multi_agent_1")] pkg: &GeneratedPackage
 }
 
 #[test]
-fn ephemeral_agent_omits_get_constructor() {
+fn ephemeral_agent_offers_only_upsert() {
     let pkg = GeneratedPackage::new(agent(
         "EphemeralAgent",
         "moonbit",
@@ -2424,13 +2459,13 @@ fn ephemeral_agent_omits_get_constructor() {
     let client = pkg.client_source();
 
     assert!(
-        !client.contains("pub async fn EphemeralAgent::get("),
-        "ephemeral agent must not expose a parameter-addressable get"
+        client.contains("pub fn EphemeralAgent::upsert(name : String) -> EphemeralAgent raise {")
     );
-    assert!(!client.contains("pub async fn EphemeralAgent::get_phantom("));
-    assert!(client.contains("pub async fn EphemeralAgent::new_phantom("));
-    assert!(!client.contains("pub fn EphemeralAgent::agent_id("));
+    assert!(!client.contains("EphemeralAgent::create("));
+    assert!(!client.contains("EphemeralAgent::get_by_id("));
+    assert!(!client.contains("EphemeralAgent::agent_id("));
     assert!(!client.contains("@runtime.create_agent("));
+    assert!(!client.contains("@runtime.get_agent("));
     assert!(client.contains("-> @runtime.InvocationResponse[Unit] raise"));
     assert!(client.contains("-> @runtime.InvocationReceipt raise"));
     assert!(client.contains("idempotency_key: result.idempotency_key"));
@@ -2620,32 +2655,31 @@ fn config_constructors_are_generated() {
     let pkg = GeneratedPackage::new(agent_type);
     let client = pkg.client_source();
 
-    // All three with-config variants (durable -> get_with_config too).
-    assert!(client.contains("pub async fn ConfigAgent::get_with_config("));
-    assert!(client.contains("pub async fn ConfigAgent::get_phantom_with_config("));
-    assert!(client.contains("pub async fn ConfigAgent::new_phantom_with_config("));
-    // One Option parameter per *local* config, named config_<path_snake>.
-    assert!(client.contains("config_api_key : String?"));
-    assert!(client.contains("config_max_retries : UInt?"));
-    // The secret-sourced config is not exposed.
-    assert!(!client.contains("config_secret"));
-    // phantom precedes the config overrides in get_phantom_with_config.
+    // `create` takes the constructor parameters, `keyed`, one optional label
+    // per *local* config named config_<path_snake>, and `env`. The
+    // secret-sourced config is not exposed.
     assert!(client.contains(
-        "pub async fn ConfigAgent::get_phantom_with_config(name : String, phantom : @runtime.Uuid, config_api_key : String?, config_max_retries : UInt?)"
+        "pub async fn ConfigAgent::create(name : String, keyed? : Bool = false, config_api_key? : String, config_max_retries? : UInt, env? : Array[(String, String)] = []) -> ConfigAgent raise {"
     ));
+    assert!(!client.contains("config_secret"));
+    // `upsert` takes no config overrides.
+    assert!(client.contains("pub fn ConfigAgent::upsert(name : String) -> ConfigAgent raise {"));
     // Config entries are built from Some values, preserving the original path.
     assert!(client.contains("let agent_config : Array[@runtime.AgentConfigEntry] = []"));
     assert!(client.contains("agent_config.push(@runtime.AgentConfigEntry::{ path: [\"api-key\"]"));
     assert!(client.contains(".encode_application(cfg0)"));
     assert!(client.contains("path: [\"max\", \"retries\"]"));
     assert!(client.contains("None => ()"));
-    // create_agent receives the built config array.
-    assert!(client.contains("parameters, None, agent_config)"));
-    assert!(client.contains("parameters, Some(phantom), agent_config)"));
-    // new_phantom_with_config delegates to get_phantom_with_config with a fresh id.
+    // create_agent receives the built config array, `keyed` and `env`.
     assert!(client.contains(
-        "ConfigAgent::get_phantom_with_config(name, @runtime.Uuid::random(), config_api_key, config_max_retries)"
+        "@runtime.create_agent(configuration, \"ConfigAgent\", parameters, keyed~, config=agent_config, env~)"
     ));
+    // Only a keyed create keeps the parameters for streaming calls.
+    assert!(
+        client.contains(
+            "parameters=if keyed { Some(parameters) } else { None }, target=Some(response)"
+        )
+    );
 }
 
 #[test]
@@ -2670,7 +2704,7 @@ fn reflection_corpus_drives_generated_runtime_wire_regressions() {
     let binary_expected = case("canonical/binary-mime")["expected"].to_string();
     let config_expected = case("config/canonical-entry")["expected"].to_string();
     let request_expected = format!(
-        "{{\"appName\":\"app\",\"envName\":\"env\",\"agentTypeName\":\"ConfigAgent\",\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected},{{\"path\":[\"optional\"],\"value\":\"west\"}}]}}"
+        "{{\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected},{{\"path\":[\"optional\"],\"value\":\"west\"}}],\"env\":{{\"REGION\":\"west\"}},\"keyed\":true}}"
     );
 
     let mut agent_type = agent(
@@ -2744,15 +2778,13 @@ fn reflection_corpus_drives_generated_runtime_wire_regressions() {
     path: ["optional"],
     value: option_codec.encode_application(option_value),
   }
-  let request = encode_create_agent_request(
-    "app",
-    "env",
-    "ConfigAgent",
+  let request = render_create_agent_request(
     TupleValue([]),
-    None,
     [entry, option_entry],
+    [("REGION", "west")],
+    true,
   )
-  assert_eq(request.stringify(), __REQUEST_EXPECTED__)
+  assert_eq(request, __REQUEST_EXPECTED__)
 }
 "#
     .replace(
@@ -2771,10 +2803,10 @@ fn reflection_corpus_drives_generated_runtime_wire_regressions() {
     pkg.test_native();
 }
 
-/// An ephemeral agent must not get a `get_with_config` (no parameter-addressable
-/// `get`), but still gets the phantom config variants.
+/// An ephemeral agent gets only `upsert`, so its local config declarations
+/// produce no override parameters.
 #[test]
-fn ephemeral_config_constructors_omit_get_with_config() {
+fn ephemeral_config_agent_offers_only_upsert() {
     let mut agent_type = agent(
         "EphemeralConfigAgent",
         "moonbit",
@@ -2792,9 +2824,11 @@ fn ephemeral_config_constructors_omit_get_with_config() {
     let pkg = GeneratedPackage::new(agent_type);
     let client = pkg.client_source();
 
-    assert!(!client.contains("pub async fn EphemeralConfigAgent::get_with_config("));
-    assert!(!client.contains("pub async fn EphemeralConfigAgent::get_phantom_with_config("));
-    assert!(client.contains("pub async fn EphemeralConfigAgent::new_phantom_with_config("));
+    assert!(
+        client.contains("pub fn EphemeralConfigAgent::upsert() -> EphemeralConfigAgent raise {")
+    );
+    assert!(!client.contains("EphemeralConfigAgent::create("));
+    assert!(!client.contains("config_region"));
     assert!(!client.contains("@runtime.create_agent("));
 }
 
@@ -2821,7 +2855,7 @@ fn config_param_names_are_deconflicted() {
     let pkg = GeneratedPackage::new(agent_type);
     let client = pkg.client_source();
     // The override param is bumped away from the constructor param.
-    assert!(client.contains("config_api_key_2 : String?"));
+    assert!(client.contains("config_api_key_2? : String"));
 }
 
 // --- Multimodal input / output ---------------------------------------------
@@ -2850,7 +2884,7 @@ fn constructor_multimodal_is_precomputed() {
 
     assert!(client.contains("pub(all) enum Multimodal0 {"));
     assert!(client.contains(
-        "pub async fn VisionSession::get(input : Array[Multimodal0]) -> VisionSession raise {"
+        "pub fn VisionSession::upsert(input : Array[Multimodal0]) -> VisionSession raise {"
     ));
     assert!(client.contains("let f0 = encode_Multimodal0(input)"));
 }
@@ -3422,7 +3456,10 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
                 ),
         )
         .unwrap();
-        let result = std::panic::catch_unwind(|| pkg.test_native());
+        // The runtime's own tests run with the other generated modules; each
+        // mode runs only its recovery test against its peer.
+        let result =
+            std::panic::catch_unwind(|| pkg.test_native_paths(&["runtime/recovery_wbtest.mbt"]));
         if result.is_err() {
             let _ = server.kill();
         }

@@ -18,7 +18,7 @@ package golem.runtime.autowire
 
 import golem.config.{AgentConfigDeclaration, AgentConfigSource}
 import golem.host.SchemaWireInterop
-import golem.host.js.{JsComponentId, JsSnapshotting, JsUuid}
+import golem.host.js.JsSnapshotting
 import golem.host.js.schema._
 import golem.reflection.Reflection
 import golem.runtime.{
@@ -45,8 +45,8 @@ import scala.scalajs.js
  * `type-node-index` into that single graph (§4.22). These tests pin the
  * load-bearing invariants: deterministic graph merge by stable type-id,
  * conflict rejection, `output-schema = unit|single`, `field-source`
- * user-supplied vs auto-injected(principal), `agent-config-declaration`
- * indices, and the exact v2 JS shapes from `golem_agent_2_0_0_common.d.ts`.
+ * user-supplied, `agent-config-declaration` indices, and the exact v2 JS shapes
+ * from `golem_agent_2_0_0_common.d.ts`.
  */
 object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
 
@@ -233,8 +233,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
         val req = baseRequest(constructorParams =
           List(
             AgentTypeEncoderV2.Param("p", AgentTypeEncoderV2.FieldSource.UserSupplied, graphOf[Point]),
-            AgentTypeEncoderV2
-              .Param("g", AgentTypeEncoderV2.FieldSource.AutoInjectedPrincipal, graphOf[Greeting])
+            AgentTypeEncoderV2.Param("g", AgentTypeEncoderV2.FieldSource.UserSupplied, graphOf[Greeting])
           )
         )
         val at     = AgentTypeEncoderV2.encode(req)
@@ -246,8 +245,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           fields(0).name == "p",
           tag(fields(0).source) == "user-supplied",
           fields(1).name == "g",
-          tag(fields(1).source) == "auto-injected",
-          rawVal(fields(1).source).asInstanceOf[String] == "principal"
+          tag(fields(1).source) == "user-supplied"
         ) &&
         assertTrue(
           // each field's `schema` index resolves to its own type in the merged graph
@@ -343,8 +341,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           js.Dynamic.literal(
             "getAgentType" -> js.Any.fromFunction1((name: String) =>
               JsRegisteredAgentType(
-                if (name == "compiled") compiled else dynamic,
-                JsComponentId(JsUuid.fromUuid(new java.util.UUID(0L, 1L)))
+                if (name == "compiled") compiled else dynamic
               )
             )
           )

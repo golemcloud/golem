@@ -37,3 +37,26 @@ Build a definition with `Tool.toolDefinition(name).body(...)`. A provider finish
 Use `Middleware.typed({ name, parameters: Middleware.NoParameters, presented, handler })` when the presented tool shape is known. Use the universal middleware API for schema-agnostic, shape-preserving policy. Universal middleware can be installed environment-wide or on selected tool bindings; typed (monomorphic) middleware can only be installed on tool bindings. Per-tool merge modes never remove environment-wide middleware. Forward input, output, permission cards, and streams at most once; capability handles are affine. Golem checks each underlying call against the calling agent's tool permissions, using the command and arguments the next layer receives, so an adapter that changes them needs the agent to hold grants for both forms.
 
 The default world supports ordinary, standalone-middleware, and combined components. Standalone middleware can be attached and deployed independently; unused agent and tool discovery returns empty lists.
+
+## Declare tool HTTP routes
+
+```typescript
+import { Http, Tool } from '@golemcloud/effect-golem';
+import { Schema } from 'effect';
+
+const report = Tool.toolDefinition('report', { http: Http.mount('/reports') })
+  .command('status', (c) =>
+    c.http(Http.get('/status/{id}')).body((b) => b.positional('id', Schema.String)),
+  )
+  .command('admin', (c) =>
+    c.http(Http.prefix('/admin')).command('purge', (p) =>
+      p.http(Http.delete('/purge/{id}')).body((b) => b.positional('id', Schema.String)),
+    ),
+  );
+```
+
+A mount enables declarations, not automatic exposure. Each nonroot ancestor needs an endpoint or prefix. Prefixes emit no route, while parent endpoints also supply their suffix to children. Names and aliases do not supply path segments. This example declares `GET /reports/status/{id}` and `DELETE /reports/admin/purge/{id}`.
+
+Endpoint options include `routeId`, `headers`, `responseHeaders`, `mode`, and `durableStreams`. Bind declared inputs with query templates such as `?format={format}` or `headers: { 'X-Token': 'token' }`. GET, HEAD and DELETE implicitly bind remaining eligible inputs from query parameters. Path captures require scalar values; query and header sources reject body-only complex values. Mount/prefix captures must name globals in scope. Plain stdin routes cannot leave required inputs in the JSON body. Platform-managed response headers and agent-only auth, CORS and system path variables are rejected for tools.
+
+An omitted mode resolves to `durableStreams` for a non-idempotent command with any declared standard stream, otherwise `plain`. Only the selected command's own annotation controls idempotence. Explicit mode wins. Default route IDs are dot-separated canonical command paths. HTTP declarations do not change invocation compatibility and do not implement serving.

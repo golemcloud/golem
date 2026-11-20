@@ -17,7 +17,6 @@ use crate::durable_host::durable_stream::tests::TestOplog;
 use crate::services::oplog::{OplogReadError, UnreadableOplog};
 use golem_common::base_model::durable_stream::StreamError;
 use golem_common::model::AgentId;
-use golem_common::model::component::ComponentId;
 use golem_common::model::oplog::OplogIndex;
 use test_r::test;
 
@@ -41,10 +40,7 @@ impl crate::durable_host::durable_session::DurableStreamConsumerJournal for Test
 
 fn unreadable() -> UnreadableOplog {
     UnreadableOplog {
-        agent_id: AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "unreadable".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
         error: OplogReadError::Gap {
             start: OplogIndex::INITIAL,
             end: OplogIndex::from_u64(2),
@@ -74,7 +70,7 @@ async fn routed_stream_session(
     let producer = DurableStreamStore::load(
         oplog.clone(),
         identity.environment_id,
-        identity.agent_id.clone(),
+        identity.agent_id,
         identity.fingerprint,
         None,
     )
@@ -161,7 +157,9 @@ async fn routed_stream_session(
             None,
             identity.invocation.idempotency_key,
             OplogPayload::Inline(Box::new(
-                golem_common::model::AgentInvocationPayload::SaveSnapshot,
+                golem_common::model::AgentInvocationPayload::SaveSnapshot {
+                    caller: golem_common::model::caller::Caller::anonymous(),
+                },
             )),
             TraceId::generate(),
             vec![],

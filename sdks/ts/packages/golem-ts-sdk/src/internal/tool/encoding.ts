@@ -76,6 +76,7 @@ export function encodeTool(source: ExtendedToolType): Tool {
     return {
       version: tool.version,
       requiresFilesystem: tool.requiresFilesystem,
+      httpMount: tool.httpMount,
       commands: { nodes: encodedNodes },
       schema: context.encoder.finish(),
     };
@@ -176,6 +177,7 @@ function encodeCommand(
     name: node.name,
     aliases: [...node.aliases],
     doc: cloneDoc(node.doc),
+    http: node.http,
     globals: encodeGlobals(node.globals, context),
     subcommands: node.subcommands.map((child) => {
       const index = indexByNode.get(child);
