@@ -8,7 +8,6 @@
 
 use super::*;
 use crate::durable_host::durability::{GuestImportIdentity, ImportNumbering};
-use golem_common::model::component::ComponentId;
 use golem_common::model::entity::{AgentEntity, OwnedAgentEntityId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{DurableInvocationId, OplogIndex};
@@ -221,13 +220,7 @@ pub(crate) fn commit_now(owner: &OwnerSuspension) -> bool {
 fn entity(start: u64) -> EntityInvocationId {
     EntityInvocationId::new(
         OwnedAgentEntityId {
-            owner: OwnedAgentId::new(
-                EnvironmentId::new(),
-                &AgentId {
-                    component_id: ComponentId::new(),
-                    agent_id: "owner".to_string(),
-                },
-            ),
+            owner: OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1)),
             entity: AgentEntity::Tool(ToolName::try_from("timer").unwrap()),
         },
         OplogIndex::from_u64(start),

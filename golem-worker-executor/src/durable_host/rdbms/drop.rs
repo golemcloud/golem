@@ -433,7 +433,7 @@ where
                 ctx.state.oplog.clone(),
                 ctx.public_state.worker(),
                 ctx.state.rdbms_service.clone(),
-                ctx.state.owned_agent_id.agent_id.clone(),
+                ctx.state.owned_agent_id.agent_id,
             )
         });
         if let Some(resolution) = replay {
@@ -474,6 +474,7 @@ where
             // to this task and SharedDropError, not the guest's ambient retry point.
             TaskRetryContext {
                 retry_point: begin,
+                retrying_start_index: Some(begin),
                 entity_parent_start_index: ctx.entity_parent_start_index(),
                 invocation_id: ctx.state.get_current_idempotency_key(),
                 environment_state_service: ctx.state.environment_state_service.clone(),
@@ -484,6 +485,7 @@ where
                 agent_config_retry_policies: ctx.state.agent_config_retry_policies(),
                 runtime_retry_policy_mutations: ctx.state.retry_policy_mutations(),
                 max_in_function_retry_delay: ctx.state.config.max_in_function_retry_delay,
+                durable_wait: false,
                 current_retry_policy_state: None,
                 retry_properties: rdbms_retry_properties(ctx, "transaction-status", &tx.pool_key),
                 worker: worker.clone(),

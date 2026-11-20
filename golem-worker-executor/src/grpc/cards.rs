@@ -14,10 +14,9 @@
 
 use super::{
     AuthCtx, CanStartWorker, CardId, DeliverCardTransferRequest, GetAgentWalletRequest,
-    GetAgentWalletResponse, GetAgentWalletSuccess, HasAll, HasComponentService,
-    InvocationFreshnessDisposition, PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, ParsedAgentKey,
+    GetAgentWalletResponse, GetAgentWalletSuccess, HasAll, InvocationFreshnessDisposition,
     StoredCard, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
-    agent_monomorphization_context, card_matches_agent_recipient, extract_owned_agent_id, golem,
+    extract_owned_agent_id, golem,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -92,43 +91,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("invalid card: {error}"))
             })?;
 
+        // A transfer reaches only an existing agent: an ID that names no agent cannot be
+        // created without its constructor.
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        if Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
-            .await?
-            .is_none()
-        {
-            let component = self
-                .component_service()
-                .get_metadata(owned_agent_id.agent_id.component_id, None)
-                .await?;
-            let parsed_agent_id =
-                ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata)
-                    .map_err(|error| {
-                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
-                    })?;
-            let target_context =
-                agent_monomorphization_context(&component, &owned_agent_id, &parsed_agent_id);
-            if !card_matches_agent_recipient(&card, &target_context) {
-                return Err(WorkerExecutorError::invalid_request(
-                    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH,
-                ));
-            }
-        }
-
         let (worker, _response_lease) =
-            if golem_common::model::agent::OwnerKind::is_reserved_instance_name(
-                &owned_agent_id.agent_id.agent_id,
-            ) {
+            if owned_agent_id.agent_id.type_tag() == golem_common::model::RESERVED_TYPE_TAG {
                 Worker::get_exact_existing_suspended_for_response(
                     self,
                     &owned_agent_id,
-                    request.principal(),
+                    request.caller()?,
                     None,
                 )
                 .await?
             } else {
+                let resolved = crate::worker::target::ResolvedTarget {
+                    owned_agent_id: owned_agent_id.clone(),
+                    new_owner: None,
+                    agent_mode: None,
+                };
                 self.get_or_create_pending_with_freshness(
                     &request,
+                    &resolved,
                     InvocationFreshnessDisposition::MayExist,
                     None,
                 )

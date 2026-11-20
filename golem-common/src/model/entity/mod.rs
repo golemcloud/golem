@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::OwnedInvocationId;
-use crate::base_model::agent::Principal;
+use crate::base_model::caller::{Caller, Principal};
 use crate::model::card::{ScopeCard, StoredCard};
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
@@ -850,14 +850,15 @@ pub enum ToolInputDecodeFailure {
 
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
-/// The calling principal is the owner agent and is derived from the execution context.
+/// The calling principal of the invocation scope is the owner agent and is derived from the
+/// execution context. The caller is the one recorded for the invocation.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
     pub call_mode: EntityCallMode,
     pub operation: EntityInvocationDescriptor,
-    pub principal: Principal,
+    pub caller: Caller,
     pub plan: EntityInvocationPlanReference,
     pub authority_wallet: Vec<StoredCard>,
 }
@@ -875,13 +876,27 @@ impl PartialEq for ResidentEntitySpan {
 
 impl Eq for ResidentEntitySpan {}
 
+/// The calling principal as recorded: two scopes are the same exactly when the principals are the
+/// same record, which is stricter than the same identity.
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+struct RecordedPrincipal(Principal);
+
+impl PartialEq for RecordedPrincipal {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.same_record(&other.0)
+    }
+}
+
+impl Eq for RecordedPrincipal {}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityInvocationScope {
     invocation_id: EntityInvocationId,
     parent_start_index: OplogIndex,
     activation: Arc<EntityActivation>,
-    calling_principal: CallingAgentPrincipal,
+    calling_principal: RecordedPrincipal,
     mode: InvocationExecutionMode,
     idempotency_key: InvocationId,
     logical_key_positions: bool,
@@ -936,7 +951,7 @@ impl EntityInvocationScope {
         }
         match &calling_principal {
             Principal::Agent(principal)
-                if principal.agent_id == invocation_id.owner_id().agent_id => {}
+                if principal.address == invocation_id.owner_id().agent_id => {}
             _ => {
                 return Err(
                     "Entity invocation calling principal must be its owner agent".to_string(),
@@ -947,7 +962,7 @@ impl EntityInvocationScope {
             invocation_id,
             parent_start_index,
             activation,
-            calling_principal,
+            calling_principal: RecordedPrincipal(calling_principal),
             mode,
             idempotency_key,
             logical_key_positions,
@@ -1006,7 +1021,7 @@ impl EntityInvocationScope {
     }
 
     pub fn calling_principal(&self) -> &CallingAgentPrincipal {
-        &self.calling_principal
+        &self.calling_principal.0
     }
 
     pub fn mode(&self) -> InvocationExecutionMode {
@@ -1486,7 +1501,7 @@ impl From<EntityInvocationScope> for golem_api_grpc::proto::golem::worker::Entit
             invocation_id: Some(value.invocation_id.into()),
             parent_start_index: value.parent_start_index.as_u64(),
             activation: Some(Arc::unwrap_or_clone(value.activation).into()),
-            calling_principal: Some(value.calling_principal.into()),
+            calling_principal: Some(value.calling_principal.0.into()),
             mode: golem_api_grpc::proto::golem::worker::InvocationExecutionMode::from(value.mode)
                 as i32,
             idempotency_key: Some(value.idempotency_key.into()),

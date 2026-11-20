@@ -170,7 +170,14 @@ pub(super) async fn cleanup(
 ) -> anyhow::Result<()> {
     let mut errors = Vec::new();
     for (worker, id) in workers.into_iter().zip(ids) {
-        let interrupt = tokio::time::timeout(Duration::from_secs(5), executor.interrupt(id)).await;
+        let interrupt = tokio::time::timeout(
+            Duration::from_secs(5),
+            executor.interrupt(&OwnedAgentId::new(
+                executor.context.default_environment_id,
+                id,
+            )),
+        )
+        .await;
         if !matches!(interrupt, Ok(Ok(()))) {
             errors.push(format!("{id} cleanup interrupt: {interrupt:?}"));
         }

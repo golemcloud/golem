@@ -61,6 +61,7 @@ impl ScalaWriter {
             if line.trim().is_empty() {
                 self.line("  *");
             } else {
+                let line = line.replace("/*", "&#47;*").replace("*/", "*&#47;");
                 self.line(format!("  * {line}"));
             }
         }
@@ -79,5 +80,21 @@ impl ScalaWriter {
         let mut result = self.lines.join("\n");
         result.push('\n');
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScalaWriter;
+    use test_r::test;
+
+    #[test]
+    fn documentation_cannot_change_scala_comment_nesting() {
+        let mut writer = ScalaWriter::new();
+        writer.doc("A literal */ and /* in the description.");
+        assert_eq!(
+            writer.finish(),
+            "/**\n  * A literal *&#47; and &#47;* in the description.\n  */\n"
+        );
     }
 }

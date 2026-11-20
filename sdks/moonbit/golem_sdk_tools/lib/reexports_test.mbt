@@ -73,7 +73,7 @@ test "component exports select raw ABI independently for each capability" {
       #|pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int { 0 }
       #|pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int { 0 }
       #|pub fn wasmExportAsyncInvokeToolMiddleware(p0 : Int, p1 : Int, p2 : Int) -> Int { 0 }
-      #|pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int { 0 }
+      #|pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int, p4 : Int, p5 : Int, p6 : Int) -> Int { 0 }
       #|pub fn mbt_ffi_cabi_realloc(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int { 0 }
     ),
   )
@@ -101,7 +101,10 @@ test "component exports select raw ABI independently for each capability" {
       output.contains("@minimalExports.callback(p0, p1, p2)"),
       !middleware,
     )
-    assert_eq(output.contains("@minimalExports.load(p0, p1, p2, p3)"), !agent)
+    assert_eq(
+      output.contains("@minimalExports.load(p0, p1, p2, p3, p4, p5, p6)"),
+      !agent,
+    )
     assert_true(output.contains("@gen.mbt_ffi_cabi_realloc(p0, p1, p2, p3)"))
     // Replacing bodies must not change any exported core signature.
     assert_eq(parse_mbt_source(output).length(), signatures.length())

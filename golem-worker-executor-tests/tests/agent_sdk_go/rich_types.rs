@@ -16,7 +16,7 @@
 //! a list + optional argument in, and a list out.
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -48,7 +48,7 @@ async fn go_rich_types_round_trip(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("RichAgent", "go-rich-1");
+    let agent_id = agent_key!("RichAgent", "go-rich-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

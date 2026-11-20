@@ -18,16 +18,17 @@ package export_golem_api_load_snapshot
 
 import (
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 var Exports struct {
-	Load func(snapshot host.Snapshot) witTypes.Result[witTypes.Unit, string]
+	Load func(snapshot host.Snapshot, constructor types.SchemaValueTree) witTypes.Result[witTypes.Unit, string]
 }
 
-func Load(snapshot host.Snapshot) witTypes.Result[witTypes.Unit, string] {
+func Load(snapshot host.Snapshot, constructor types.SchemaValueTree) witTypes.Result[witTypes.Unit, string] {
 	if Exports.Load == nil {
 		panic("golem: export load-snapshot was not registered — is the SDK imported?")
 	}
-	return Exports.Load(snapshot)
+	return Exports.Load(snapshot, constructor)
 }

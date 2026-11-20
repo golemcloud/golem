@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
@@ -79,15 +80,15 @@ async fn nonmatching_storage(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("Networking", "nonmatching-storage-seed"),
+            agent_key!("Networking", "nonmatching-storage-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while seed.eviction_class().await.is_none() {
             tokio::task::yield_now().await;
@@ -102,25 +103,21 @@ async fn nonmatching_storage(
         AgentMode::Durable
     };
     let name = if durable {
-        agent_id!("Networking", "nonmatching-storage")
+        agent_key!("Networking", "nonmatching-storage")
     } else {
-        agent_id!("EphemeralNetworking", "nonmatching-storage")
+        agent_key!("EphemeralNetworking", "nonmatching-storage")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "tcp_collect_p3",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "tcp_collect_p3",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -128,7 +125,16 @@ async fn nonmatching_storage(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "tcp_collect_p3",
+        ),
     )
     .await?;
     let (flushed, mut flushes) = tokio::sync::mpsc::unbounded_channel();
@@ -166,7 +172,7 @@ async fn nonmatching_storage(
     let chunk = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             executor.commit_oplog(&id).await?;
-            let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             if let Some(entry) = entries.iter().find(|entry| {
                 matches!(&entry.entry, PublicOplogEntry::Start(start)
                     if start.function_name == "sockets::types::tcp-socket::receive-chunk")
@@ -296,7 +302,7 @@ async fn nonmatching_storage(
     );
     assert!(!invocation.is_finished());
     executor.commit_oplog(&id).await?;
-    let pending = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+    let pending = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
     assert_eq!(
         count_agent_invocation_pair_since(&pending, OplogIndex::INITIAL),
         (2, 1)
@@ -306,7 +312,7 @@ async fn nonmatching_storage(
     ));
     assert!(pending.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if cancelled.start_index == chunk)));
 
-    executor.interrupt(&id).await?;
+    executor.interrupt(&owned).await?;
     assert!(matches!(
         tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
         InterruptKind::Interrupt(_)

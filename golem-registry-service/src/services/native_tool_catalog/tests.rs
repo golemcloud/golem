@@ -28,6 +28,7 @@ fn plan_exposes_ambient_identity_metadata_and_defaults() {
         definition: Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree { nodes: vec![] },
             schema: SchemaGraph::empty(),
         },

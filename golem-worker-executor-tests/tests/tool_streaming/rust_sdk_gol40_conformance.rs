@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::{test, timeout};
 
 #[derive(Debug, FromSchema)]
@@ -68,28 +69,17 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         )),
     );
 
-    let agent_id = agent_id!("ToolStreamingCaller", "gol40-rust-sdk-conformance");
+    let agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-conformance");
     let worker_id = executor
         .start_agent(&caller_component.id, agent_id.clone())
         .await?;
-    let principal = Principal::Oidc(OidcPrincipal {
-        sub: "gol40-rust".to_string(),
-        issuer: "https://gol40.test".to_string(),
-        email: None,
-        name: None,
-        email_verified: None,
-        given_name: None,
-        family_name: None,
-        picture: None,
-        preferred_username: None,
-        claims: "{}".to_string(),
-    });
+    let caller = callers::user_with_claims("https://gol40.test", "gol40-rust", "{}");
 
     let proxy: Vec<String> = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            principal.clone(),
+            caller.clone(),
             "rust_proxy_generated_parity",
             data_value!(),
         )
@@ -103,7 +93,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
             "MATRIX.SAMPLE",
             "108",
             "south|east|north",
-            "oidc:gol40-rust",
+            callers::user_text("https://gol40.test", "gol40-rust").as_str(),
             "request.source",
             "unsupported source",
             "false",
@@ -112,10 +102,10 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
 
     let capable_path = "/gol40-rust-reflection-capability";
     let reflection: Vec<String> = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            principal.clone(),
+            caller.clone(),
             "rust_reflected_generated_parity",
             data_value!(capable_path),
         )
@@ -125,7 +115,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     assert_eq!(reflection[1], reflection[0]);
     assert!(reflection[2].contains("Declared"), "{reflection:?}");
     assert!(reflection[3].contains("declared"), "{reflection:?}");
-    assert_eq!(&reflection[4..], ["oidc", "oidc", "0", "0"]);
+    assert_eq!(&reflection[4..], ["user", "user", "0", "0"]);
     assert_eq!(
         executor.get_file_contents(&worker_id, capable_path).await?,
         Vec::<u8>::new(),
@@ -133,10 +123,10 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     );
 
     let terminals: RustSdkTerminalObservation = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            principal,
+            caller,
             "gol40_rust_sdk_terminal_observation",
             data_value!(),
         )
@@ -162,13 +152,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
     assert!(terminals.cancelled_reader_result);
     assert_eq!(terminals.dropped_observer_bytes, b"marker:detached");
 
-    if let Some(active) = executor
-        .active_entity_metadata(&OwnedAgentId::new(
-            context.default_environment_id,
-            &worker_id,
-        ))
-        .await
-    {
+    if let Some(active) = executor.active_entity_metadata(&worker_id.clone()).await {
         assert!(active.tool_operations.operations.is_empty());
         assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
     }
@@ -185,7 +169,7 @@ async fn gol40_rust_sdk_proxy_reflection_and_terminal_rows_use_real_components(
         caller_checkpoint_server,
         mut caller_checkpoint_arrivals,
     ) = start_crash_checkpoint_server().await;
-    let exception_agent_id = agent_id!("ToolStreamingCaller", "gol40-rust-sdk-exception");
+    let exception_agent_id = agent_key!("ToolStreamingCaller", "gol40-rust-sdk-exception");
     let exception_worker_id = executor
         .start_agent_with(
             &caller_component.id,

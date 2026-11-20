@@ -18,7 +18,7 @@ fn WorkflowAgent::new(workflow_id : String) -> WorkflowAgent {
 #derive.endpoint(post="/start")
 pub async fn WorkflowAgent::start(self : Self, approver : String) -> String {
   let promise_id = @api.create_promise()
-  let _ = HumanAgentClient::scoped(approver, async fn(client) {
+  let _ = HumanAgentClient::scoped_upsert(approver, async fn(client) {
     client.request_approval(
       self.workflow_id,
       ApprovalPromiseId::from_host(promise_id),

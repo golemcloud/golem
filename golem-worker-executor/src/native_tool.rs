@@ -11,7 +11,7 @@ use crate::durable_host::tool::input::NativeAttachmentInput;
 use crate::worker::tasks::NativeReconstructionSpawner;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::agent::Principal;
+use golem_common::model::caller::Caller;
 use golem_common::model::oplog::payload::types::{
     SerializableToolError, SerializableToolResultValue, SerializableToolRpcError,
     SerializableToolStructuredResult,
@@ -71,7 +71,7 @@ pub struct NativeToolKey {
 pub struct NativeToolInvocation {
     pub command_path: Vec<String>,
     pub input: TypedSchemaValue,
-    pub principal: Principal,
+    pub caller: Caller,
     pub cancellation: Option<tokio_util::sync::CancellationToken>,
     pub stdin: Option<NativeToolStdin>,
     pub stdout: Option<NativeToolOutput>,
@@ -270,7 +270,7 @@ where
                 golem_native_tool::NativeToolInvocation {
                     command_path: invocation.command_path,
                     input: invocation.input,
-                    principal: invocation.principal,
+                    caller: invocation.caller,
                     cancellation: cancellation_handle(invocation.cancellation),
                     stdin: invocation.stdin.map(|input| Box::new(input) as _),
                     stdout: invocation.stdout.map(|output| Box::new(output) as _),

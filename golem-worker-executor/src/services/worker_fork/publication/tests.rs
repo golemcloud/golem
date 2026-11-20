@@ -19,20 +19,18 @@ use golem_common::model::{
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use std::sync::Arc;
 use test_r::test;
+use uuid::Uuid;
 
-fn owner(name: &str) -> OwnedAgentId {
+fn owner(h: u128) -> OwnedAgentId {
     OwnedAgentId::new(
         EnvironmentId(Uuid::from_u128(1)),
-        &AgentId {
-            component_id: ComponentId(Uuid::from_u128(2)),
-            agent_id: name.into(),
-        },
+        &AgentId::from_parts(7, h),
     )
 }
 
 #[test]
 fn a_missing_baseline_answers_by_the_target_that_the_reconciliation_found() {
-    let target = owner("target");
+    let target = owner(1);
     let cut = OplogIndex::from_u64(7);
     let name = FilesystemSnapshotName::update();
     let (matching, other) = (
@@ -68,7 +66,7 @@ fn a_missing_baseline_answers_by_the_target_that_the_reconciliation_found() {
 
 #[test]
 fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
-    let source = owner("source");
+    let source = owner(2);
     let generation = AgentFingerprint(Uuid::from_u128(3));
     let cut = OplogIndex::from_u64(7);
     let hash = request_hash(&source, generation, cut, None, None).unwrap();
@@ -78,7 +76,7 @@ fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
     );
     assert_ne!(
         hash,
-        request_hash(&owner("other"), generation, cut, None, None).unwrap()
+        request_hash(&owner(3), generation, cut, None, None).unwrap()
     );
     assert_ne!(
         hash,
@@ -97,14 +95,7 @@ fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
     );
     assert_ne!(
         hash,
-        request_hash(
-            &source,
-            generation,
-            cut,
-            None,
-            Some((None, None, Uuid::nil()))
-        )
-        .unwrap()
+        request_hash(&source, generation, cut, None, Some((None, None))).unwrap()
     );
     let selected = StreamId(Uuid::from_u128(9));
     let empty = request_hash(&source, generation, cut, Some((selected, None)), None).unwrap();
@@ -134,20 +125,12 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         RetryConfig::default(),
     )
     .await;
-    let source = owner("source");
-    let target = owner("fork");
+    let source = owner(2);
+    let target = owner(4);
     let cut = OplogIndex::from_u64(2);
     let source_fingerprint = AgentFingerprint(Uuid::from_u128(3));
     let fingerprint = AgentFingerprint(Uuid::from_u128(4));
-    let phantom = Uuid::from_u128(5);
-    let hash = request_hash(
-        &source,
-        source_fingerprint,
-        cut,
-        None,
-        Some((None, None, phantom)),
-    )
-    .unwrap();
+    let hash = request_hash(&source, source_fingerprint, cut, None, Some((None, None))).unwrap();
     assert_eq!(
         existing_fork(&service, &target, cut, hash).await.unwrap(),
         ExistingFork::Absent
@@ -160,10 +143,11 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
             AgentMode::Durable,
             stage_id,
             AgentMetadata {
-                agent_id: target.agent_id.clone(),
-                component_id: target.agent_id.component_id,
+                agent_id: target.agent_id,
+                component_id: ComponentId(Uuid::from_u128(2)),
                 agent_type_name: None,
                 canonical_key: None,
+                constructor_parameters: None,
                 owner_kind: OwnerKind::ComponentAgent,
                 env: vec![],
                 environment_id: target.environment_id,
@@ -173,13 +157,12 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
                 created_at: Timestamp::now_utc(),
                 parent: None,
                 last_known_status: AgentStatusRecord::default(),
-                original_phantom_id: None,
                 fingerprint,
                 agent_mode: AgentMode::Durable,
                 create_request: golem_common::model::oplog::CreateRequest::new(
                     golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                     None,
-                    golem_common::model::agent::Principal::anonymous(),
+                    golem_common::model::caller::Caller::anonymous(),
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),
@@ -190,10 +173,11 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
     stage
         .add(OplogEntry::create(Box::new(
             golem_common::model::oplog::CreateParameters {
-                agent_id: target.agent_id.clone(),
-                component_id: target.agent_id.component_id,
+                agent_id: target.agent_id,
+                component_id: ComponentId(Uuid::from_u128(2)),
                 agent_type_name: None,
                 canonical_key: None,
+                constructor_parameters: None,
                 owner_kind: OwnerKind::ComponentAgent,
                 agent_mode: AgentMode::Durable,
                 component_revision: ComponentRevision::INITIAL,
@@ -205,15 +189,15 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
                 initial_total_linear_memory_size: 100,
                 initial_active_plugins: Default::default(),
                 local_agent_config: vec![],
-                original_phantom_id: None,
                 instance_id: fingerprint.0,
                 create_request: golem_common::model::oplog::CreateRequest::new(
                     golem_common::model::oplog::CreateRequestKind::GetOrCreate,
                     None,
-                    golem_common::model::agent::Principal::anonymous(),
+                    golem_common::model::caller::Caller::anonymous(),
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),
+                never_live: false,
             },
         )))
         .await
@@ -240,7 +224,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         })
         .await
         .unwrap();
-    write_guest_result(stage.as_ref(), None, None, phantom)
+    write_guest_result(stage.as_ref(), None, None, &target.agent_id)
         .await
         .unwrap();
     // Extra entries after creation must not affect retry recognition.
@@ -305,7 +289,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
     assert_eq!(
         result,
         HostResponse::GolemApiFork(HostResponseGolemApiFork {
-            forked_phantom_id: phantom,
+            forked_agent_id: Some(target.agent_id),
             result: Ok(golem_common::model::ForkResult::Forked),
         })
     );

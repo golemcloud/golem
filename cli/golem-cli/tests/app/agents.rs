@@ -1533,7 +1533,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             	}}); err != nil {{
             		log.Fatal(err)
             	}}
-            	agent := must(target.GetStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-generated-e2e"}}))
+            	agent := must(target.UpsertStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-generated-e2e"}}))
 
             	expect("consume", must(agent.Consume(ctx, bridge.StreamOf[uint32](1, 2, 3))), []uint32{{1, 2, 3}})
             	expect("produce", must(must(agent.Produce(ctx, []uint32{{4, 5}})).Collect(ctx)), []uint32{{4, 5}})
@@ -1579,8 +1579,10 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             		log.Fatal(err)
             	}}
 
-            	described := must(must(configured.GetConfiguredRPCTarget(
+            	described := must(must(configured.CreateConfiguredRPCTarget(
+            		ctx,
             		configured.ConfiguredRPCTargetID{{Name: "go-configured"}},
+            		bridge.Keyed(),
             		configured.WithConfiguredRPCTargetConfig(configured.ConfiguredRPCTargetConfig{{
             			Count: values.Some[uint32](7),
             			Label: values.Some("go-label"),
@@ -1686,7 +1688,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
                 "streaming-invocation",
                 "local",
             );
-            let agent = StreamingRpcTarget::get("rust-generated-e2e".to_string()).await?;
+            let agent = StreamingRpcTarget::upsert("rust-generated-e2e".to_string())?;
 
             assert_eq!(agent.consume(input(vec![1_u32, 2, 3])).await?, vec![1, 2, 3]);
             assert_eq!(agent.produce(vec![4, 5]).await?.try_collect::<Vec<_>>().await?, vec![4, 5]);
@@ -1775,7 +1777,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     )
     .unwrap();
     let rust_config_driver = formatdoc! {r#"
-        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, GolemServer}};
+        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, CreateOptions, GolemServer}};
 
         #[tokio::main]
         async fn main() -> Result<(), Box<dyn std::error::Error>> {{
@@ -1787,10 +1789,13 @@ async fn test_generated_streaming_bridges_end_to_end() {
                 "streaming-invocation",
                 "local",
             );
-            let agent = ConfiguredRpcTarget::get_with_config(
+            let agent = ConfiguredRpcTarget::create(
                 "rust-configured".to_string(),
-                Some(7),
-                Some("rust-label".to_string()),
+                CreateOptions {{
+                    keyed: true,
+                    config: (Some(7), Some("rust-label".to_string())),
+                    ..Default::default()
+                }},
             ).await?;
             assert_eq!(
                 agent.describe().await?,
@@ -1840,7 +1845,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
           application: 'streaming-invocation',
           environment: 'local',
         }})
-        const agent = await StreamingRpcTarget.get('typescript-generated-e2e')
+        const agent = StreamingRpcTarget.upsert('typescript-generated-e2e')
         assert.deepEqual(await agent.consume(input([1, 2, 3])), [1, 2, 3])
         assert.deepEqual(await collect(await agent.produce([4, 5])), [4, 5])
         assert.deepEqual(await collect(await agent.transform(input([6, 7]))), [60, 70])
@@ -1923,11 +1928,10 @@ async fn test_generated_streaming_bridges_end_to_end() {
           application: 'streaming-invocation',
           environment: 'local',
         }})
-        const agent = await ConfiguredRpcTarget.getWithConfig(
-          'typescript-configured',
-          7,
-          'typescript-label',
-        )
+        const agent = await ConfiguredRpcTarget.create('typescript-configured', {{
+          keyed: true,
+          config: {{ count: 7, label: 'typescript-label' }},
+        }})
         assert.deepEqual(await agent.describe(), ['typescript-configured', 'typescript-label', 7])
         console.log('TYPESCRIPT_CONFIG_BRIDGE_E2E_OK')
         "#};
@@ -1995,7 +1999,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
               "streaming-invocation",
               "local",
             )
-            val agent = Await.result(StreamingRpcTargetClient.get("scala-generated-e2e"), timeout)
+            val agent = StreamingRpcTargetClient.upsert("scala-generated-e2e")
 
             assert(Await.result(agent.consume(input(List(UInt(1), UInt(2), UInt(3)))), timeout).map(_.value) == List(1, 2, 3))
             assert(collect(Await.result(agent.produce(List(UInt(4), UInt(5))), timeout)).map(_.value) == List(4, 5))
@@ -2066,10 +2070,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
             )
             val timeout = 90.seconds
             val agent = Await.result(
-              ConfiguredRpcTargetClient.getWithConfig(
+              ConfiguredRpcTargetClient.create(
                 "scala-configured",
-                Some(UInt(7)),
-                Some("scala-label"),
+                keyed = true,
+                count = Some(UInt(7)),
+                label = Some("scala-label"),
               ),
               timeout,
             )
@@ -2180,7 +2185,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
             "streaming-invocation",
             "local",
           )
-          let agent = @client.StreamingRpcTarget::get("moonbit-generated-e2e")
+          let agent = @client.StreamingRpcTarget::upsert("moonbit-generated-e2e")
           assert_eq(agent.consume(uint_input([1, 2, 3])), [1, 2, 3])
           assert_eq(collect_uint(agent.produce([4, 5])), [4, 5])
           assert_eq(collect_uint(agent.transform(uint_input([6, 7]))), [60, 70])
@@ -2268,10 +2273,11 @@ async fn test_generated_streaming_bridges_end_to_end() {
             "streaming-invocation",
             "local",
           )
-          let agent = @client.ConfiguredRpcTarget::get_with_config(
+          let agent = @client.ConfiguredRpcTarget::create(
             "moonbit-configured",
-            Some(7),
-            Some("moonbit-label"),
+            keyed=true,
+            config_count=7,
+            config_label="moonbit-label",
           )
           assert_eq(agent.describe(), ("moonbit-configured", "moonbit-label", 7))
           println("MOONBIT_CONFIG_BRIDGE_E2E_OK")
@@ -2344,7 +2350,7 @@ async fn test_rust_counter() {
                 flag::LANGUAGE,
                 "ts",
                 flag::SCRIPT,
-                &format!("(await CounterAgent.get(\"{uuid}\")).increment()"),
+                &format!("CounterAgent.upsert(\"{uuid}\").increment()"),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -2353,6 +2359,52 @@ async fn test_rust_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+
+    assert_counter_repl_upsert_and_create(&ctx).await;
+}
+
+/// Runs a TS REPL script against the `CounterAgent` of the counter template: `upsert` reaches
+/// the keyed agent every time, a keyed `create` fails with a conflict when the keyed agent
+/// exists, and a `create` without a key makes a new agent.
+async fn assert_counter_repl_upsert_and_create(ctx: &TestContext) {
+    let name = Uuid::new_v4().to_string();
+    let keyed_name = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            cmd::REPL,
+            flag::LANGUAGE,
+            "ts",
+            flag::SCRIPT,
+            &formatdoc! {r#"
+                const counter = CounterAgent.upsert("{name}");
+                await counter.increment();
+                const keyed = await CounterAgent.create("{keyed_name}", {{ keyed: true }});
+                const conflict = await CounterAgent.create("{keyed_name}", {{ keyed: true }}).then(
+                  () => 0,
+                  (error) => error.status,
+                );
+                const unkeyed = await CounterAgent.create("{name}");
+                [
+                  await CounterAgent.upsert("{name}").increment(),
+                  await unkeyed.increment(),
+                  (await CounterAgent.upsert("{keyed_name}").agentId()) === (await keyed.agentId()),
+                  (await unkeyed.agentId()) !== (await counter.agentId()),
+                  conflict,
+                ]
+            "#},
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains_ordered(vec![
+        "Preparing TypeScript REPL",
+        "[",
+        "  2,",
+        "  1,",
+        "  true,",
+        "  true,",
+        "  409",
+        "]",
+    ]));
 }
 
 /// End-to-end test for the Go SDK: creates a Go app from the composable counter
@@ -2625,9 +2677,9 @@ async fn test_go_bridge_e2e() {
 
     ctx.cd(app_name);
 
-    // An ephemeral agent beside the template's durable counter: its client
-    // constructs a phantom per call and reports the instance that ran. Its
-    // configuration, one value nested, is overridden through the typed option.
+    // An ephemeral agent beside the template's durable counter: each call of
+    // its upsert client runs on a new instance and reports the instance that
+    // ran. Its configuration, one value nested, comes from the manifest.
     let lib = walkdir::WalkDir::new(ctx.cwd_path())
         .into_iter()
         .filter_map(Result::ok)
@@ -2782,7 +2834,6 @@ async fn test_go_bridge_e2e() {
             	"log"
 
             	"github.com/golemcloud/golem/sdks/go/bridge"
-            	"github.com/golemcloud/golem/sdks/go/core/values"
             	client "golem.local/bridge/counter-agent-client"
             	echo "golem.local/bridge/echo-agent-client"
             )
@@ -2796,7 +2847,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	counter, err := client.GetCounterAgent(client.CounterAgentID{{Name: "go-e2e-counter"}})
+            	counter, err := client.UpsertCounterAgent(client.CounterAgentID{{Name: "go-e2e-counter"}})
             	if err != nil {{
             		log.Fatal(err)
             	}}
@@ -2809,7 +2860,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	echoes, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}})
+            	echoes, err := echo.UpsertEchoAgent(echo.EchoAgentID{{Prefix: "go:"}})
             	if err != nil {{
             		log.Fatal(err)
             	}}
@@ -2821,26 +2872,8 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	marked, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
-            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{Mark: values.Some("!")}}))
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	three, err := marked.Echo(ctx, "c")
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	doubled, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
-            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{StyleRepeat: values.Some[uint8](2)}}))
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	four, err := doubled.Echo(ctx, "d")
-            	if err != nil {{
-            		log.Fatal(err)
-            	}}
-            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s,%s,%s fresh=%t\n",
-            		first, second, one.Value, two.Value, three.Value, four.Value, one.AgentID != two.AgentID)
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s fresh=%t\n",
+            		first, second, one.Value, two.Value, one.AgentID != two.AgentID)
             }}
             "#
         },
@@ -2873,7 +2906,7 @@ async fn test_go_bridge_e2e() {
         program_dir.display()
     );
     assert!(
-        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b,go:c!,go:dd fresh=true"),
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b fresh=true"),
         "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }
@@ -3542,7 +3575,7 @@ async fn rust_ambient_native_client_executes_through_golem() {
         indoc! {r#"
             use golem_rust::schema::{SchemaValue, TypedSchemaValue};
             use golem_rust::tool::{
-                InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+                InputStream, InvocationResult, InvocationContext, OutputStream, RawCustomToolError, Tool,
                 ToolInvokeError, UnderlyingTool,
             };
             use golem_rust::universal_tool_middleware;
@@ -3556,7 +3589,7 @@ async fn rust_ambient_native_client_executes_through_golem() {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                _principal: Principal,
+                _ctx: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 let input = if tool_name == "native-conformance"
@@ -4086,7 +4119,7 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     let receipt = &document["response"];
     let owner: golem_common::model::AgentId =
         serde_json::from_value(receipt["agentId"].clone()).unwrap();
-    let owner = format!("{}:{}", owner.component_id.0, owner.agent_id);
+    let owner = owner.to_string();
     let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
     Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
     assert_ne!(invocation_id, "structured-cli-repeat");
@@ -4366,9 +4399,9 @@ async fn test_go_agent_guest_bridge_e2e() {
 
             func init() {{
             	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
-            		counter := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName}}))
-            		stepped := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName + "-stepped"}},
-            			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
+            		counter := golem.Must(provider.UpsertCounterAgent(provider.CounterAgentID{{Name: in.ProviderName}}))
+            		stepped := golem.Must(provider.CreateCounterAgent(provider.CounterAgentID{{Name: in.ProviderName + "-stepped"}},
+            			golem.Keyed(), provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
             		return fmt.Sprintf("ok:%d:%d", golem.Must(counter.Increment()), golem.Must(stepped.Increment()))
             	}})
             }}
@@ -4650,7 +4683,7 @@ async fn test_ts_counter() {
                 flag::LANGUAGE,
                 "ts",
                 flag::SCRIPT,
-                &format!("(await CounterAgent.get(\"{uuid}\")).increment()"),
+                &format!("CounterAgent.upsert(\"{uuid}\").increment()"),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -4659,6 +4692,8 @@ async fn test_ts_counter() {
         assert!(!outputs.stdout_contains("error"));
         assert!(!outputs.stderr_contains("error"));
     }
+
+    assert_counter_repl_upsert_and_create(&ctx).await;
 }
 
 #[test]
@@ -4795,9 +4830,9 @@ async fn test_previous_invocation_failed_revert_workflow() {
 }
 
 #[test]
-async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
+async fn test_long_agent_key_rejected_in_invoke_repl_and_rpc() {
     let mut ctx = TestContext::new();
-    let app_name = "long-agent-id-rejected";
+    let app_name = "long-agent-key-rejected";
 
     let outputs = ctx
         .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "ts"])
@@ -4814,7 +4849,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         formatdoc! { r#"
             manifestVersion: {MANIFEST_VERSION}
 
-            app: long-agent-id-rejected
+            app: long-agent-key-rejected
 
             environments:
               local:
@@ -4823,7 +4858,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
                 server: cloud
 
             components:
-              long-agent-id-rejected:ts-main:
+              long-agent-key-rejected:ts-main:
                 templates: ts
         "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
     )
@@ -4864,7 +4899,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await TargetAgent.client.get({ id: targetId }).ping();
+                  return await TargetAgent.client.upsert({ id: targetId }).ping();
                 },
               },
             });
@@ -4887,7 +4922,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         .cli([flag::YES, cmd::AGENT, cmd::INVOKE, &target_agent, "ping"])
         .await;
     assert!(!outputs.success());
-    assert!(outputs.stderr_contains("Agent id is too long"));
+    assert!(outputs.stderr_contains("Agent key is too long"));
 
     let outputs = ctx
         .cli([
@@ -4895,11 +4930,11 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
             flag::LANGUAGE,
             "ts",
             flag::SCRIPT,
-            &format!("(await TargetAgent.get(\"{long_id}\")).ping()"),
+            &format!("TargetAgent.upsert(\"{long_id}\").ping()"),
         ])
         .await;
     assert!(!outputs.success());
-    assert!(outputs.stderr_contains("Agent id is too long"));
+    assert!(outputs.stderr_contains("Agent key is too long"));
 
     let outputs = ctx
         .cli([
@@ -5417,7 +5452,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             "json",
             flag::SCRIPT,
             r#"
-                (await LongAgentName.get({oneField: "1212", anotherField: 100})).ask({oneField: "1", anotherField: 2})
+                LongAgentName.upsert({oneField: "1212", anotherField: 100}).ask({oneField: "1", anotherField: 2})
             "#,
         ])
         .await;

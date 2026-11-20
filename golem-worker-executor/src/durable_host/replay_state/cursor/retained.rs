@@ -206,6 +206,7 @@ impl CursorTx<'_> {
         };
         if let Some((prior_idx, prior)) = &*terminal {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                terminal_idx,
                 "at most one End/Cancelled per durable call Start",
                 format!(
                     "{} at {terminal_idx} closing Start {start_index} already closed by {} at {prior_idx}",
@@ -688,6 +689,7 @@ impl ReplayState {
             if !unclosed.is_empty() {
                 let mut unclosed: Vec<_> = unclosed.into_iter().collect();
                 unclosed.sort();
+                let first_unclosed = unclosed[0];
                 let unclosed: Vec<_> = unclosed
                     .into_iter()
                     .map(|idx| {
@@ -699,6 +701,7 @@ impl ReplayState {
                     })
                     .collect();
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    first_unclosed,
                     "an End/Cancelled closing every unclaimed retained Start before the live invocation finished",
                     format!(
                         "live invocation of {owned_agent_id} finished with unclosed unclaimed retained Start(s) at {}",

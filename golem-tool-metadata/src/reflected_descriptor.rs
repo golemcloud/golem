@@ -163,6 +163,7 @@ impl From<native::Tool> for ExtendedToolType {
         Self {
             version: value.version,
             requires_filesystem: value.requires_filesystem,
+            http_mount: value.http_mount,
             commands: value
                 .commands
                 .nodes
@@ -171,6 +172,7 @@ impl From<native::Tool> for ExtendedToolType {
                     name: v.name,
                     aliases: v.aliases,
                     doc: v.doc,
+                    http: v.http,
                     globals: ExtendedGlobals {
                         options: v
                             .globals
@@ -191,8 +193,116 @@ impl From<native::Tool> for ExtendedToolType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_schema::http::{LiteralSegment, PathSegment, PathVariable};
     use golem_schema::schema::{SchemaTypeDef, TypeId};
     use test_r::test;
+
+    #[cfg(feature = "guest")]
+    #[test]
+    fn direct_wire_preserves_http_presence_without_defaults() {
+        use crate::{WireToolSchema, WireTypeRef};
+        use golem_schema::http::*;
+
+        for http_mount in [
+            None,
+            Some(native::ToolHttpMount {
+                path_prefix: vec![],
+            }),
+        ] {
+            for http in [
+                None,
+                Some(native::CommandHttp::Prefix(native::ToolHttpPrefix {
+                    path_suffix: vec![],
+                })),
+                Some(native::CommandHttp::Endpoint(native::ToolHttpEndpoint {
+                    route_id: None,
+                    http_method: HttpMethod::Custom(CustomHttpMethod {
+                        value: "REPORT".into(),
+                    }),
+                    path_suffix: vec![PathSegment::RemainingPathVariable(PathVariable {
+                        variable_name: "rest".into(),
+                    })],
+                    query_vars: vec![QueryVariable {
+                        query_param_name: "q".into(),
+                        variable_name: "query".into(),
+                    }],
+                    header_vars: vec![HeaderVariable {
+                        header_name: "X-Test".into(),
+                        variable_name: "test".into(),
+                    }],
+                    response_headers: vec![FileResponseHeader {
+                        name: "X-Response".into(),
+                        value: "é".into(),
+                    }],
+                    mode: None,
+                    durable_streams: Some(DurableStreamRouteOptions {
+                        slots: vec![DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Output(
+                                DurableStreamOutputSlotSource {
+                                    name: "stdout".into(),
+                                },
+                            ),
+                            name: Some(String::new()),
+                            content_type: None,
+                        }],
+                        load: Some(DurableStreamRouteLoadOptions {
+                            max_concurrent_readers_per_stream: Some(u32::MAX),
+                            max_append_requests_per_second_per_stream: Some(0),
+                        }),
+                    }),
+                })),
+            ] {
+                let tool = native::Tool {
+                    version: "1".into(),
+                    requires_filesystem: false,
+                    http_mount: http_mount.clone(),
+                    schema: SchemaGraph::empty(),
+                    commands: native::CommandTree {
+                        nodes: vec![native::CommandNode {
+                            name: "tool".into(),
+                            aliases: vec![],
+                            doc: native::Doc::default(),
+                            http: http.clone(),
+                            globals: native::Globals::default(),
+                            subcommands: vec![],
+                            body: None,
+                        }],
+                    },
+                };
+                let reflected = ExtendedToolType::from(tool.clone());
+                assert_eq!(reflected.http_mount, tool.http_mount);
+                assert_eq!(reflected.commands[0].http, tool.commands.nodes[0].http);
+                if matches!(http, Some(CommandHttp::Endpoint(_))) {
+                    assert!(reflected.try_to_native_tool().is_err());
+                } else {
+                    assert_eq!(reflected.try_to_native_tool().unwrap(), tool);
+                    assert_eq!(
+                        native::wit::decode_tool(reflected.try_to_tool().unwrap()).unwrap(),
+                        tool
+                    );
+                }
+                let direct = ExtendedToolType::<WireTypeRef> {
+                    version: "1".into(),
+                    requires_filesystem: false,
+                    http_mount: http_mount.clone(),
+                    commands: vec![ExtendedCommandNode {
+                        name: "tool".into(),
+                        aliases: vec![],
+                        doc: native::Doc::default(),
+                        http,
+                        globals: ExtendedGlobals::default(),
+                        subcommands: vec![],
+                        body: None,
+                    }],
+                };
+                assert_eq!(
+                    native::wit::decode_tool(direct.into_wire(WireToolSchema::default()).unwrap())
+                        .unwrap(),
+                    tool
+                );
+            }
+        }
+    }
 
     #[test]
     fn native_descriptor_round_trips_through_reflection() {
@@ -223,6 +333,11 @@ mod tests {
         let tool = native::Tool {
             version: "1.2.3".into(),
             requires_filesystem: false,
+            http_mount: Some(native::ToolHttpMount {
+                path_prefix: vec![PathSegment::Literal(LiteralSegment {
+                    value: "reports".into(),
+                })],
+            }),
             schema: SchemaGraph {
                 root: SchemaType::Record {
                     fields: vec![],
@@ -240,6 +355,11 @@ mod tests {
                         name: "tool".into(),
                         aliases: vec!["t".into()],
                         doc: doc.clone(),
+                        http: Some(native::CommandHttp::Prefix(native::ToolHttpPrefix {
+                            path_suffix: vec![PathSegment::Literal(LiteralSegment {
+                                value: "admin".into(),
+                            })],
+                        })),
                         globals: native::Globals {
                             options: vec![profile],
                             flags: vec![],
@@ -251,6 +371,48 @@ mod tests {
                         name: "run".into(),
                         aliases: vec!["r".into()],
                         doc: doc.clone(),
+                        http: Some(native::CommandHttp::Endpoint(native::ToolHttpEndpoint {
+                            route_id: Some("custom-route".into()),
+                            http_method: golem_schema::http::HttpMethod::Post(
+                                golem_schema::Empty {},
+                            ),
+                            path_suffix: vec![
+                                PathSegment::Literal(LiteralSegment {
+                                    value: "run".into(),
+                                }),
+                                PathSegment::PathVariable(PathVariable {
+                                    variable_name: "path".into(),
+                                }),
+                            ],
+                            query_vars: vec![golem_schema::http::QueryVariable {
+                                query_param_name: "m".into(),
+                                variable_name: "mode".into(),
+                            }],
+                            header_vars: vec![golem_schema::http::HeaderVariable {
+                                header_name: "X-Profile".into(),
+                                variable_name: "profile".into(),
+                            }],
+                            response_headers: vec![golem_schema::http::FileResponseHeader {
+                                name: "X-Custom".into(),
+                                value: "yes".into(),
+                            }],
+                            mode: Some(golem_schema::http::HttpRouteMode::Plain),
+                            durable_streams: Some(golem_schema::http::DurableStreamRouteOptions {
+                                slots: vec![golem_schema::http::DurableStreamSlotOptions {
+                                    source: golem_schema::http::DurableStreamSlotSource::Output(
+                                        golem_schema::http::DurableStreamOutputSlotSource {
+                                            name: "stdout".into(),
+                                        },
+                                    ),
+                                    name: Some("download".into()),
+                                    content_type: Some("text/plain".into()),
+                                }],
+                                load: Some(golem_schema::http::DurableStreamRouteLoadOptions {
+                                    max_concurrent_readers_per_stream: Some(7),
+                                    max_append_requests_per_second_per_stream: Some(13),
+                                }),
+                            }),
+                        })),
                         globals: native::Globals::default(),
                         subcommands: vec![],
                         body: Some(native::CommandBody {
@@ -332,5 +494,10 @@ mod tests {
                 .all(|body| body.positional_plan.is_empty())
         );
         assert_eq!(reflected.try_to_native_tool().unwrap(), tool);
+        #[cfg(feature = "guest")]
+        assert_eq!(
+            native::wit::decode_tool(reflected.try_to_tool().unwrap()).unwrap(),
+            tool
+        );
     }
 }

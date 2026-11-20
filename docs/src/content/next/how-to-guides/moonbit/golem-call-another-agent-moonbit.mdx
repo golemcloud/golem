@@ -6,12 +6,12 @@ The `#derive.agent` code generation tool auto-generates a `<AgentName>Client` st
 
 ## Getting a Client (Scoped)
 
-Use `<AgentName>Client::scoped(...)` with the target agent's constructor parameters and an async
+Use `<AgentName>Client::scoped_upsert(...)` with the target agent's constructor parameters and an async
 callback. Call it from an `async fn`; MoonBit has no `await` keyword. The client is automatically
 dropped when the callback returns:
 
 ```moonbit
-CounterClient::scoped("my-counter", async fn(counter) {
+CounterClient::scoped_upsert("my-counter", async fn(counter) {
   counter.increment()
   counter.increment()
   let value = counter.get_value()
@@ -21,27 +21,36 @@ CounterClient::scoped("my-counter", async fn(counter) {
 
 This is the **recommended** pattern — it ensures the client resource is cleaned up automatically.
 
-Note: agents with no constructor parameters omit the parameter from `scoped` / `get`.
+Note: agents with no constructor parameters omit the parameter from `scoped_upsert` / `upsert`.
 
 ## Getting a Client (Manual)
 
-Use `<AgentName>Client::get(...)` for manual lifecycle management. You **must** call `client.drop()` when done:
+Use `<AgentName>Client::upsert(...)` for manual lifecycle management. You **must** call `client.drop()` when done:
 
 ```moonbit
-let counter = CounterClient::get("my-counter")
+let counter = CounterClient::upsert("my-counter")
 counter.increment()
 let value = counter.get_value()
 counter.drop()  // must call drop when done
 ```
 
-This does **not** create the agent — the agent is created implicitly on its first invocation. If it already exists, you get a handle to the existing instance.
+Both address the **keyed** agent of the constructor parameters. The host creates the agent when it is missing — on the first invocation, or on `agent_id()` — and reuses it otherwise.
+
+A durable agent's client also has:
+
+- `<AgentName>Client::create(params..., keyed?, config?, env?)` (async): creates a new agent and returns after its initialization. Without `keyed=true` the new agent has no key and a new agent ID; with it, it is the keyed agent, and an existing one raises `RpcError::Conflict`.
+- `<AgentName>Client::get_by_id(agent_id)`: addresses the existing agent with an `@schema.AgentId`. It never creates the agent; an unknown ID raises `RpcError::NotFound`.
+- `client.agent_id()` (async): the `@schema.AgentId` of the client's agent.
+- `scoped_create(...)` and `scoped_get_by_id(...)`, the scoped forms of `create` and `get_by_id`.
+
+An ephemeral agent's client has only `upsert` and `scoped_upsert`; every invocation runs on a new one-shot instance.
 
 ## Awaited Call
 
 Call a method and block until the result returns:
 
 ```moonbit
-CounterClient::scoped("my-counter", async fn(counter) {
+CounterClient::scoped_upsert("my-counter", async fn(counter) {
   counter.increment()
   let count = counter.get_value()
   count
@@ -55,7 +64,7 @@ The calling agent **blocks** until the target agent processes the request and re
 Agent methods accept custom types defined in your agent code:
 
 ```moonbit
-TaskManagerClient::scoped(async fn(tm) {
+TaskManagerClient::scoped_upsert(async fn(tm) {
   let count = tm.add_task({
     title: "Build RPC support",
     priority: High,
@@ -67,9 +76,9 @@ TaskManagerClient::scoped(async fn(tm) {
 })
 ```
 
-## Phantom Agents
+## Agents Without a Key
 
-To create multiple distinct instances with the same constructor parameters, use phantom agents. See the [`golem-multi-instance-agent-moonbit`](/next/how-to-guides/moonbit/golem-multi-instance-agent-moonbit) guide.
+To create multiple distinct instances with the same constructor parameters, use `create` without `keyed`: each call makes a new agent with a new agent ID. See the [`golem-multi-instance-agent-moonbit`](/next/how-to-guides/moonbit/golem-multi-instance-agent-moonbit) guide.
 
 ## Cross-Component RPC
 
@@ -132,6 +141,8 @@ pub async fn ExampleAgent::weather_in_london(self : Self) -> String {
   )
 }
 ```
+
+`scoped` addresses the keyed agent through `upsert` and drops the client afterwards. The generated client also has `upsert`, and for a durable provider `create` (async, with `keyed?`, one labelled optional per local config value, and `env?`), `get_by_id(agent_id)` and `agent_id()`.
 
 This client is generated from the built provider's discovered schema before the caller is compiled. It uses the guest RPC host API directly, not the external REST bridge transport. Do not import the provider component's executable MoonBit package into the caller.
 

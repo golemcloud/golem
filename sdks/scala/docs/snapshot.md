@@ -195,7 +195,7 @@ Keep normal policy annotations and registration. Incomplete or conflicting hook 
 combined with explicit byte hooks or `Snapshotted[S]`, fail compilation. Existing simpler modes remain unchanged.
 Binary-only applications use JSON null state; zero-part bundles still emit multipart. Part names are case-sensitive
 `[A-Za-z0-9_][A-Za-z0-9_.-]*`, and content types are bare ASCII MIME types without parameters, normalized lowercase.
-Parts are application-owned bytes, not automatically managed resources. The SDK owns principal-envelope encoding.
+Parts are application-owned bytes, not automatically managed resources. The SDK owns envelope encoding; the envelope holds no caller.
 
 Hooks run unpersisted and may be retried. Whole-buffer copies amplify peak memory usage; the host's 64 KiB
 inline/blob-spill threshold is not a snapshot size cap. See the
@@ -209,7 +209,7 @@ inline/blob-spill threshold is not a snapshot size cap. See the
 initialization: the implementation's companion factory receives the snapshot and a `SnapshotRestoreContext`, and it
 must return the complete fresh instance. The SDK installs that instance only after the returned `Future` succeeds.
 
-`SnapshotRestoreContext` provides typed identity fields, the full agent ID, phantom ID, restored principal, and fresh
+`SnapshotRestoreContext` provides typed identity fields, the typed agent ID, the restored principal, and fresh
 configuration. Snapshot loading runs in read-only mode and writes nothing to the oplog. It may decode data, perform
 local computation, read configuration, and use other permitted reads. Mutating host operations and outgoing HTTP or
 agent RPC calls are rejected before they take effect.

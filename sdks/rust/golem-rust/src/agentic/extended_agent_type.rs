@@ -12,21 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::{AutoInjectedParamType, schema_graph_root};
+use crate::agentic::schema_graph_root;
 use crate::golem_agentic::golem::agent::common::AgentConfigDeclaration;
 use crate::golem_agentic::golem::agent::common::{
     AgentConfigSource, AgentConstructor, AgentDependency, AgentMethod, AgentMode, AgentType,
-    AgentTypeKind, AutoInjectedKind, FieldSource, HttpEndpointDetails, HttpMountDetails,
-    InputSchema, NamedField, OutputSchema, ReadOnlyConfig, Snapshotting,
+    AgentTypeKind, FieldSource, HttpEndpointDetails, HttpMountDetails, InputSchema, NamedField,
+    OutputSchema, ReadOnlyConfig, Snapshotting,
 };
 use crate::schema::wit::GraphEncoder;
 use crate::schema::{MetadataEnvelope, SchemaGraph, merge_agent_graphs};
-use std::collections::HashSet;
 
-// An enriched representation is a different view of the agent type that will include
-// extra details such as auto-injected schemas such as Principal
-// The agent registry will hold this information for the generated `initiate` , `invoke` and rpc calls
-// to look up so that these parameters can be injected automatically by the platform
+// An enriched representation is a different view of the agent type that decodes each schema
+// graph once. The agent registry holds it for the generated `initiate`, `invoke` and rpc calls.
 #[derive(Clone)]
 pub struct ExtendedAgentType {
     pub type_name: String,
@@ -78,11 +75,6 @@ impl ExtendedAgentType {
                         match field.source {
                             FieldSource::UserSupplied => {
                                 EnrichedParameterSchema::Value(graph(field.schema)?)
-                            }
-                            FieldSource::AutoInjected(AutoInjectedKind::Principal) => {
-                                EnrichedParameterSchema::AutoInject(
-                                    AutoInjectedParamType::Principal,
-                                )
                             }
                         },
                     ))
@@ -141,18 +133,6 @@ impl ExtendedAgentType {
                 .collect::<Result<_, crate::schema::wit::DecodeError>>()?,
             sorted_method_indices,
         })
-    }
-
-    pub fn principal_params_in_constructor(&self) -> HashSet<String> {
-        let mut principal_params = HashSet::new();
-
-        for (name, schema) in &self.constructor.input_schema {
-            if let EnrichedParameterSchema::AutoInject(AutoInjectedParamType::Principal) = schema {
-                principal_params.insert(name.clone());
-            }
-        }
-
-        principal_params
     }
 
     pub fn to_agent_type(&self) -> AgentType {
@@ -248,7 +228,6 @@ impl ExtendedAgentConstructor {
 #[derive(Clone)]
 pub enum EnrichedParameterSchema {
     Value(SchemaGraph),
-    AutoInject(AutoInjectedParamType),
 }
 
 struct AgentSchemaRoots {
@@ -308,9 +287,8 @@ fn collect_data_schema_graphs(
     graphs: &mut Vec<SchemaGraph>,
 ) {
     for (_, schema) in schema {
-        if let EnrichedParameterSchema::Value(schema) = schema {
-            collect_schema_graph(schema, graphs);
-        }
+        let EnrichedParameterSchema::Value(schema) = schema;
+        collect_schema_graph(schema, graphs);
     }
 }
 
@@ -335,10 +313,6 @@ fn encode_input_schema(
                 EnrichedParameterSchema::Value(schema) => (
                     FieldSource::UserSupplied,
                     encoder.encode_type(&schema_graph_root(schema))?,
-                ),
-                EnrichedParameterSchema::AutoInject(AutoInjectedParamType::Principal) => (
-                    FieldSource::AutoInjected(AutoInjectedKind::Principal),
-                    encoder.encode_type(&crate::schema::SchemaType::record(vec![]))?,
                 ),
             };
             Ok(NamedField {

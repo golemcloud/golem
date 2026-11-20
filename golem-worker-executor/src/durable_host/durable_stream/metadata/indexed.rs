@@ -545,7 +545,7 @@ impl DurableStreamStore {
                 *attachment,
                 *stream,
                 *environment,
-                consumer.clone(),
+                *consumer,
             ));
             keys.push(ProducerMetadataKey::Stream(*stream));
         }

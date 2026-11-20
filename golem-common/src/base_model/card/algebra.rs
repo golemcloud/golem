@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::base_model::card::owner::OwnerPattern;
+use crate::base_model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern, OwnerPattern};
 use crate::base_model::card::recipient::RecipientPattern;
 use crate::base_model::card::{
     Card, CardId, NetworkClass, PermissionClass, PermissionPattern, PermissionTarget,
@@ -98,6 +98,10 @@ fn matches_any(
                     && NetworkClass::verb_subsumes(grant.verb, request.verb)
                     && grant.resource.denies(&request.resource)
             }
+            _ if denial => {
+                grant.subsumes(request)
+                    || typed_like_denial(grant, request).is_some_and(|typed| grant.subsumes(&typed))
+            }
             _ => grant.subsumes(request),
         };
         if matches {
@@ -105,6 +109,56 @@ fn matches_any(
         }
     }
     Ok(false)
+}
+
+/// A concrete agent in a request may lack its trusted type name, for example when the target
+/// was parsed from text. A `Type(*)` denial must still apply to it unless its reserved tag
+/// shows that it is no agent of any type, so a denial assumes the untyped agent has the
+/// wildcard's type. Grants never do: an untyped agent is not covered by a type wildcard grant.
+fn typed_like_denial(
+    denial: &PermissionTarget,
+    request: &PermissionTarget,
+) -> Option<PermissionTarget> {
+    let AgentOwnerPattern::Agent {
+        agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type),
+        ..
+    } = agent_owner(denial)?
+    else {
+        return None;
+    };
+    let mut typed = request.clone();
+    match agent_owner_mut(&mut typed)? {
+        AgentOwnerPattern::Agent {
+            agent: AgentOwnerLeafPattern::Agent(leaf),
+            ..
+        } if leaf.agent_type.is_none() && leaf.agent_id.type_id().is_some() => {
+            leaf.agent_type = Some(agent_type.clone());
+            Some(typed)
+        }
+        _ => None,
+    }
+}
+
+fn agent_owner(target: &PermissionTarget) -> Option<&AgentOwnerPattern> {
+    match target {
+        PermissionTarget::Filesystem(target) => Some(&target.owner),
+        PermissionTarget::Env(target) => Some(&target.owner),
+        PermissionTarget::Oplog(target) => Some(&target.owner),
+        PermissionTarget::Config(target) => Some(&target.owner),
+        PermissionTarget::Agent(target) => Some(&target.owner),
+        _ => None,
+    }
+}
+
+fn agent_owner_mut(target: &mut PermissionTarget) -> Option<&mut AgentOwnerPattern> {
+    match target {
+        PermissionTarget::Filesystem(target) => Some(&mut target.owner),
+        PermissionTarget::Env(target) => Some(&mut target.owner),
+        PermissionTarget::Oplog(target) => Some(&mut target.owner),
+        PermissionTarget::Config(target) => Some(&mut target.owner),
+        PermissionTarget::Agent(target) => Some(&mut target.owner),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]

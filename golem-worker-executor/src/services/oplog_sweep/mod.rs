@@ -52,17 +52,13 @@ use std::time::{Duration, Instant};
 
 use futures::stream::{self, StreamExt};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{AgentId, OwnedAgentId, ShardAssignment, ShardId};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, info, info_span, warn};
-use uuid::Uuid;
 
 use crate::metrics::oplog::{record_oplog_sweep_outcome, record_oplog_sweep_tick};
-use crate::services::component::ComponentService;
 use crate::services::golem_config::OplogSweepConfig;
 use crate::services::oplog::{ArchiveWait, OplogArchiveService};
 use crate::services::scheduler::SchedulerWorkerAccess;
@@ -94,7 +90,7 @@ impl Display for RouteId {
 /// has no outcome, though `scanned` still counts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
-    /// The key did not parse as `{component_id}:{agent_name}`.
+    /// The key did not parse as `{env-uuid}/{agent-uuid}`.
     Unparseable,
     /// Another executor owns this agent's shard.
     NotOwned,
@@ -105,8 +101,6 @@ enum Outcome {
     Waiting,
     /// `ActiveAgents` holds a worker for the agent, running or suspended.
     Resident,
-    /// The agent's component could not be resolved, so its environment is unknown.
-    Unaddressable,
     /// The agent's worker declined the archive: it is being deleted, its oplog was retired, its
     /// index moved, it no longer exists, or no archive step recognised its oplog.
     Declined,
@@ -118,13 +112,12 @@ enum Outcome {
 
 impl Outcome {
     /// Every outcome, in declaration order, which is also the order [`RouteReport`] counts them in.
-    const ALL: [Outcome; 9] = [
+    const ALL: [Outcome; 8] = [
         Outcome::Unparseable,
         Outcome::NotOwned,
         Outcome::Empty,
         Outcome::Waiting,
         Outcome::Resident,
-        Outcome::Unaddressable,
         Outcome::Declined,
         Outcome::ArchiveFailed,
         Outcome::Archived,
@@ -138,7 +131,6 @@ impl Outcome {
             Outcome::Empty => "empty",
             Outcome::Waiting => "waiting",
             Outcome::Resident => "resident",
-            Outcome::Unaddressable => "unaddressable",
             Outcome::Declined => "declined",
             Outcome::ArchiveFailed => "archive_failed",
             Outcome::Archived => "archived",
@@ -168,14 +160,6 @@ enum Verdict {
 /// Slack over the layer count when bounding the archive steps one agent gets in a single tick. A
 /// correct stack needs one step per layer, so the bound only stops a layer that miscounts `more`.
 const ARCHIVE_STEP_SLACK: usize = 2;
-
-/// Resolved environments held at once, far above the components one executor's shards can hold.
-const MAX_CACHED_ENVIRONMENTS: usize = 10_000;
-
-/// How long a component that would not resolve is left alone before it is asked again. Without it
-/// every tick repeats two registry calls per failure, and remembering failures forever would strand
-/// agents behind a registry that was only briefly unreachable.
-const UNRESOLVED_ENVIRONMENT_RETRY: Duration = Duration::from_secs(300);
 
 /// The shortest a tick interval is allowed to be. A misconfigured zero would otherwise spin.
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -251,17 +235,9 @@ impl SweepReport {
     }
 }
 
-/// Layer keys are `{component_id}:{agent_name}`, written by `AgentId::to_redis_key`. An agent name
-/// may itself contain `:`, so only the first separator is significant.
-fn parse_agent_id(key: &str) -> Option<AgentId> {
-    let (component, name) = key.split_once(':')?;
-    if name.is_empty() {
-        return None;
-    }
-    Some(AgentId {
-        component_id: ComponentId(Uuid::parse_str(component).ok()?),
-        agent_id: name.to_string(),
-    })
+/// Layer keys are `{env-uuid}/{agent-uuid}`, written by `OwnedAgentId::storage_key`.
+fn parse_agent_id(key: &str) -> Option<OwnedAgentId> {
+    OwnedAgentId::from_storage_key(key)
 }
 
 /// Whether this executor owns the agent under the assignment it is currently running.
@@ -309,7 +285,7 @@ fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> RouteReport {
 }
 
 /// Splits a scanned page, without I/O, into agents worth probing and outcomes for the rest.
-fn triage(keys: &[String], assignment: &ShardAssignment) -> (Vec<AgentId>, Vec<Outcome>) {
+fn triage(keys: &[String], assignment: &ShardAssignment) -> (Vec<OwnedAgentId>, Vec<Outcome>) {
     let mut candidates = Vec::with_capacity(keys.len());
     let mut settled = Vec::new();
     for key in keys {
@@ -318,21 +294,13 @@ fn triage(keys: &[String], assignment: &ShardAssignment) -> (Vec<AgentId>, Vec<O
                 warn!(key = %key, "Oplog sweep skipping an unparseable layer key");
                 settled.push(Outcome::Unparseable);
             }
-            Some(agent_id) if !owns(assignment, &agent_id) => settled.push(Outcome::NotOwned),
-            Some(agent_id) => candidates.push(agent_id),
+            Some(owned_agent_id) if !owns(assignment, &owned_agent_id.agent_id) => {
+                settled.push(Outcome::NotOwned)
+            }
+            Some(owned_agent_id) => candidates.push(owned_agent_id),
         }
     }
     (candidates, settled)
-}
-
-/// What the registry last said about one component's environment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResolvedEnvironment {
-    Known(EnvironmentId),
-    /// Nothing answered, and when to ask again.
-    Unknown {
-        retry_after: Instant,
-    },
 }
 
 /// A memo entry: the index an agent showed, and the scan pass that last saw it.
@@ -416,26 +384,21 @@ pub struct OplogSweeper {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     routes: Vec<Route>,
     shards: Arc<dyn ShardService>,
-    components: Arc<dyn ComponentService>,
     worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     /// Archive steps one agent gets per visit: the stack depth plus [`ARCHIVE_STEP_SLACK`].
     max_archive_steps: u32,
     /// The index each agent showed and the pass that saw it, per route, which [`assess`] gates on.
     /// A completed pass drops what it did not see, since ephemeral ids are unbounded and a drained
     /// agent never returns. Losing an entry costs a pass of latency, never a stranded oplog.
-    memo: Mutex<HashMap<(RouteId, AgentId), Seen>>,
+    memo: Mutex<HashMap<(RouteId, OwnedAgentId), Seen>>,
     /// Per-agent inspection failures. Permanent storage errors must not be retried every pass.
-    inspection_failures: Mutex<HashMap<(RouteId, AgentId), InspectionFailure>>,
+    inspection_failures: Mutex<HashMap<(RouteId, OwnedAgentId), InspectionFailure>>,
     /// Per-route namespace scan failures. One unavailable route must not hot-loop or delay others.
     scan_failures: Mutex<HashMap<RouteId, ScanFailure>>,
     /// Where each route's scan stopped. Absent means the start of the namespace.
     cursors: Mutex<HashMap<RouteId, ScanResume>>,
     /// Which scan pass each route is on. Bumped when a pass reaches the end of the namespace.
     passes: Mutex<HashMap<RouteId, u64>>,
-    /// Environments already resolved, by component, so a cold registry lookup is paid once rather
-    /// than every tick. A known entry never goes stale, since a component keeps its environment.
-    /// Cleared wholesale past [`MAX_CACHED_ENVIRONMENTS`].
-    environments: Mutex<HashMap<ComponentId, ResolvedEnvironment>>,
     /// The route the next tick starts at, so the routes a tick could not afford go first next time.
     route_cursor: Mutex<usize>,
 }
@@ -450,7 +413,6 @@ impl OplogSweeper {
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         archives: &[Arc<dyn OplogArchiveService>],
         shards: Arc<dyn ShardService>,
-        components: Arc<dyn ComponentService>,
         worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync>,
     ) -> Arc<Self> {
         let sources = archives.len().saturating_sub(1);
@@ -484,7 +446,6 @@ impl OplogSweeper {
             indexed_storage,
             routes,
             shards,
-            components,
             worker_access,
             max_archive_steps: archives.len().saturating_add(ARCHIVE_STEP_SLACK) as u32,
             memo: Mutex::new(HashMap::new()),
@@ -492,7 +453,6 @@ impl OplogSweeper {
             scan_failures: Mutex::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             passes: Mutex::new(HashMap::new()),
-            environments: Mutex::new(HashMap::new()),
             route_cursor: Mutex::new(0),
         })
     }
@@ -753,23 +713,14 @@ impl OplogSweeper {
     async fn sweep_agent(
         &self,
         route: &Route,
-        agent_id: AgentId,
+        owned_agent_id: OwnedAgentId,
         pass: u64,
         cancel: &CancellationToken,
     ) -> Option<Outcome> {
         if cancel.is_cancelled() {
             return None;
         }
-
-        // Resolved first, as the only step that can be slow. The layer below addresses objects by
-        // environment, which a scanned key does not carry.
-        let Some(environment_id) = self.environment_of(agent_id.component_id).await else {
-            return Some(Outcome::Unaddressable);
-        };
-        let owned_agent_id = OwnedAgentId {
-            environment_id,
-            agent_id: agent_id.clone(),
-        };
+        let agent_id = &owned_agent_id;
 
         // Checked before any storage read: on a busy executor most keys belong to running agents.
         if self.is_resident(&owned_agent_id).await {
@@ -777,7 +728,7 @@ impl OplogSweeper {
         }
 
         if self
-            .inspection_is_backed_off(route.id, &agent_id, pass)
+            .inspection_is_backed_off(route.id, agent_id, pass)
             .await
         {
             return Some(Outcome::Waiting);
@@ -790,16 +741,16 @@ impl OplogSweeper {
         {
             Ok(current) => current,
             Err(error) => {
-                self.record_inspection_failure(route.id, &agent_id, pass)
+                self.record_inspection_failure(route.id, agent_id, pass)
                     .await;
                 crate::metrics::oplog::record_archive_maintenance_failure("sweep_inspection");
                 warn!(agent_id = %owned_agent_id, error = %error, "Failed to inspect oplog archive during sweep");
                 return Some(Outcome::ArchiveFailed);
             }
         };
-        self.clear_inspection_failure(route.id, &agent_id).await;
+        self.clear_inspection_failure(route.id, agent_id).await;
         if current == OplogIndex::NONE {
-            self.forget(route.id, &agent_id).await;
+            self.forget(route.id, agent_id).await;
             return Some(Outcome::Empty);
         }
 
@@ -810,13 +761,13 @@ impl OplogSweeper {
             .get(&(route.id, agent_id.clone()))
             .copied();
         if assess(remembered, current, pass) == Verdict::Wait {
-            self.remember(route.id, &agent_id, current, pass).await;
+            self.remember(route.id, agent_id, current, pass).await;
             return Some(Outcome::Waiting);
         }
 
         // Restamped before archiving: a failed archive leaves the agent in the layer, and on the
         // old stamp `finish_pass` would drop it and restart its gate every pass.
-        self.remember(route.id, &agent_id, current, pass).await;
+        self.remember(route.id, agent_id, current, pass).await;
         Some(self.archive_agent(route, owned_agent_id, current).await)
     }
 
@@ -885,60 +836,18 @@ impl OplogSweeper {
             return Outcome::ArchiveFailed;
         }
 
-        self.forget(route.id, agent_id).await;
+        self.forget(route.id, &owned_agent_id).await;
         debug!(agent_id = %agent_id, steps, "Oplog sweep archived an agent");
         Outcome::Archived
     }
 
-    /// An agent's environment, resolved through its component: a scanned key carries none, and the
-    /// `Create` entry may already have moved down a layer.
-    ///
-    /// Tries the deployed lookup, then revision zero, which `get_component_metadata` returns even
-    /// for a deleted component. A component keeps its environment across revisions, and a stranded
-    /// oplog often belongs to a deleted one.
-    async fn environment_of(&self, component_id: ComponentId) -> Option<EnvironmentId> {
-        match self.environments.lock().await.get(&component_id) {
-            Some(ResolvedEnvironment::Known(environment_id)) => return Some(*environment_id),
-            Some(ResolvedEnvironment::Unknown { retry_after }) if Instant::now() < *retry_after => {
-                return None;
-            }
-            _ => {}
-        }
-        let resolved = if let Ok(component) = self.components.get_metadata(component_id, None).await
-        {
-            Some(component.environment_id)
-        } else {
-            match self
-                .components
-                .get_metadata(component_id, Some(ComponentRevision::INITIAL))
-                .await
-            {
-                Ok(component) => Some(component.environment_id),
-                Err(error) => {
-                    warn!(
-                        component_id = %component_id,
-                        error = %error,
-                        "Oplog sweep could not resolve the component of a stranded oplog"
-                    );
-                    None
-                }
-            }
-        };
-        let entry = match resolved {
-            Some(environment_id) => ResolvedEnvironment::Known(environment_id),
-            None => ResolvedEnvironment::Unknown {
-                retry_after: Instant::now() + UNRESOLVED_ENVIRONMENT_RETRY,
-            },
-        };
-        let mut cache = self.environments.lock().await;
-        if cache.len() >= MAX_CACHED_ENVIRONMENTS {
-            cache.clear();
-        }
-        cache.insert(component_id, entry);
-        resolved
-    }
-
-    async fn remember(&self, route: RouteId, agent_id: &AgentId, index: OplogIndex, pass: u64) {
+    async fn remember(
+        &self,
+        route: RouteId,
+        agent_id: &OwnedAgentId,
+        index: OplogIndex,
+        pass: u64,
+    ) {
         let mut memo = self.memo.lock().await;
         let key = (route, agent_id.clone());
         if memo.len() >= self.config.max_tracked_agents.max(1) && !memo.contains_key(&key) {
@@ -959,7 +868,7 @@ impl OplogSweeper {
     async fn inspection_is_backed_off(
         &self,
         route: RouteId,
-        agent_id: &AgentId,
+        agent_id: &OwnedAgentId,
         pass: u64,
     ) -> bool {
         self.inspection_failures
@@ -993,7 +902,7 @@ impl OplogSweeper {
         );
     }
 
-    async fn record_inspection_failure(&self, route: RouteId, agent_id: &AgentId, pass: u64) {
+    async fn record_inspection_failure(&self, route: RouteId, agent_id: &OwnedAgentId, pass: u64) {
         let mut failures = self.inspection_failures.lock().await;
         let key = (route, agent_id.clone());
         if failures.len() >= self.config.max_tracked_agents.max(1) && !failures.contains_key(&key) {
@@ -1011,7 +920,7 @@ impl OplogSweeper {
         );
     }
 
-    async fn clear_inspection_failure(&self, route: RouteId, agent_id: &AgentId) {
+    async fn clear_inspection_failure(&self, route: RouteId, agent_id: &OwnedAgentId) {
         self.inspection_failures
             .lock()
             .await
@@ -1045,7 +954,7 @@ impl OplogSweeper {
         }
     }
 
-    async fn forget(&self, route: RouteId, agent_id: &AgentId) {
+    async fn forget(&self, route: RouteId, agent_id: &OwnedAgentId) {
         self.memo.lock().await.remove(&(route, agent_id.clone()));
         self.clear_inspection_failure(route, agent_id).await;
     }
@@ -1056,12 +965,14 @@ impl OplogSweeper {
         self.memo
             .lock()
             .await
-            .retain(|(memo_route, agent_id), _| *memo_route != route || owns(assignment, agent_id));
+            .retain(|(memo_route, owned_agent_id), _| {
+                *memo_route != route || owns(assignment, &owned_agent_id.agent_id)
+            });
         self.inspection_failures
             .lock()
             .await
-            .retain(|(failure_route, agent_id), _| {
-                *failure_route != route || owns(assignment, agent_id)
+            .retain(|(failure_route, owned_agent_id), _| {
+                *failure_route != route || owns(assignment, &owned_agent_id.agent_id)
             });
     }
 }

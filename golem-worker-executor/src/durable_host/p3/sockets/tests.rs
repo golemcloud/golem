@@ -181,10 +181,12 @@ fn p3_udp_socket_host_payload_pair_roundtrips() {
 
     assert_host_payload_pair_roundtrip::<P3SocketsTypesUdpSocketSend>(
         HostRequestP3SocketsUdpSend {
-            data: b"outgoing udp bytes".to_vec(),
             remote_address: Some(remote_address.clone()),
         },
-        HostResponseP3SocketsUdpSend { result: Ok(()) },
+        HostResponseP3SocketsUdpSend {
+            result: Ok(()),
+            endpoint: None,
+        },
     );
     assert_host_payload_pair_roundtrip::<P3SocketsTypesUdpSocketReceive>(
         HostRequestNoInput {},
@@ -193,6 +195,7 @@ fn p3_udp_socket_host_payload_pair_roundtrips() {
                 data: b"incoming udp bytes".to_vec(),
                 remote_address,
             }),
+            endpoint: None,
         },
     );
 }

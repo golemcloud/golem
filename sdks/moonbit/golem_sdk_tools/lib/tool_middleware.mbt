@@ -19,7 +19,7 @@ pub(all) struct ToolMiddlewareCommandInfo {
 pub(all) enum ToolMiddlewareParamSource {
   CanonicalInput(String)
   Stdin
-  Principal
+  InvocationContext
 } derive(Debug, Eq)
 
 ///|
@@ -366,14 +366,14 @@ fn middleware_output_stream_type() -> ParamType {
 ///|
 fn projected_middleware_param(
   parameter : ToolParamType,
-  include_principal : Bool,
+  include_context : Bool,
 ) -> ParamType? {
   match parameter {
     Public(type_) | LabelledPublic(type_) | QuestionOptionalPublic(type_) =>
       Some(type_)
-    Hidden(Principal) | LabelledHidden(Principal) =>
-      if include_principal {
-        Some(Simple("@tool.Principal"))
+    Hidden(InvocationContext) | LabelledHidden(InvocationContext) =>
+      if include_context {
+        Some(Simple("@tool.InvocationContext"))
       } else {
         None
       }
@@ -385,8 +385,9 @@ fn projected_middleware_param(
     | LabelledHidden(OutputStream | ErrorStream)
     | OptionalHidden(OutputStream | ErrorStream)
     | LabelledOptionalHidden(OutputStream | ErrorStream) => None
-    OptionalHidden(Principal) | LabelledOptionalHidden(Principal) =>
-      abort("principal cannot be optional")
+    OptionalHidden(InvocationContext)
+    | LabelledOptionalHidden(InvocationContext) =>
+      abort("the invocation context cannot be optional")
   }
 }
 
@@ -428,7 +429,7 @@ fn middleware_param_identities(
 fn append_projected_params(
   existing : Array[ProjectedMiddlewareParam],
   command : ToolCommandInfo,
-  include_principal : Bool,
+  include_context : Bool,
 ) -> Array[ProjectedMiddlewareParam] {
   let result = existing.copy()
   let inherited_identities : Map[String, Unit] = Map([])
@@ -442,7 +443,7 @@ fn append_projected_params(
     if identities.any(identity => inherited_identities.contains(identity)) {
       continue
     }
-    match projected_middleware_param(pair.1, include_principal) {
+    match projected_middleware_param(pair.1, include_context) {
       Some(type_) => {
         let source = match pair.1 {
           Public(_) | LabelledPublic(_) | QuestionOptionalPublic(_) =>
@@ -451,15 +452,16 @@ fn append_projected_params(
             ToolMiddlewareParamSource::Stdin
           OptionalHidden(InputStream) | LabelledOptionalHidden(InputStream) =>
             ToolMiddlewareParamSource::Stdin
-          Hidden(Principal) | LabelledHidden(Principal) =>
-            ToolMiddlewareParamSource::Principal
+          Hidden(InvocationContext) | LabelledHidden(InvocationContext) =>
+            ToolMiddlewareParamSource::InvocationContext
           Hidden(OutputStream | ErrorStream)
           | LabelledHidden(OutputStream | ErrorStream)
           | OptionalHidden(OutputStream | ErrorStream)
           | LabelledOptionalHidden(OutputStream | ErrorStream) =>
             abort("output streams are not middleware handler parameters")
-          OptionalHidden(Principal) | LabelledOptionalHidden(Principal) =>
-            abort("principal cannot be optional")
+          OptionalHidden(InvocationContext)
+          | LabelledOptionalHidden(InvocationContext) =>
+            abort("the invocation context cannot be optional")
         }
         result.push({ source_name: pair.0, type_, identities, source, })
         for identity in identities {
@@ -609,7 +611,7 @@ fn collect_middleware_surfaces(
   visiting : Array[String],
   surfaces : Array[ToolMiddlewareCommandInfo],
   handlers : Map[String, Array[String]],
-  include_principal : Bool,
+  include_context : Bool,
 ) -> Unit raise ToolMiddlewareParseError {
   if visiting.contains(current.source_name) {
     middleware_fail(
@@ -632,11 +634,11 @@ fn collect_middleware_surfaces(
           middleware_name,
           command_path.concat([command.name]),
           source_path.concat([command.source_name]),
-          append_projected_params(command_inherited, command, include_principal),
+          append_projected_params(command_inherited, command, include_context),
           next_visiting,
           surfaces,
           handlers,
-          include_principal,
+          include_context,
         )
       }
       None => {
@@ -655,7 +657,7 @@ fn collect_middleware_surfaces(
           handlers,
           leaf_command_path,
           leaf_source_path,
-          append_projected_params(command_inherited, command, include_principal),
+          append_projected_params(command_inherited, command, include_context),
           command,
         )
       }
@@ -668,7 +670,7 @@ fn middleware_surfaces(
   tool : ToolInfo,
   tools : Array[ToolInfo],
   middleware_name : String,
-  include_principal : Bool,
+  include_context : Bool,
 ) -> Array[ToolMiddlewareCommandInfo] raise ToolMiddlewareParseError {
   let surfaces : Array[ToolMiddlewareCommandInfo] = []
   collect_middleware_surfaces(
@@ -681,7 +683,7 @@ fn middleware_surfaces(
     [],
     surfaces,
     {},
-    include_principal,
+    include_context,
   )
   surfaces
 }

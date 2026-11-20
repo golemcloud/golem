@@ -18,7 +18,7 @@
 //! again. Mirrors `rdbms::rdbms_postgres_crud`.
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
@@ -101,7 +101,7 @@ async fn transactions_queries_and_replay(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!(agent_type, "go-rdbms-1");
+    let agent_id = agent_key!(agent_type, "go-rdbms-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

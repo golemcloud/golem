@@ -167,6 +167,7 @@ async fn abandoned_final_initiation_window_preserves_accepted_start_cleanup() {
                 is_live: true,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: std::time::Duration::ZERO,
+                durable_wait: false,
             },
             "test:monotonic_clock::now",
         ),
@@ -235,6 +236,7 @@ pub fn live_unfinished_handle_with_counter<P: DropPolicy>(
                 is_live: true,
                 snapshotting_mode: false,
                 max_in_function_retry_delay: std::time::Duration::ZERO,
+                durable_wait: false,
             },
             "test:monotonic_clock::now",
         ),
@@ -615,10 +617,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
         let replay_state = ReplayState::new_for_owner(
             golem_common::model::OwnedAgentId {
                 environment_id: golem_common::model::environment::EnvironmentId::new(),
-                agent_id: golem_common::model::AgentId {
-                    component_id: golem_common::model::component::ComponentId::new(),
-                    agent_id: "direct-claim-test".to_string(),
-                },
+                agent_id: golem_common::model::AgentId::from_parts(7, 1),
             },
             oplog.clone(),
             golem_common::model::regions::DeletedRegions::default(),
@@ -646,6 +645,7 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
                         is_live: false,
                         snapshotting_mode: false,
                         max_in_function_retry_delay: std::time::Duration::ZERO,
+                        durable_wait: false,
                     },
                     GolemContextSpanFinish::FQFN,
                 ),
@@ -670,5 +670,290 @@ async fn direct_claim_with_a_wrong_invocation_id_does_not_consume_the_start() {
             panic!("expected the matching Start to remain available");
         };
         assert_eq!(handle.start_idx(), start_index);
+    }
+}
+
+#[test]
+fn a_replayed_cancellation_of_a_recorded_completion_has_the_end_as_expected_step() {
+    use golem_common::model::oplog::ReplayStep;
+
+    for resolution in [
+        Resolution::Completed {
+            end_idx: OplogIndex::from_u64(9),
+            response: None,
+            delivery_marker: None,
+            forced_commit: false,
+        },
+        Resolution::CompletedButDiscarded {
+            end_idx: OplogIndex::from_u64(9),
+            marker_idx: OplogIndex::from_u64(11),
+            response: None,
+        },
+    ] {
+        let error = expect_cancelled_resolution(&resolution).unwrap_err();
+
+        let WorkerExecutorError::UnexpectedOplogEntry { divergence } = error else {
+            panic!("expected a replay divergence, got {error}");
+        };
+        assert_eq!(divergence.oplog_index, OplogIndex::from_u64(9));
+        assert_eq!(divergence.expected, ReplayStep::described("End at 9"));
+        assert_eq!(divergence.actual, ReplayStep::described("Cancelled"));
+    }
+    assert!(
+        expect_cancelled_resolution(&Resolution::Cancelled {
+            cancelled_idx: OplogIndex::from_u64(9),
+            partial: None,
+        })
+        .is_ok()
+    );
+}
+
+async fn replay_state_with(
+    entries: Vec<OplogEntry>,
+    deleted: golem_common::model::regions::DeletedRegions,
+) -> crate::durable_host::replay_state::ReplayState {
+    use super::super::tests::InMemoryOplog;
+
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in entries {
+        oplog.add(entry).await.unwrap();
+    }
+    crate::durable_host::replay_state::ReplayState::new_for_owner(
+        golem_common::model::OwnedAgentId {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            agent_id: golem_common::model::AgentId::from_parts(7, 1),
+        },
+        oplog.clone(),
+        deleted,
+        None,
+        crate::durable_host::tool::operation::OwnerToolOperations::new(),
+        oplog.current_oplog_index().await,
+        None,
+    )
+    .await
+    .unwrap()
+}
+
+fn clock_start(
+    function_name: golem_common::model::oplog::host_functions::HostFunctionName,
+) -> OplogEntry {
+    OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name,
+        invocation_id: None,
+        observational_owner: None,
+        request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
+            golem_common::model::oplog::HostRequestNoInput {},
+        )))),
+        durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
+        denial: None,
+    }
+}
+
+fn clock_end(start_index: u64) -> OplogEntry {
+    OplogEntry::End {
+        timestamp: Timestamp::now_utc(),
+        start_index: OplogIndex::from_u64(start_index),
+        response: Some(OplogPayload::Inline(Box::new(
+            HostResponse::MonotonicClockTimestamp(
+                golem_common::model::oplog::HostResponseMonotonicClockTimestamp { nanos: 1 },
+            ),
+        ))),
+        forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
+    }
+}
+
+fn recovery_succeeded() -> OplogEntry {
+    OplogEntry::RecoverySucceeded {
+        timestamp: Timestamp::now_utc(),
+    }
+}
+
+fn required_divergence(
+    result: Result<ReplayStartClaimOutcome, WorkerExecutorError>,
+) -> golem_common::model::oplog::ReplayDivergence {
+    match result {
+        Err(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => *divergence,
+        Err(error) => panic!("expected a replay divergence, got {error}"),
+        Ok(_) => panic!("a required claim without its Start must fail"),
+    }
+}
+
+fn replayed_function_name(step: &golem_common::model::oplog::ReplayStep) -> String {
+    match step {
+        golem_common::model::oplog::ReplayStep::HostCall(call) => call.function_name.clone(),
+        other => panic!("expected the replayed host call, got {other}"),
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn a_required_claim_of_a_locally_live_store_names_the_surviving_history() {
+    use golem_common::model::oplog::ReplayStep;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+
+    // [RecoverySucceeded, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5), RemoveRetryPolicy(6),
+    // Start(C=7), End(C=7→8)]. A's awaiter retains B and stops at the positional
+    // RemoveRetryPolicy(6), so history survives past the cursor at 5.
+    let replay_state = replay_state_with(
+        vec![
+            recovery_succeeded(),
+            clock_start(HostFunctionName::MonotonicClockNow),
+            clock_start(HostFunctionName::MonotonicClockNow),
+            clock_end(2),
+            clock_end(3),
+            OplogEntry::RemoveRetryPolicy {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                name: "replay-policy".to_string(),
+            },
+            clock_start(HostFunctionName::MonotonicClockResolution),
+            clock_end(7),
+        ],
+        Default::default(),
+    )
+    .await;
+    let handle = replay_state
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    replay_state.await_resolution(handle).await.unwrap();
+    assert_eq!(replay_state.last_replayed_index(), OplogIndex::from_u64(5));
+    let claim = || {
+        StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+    };
+
+    // An ordinary claim of a Store that continued live is a new live call of that Store.
+    let ordinary =
+        claims::claim_for_store(replay_state.clone(), claim(), true, false, |_, _| {}, None)
+            .await
+            .unwrap();
+    assert!(matches!(
+        ordinary,
+        ReplayStartClaimOutcome::StoreAlreadyLive
+    ));
+
+    // A required claim runs with historical admission and names the entry the cursor holds.
+    let divergence = required_divergence(
+        claims::claim_for_store(replay_state.clone(), claim(), true, true, |_, _| {}, None).await,
+    );
+    assert_eq!(
+        divergence.oplog_index,
+        OplogIndex::from_u64(6),
+        "{divergence}"
+    );
+    assert_ne!(
+        divergence.expected,
+        ReplayStep::end_of_history(),
+        "{divergence}"
+    );
+    assert!(
+        divergence
+            .expected
+            .to_string()
+            .starts_with("RemoveRetryPolicy"),
+        "the surviving positional entry is the expected step: {divergence}"
+    );
+    assert_eq!(
+        replayed_function_name(&divergence.actual),
+        HostFunctionName::WallClockNow.to_string()
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn a_required_claim_at_the_end_of_the_history_has_end_of_history_as_expected_step() {
+    use golem_common::model::oplog::ReplayStep;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+
+    let replay_state = replay_state_with(vec![recovery_succeeded()], Default::default()).await;
+    for store_continued_live in [false, true] {
+        let divergence = required_divergence(
+            claims::claim_for_store(
+                replay_state.clone(),
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                ),
+                store_continued_live,
+                true,
+                |_, _| {},
+                None,
+            )
+            .await,
+        );
+        assert_eq!(
+            divergence.oplog_index,
+            OplogIndex::from_u64(2),
+            "{divergence}"
+        );
+        assert_eq!(divergence.expected, ReplayStep::end_of_history());
+        assert_eq!(
+            replayed_function_name(&divergence.actual),
+            HostFunctionName::MonotonicClockNow.to_string()
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn a_required_claim_of_a_deleted_start_keeps_its_index() {
+    use golem_common::model::oplog::ReplayStep;
+    use golem_common::model::oplog::host_functions::HostFunctionName;
+    use golem_common::model::regions::{DeletedRegions, OplogRegion};
+
+    // [RecoverySucceeded, Start(2), End(2→3), RemoveRetryPolicy(4)] with 2..=3 deleted.
+    let replay_state = replay_state_with(
+        vec![
+            recovery_succeeded(),
+            clock_start(HostFunctionName::MonotonicClockNow),
+            clock_end(2),
+            OplogEntry::RemoveRetryPolicy {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                name: "replay-policy".to_string(),
+            },
+        ],
+        DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]),
+    )
+    .await;
+    for store_continued_live in [false, true] {
+        let divergence = required_divergence(
+            claims::claim_for_store(
+                replay_state.clone(),
+                StartClaim::unowned(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                ),
+                store_continued_live,
+                true,
+                |_, _| {},
+                None,
+            )
+            .await,
+        );
+        assert_eq!(
+            divergence.oplog_index,
+            OplogIndex::from_u64(2),
+            "a deleted-region Start keeps its own index: {divergence}"
+        );
+        assert!(
+            matches!(divergence.expected, ReplayStep::Other(_)),
+            "{divergence}"
+        );
+        assert_eq!(
+            replayed_function_name(&divergence.actual),
+            HostFunctionName::MonotonicClockNow.to_string()
+        );
     }
 }

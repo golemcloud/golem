@@ -55,6 +55,13 @@ impl AgentMetadataDto {
         for entry in &mut self.config {
             entry.value = crate::schema::redact_host_managed_typed_value(entry.value.clone());
         }
+        for update in &mut self.updates {
+            if let crate::base_model::worker::UpdateRecord::FailedUpdate(update) = update
+                && let Some(divergence) = &mut update.divergence
+            {
+                divergence.redact_host_managed_values_for_external();
+            }
+        }
     }
 }
 

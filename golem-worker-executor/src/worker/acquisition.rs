@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use uuid::Uuid;
 
 use golem_common::model::IdempotencyKey;
@@ -31,6 +32,9 @@ pub(super) enum CreateDecision {
 pub(super) struct CreateIdentity<'a> {
     pub request: &'a CreateRequest,
     pub canonical_key: Option<&'a str>,
+    /// The canonical constructor parameter text. An agent without a key gets its ID from the
+    /// request alone, so a retry with other parameters must not reach it.
+    pub constructor_parameters: Option<&'a str>,
     pub env: &'a [(String, String)],
     pub config: &'a [AgentConfigEntryDto],
 }
@@ -61,8 +65,9 @@ pub(super) fn decide_create(
             .collect::<HashMap<_, _>>()
     };
     if stored.request.kind == incoming.request.kind
-        && stored.request.principal == incoming.request.principal
+        && stored.request.caller == incoming.request.caller
         && stored.canonical_key == incoming.canonical_key
+        && stored.constructor_parameters == incoming.constructor_parameters
         && env(stored.env) == env(incoming.env)
         && config(stored.config) == config(incoming.config)
     {
@@ -93,7 +98,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(last_error) = error_and_retry_count {
                     if status.last_error_kind == Some(OplogErrorKind::Recovery) {
                         Err(WorkerExecutorError::failed_to_resume_worker(
-                            owned_agent_id.agent_id.clone(),
+                            owned_agent_id.agent_id,
                             WorkerExecutorError::runtime(
                                 last_error.error.to_string(&last_error.stderr),
                             ),
@@ -125,17 +130,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         loop {
-            let worker = match Self::get_exact_existing_suspended(
-                deps,
-                owned_agent_id,
-                Principal::anonymous(),
-            )
-            .await
-            {
-                Ok(worker) => worker,
-                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
-                Err(error) => return Err(error.into()),
-            };
+            let worker =
+                match Self::get_exact_existing_suspended(deps, owned_agent_id, Caller::anonymous())
+                    .await
+                {
+                    Ok(worker) => worker,
+                    Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
+                    Err(error) => return Err(error.into()),
+                };
             if worker.agent_mode() != AgentMode::Ephemeral {
                 return Ok(Some((worker, None)));
             }
@@ -160,7 +162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -173,9 +175,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             InvocationFreshnessDisposition::MayExist,
-            CreateIntent::UNKEYED_INVOCATION,
+            CreateIntent::Existing,
         )
         .await
     }
@@ -187,7 +189,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -203,7 +205,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 component_revision,
                 parent,
                 invocation_context_stack,
-                principal,
+                caller,
                 freshness_disposition,
                 create_intent,
             )
@@ -215,13 +217,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn get_exact_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, principal)
+            .get_existing(deps, owned_agent_id, caller)
             .await
     }
     /// Pins an existing owner's response metadata without allowing owner creation. With an
@@ -230,7 +232,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn get_exact_existing_suspended_for_response<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        principal: Principal,
+        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
@@ -242,7 +244,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .get_existing_with_fingerprint(
                     deps,
                     owned_agent_id,
-                    principal.clone(),
+                    caller.clone(),
                     expected_fingerprint,
                 )
                 .await?;
@@ -275,7 +277,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         mut freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
@@ -289,9 +291,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_env.clone(),
                 worker_agent_config.clone(),
                 component_revision,
-                parent.clone(),
+                parent,
                 invocation_context_stack,
-                principal.clone(),
+                caller.clone(),
                 freshness_disposition,
                 create_intent.clone(),
             )
@@ -319,7 +321,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -332,7 +334,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             InvocationFreshnessDisposition::MayExist,
         )
         .await
@@ -351,7 +353,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_existing_with_fingerprint(
                 deps,
                 owned_agent_id,
-                Principal::anonymous(),
+                Caller::anonymous(),
                 Some(expected_fingerprint),
             )
             .await?;
@@ -368,7 +370,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         if current.is_none_or(|identity| identity.fingerprint != expected_fingerprint) {
             return Err(WorkerExecutorError::AgentNotFound {
-                agent_id: owned_agent_id.agent_id.clone(),
+                agent_id: owned_agent_id.agent_id,
             });
         }
 
@@ -384,7 +386,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
@@ -398,19 +400,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             component_revision,
             parent,
             invocation_context_stack,
-            principal,
+            caller,
             freshness_disposition,
-            CreateIntent::UNKEYED_INVOCATION,
+            CreateIntent::Existing,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
         Ok(worker)
     }
+    /// `new_owner` is the owner that the request creates when the agent is missing. A request
+    /// without one reaches only an existing agent, so it cannot be KnownFresh.
     pub async fn validate_invocation_freshness<T: HasComponentService + HasWorkerService + Sync>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         idempotency_key: &IdempotencyKey,
         freshness_disposition: InvocationFreshnessDisposition,
+        new_owner: Option<&NewOwner>,
     ) -> Result<(), WorkerExecutorError> {
         if freshness_disposition == InvocationFreshnessDisposition::MayExist
             && let Some(metadata) = deps.worker_service().get(owned_agent_id).await?
@@ -424,31 +429,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             return validate_resolved_invocation_identity(
                 metadata.agent_mode,
-                metadata.original_phantom_id,
+                owned_agent_id.environment_id,
+                &owned_agent_id.agent_id,
+                metadata.canonical_key.is_some(),
                 idempotency_key,
                 freshness_disposition,
             );
         }
+        let Some((owner, constructor)) =
+            new_owner.and_then(|owner| owner.constructor.as_ref().map(|c| (owner, c)))
+        else {
+            if freshness_disposition == InvocationFreshnessDisposition::MayExist {
+                return Ok(());
+            }
+            crate::metrics::ephemeral::record_known_fresh_validation_failure();
+            return Err(WorkerExecutorError::invalid_request(
+                "KnownFresh requires the constructor of the ephemeral agent",
+            ));
+        };
         let component = deps
             .component_service()
-            .get_metadata(owned_agent_id.component_id(), None)
+            .get_metadata(owner.component_id, None)
             .await?;
-        let parsed_agent_id =
-            match ParsedAgentKey::parse(&owned_agent_id.agent_id.agent_id, &component.metadata) {
-                Ok(parsed_agent_id) => parsed_agent_id,
-                Err(_) if freshness_disposition == InvocationFreshnessDisposition::MayExist => {
-                    return Ok(());
-                }
-                Err(err) => {
-                    crate::metrics::ephemeral::record_known_fresh_validation_failure();
-                    return Err(WorkerExecutorError::invalid_request(format!(
-                        "KnownFresh requires a valid ephemeral agent id: {err}"
-                    )));
-                }
-            };
         let Some(agent_type) = component
             .metadata
-            .find_agent_type_by_name_ref(&parsed_agent_id.agent_type)
+            .find_agent_type_by_name_ref(&constructor.agent_type)
         else {
             if freshness_disposition == InvocationFreshnessDisposition::MayExist {
                 return Ok(());
@@ -466,7 +471,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let result = validate_resolved_invocation_identity(
             agent_mode,
-            parsed_agent_id.phantom_id,
+            owned_agent_id.environment_id,
+            &owned_agent_id.agent_id,
+            owner.keyed,
             idempotency_key,
             freshness_disposition,
         );
@@ -585,7 +592,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
         create_intent: CreateIntent,
@@ -596,9 +603,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let create_intent = create_intent.clone();
                 let worker_env = worker_env.clone();
                 let worker_agent_config = worker_agent_config.clone();
-                let parent = parent.clone();
                 let invocation_context_stack = invocation_context_stack.clone();
-                let principal = principal.clone();
+                let caller = caller.clone();
                 async move {
                     let start = std::time::Instant::now();
                     let mut lifecycle = worker
@@ -622,7 +628,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker_env,
                         worker_agent_config,
                         parent,
-                        &principal,
+                        &caller,
                         &invocation_context_stack,
                         freshness_disposition,
                         creation_mode,
@@ -643,6 +649,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "execution owner kind does not match the requested creation mode",
                 ));
             }
+            self.ensure_owns_key(create_intent.owner())?;
             // Construction success belongs to all waiters. Only the task's originating caller
             // may treat a newly written Create as its own, rather than an existing incarnation.
             let exclusive = matches!(
@@ -667,16 +674,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // rather than returning a missing-agent result from an exclusive create.
                 return Err(WorkerExecutorError::ShardingNotReady);
             }
-            let incoming_request = create_intent.request(
-                self.parsed_agent_id.as_ref().and_then(|id| id.phantom_id),
-                principal.clone(),
-                &invocation_context_stack,
-            );
-            let canonical_key = self
-                .parsed_agent_id
-                .as_ref()
-                .filter(|id| self.agent_mode() == AgentMode::Durable && id.phantom_id.is_none())
-                .map(ToString::to_string);
+            let incoming_request = create_intent.request(caller.clone(), &invocation_context_stack);
+            let canonical_key = create_intent
+                .owner()
+                .and_then(|owner| owner.canonical_key(self.agent_mode()));
+            let constructor_parameters = create_intent
+                .owner()
+                .and_then(|owner| owner.constructor.as_ref())
+                .map(|constructor| constructor.canonical_parameters())
+                .transpose()
+                .map_err(WorkerExecutorError::invalid_request)?;
             let stored_config: Vec<_> = self
                 .initial_worker_metadata
                 .config
@@ -730,12 +737,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Some(CreateIdentity {
                     request: &self.initial_worker_metadata.create_request,
                     canonical_key: self.initial_worker_metadata.canonical_key.as_deref(),
+                    constructor_parameters: self
+                        .initial_worker_metadata
+                        .constructor_parameters
+                        .as_deref(),
                     env: &self.initial_worker_metadata.env,
                     config: &stored_config,
                 }),
                 CreateIdentity {
                     request: &incoming_request,
                     canonical_key: canonical_key.as_deref(),
+                    constructor_parameters: constructor_parameters.as_deref(),
                     env: worker_env.as_deref().unwrap_or_default(),
                     config: &incoming_config,
                 },
@@ -756,9 +768,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
         }
     }
+    /// A keyed request reaches the agent at the ID its key derives. Another key at that ID is a
+    /// collision, and the request must not act on that agent.
+    pub(crate) fn ensure_owns_key(
+        &self,
+        owner: Option<&NewOwner>,
+    ) -> Result<(), WorkerExecutorError> {
+        let Some(owner) = owner else {
+            return Ok(());
+        };
+        owner.ensure_owns_key(
+            self.agent_id(),
+            self.agent_mode(),
+            self.initial_worker_metadata.canonical_key.as_deref(),
+        )
+    }
+
     pub(crate) async fn ensure_existing_with_fingerprint(
         self: &Arc<Self>,
-        _principal: Principal,
+        _principal: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
@@ -1027,7 +1055,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         let current_status_snapshot = current_status.load_full();
-        let metrics_status = Arc::new(WorkerStatusMetric::new(current_status_snapshot.status));
+        let metrics_status = Arc::new(WorkerStatusMetric::new(
+            current_status_snapshot.reported_status(),
+        ));
         let last_oplog_idx = current_status_snapshot.oplog_idx;
         drop(current_status_snapshot);
 
@@ -1229,7 +1259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             let create_request = &worker.initial_worker_metadata.create_request;
             let invocation_context = create_request.invocation_context();
-            let principal = create_request.principal.clone();
+            let caller = create_request.caller.clone();
             let idempotency_key = self.initialization_idempotency_key();
             let (_, entry) = self
                 .pending_invocation_entry(
@@ -1238,7 +1268,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         idempotency_key,
                         input: agent_id.parameters.value().clone(),
                         invocation_context,
-                        principal,
+                        caller,
                     },
                     None,
                 )
@@ -1318,26 +1348,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor
             && (initial_worker_metadata.agent_mode != AgentMode::Durable
                 || initial_worker_metadata.agent_type_name.is_some()
-                || initial_worker_metadata.canonical_key.is_some()
-                || initial_worker_metadata.original_phantom_id.is_some())
+                || initial_worker_metadata.canonical_key.is_some())
         {
             return Err(WorkerExecutorError::invalid_request(
-                "oplog processor metadata must be durable and have no agent type, key or phantom identity",
+                "oplog processor metadata must be durable and have no agent type or key",
             ));
         }
         let component_id = initial_worker_metadata.component_id;
-        // This consistency check applies while IDs still encode the component and type.
-        debug_assert_eq!(component_id, owned_agent_id.component_id());
-        if let Some(agent_type_name) = &initial_worker_metadata.agent_type_name {
-            debug_assert_eq!(
-                ParsedAgentKey::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).as_ref(),
-                Ok(agent_type_name),
-            );
-        }
-        initial_worker_metadata
-            .owner_kind
-            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-            .map_err(WorkerExecutorError::runtime)?;
         let persisted_status = last_known_status.clone();
         let agent_mode = initial_worker_metadata.agent_mode;
         let current_status = calculate_last_known_status_with_checkpoint(
@@ -1369,7 +1386,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             kind => ResolvedOwnerContext::from_authoritative_kind(
                 kind,
-                &owned_agent_id.agent_id.agent_id,
+                &owned_agent_id.agent_id,
+                None,
                 &initial_component.metadata,
             )
             .map_err(WorkerExecutorError::invalid_request)?,
@@ -1431,7 +1449,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
-        principal: &Principal,
+        caller: &Caller,
         invocation_context: &InvocationContextStack,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
@@ -1445,15 +1463,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // the next open claims the new epoch. Read before anything else, so a worker whose shard
         // has already left the assignment is refused without touching storage.
         let shard_epoch = owned_shard_epoch(this, &owned_agent_id.agent_id)?;
-        let component_id = owned_agent_id.component_id();
 
         let owner_kind = creation_mode.owner_kind();
-        owner_kind
-            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
 
-        // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
-        // idempotency key at invocation ingress. All other paths retain the checked lookup.
+        // KnownFresh has already been validated against the ephemeral agent type, the agent ID
+        // and the idempotency key at invocation ingress. All other paths retain the checked lookup.
         let existing = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
             None
         } else {
@@ -1471,7 +1485,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(existing)
             }
             None => {
-                // Create and initialize a new worker.
+                // A request that names an agent only by ID never creates it.
+                let Some(new_owner) = create_intent.owner() else {
+                    return Err(WorkerExecutorError::worker_not_found(
+                        owned_agent_id.agent_id(),
+                    ));
+                };
+                let component_id = new_owner.component_id;
                 let component = this
                     .component_service()
                     .get_metadata(component_id, component_revision)
@@ -1479,13 +1499,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let owner_context = ResolvedOwnerContext::from_authoritative_kind(
                     owner_kind,
-                    &owned_agent_id.agent_id.agent_id,
+                    &owned_agent_id.agent_id,
+                    new_owner.constructor.clone(),
                     &component.metadata,
                 )
                 .map_err(WorkerExecutorError::invalid_request)?;
-                if owner_kind != OwnerKind::ComponentAgent
-                    && component.environment_id != owned_agent_id.environment_id
-                {
+                if component.environment_id != owned_agent_id.environment_id {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",
                     ));
@@ -1549,20 +1568,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ..Default::default()
                 };
 
-                // Use the component's authoritative account_id and environment_id
-                // rather than the caller-provided values. During cross-account or
-                // cross-environment RPC the caller may pass its own account/environment,
-                // but the worker must belong to the component's owning account and
-                // environment for correct metric attribution and quota enforcement.
+                // The agent belongs to the component's owning account, not the caller's, for
+                // metric attribution and quota enforcement. Its environment is part of its ID
+                // and was checked against the component above.
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
                     component_id,
                     agent_type_name: agent_id.as_ref().map(|id| id.agent_type.clone()),
-                    canonical_key: agent_id
+                    canonical_key: new_owner.canonical_key(agent_mode),
+                    constructor_parameters: agent_id
                         .as_ref()
-                        .filter(|id| agent_mode == AgentMode::Durable && id.phantom_id.is_none())
-                        .map(ToString::to_string),
+                        .map(ParsedAgentKey::canonical_parameters)
+                        .transpose()
+                        .map_err(WorkerExecutorError::invalid_request)?,
                     owner_kind,
                     env: worker_env,
                     config: initial_agent_config,
@@ -1572,12 +1591,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
-                    original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
                     fingerprint: AgentFingerprint(instance_id),
                     agent_mode,
                     create_request: create_intent.request(
-                        agent_id.as_ref().and_then(|id| id.phantom_id),
-                        principal.clone(),
+                        caller.clone(),
                         &invocation_context
                             .clone()
                             .limit_depth(this.config().limits.max_invocation_context_stack_depth),
@@ -1600,10 +1617,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry =
                     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
-                        agent_id: initial_worker_metadata.agent_id.clone(),
+                        agent_id: initial_worker_metadata.agent_id,
                         component_id: initial_worker_metadata.component_id,
                         agent_type_name: initial_worker_metadata.agent_type_name.clone(),
                         canonical_key: initial_worker_metadata.canonical_key.clone(),
+                        constructor_parameters: initial_worker_metadata
+                            .constructor_parameters
+                            .clone(),
                         owner_kind: initial_worker_metadata.owner_kind,
                         agent_mode: initial_worker_metadata.agent_mode,
                         component_revision: initial_worker_metadata
@@ -1612,7 +1632,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         env: initial_worker_metadata.env.clone(),
                         environment_id: initial_worker_metadata.environment_id,
                         created_by: initial_worker_metadata.created_by,
-                        parent: initial_worker_metadata.parent.clone(),
+                        parent: initial_worker_metadata.parent,
                         component_size: initial_worker_metadata.last_known_status.component_size,
                         initial_total_linear_memory_size: initial_worker_metadata
                             .last_known_status
@@ -1622,9 +1642,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .active_plugins
                             .clone(),
                         local_agent_config,
-                        original_phantom_id: initial_worker_metadata.original_phantom_id,
                         instance_id,
                         create_request: initial_worker_metadata.create_request.clone(),
+                        never_live: false,
                     }));
 
                 let initial_status = Arc::new(arc_swap::ArcSwap::from_pointee(initial_status));

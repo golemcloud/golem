@@ -10,11 +10,13 @@ use super::error::RequestHandlerError;
 use super::file_response::{FileRequest, representation_headers, verified_stream};
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
-use crate::service::worker::WorkerService;
+use crate::service::worker::{WorkerService, WorkerServiceError};
 use bytes::Bytes;
 use futures::{StreamExt, stream::BoxStream};
-use golem_common::model::AgentId;
+use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::component::ComponentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use std::io;
 use tokio::sync::{mpsc, oneshot};
@@ -25,7 +27,8 @@ pub(super) async fn serve(
     worker: &WorkerService,
     request: &RichRequest,
     selected: &ResolvedRouteEntry,
-    agent_id: &AgentId,
+    component_id: ComponentId,
+    constructor: &ParsedAgentKey,
     path: &str,
     directory_request: bool,
     deadline: Instant,
@@ -47,7 +50,8 @@ pub(super) async fn serve(
     };
     let read = match worker
         .read_mounted_file(
-            agent_id,
+            component_id,
+            constructor,
             path,
             selection,
             selected.route.environment_id,
@@ -56,6 +60,13 @@ pub(super) async fn serve(
         .await
     {
         Ok(read) => read,
+        Err(
+            error @ WorkerServiceError::GolemError(WorkerExecutorError::AgentKeyCollision {
+                ..
+            }),
+        ) => {
+            return Err(RequestHandlerError::AgentInvocationFailed(error));
+        }
         Err(error) => return Err(RequestHandlerError::InternalError(error.into())),
     };
     if Instant::now() >= deadline {

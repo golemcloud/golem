@@ -10,11 +10,11 @@
 
 package golem.runtime.rpc
 
-import golem.InvocationId
+import golem.{AgentId, InvocationId}
 
 import scala.concurrent.Future
 
-final case class InvocationMetadata(agentId: String, invocationId: InvocationId)
+final case class InvocationMetadata(agentId: AgentId, invocationId: InvocationId)
 
 final case class InvocationResult[+A](metadata: InvocationMetadata, value: A)
 

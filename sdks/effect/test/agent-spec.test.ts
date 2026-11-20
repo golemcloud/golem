@@ -111,9 +111,13 @@ describe("defineAgent / .implement split", () => {
 
   it("spec exposes a typed RPC client without ever being registered", () => {
     expect(typeof SpecOnlyAgent.client).toBe("object")
-    expect(typeof SpecOnlyAgent.client.get).toBe("function")
-    expect(typeof SpecOnlyAgent.client.getPhantom).toBe("function")
-    expect(typeof SpecOnlyAgent.client.newPhantom).toBe("function")
+    expect(typeof SpecOnlyAgent.client.upsert).toBe("function")
+    expect(typeof SpecOnlyAgent.client.create).toBe("function")
+    expect(typeof SpecOnlyAgent.client.getById).toBe("function")
+    expect(typeof SpecOnlyAgent.client.bindSelf).toBe("function")
+    expect("get" in SpecOnlyAgent.client).toBe(false)
+    expect("newPhantom" in SpecOnlyAgent.client).toBe(false)
+    expect("getPhantom" in SpecOnlyAgent.client).toBe(false)
   })
 
   it("implemented agent shares the SAME client reference as its spec", () => {

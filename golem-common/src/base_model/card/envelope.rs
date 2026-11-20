@@ -19,6 +19,7 @@ use super::monomorphization::{
 use super::owner::*;
 use super::recipient::{RecipientOwnerContext, RecipientPattern};
 use super::{PermissionPattern, PolymorphicPermissionPattern};
+use crate::base_model::{AgentId, RESERVED_TYPE_TAG};
 use crate::model::account::AccountEmail;
 use crate::model::agent::AgentTypeName;
 use crate::model::application::ApplicationName;
@@ -350,6 +351,10 @@ fn recipient_envelope_context(
     let wildcard_environment = || EnvironmentName("*".to_string());
     let wildcard_component = || ComponentName("*".to_string());
     let wildcard_agent_type = || AgentTypeName("*".to_string());
+    let placeholder_agent = || AgentOwnerLeaf {
+        agent_id: AgentId::from_parts(RESERVED_TYPE_TAG, 0),
+        agent_type: None,
+    };
 
     match recipient {
         RecipientPattern::Any => AgentPermissionMonomorphizationContext {
@@ -357,7 +362,7 @@ fn recipient_envelope_context(
             application: wildcard_application(),
             environment: wildcard_environment(),
             component: wildcard_component(),
-            agent_name: "*".to_string(),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::AgentType(wildcard_agent_type()),
         },
         RecipientPattern::Account { account }
@@ -367,7 +372,7 @@ fn recipient_envelope_context(
             application: wildcard_application(),
             environment: wildcard_environment(),
             component: wildcard_component(),
-            agent_name: "*".to_string(),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::AgentType(wildcard_agent_type()),
         },
         RecipientPattern::ApplicationEnvironments {
@@ -382,7 +387,7 @@ fn recipient_envelope_context(
             application: application.clone(),
             environment: wildcard_environment(),
             component: wildcard_component(),
-            agent_name: "*".to_string(),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::AgentType(wildcard_agent_type()),
         },
         RecipientPattern::Environment {
@@ -399,7 +404,7 @@ fn recipient_envelope_context(
             application: application.clone(),
             environment: environment.clone(),
             component: wildcard_component(),
-            agent_name: "*".to_string(),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::AgentType(wildcard_agent_type()),
         },
         RecipientPattern::ComponentAgents {
@@ -412,7 +417,7 @@ fn recipient_envelope_context(
             application: application.clone(),
             environment: environment.clone(),
             component: component.clone(),
-            agent_name: "*".to_string(),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::AgentType(wildcard_agent_type()),
         },
         RecipientPattern::ComponentExternalToolOwner {
@@ -425,7 +430,7 @@ fn recipient_envelope_context(
             application: application.clone(),
             environment: environment.clone(),
             component: component.clone(),
-            agent_name: "~external-tool-owner".to_string(),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::ComponentExternalToolOwner,
         },
         RecipientPattern::Agent {
@@ -439,7 +444,7 @@ fn recipient_envelope_context(
             application: application.clone(),
             environment: environment.clone(),
             component: component.clone(),
-            agent_name: format!("{}(*)", agent_type.0),
+            agent: placeholder_agent(),
             owner: RecipientOwnerContext::AgentType(agent_type.clone()),
         },
     }
@@ -452,7 +457,14 @@ mod tests {
     use test_r::test;
 
     const RECIPIENT: &str = "owner@example.com/app/prod/component/~external-tool-owner";
-    const RUNTIME_OWNER: &str = "~golem-external-tool-owner-01234567-89ab-cdef-0123-456789abcdef";
+    const RUNTIME_OWNER: &str = "00000000-4567-89ab-8def-0123456789ab";
+
+    fn cart(n: u128) -> AgentOwnerLeaf {
+        AgentOwnerLeaf {
+            agent_id: crate::base_model::AgentId::from_parts(7, n),
+            agent_type: Some(AgentTypeName("Cart".to_string())),
+        }
+    }
 
     #[test]
     fn template_envelope_covers_broad_binding_regions() {
@@ -485,7 +497,7 @@ mod tests {
                 context.application = ApplicationName("app".to_string());
                 context.environment = EnvironmentName("prod".to_string());
                 context.component = ComponentName("component".to_string());
-                context.agent_name = "Cart(alice)".to_string();
+                context.agent = cart(1);
                 let actual =
                     resolve_permissions_for_agent_context(std::slice::from_ref(&slot), &context);
                 let envelope = permission_card_envelope(&[slot], &[], &[], &[]).unwrap();
@@ -508,7 +520,7 @@ mod tests {
         let envelope =
             permission_card_envelope(std::slice::from_ref(&slot), &[], &[], &[]).unwrap();
         let literal = parse_permission(&format!(
-            "filesystem(owner@example.com/app/prod/component/Cart%28%2A%29) @ {recipient} : read : /**"
+            "filesystem(owner@example.com/app/prod/component/00000007-0000-8000-8000-000000000009) @ {recipient} : read : /**"
         )).unwrap();
         let PermissionPattern::Filesystem(pattern) = &envelope.lower_positive[0] else {
             panic!()
@@ -520,16 +532,22 @@ mod tests {
                 ..
             }
         ));
-        for name in ["Cart(alice)", "Cart(bob)", "Cart(*)"] {
+        for agent in [cart(1), cart(2)] {
             let mut context = recipient_envelope_context(slot.recipient());
-            context.agent_name = name.to_string();
+            context.agent = agent;
             let actual =
                 resolve_permissions_for_agent_context(std::slice::from_ref(&slot), &context);
             assert!(envelope.lower_positive[0].subsumes(&actual[0]));
-            if name != "Cart(*)" {
-                assert!(!literal.subsumes(&actual[0]));
-            }
+            assert!(!literal.subsumes(&actual[0]));
         }
+        let mut other_type = recipient_envelope_context(slot.recipient());
+        other_type.agent = AgentOwnerLeaf {
+            agent_id: crate::base_model::AgentId::from_parts(8, 1),
+            agent_type: Some(AgentTypeName("Other".to_string())),
+        };
+        let actual =
+            resolve_permissions_for_agent_context(std::slice::from_ref(&slot), &other_type);
+        assert!(!envelope.lower_positive[0].subsumes(&actual[0]));
         let converted = PolymorphicPermissionPattern::from(literal.clone());
         assert_eq!(converted.as_concrete(), Some(literal));
         assert!(!converted.has_slots());
@@ -556,7 +574,7 @@ mod tests {
         assert!(envelope.lower_negative.is_empty());
         assert!(envelope.upper_negative.is_empty());
         let mut context = recipient_envelope_context(first.recipient());
-        context.agent_name = "Cart(alice)".to_string();
+        context.agent = cart(1);
         let actual = resolve_permissions_for_agent_context(std::slice::from_ref(&second), &context);
         assert!(
             envelope
@@ -651,18 +669,13 @@ mod tests {
     }
 
     #[test]
-    fn dummy_external_tool_owner_literal_cannot_authorize_runtime_instance() {
-        let dummy = parse_polymorphic_permission(&format!(
-            "filesystem(owner@example.com/app/prod/component/~external-tool-owner) @ {RECIPIENT} : read : /**"
-        ))
-        .unwrap();
-        let dummy_envelope = permission_envelopes_for_recipient_patterns(&[dummy]).unwrap();
-        let runtime_target = parse_permission(&format!(
-            "filesystem(owner@example.com/app/prod/component/{RUNTIME_OWNER}) @ {RECIPIENT} : read : /**"
-        ))
-        .unwrap();
-
-        assert!(!dummy_envelope[0].subsumes(&runtime_target));
+    fn a_named_external_tool_owner_literal_is_not_an_owner() {
+        assert!(
+            parse_polymorphic_permission(&format!(
+                "filesystem(owner@example.com/app/prod/component/~external-tool-owner) @ {RECIPIENT} : read : /**"
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -671,7 +684,11 @@ mod tests {
             parse_polymorphic_permission(&format!("filesystem(?agent) @ {RECIPIENT} : read : /**"))
                 .unwrap();
         let mut context = recipient_envelope_context(permission.recipient());
-        context.agent_name = RUNTIME_OWNER.to_string();
+        let runtime_owner = AgentOwnerLeaf {
+            agent_id: RUNTIME_OWNER.parse().unwrap(),
+            agent_type: None,
+        };
+        context.agent = runtime_owner.clone();
 
         let resolved = resolve_permissions_for_agent_context(&[permission], &context);
         let PermissionPattern::Filesystem(pattern) = &resolved[0] else {
@@ -679,8 +696,8 @@ mod tests {
         };
         assert!(matches!(
             &pattern.owner,
-            AgentOwnerPattern::Agent { agent, .. }
-                if *agent == super::super::owner::AgentOwnerLeafPattern::Agent(RUNTIME_OWNER.to_string())
+            AgentOwnerPattern::Agent { agent: AgentOwnerLeafPattern::Agent(agent), .. }
+                if *agent == runtime_owner
         ));
     }
 }

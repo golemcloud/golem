@@ -16,7 +16,7 @@
 
 package golem.tool
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.SchemaDecodeError
 import golem.schema.wire.*
 import golem.tool.wire.*
@@ -29,7 +29,7 @@ final case class WireToolInput(
   stdin: Option[ToolInputStream],
   stdout: Option[ToolOutputStream],
   stderr: Option[ToolOutputStream],
-  principal: Principal
+  context: InvocationContext
 )
 
 final case class WireToolBinding(

@@ -13,3 +13,7 @@ import {
   "moonbitlang/core/random" @random,
   "moonbitlang/core/debug" @debug,
 }
+
+import {
+  "moonbitlang/async/socket" @socket,
+} for "wbtest"

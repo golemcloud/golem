@@ -925,10 +925,12 @@ mod tests {
         let tool = Tool {
             version: "1".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "presented-search".to_string(),
                     aliases: vec![],
+                    http: None,
                     doc: Doc {
                         summary: String::new(),
                         description: String::new(),

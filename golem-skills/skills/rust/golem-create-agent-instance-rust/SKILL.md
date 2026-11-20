@@ -1,35 +1,40 @@
 ---
 name: golem-create-agent-instance-rust
-description: "Creating a new Rust Golem agent instance with golem agent new. Use when asked to create, instantiate, or pre-create an agent without invoking a method."
+description: "Creating a new Rust Golem agent instance with golem agent create or golem agent upsert. Use when asked to create, instantiate, or pre-create an agent without invoking a method."
 ---
 
-# Creating a Golem Agent Instance with `golem agent new`
+# Creating a Golem Agent Instance with `golem agent create`
 
 Both `golem` and `golem-cli` can be used — all commands below work with either binary.
 
 ## Usage
 
 ```shell
-golem agent new <AGENT_ID> [OPTIONS]
+golem agent create <AGENT_TYPE>(<PARAMETERS>) [OPTIONS]
+golem agent upsert <AGENT_TYPE>(<PARAMETERS>)
 ```
 
-This **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations. If the agent's component has not been deployed yet and the CLI is run from an application directory, it will automatically build and deploy the component first.
+`golem agent create` **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations. The command prints the agent ID (a UUID that Golem issues) and the fingerprint of the new agent. If the agent's component has not been deployed yet and the CLI is run from an application directory, it will automatically build and deploy the component first.
 
-Unlike `golem agent invoke`, which implicitly creates the agent on first call, `golem agent new` explicitly pre-creates the agent — useful when you need to set environment variables or configuration at creation time.
+- Without `--keyed`, each call creates a **new agent without a key**, even for the same constructor parameters. It is reachable only by its agent ID: `AgentTypeName[<AGENT_ID>]` or the bare `<AGENT_ID>`.
+- With `--keyed`, it creates the **keyed** agent of the constructor parameters, which `AgentTypeName(params)` addresses. It fails when the keyed agent already exists.
+- `golem agent upsert` gets the keyed agent of the constructor parameters and creates it when it does not exist. It takes no environment variables or configuration.
 
-## Agent ID Format
+Unlike `golem agent invoke`, which implicitly creates the keyed agent on first call, `golem agent create` explicitly pre-creates the agent — useful when you need to set environment variables or configuration at creation time.
 
-The agent ID identifies the agent type and its constructor parameters:
+## Agent Address Format
+
+The address of `create` and `upsert` is a key: the agent type and its constructor parameters:
 
 ```
 AgentTypeName(param1, param2, ...)
 ```
 
-The agent ID can optionally be prefixed with environment or application paths:
+The key can optionally be prefixed with environment or application paths:
 
 | Format | Description |
 |--------|-------------|
-| `AgentTypeName(params)` | Standalone agent name |
+| `AgentTypeName(params)` | Agent type and constructor parameters |
 | `env/AgentTypeName(params)` | Environment-specific |
 | `app/env/AgentTypeName(params)` | Application and environment-specific |
 | `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
@@ -38,40 +43,46 @@ For agents with no constructor parameters, use empty parentheses: `AgentTypeName
 
 ## Examples
 
-### Create an agent with no constructor parameters
+### Create a new agent without a key
 
 ```shell
-golem agent new 'MyAgent()'
+golem agent create 'MyAgent()'
 ```
 
-### Create an agent with constructor parameters
+### Create the keyed agent of constructor parameters
 
 ```shell
-golem agent new 'ChatRoom("general")'
+golem agent create --keyed 'ChatRoom("general")'
+```
+
+### Get or create the keyed agent
+
+```shell
+golem agent upsert 'ChatRoom("general")'
 ```
 
 ### Create an agent with environment variables
 
 ```shell
-golem agent new 'MyAgent("user-123")' --env API_KEY=sk-abc123 --env LOG_LEVEL=debug
+golem agent create 'MyAgent("user-123")' --env API_KEY=sk-abc123 --env LOG_LEVEL=debug
 ```
 
 ### Create an agent with configuration
 
 ```shell
-golem agent new 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
+golem agent create 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
 ```
 
 ### Create an agent in a specific environment
 
 ```shell
-golem agent new 'staging/MyAgent("user-123")'
+golem agent create 'staging/MyAgent("user-123")'
 ```
 
 ### Combine environment variables and configuration
 
 ```shell
-golem agent new 'OrderProcessor("us-east")' \
+golem agent create 'OrderProcessor("us-east")' \
   --env DATABASE_URL=postgres://... \
   --config batch_size=100 \
   --config retry_policy.max_attempts=3
@@ -81,16 +92,18 @@ golem agent new 'OrderProcessor("us-east")' \
 
 | Option | Description |
 |--------|-------------|
+| `--keyed` | Create the keyed agent of the constructor parameters; fails when it already exists |
+| `-i, --idempotency-key <KEY>` | A create retried with the same key returns the agent of the first create |
 | `-e, --env <ENV=VAL>` | Environment variables visible to the agent (can be repeated) |
 | `-c, --config <PATH=VALUE>` | Configuration entries for the agent, using dot-separated paths (can be repeated). Only configuration declared by the agent can be provided. If not provided, the default from the manifest (`agents.*.config`) is used. |
 
 ## Auto-Deploy
 
-If the agent's component has not been deployed yet and the CLI is run from an application directory, `golem agent new` will automatically build and deploy the component before creating the agent.
+If the agent's component has not been deployed yet and the CLI is run from an application directory, `golem agent create` will automatically build and deploy the component before creating the agent.
 
 ## Value Syntax
 
-The agent ID parameters use **Rust syntax**:
+The constructor parameters in the address use **Rust syntax**:
 
 - Field names use `snake_case`
 - Options: `Some(value)` / `None`
@@ -100,11 +113,11 @@ The agent ID parameters use **Rust syntax**:
 - Results: `Ok(value)` / `Err(value)`
 
 ```shell
-golem agent new 'UserManager(MyConfig { region: "us-east", max_connections: Some(10) })'
+golem agent create 'UserManager(MyConfig { region: "us-east", max_connections: Some(10) })'
 ```
 
-## When to Use `golem agent new` vs `golem agent invoke`
+## When to Use `golem agent create` vs `golem agent invoke`
 
-- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation.
-- Use `golem agent invoke` when you want to call a method — the agent is created automatically on first invocation if it doesn't exist.
-- An agent created with `golem agent new` can be invoked later with `golem agent invoke` using the same agent ID.
+- Use `golem agent create` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation.
+- Use `golem agent invoke` when you want to call a method — addressed by its key, the agent is created automatically on first invocation if it doesn't exist.
+- An agent created with `golem agent create --keyed` can be invoked later with `golem agent invoke` using the same `AgentTypeName(params)` key. An agent created without `--keyed` is invoked by its agent ID, for example `golem agent invoke 'MyAgent[<AGENT_ID>]' my_method`.

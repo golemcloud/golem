@@ -13,6 +13,7 @@ use golem_worker_executor::services::rdbms::{
     RdbmsTransactionStatus,
 };
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use test_r::test;
 use tokio::sync::Notify;
@@ -513,15 +514,15 @@ async fn completion_stop(
     let seed_id = executor
         .start_agent(
             &component.id,
-            agent_id!("DbKvCompletion", "completion-seed"),
+            agent_key!("DbKvCompletion", "completion-seed"),
         )
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -532,9 +533,9 @@ async fn completion_stop(
 
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("DbKvCompletion", "completion-target")
+        agent_key!("DbKvCompletion", "completion-target")
     } else {
-        agent_id!("EphemeralDbKvCompletion", "completion-target")
+        agent_key!("EphemeralDbKvCompletion", "completion-target")
     };
     let key = IdempotencyKey::fresh();
     let method = match operation {
@@ -542,23 +543,26 @@ async fn completion_stop(
         Operation::Execute => "execute_twice",
         Operation::Commit => "commit",
     };
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(&executor, &key, method))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
-    let worker = Worker::get_or_create_suspended(
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        method,
+    );
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
-        &OwnedAgentId::new(context.default_environment_id, &id),
+        &owned,
         None,
         vec![],
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(&executor, component.id, &name, durable, &key, method),
     )
     .await?;
     let input = if operation == Operation::Keyvalue {
@@ -582,7 +586,7 @@ async fn completion_stop(
     let result = async {
         state.call.wait_pending().await?;
         executor.commit_oplog(&id).await?;
-        let before = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let before = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(count_agent_invocation_pair_since(&before, OplogIndex::INITIAL) == (2, 1));
         let start = if operation == Operation::Commit {
             let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
@@ -621,7 +625,7 @@ async fn completion_stop(
         ensure!(state.call.state.load(Ordering::SeqCst) == PENDING, "accepted stop dropped or returned provider work");
         ensure!(!invocation.is_finished() && worker.is_loaded().await);
         ensure!(registry.applied_updates()[baseline..].iter().any(|u| u.memory_gb_seconds_delta > 0 || u.memory_byte_nanoseconds_remainder > 0), "held account interval must keep accruing memory byte-time");
-        let held = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let held = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(terminals(&held, start) == 0 && count_agent_invocation_pair_since(&held, OplogIndex::INITIAL) == (2, 1));
         ensure!(!held.iter().any(|e| matches!(e.entry, PublicOplogEntry::Cancelled(_))));
         state.call.release.add_permits(1);
@@ -641,7 +645,7 @@ async fn completion_stop(
         worker.join_accepted_stops_for_test().await?;
         worker.retained_cleanup_for_test().await?;
         ensure!(state.call.state.load(Ordering::SeqCst) == RETURNED);
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(terminals(&stopped, start) == 1, "provider completion must retain its real End: {stopped:#?}");
         ensure!(!stopped.iter().any(|e| matches!(e.entry, PublicOplogEntry::Cancelled(_))));
         let expected: Vec<String> = if operation == Operation::Commit { ["tx-statement", "pre-commit", "commit", "cleanup"].into_iter().map(str::to_string).collect() } else { vec!["first".to_string()] };
@@ -668,16 +672,16 @@ async fn completion_stop(
         registry.set_policy(policy);
         applied_refresh(&limits, &registry, context.account_id).await?.await?;
         if durable {
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             tokio::time::timeout(Duration::from_secs(10), &mut invocation).await.context("ordinary same-key reconstruction")???;
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(terminals(&recovered, start) == 1 && count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
             let after = state.effects();
             ensure!(after == if operation == Operation::Commit { expected } else { vec!["first".to_string(), "second".to_string()] }, "completed history repeated a provider effect: {after:?}");
             executor.invoke_and_await_agent_with_key(&component, &name, &key, method, input.clone()).await?;
             ensure!(state.effects() == after, "same-key lookup executed provider work");
         } else {
-            executor.invoke_and_await_agent(&component, &agent_id!("EphemeralDbKvCompletion", "completion-probe"), method, input.clone()).await?;
+            executor.invoke_and_await_agent(&component, &agent_key!("EphemeralDbKvCompletion", "completion-probe"), method, input.clone()).await?;
             ensure!(state.effects() == ["first", "first", "second"]);
         }
         Ok::<_, anyhow::Error>(())

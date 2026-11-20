@@ -583,7 +583,7 @@ mod tests {
             trait Example {
                 fn sdk_alias(
                     &self,
-                    principal: sdk_alias::tool::Principal,
+                    context: sdk_alias::tool::InvocationContext,
                     payload: golem_rust::Payload,
                 );
 
@@ -594,7 +594,7 @@ mod tests {
         normalize_sdk_paths_in_item_trait(&mut item, &resolved, &canonical, &preserved);
         let normalized = quote! { #item }.to_string();
         assert!(normalized.contains("fn sdk_alias"));
-        assert!(normalized.contains("principal : golem_rust :: tool :: Principal"));
+        assert!(normalized.contains("context : golem_rust :: tool :: InvocationContext"));
         assert!(normalized.contains("payload : __preserved_golem_rust :: Payload"));
         assert!(normalized.contains("fn __preserved_golem_rust"));
         assert!(normalized.contains("__preserved_golem_rust : String"));
@@ -602,7 +602,7 @@ mod tests {
         let emitted =
             resolve_generated_sdk_paths(quote! { #item }, &resolved, &canonical, &preserved)
                 .to_string();
-        assert!(emitted.contains("principal : sdk_alias :: tool :: Principal"));
+        assert!(emitted.contains("context : sdk_alias :: tool :: InvocationContext"));
         assert!(emitted.contains("payload : golem_rust :: Payload"));
         assert!(emitted.contains("fn golem_rust"));
         assert!(emitted.contains("golem_rust : String"));

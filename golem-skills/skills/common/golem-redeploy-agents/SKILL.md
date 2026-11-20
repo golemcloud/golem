@@ -1,6 +1,6 @@
 ---
 name: golem-redeploy-agents
-description: "Redeploying existing agents by deleting and recreating them. Use when asked to redeploy agents, reset agent state while keeping the same identity, or force agents to start fresh with the latest component version."
+description: "Redeploying existing agents by deleting and recreating them. Use when asked to redeploy agents, reset agent state while keeping the same key, or force agents to start fresh with the latest component version."
 ---
 
 # Redeploying Existing Agents
@@ -9,7 +9,7 @@ Both `golem` and `golem-cli` can be used — all commands below work with either
 
 ## Overview
 
-Redeploying an agent means **deleting** it and **recreating** it with the same name and stored per-agent environment and local configuration overrides, but using the currently deployed component version. Defaults come from that component, so effective environment variables and configuration can change. Unlike an in-place update, redeployment destroys the agent's execution state, including its operation log (oplog) and internal WASM state. Guest key-value storage is scoped by environment, bucket, and key, not by the agent lifecycle: redeploy and reset do not clear it. Clean up application KV data separately when a fully clean start is required.
+Redeploying an agent means **deleting** it and **recreating** it from its constructor parameters and stored per-agent environment and local configuration overrides, but using the currently deployed component version. A **keyed** agent is recreated with its key, so it keeps its agent ID. An agent **without a key** is recreated from its constructor parameters, env and config with a **new agent ID**; the old ID no longer reaches it. Defaults come from that component, so effective environment variables and configuration can change. Unlike an in-place update, redeployment destroys the agent's execution state, including its operation log (oplog) and internal WASM state. Guest key-value storage is scoped by environment, bucket, and key, not by the agent lifecycle: redeploy and reset do not clear it. Clean up application KV data separately when a fully clean start is required.
 
 Use redeployment when:
 
@@ -31,7 +31,7 @@ This applies deployment changes, if any, and then processes existing **durable**
 
 1. Lists the durable agents of each deployed component.
 2. Deletes each agent (destroying its oplog and stored state).
-3. Recreates each agent with the same name and stored per-agent environment and local configuration overrides, using the currently deployed component and its defaults.
+3. Recreates each agent from its constructor parameters and stored per-agent environment and local configuration overrides, using the currently deployed component and its defaults. A keyed agent keeps its agent ID; an agent without a key gets a new agent ID, which the CLI reports (`recreatedAgentId` in structured output).
 
 ### Comparison with Other Post-Deploy Flags
 
@@ -62,7 +62,9 @@ With this configuration, every `golem deploy` targeting the `local` environment 
 
 | Aspect | Preserved? |
 |--------|------------|
-| Agent name (identity) | ✅ Yes |
+| Key and agent ID of a keyed agent | ✅ Yes |
+| Agent ID of an agent without a key | ❌ No — recreated with a new agent ID (`recreatedAgentId`) |
+| Constructor parameters | ✅ Yes |
 | Stored per-agent environment overrides | ✅ Yes — effective defaults can change |
 | Stored per-agent local configuration overrides | ✅ Yes — effective defaults can change |
 | Component configuration defaults | ❌ No — taken from the currently deployed component |

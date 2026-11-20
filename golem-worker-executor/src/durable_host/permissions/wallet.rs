@@ -207,7 +207,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                         )),
                         Some(CardManagedByRuntimeDerived {
                             environment_id: owned_agent_id.environment_id,
-                            agent_id: owned_agent_id.agent_id.clone(),
+                            agent_id: owned_agent_id.agent_id,
                             invocation_key,
                             oplog_index: operation_index,
                         }),
@@ -259,6 +259,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                     CallReplayOutcome::Incomplete(live) => {
                         handle = live;
                         transfer = Some(CardTransferData::from_request(
+                            start_index,
                             load_card_transfer_request(self, start_index).await?,
                         )?);
                     }
@@ -266,7 +267,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
             }
 
             let transfer = transfer.expect("a live transfer has its request");
-            let result = match execute_source_card_transfer(self, &transfer).await {
+            let result = match execute_source_card_transfer(self, &transfer, start_index).await {
                 Ok(result) => result,
                 Err(error) => {
                     handle.abandon_for_trap();

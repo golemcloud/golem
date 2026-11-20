@@ -20,7 +20,7 @@
 use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
@@ -65,7 +65,7 @@ async fn go_custom_snapshot_round_trips_unexported_state(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("SnapAgent", "go-snapshot-1");
+    let agent_id = agent_key!("SnapAgent", "go-snapshot-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -141,7 +141,7 @@ async fn go_default_json_snapshot_recovers_exported_state(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("JSONSnapAgent", "go-json-snapshot-1");
+    let agent_id = agent_key!("JSONSnapAgent", "go-json-snapshot-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

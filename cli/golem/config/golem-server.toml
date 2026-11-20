@@ -361,6 +361,7 @@ drop_when_full = 0.25
 ttl = "8h"
 
 [worker_executor.agent_sockets]
+dns_servers = []
 enabled = false
 refused_ports = []
 
@@ -1338,6 +1339,7 @@ type = "Disabled"
 # ttl = "8h"
 #
 # [worker_executor.agent_sockets]
+# dns_servers = []
 # enabled = false
 # refused_ports = []
 #

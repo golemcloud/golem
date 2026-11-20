@@ -91,7 +91,7 @@ object ToolMiddlewareCompileContract {
     commandPath: List[String],
     input: TypedValue,
     stdin: Option[ToolMiddlewareInputHandle],
-    principal: String
+    context: String
   )
 
   trait UniversalToolMiddleware {
@@ -156,7 +156,7 @@ object ToolMiddlewareCompileContract {
         underlying: U,
         config: String,
         value: String,
-        principal: String
+        context: String
       ): Future[Either[ToolInvokeError[PublicError], String]]
 
       def copy(
@@ -192,7 +192,7 @@ object ToolMiddlewareCompileContract {
       underlying: PublicEchoUnderlying,
       config: String,
       value: String,
-      principal: String
+      context: String
     ): Future[Either[ToolInvokeError[PublicError], String]] =
       underlying.echo(config, value)
 
@@ -226,7 +226,7 @@ object ToolMiddlewareCompileContract {
       underlying: BackendEchoUnderlying,
       config: String,
       value: String,
-      principal: String
+      context: String
     ): Future[Either[ToolInvokeError[PublicError], String]] =
       underlying.execute(s"$config:$value").map {
         case Right(result) => Right(result.toString)
@@ -283,7 +283,7 @@ class ToolMiddlewareCompileContractSpec extends munit.FunSuite {
         List("run"),
         TypedValue(value),
         stream,
-        "principal"
+        "context"
       )
 
     val first  = Await.result(middleware.invoke(invocation("one", Some(stdin)), fake), 1.second)

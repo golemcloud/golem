@@ -65,7 +65,7 @@ async fn completion_before_stop(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let name = agent_id!("BlobStore", "entered-mutation");
+    let name = agent_key!("BlobStore", "entered-mutation");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     executor
         .invoke_and_await_agent(
@@ -85,7 +85,7 @@ async fn completion_before_stop(
         )
         .await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .context("cached worker")?
         .primary();
@@ -121,7 +121,7 @@ async fn completion_before_stop(
     }));
     storage.pending.notified().await;
     ensure!(storage.effects.load(Ordering::SeqCst) == 1);
-    executor.commit_oplog(&id).await?;
+    executor.commit_oplog(&id.agent_id).await?;
     let before = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
     let boundary = if copy {
         "::copy_object"

@@ -15,7 +15,6 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use golem_common::config::DbPostgresConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
@@ -39,13 +38,10 @@ fn scheduled_action_fingerprints_roundtrip() {
 
     let account_id = AccountId(Uuid::from_u128(1));
     let environment_id = EnvironmentId(Uuid::from_u128(2));
-    let agent_id = AgentId {
-        component_id: ComponentId(Uuid::from_u128(3)),
-        agent_id: "Counter(\"scheduled\")".to_string(),
-    };
+    let agent_id = AgentId::from_parts(7, 3);
     let fingerprint = AgentFingerprint(Uuid::from_u128(4));
     let promise_id = PromiseId {
-        agent_id: agent_id.clone(),
+        agent_id,
         fingerprint,
         oplog_idx: OplogIndex::from_u64(42),
     };
@@ -90,13 +86,7 @@ fn scheduled_invocation_wake_roundtrips_without_payload() {
     use golem_common::model::{AgentFingerprint, InvocationId};
     use golem_common::serialization::deserialize;
 
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Counter(\"scheduled\")".to_string(),
-        },
-    );
+    let owned_agent_id = crate::fresh_owned_agent_id();
     let fingerprint = AgentFingerprint::new();
     let key = InvocationId(Uuid::new_v4());
     let action = ScheduledAction::WakeInvocation {
@@ -156,10 +146,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
         .await
         .expect("Cannot create postgres scheduler storage");
 
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "scheduled".to_string(),
-    };
+    let agent_id = crate::fresh_owned_agent_id().agent_id;
     let environment_id = EnvironmentId::new();
     let idempotency_key = golem_common::model::InvocationId(Uuid::new_v4());
     let action = ScheduledAction::WakeInvocation {

@@ -61,6 +61,9 @@ def connect():
     request = b""
     while b"\r\n\r\n" not in request:
         request += read_exact(conn, 1)
+    assert request.startswith(
+        b"GET /v1/runtime/envs/env-id/invoke-agent-session "
+    ), request
     headers = dict(
         line.split(": ", 1)
         for line in request.decode().split("\r\n")[1:]
@@ -186,7 +189,7 @@ def accept_operation(conn, operation, key, mappings):
     send(
         conn,
         type="invocationAccepted",
-        agentId={"componentId": "component", "agentId": "accepted-agent"},
+        agentId="00000000-0000-8000-8000-000000000abc",
         attemptId=operation["attemptId"],
         idempotencyKey="00000000-0000-0000-0000-000000000123",
         sessionToken="original-session",
@@ -302,7 +305,7 @@ if mode in ("input-prefetch-delayed", "input-prefetch-before-attachment"):
         start = receive(conn)
         provisional = start["methodParameters"]["value"]["provisionalRef"]
         send(conn, type="invocationAccepted", attemptId=start["attemptId"],
-             agentId={"componentId": "component", "agentId": "accepted-agent"},
+             agentId="00000000-0000-8000-8000-000000000abc",
              idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="prefetch-session",
              mappings=[dict(direction="input", channel=1, streamToken="input",
                             provisionalRef=provisional,
@@ -342,7 +345,7 @@ if mode in ("input-failure-replay", "input-eof-replay"):
         provisional = start["methodParameters"]["value"]["provisionalRef"]
         send(
             conn, type="invocationAccepted", attemptId=start["attemptId"],
-            agentId={"componentId": "component", "agentId": "accepted-agent"},
+            agentId="00000000-0000-8000-8000-000000000abc",
             idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="input-session",
             mappings=[dict(direction="input", channel=1, streamToken="input",
                            provisionalRef=provisional,
@@ -370,7 +373,7 @@ if mode in ("input-failure-replay", "input-eof-replay"):
             assert resume["operation"] == "resume"
             send(
                 conn, type="invocationAccepted", attemptId=resume["attemptId"],
-                agentId={"componentId": "component", "agentId": "accepted-agent"},
+                agentId="00000000-0000-8000-8000-000000000abc",
                 idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="input-session",
                 mappings=[dict(direction="input", channel=channel, streamToken="input",
                                inputHighWater=dict(sequence="1", terminal=False))],
@@ -431,7 +434,7 @@ with connect() as conn:
     send(
         conn,
         type="invocationAccepted",
-        agentId={"componentId": "component", "agentId": "accepted-agent"},
+        agentId="00000000-0000-8000-8000-000000000abc",
         attemptId=start["attemptId"],
         idempotencyKey="00000000-0000-0000-0000-000000000123",
         sessionToken="original-session",
@@ -529,7 +532,7 @@ with connect() as conn:
                 assert resume["operation"] == "resume"
                 assert resume["outputCursors"] == ["cursor-1"]
                 send(resumed, type="invocationAccepted", attemptId=resume["attemptId"],
-                     agentId={"componentId": "component", "agentId": "accepted-agent"},
+                     agentId="00000000-0000-8000-8000-000000000abc",
                      idempotencyKey="00000000-0000-0000-0000-000000000123", sessionToken="new-session",
                      mappings=[dict(direction="output", channel=3, streamToken="output"),
                                dict(direction="output", channel=4, streamToken="sibling")])
@@ -616,7 +619,7 @@ with connect() as conn:
     send(
         conn,
         type="invocationAccepted",
-        agentId={"componentId": "component", "agentId": "accepted-agent"},
+        agentId="00000000-0000-8000-8000-000000000abc",
         attemptId=takeover["attemptId"],
         idempotencyKey="00000000-0000-0000-0000-000000000123",
         sessionToken="new-session",

@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rollup } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import ts from 'typescript';
 import path from 'node:path';
 import fs from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { z } from 'zod';
 import { compileSchema } from '../src/schema/adapter';
@@ -14,8 +15,13 @@ import { ToolType } from '../src/toolReflection';
 import '../src/schema/zod';
 import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import {
+  bundleSourcePath,
+  writeBundleFixture,
+} from '../../../../javascript/js-bundle-fixtures.mjs';
 
 const nativeRequire = createRequire(import.meta.url);
+const COUNTER_AGENT_ID = '00000007-0000-8000-8000-000000000021';
 const fixtures = path.resolve('tests/components');
 const richToolContract = JSON.parse(
   fs.readFileSync(path.resolve('../../../../test-data/gol-40/rich-tool-conformance-v1.json')),
@@ -45,7 +51,7 @@ function configuration(main) {
   };
 }
 
-async function build(name, pluginOptions = {}, format = 'cjs') {
+async function build(name, pluginOptions = {}, format = 'cjs', outputOptions = {}) {
   const main = path.join(fixtures, `${name}.ts`);
   const config = configuration(main);
   if (expected[name]) expect(discoverCapabilities(config)).toEqual(expected[name]);
@@ -89,12 +95,52 @@ async function build(name, pluginOptions = {}, format = 'cjs') {
     ],
   });
   try {
-    const { output } = await bundle.generate({ format, inlineDynamicImports: true });
+    const { output } = await bundle.generate({
+      format,
+      inlineDynamicImports: true,
+      ...outputOptions,
+    });
     return { ...output[0], unminified };
   } finally {
     await bundle.close();
   }
 }
+
+it('builds JS guest bundle fixtures', async () => {
+  const chunk = await build('js-guest-smoke', {}, 'es', {
+    file: path.resolve(process.env.GOLEM_JS_GUEST_BUNDLE_DIR ?? fixtures, 'ts/smoke/smoke.mjs'),
+    sourcemap: true,
+    sourcemapPathTransform: bundleSourcePath,
+  });
+  expect(chunk.code).toContain('JsGuestSmoke');
+  expect(chunk.map).not.toBeNull();
+  writeBundleFixture('ts', 'smoke', {
+    'smoke.mjs': chunk.code,
+    'smoke.mjs.map': chunk.map.toString() + '\n',
+  });
+}, 30000);
+
+it('keeps JS guest fixture outputs isolated by SDK and application', () => {
+  const directory = fs.mkdtempSync(path.join(tmpdir(), 'golem-js-bundles-'));
+  vi.stubEnv('GOLEM_JS_GUEST_BUNDLE_DIR', directory);
+  try {
+    writeBundleFixture('ts', 'smoke', { 'smoke.mjs': 'old', 'obsolete.map': '{}' });
+    writeBundleFixture('ts', 'other', { 'other.mjs': 'other application' });
+    writeBundleFixture('effect', 'smoke', { 'smoke.mjs': 'other SDK' });
+    writeBundleFixture('ts', 'smoke', { 'smoke.mjs': 'new' });
+    expect(fs.readFileSync(path.join(directory, 'ts/smoke/smoke.mjs'), 'utf8')).toBe('new');
+    expect(fs.existsSync(path.join(directory, 'ts/smoke/obsolete.map'))).toBe(false);
+    expect(fs.readFileSync(path.join(directory, 'ts/other/other.mjs'), 'utf8')).toBe(
+      'other application',
+    );
+    expect(fs.readFileSync(path.join(directory, 'effect/smoke/smoke.mjs'), 'utf8')).toBe(
+      'other SDK',
+    );
+  } finally {
+    vi.unstubAllEnvs();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 const unit = { valueNodes: [{ tag: 'record-value', val: [] }], root: 0 };
 function wireValue(schema, value) {
@@ -113,13 +159,21 @@ function instantiate(code, overrides = {}, format = 'cjs') {
   const module = { exports: {} };
   const host = {
     DatabaseSync: class {},
-    getEnvironment: () => [['GOLEM_AGENT_ID', 'Counter()']],
-    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' } }),
-    parseAgentId: () => [
-      'Counter',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: unit },
-      undefined,
+    getEnvironment: () => [
+      ['GOLEM_AGENT_ID', COUNTER_AGENT_ID],
+      ['GOLEM_AGENT_TYPE', 'Counter'],
     ],
+    caller: () => ({ original: { tag: 'anonymous' }, immediate: { tag: 'anonymous' }, tokens: [] }),
+    parseUuid: (uuid) => {
+      const hex = uuid.replace(/-/g, '');
+      return { highBits: BigInt(`0x${hex.slice(0, 16)}`), lowBits: BigInt(`0x${hex.slice(16)}`) };
+    },
+    uuidToString: ({ highBits, lowBits }) => {
+      const hex = [highBits, lowBits]
+        .map((bits) => BigInt.asUintN(64, bits).toString(16).padStart(16, '0'))
+        .join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    },
     ...overrides,
   };
   new Function('require', 'module', 'exports', code)(
@@ -756,10 +810,12 @@ describe('component exports', () => {
     let configReads = 0;
     let secretDrops = 0;
     let title;
-    let principal = { tag: 'anonymous' };
     const runtime = await instantiate(output.code, {
-      makeAgentId: () => 'Counter()',
-      caller: () => ({ original: principal, immediate: principal }),
+      caller: () => ({
+        original: { tag: 'anonymous' },
+        immediate: { tag: 'anonymous' },
+        tokens: [],
+      }),
       getConfigValue(path, graph) {
         expect(graph.typeNodes.length).toBeGreaterThan(0);
         if (path.join('.') === 'group')
@@ -794,10 +850,14 @@ describe('component exports', () => {
         root: 0,
       }),
       WasmRpc: class {
+        static upsert(agentTypeName, input) {
+          calls.push({ upsert: agentTypeName, input });
+          return new this();
+        }
         asyncInvokeAndAwait(method, input) {
           calls.push({ method, input });
           return {
-            metadata: hostInvocationMetadata('Counter()'),
+            metadata: hostInvocationMetadata(COUNTER_AGENT_ID),
             future: {
               get: async () => ({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 }),
               cancel() {},
@@ -815,19 +875,20 @@ describe('component exports', () => {
     });
     expect(runtime.guest.discoverAgentTypes()).toHaveLength(1);
     await runtime.guest.initialize('Counter', structuredClone(unit));
-    principal = {
-      tag: 'golem-user',
-      val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
-    };
-    const principalResult = await runtime.guest.invoke('principal', structuredClone(unit));
-    principal = { tag: 'anonymous' };
-    expect(principalResult).toEqual({
+    const principalRefResult = await runtime.guest.invoke('principalRef', {
       root: 3,
       valueNodes: [
-        { tag: 'uuid-value', val: { highBits: 17n, lowBits: 31n } },
-        { tag: 'record-value', val: [0] },
-        { tag: 'record-value', val: [1] },
-        { tag: 'variant-value', val: { case_: 2, payload: 2 } },
+        { tag: 'string-value', val: 'https://login.example' },
+        { tag: 'string-value', val: 'u-1' },
+        { tag: 'record-value', val: [0, 1] },
+        { tag: 'record-value', val: [2] },
+      ],
+    });
+    expect(schemaValueFromWit(principalRefResult)).toEqual({
+      tag: 'record',
+      fields: [
+        { tag: 'string', value: 'https://login.example' },
+        { tag: 'string', value: 'u-1' },
       ],
     });
     expect(configReads).toBe(0);
@@ -866,6 +927,7 @@ describe('component exports', () => {
     });
     expect(remote).toEqual({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 });
     expect(calls).toEqual([
+      { upsert: 'Counter', input: expect.objectContaining({ valueNodes: expect.any(Array) }) },
       {
         method: 'scalar',
         input: {
@@ -1135,7 +1197,7 @@ describe('component exports', () => {
           expect(retained).not.toContain(module);
       if (name === 'agent-reflection') expect(retained).toContain('schema-model/wit.mjs');
       if (!capabilities.agents) {
-        expect(output.unminified).not.toContain('serializePrincipal');
+        expect(output.unminified).not.toContain('validateLegacySnapshotPrincipal');
         expect(output.unminified).not.toContain('initializedAgent');
       }
       const exports = await instantiate(output.code);
@@ -1161,7 +1223,10 @@ describe('component exports', () => {
           val: 'missing',
         });
         await expect(
-          exports.loadSnapshot.load({ payload: new Uint8Array(), mimeType: 'application/json' }),
+          exports.loadSnapshot.load(
+            { payload: new Uint8Array(), mimeType: 'application/json' },
+            unit,
+          ),
         ).rejects.toBe('This component does not define agents');
       } else {
         await exports.guest.initialize('Counter', unit);
@@ -1172,13 +1237,12 @@ describe('component exports', () => {
         expect(compileSchema(z.number()).fromValue(schemaValueFromWit(result))).toBe(18);
         const snapshot = await exports.saveSnapshot.save();
         expect(JSON.parse(new TextDecoder().decode(snapshot.payload))).toEqual({
-          version: 1,
-          principal: { tag: 'anonymous' },
+          version: 2,
           state: { count: 18 },
           fileDatabases: {},
         });
         const restored = await instantiate(output.code);
-        await restored.loadSnapshot.load(snapshot);
+        await restored.loadSnapshot.load(snapshot, unit);
         expect(await restored.saveSnapshot.save()).toEqual(snapshot);
       }
       const input = wireValue(z.object({ name: z.string() }), { name: 'Ada' });

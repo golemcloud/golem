@@ -40,7 +40,6 @@ test "generated tool invocation and snapshot hooks" {
           @agentGuest.initialize(
             "Counter",
             empty,
-            @common.Principal::Anonymous,
             group,
           )
           is Ok(_),
@@ -52,7 +51,6 @@ test "generated tool invocation and snapshot hooks" {
         let result = @agentGuest.invoke(
             "add",
             input,
-            @common.Principal::Anonymous,
             group,
           )
           .unwrap()
@@ -62,10 +60,10 @@ test "generated tool invocation and snapshot hooks" {
         assert_eq(snapshot.mime_type, "application/json")
         assert_eq(
           Bytes::from_array([ for byte in snapshot.payload => byte ]),
-          b"{\"version\":1,\"principal\":{\"tag\":\"anonymous\"},\"state\":{\"value\":18}}",
+          b"{\"version\":2,\"state\":{\"value\":18}}",
         )
         assert_true(
-          @loadSnapshot.load(snapshot, group)
+          @loadSnapshot.load(snapshot, empty, group)
           is Err("Agent instance is already initialized"),
         )
       } else {
@@ -73,19 +71,18 @@ test "generated tool invocation and snapshot hooks" {
           @agentGuest.initialize(
             "Counter",
             empty,
-            @common.Principal::Anonymous,
             group,
           )
           is Err(@common.AgentError::InvalidType("Counter")),
         )
         assert_true(
-          @agentGuest.invoke("add", empty, @common.Principal::Anonymous, group)
+          @agentGuest.invoke("add", empty, group)
           is Err(@common.AgentError::InvalidMethod("add")),
         )
         let snapshot = @saveSnapshot.save(group)
         assert_eq(snapshot.payload.length(), 0)
         assert_true(
-          @loadSnapshot.load(snapshot, group)
+          @loadSnapshot.load(snapshot, empty, group)
           is Err("Component defines no agents"),
         )
       }
@@ -103,7 +100,6 @@ test "generated tool invocation and snapshot hooks" {
         None,
         None,
         None,
-        @common.Principal::Anonymous,
         group,
       )
       if has_tools {

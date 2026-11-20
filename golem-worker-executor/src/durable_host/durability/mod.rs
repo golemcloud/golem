@@ -58,7 +58,8 @@ pub use retry::{
 };
 pub(crate) use retry::{
     collect_named_retry_policies, evaluate_named_policy_step_resetting_on_invalid_state,
-    merge_named_retry_policy_tiers, try_trigger_host_trap_retry,
+    merge_named_retry_policy_tiers, retry_backoff_waits_durably, try_trigger_host_trap_retry,
+    wait_recorded_retry_backoff, wait_retry_backoff,
 };
 
 #[derive(Debug)]

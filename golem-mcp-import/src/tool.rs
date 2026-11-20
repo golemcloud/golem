@@ -197,12 +197,14 @@ impl ProjectedTool {
             .transpose()?;
         let definition = Tool {
             requires_filesystem: false,
+            http_mount: None,
             version: "0.0.0".into(),
             schema: graph,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.into(),
                     aliases: Vec::new(),
+                    http: None,
                     doc: Doc {
                         summary: optional_string(upstream, "title")?
                             .unwrap_or(&upstream_name)

@@ -204,7 +204,11 @@ describe("Saga", () => {
           ["attempt", { tag: "integer", val: 1n }],
           ["error-kind", { tag: "text", val: kind }],
         ]
-        expect(resolve).toHaveBeenCalledWith("saga", expect.stringMatching(/^urn:worker:/), props)
+        expect(resolve).toHaveBeenCalledWith(
+          "saga",
+          expect.stringMatching(/^urn:agent:[^/]+\/[0-9a-f-]{36}$/),
+          props,
+        )
         expect(next).toHaveBeenCalledWith(
           undefined,
           new Uint8Array(),

@@ -39,25 +39,21 @@ use golem_common::model::OplogIndex;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::PromiseId;
 use golem_common::model::RetryContext;
-use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::agent::{AgentPrincipal, Principal};
+use golem_common::model::caller::Caller;
 use golem_common::model::card::AgentResourcePattern;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostRequestGolemApiAgentId;
 use golem_common::model::oplog::HostRequestGolemApiComponentSlug;
-use golem_common::model::oplog::HostRequestGolemApiComponentSlugAndAgentName;
 use golem_common::model::oplog::HostRequestGolemApiForkAgent;
 use golem_common::model::oplog::HostRequestGolemApiPromiseId;
 use golem_common::model::oplog::HostRequestGolemApiRevertAgent;
 use golem_common::model::oplog::HostRequestGolemApiUpdateAgent;
 use golem_common::model::oplog::HostRequestNoInput;
-use golem_common::model::oplog::HostResponseGolemApiAgentId;
 use golem_common::model::oplog::HostResponseGolemApiAgentMetadata;
 use golem_common::model::oplog::HostResponseGolemApiComponentId;
 use golem_common::model::oplog::HostResponseGolemApiFork;
@@ -71,7 +67,6 @@ use golem_common::model::oplog::host_functions::GolemApiForkWorker;
 use golem_common::model::oplog::host_functions::GolemApiGenerateIdempotencyKey;
 use golem_common::model::oplog::host_functions::GolemApiGetAgentMetadata;
 use golem_common::model::oplog::host_functions::GolemApiGetSelfMetadata;
-use golem_common::model::oplog::host_functions::GolemApiResolveAgentIdStrict;
 use golem_common::model::oplog::host_functions::GolemApiResolveComponentId;
 use golem_common::model::oplog::host_functions::GolemApiRevertWorker;
 use golem_common::model::oplog::host_functions::GolemApiUpdateWorker;
@@ -129,46 +124,90 @@ fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind 
     }
 }
 
-pub(super) async fn resolve_agent_owner<Ctx: WorkerCtx>(
+/// The owner pattern of the agent with this ID in the caller's environment, from the component
+/// and agent type of its Create entry. For an agent that does not exist, it is the deployed
+/// agent type that the ID's tag names, so a caller without permission cannot tell whether the
+/// agent exists. `None` when the agent does not exist and its tag names no deployed agent type.
+pub(crate) async fn resolve_agent_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
-    component_id: &ComponentId,
-    agent: Option<&str>,
-) -> Result<(AgentOwnerPattern, EnvironmentId), WorkerExecutorError> {
-    let component = if *component_id == ctx.owner_component_metadata().id {
+    agent_id: &AgentId,
+) -> Result<Option<AgentOwnerPattern>, WorkerExecutorError> {
+    let environment_id = ctx.owned_agent_id.environment_id;
+    let (component_id, agent_type) = if agent_id == ctx.agent_id() {
+        (
+            ctx.owner_component_metadata().id,
+            ctx.public_state
+                .worker()
+                .get_initial_worker_metadata()
+                .agent_type_name,
+        )
+    } else {
+        let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
+        match ctx.state.worker_service.get(&owned_agent_id).await? {
+            Some(metadata) => (
+                metadata.initial_worker_metadata.component_id,
+                metadata.initial_worker_metadata.agent_type_name,
+            ),
+            None => {
+                let registered = match agent_id.type_id() {
+                    Some(type_id) => {
+                        ctx.state
+                            .agent_types_service
+                            .get_by_type_id(environment_id, type_id)
+                            .await?
+                    }
+                    None => None,
+                };
+                let Some(registered) = registered else {
+                    return Ok(None);
+                };
+                (
+                    registered.implemented_by.component_id,
+                    Some(registered.agent_type.type_name),
+                )
+            }
+        }
+    };
+    let component = component_owner(ctx, component_id).await?;
+    Ok(Some(AgentOwnerPattern::Agent {
+        account: component.account_email,
+        application: component.application_name,
+        environment: component.environment_name,
+        component: component.component_name,
+        agent: AgentOwnerLeafPattern::agent(*agent_id, agent_type),
+    }))
+}
+
+/// The metadata of a component of the caller's environment.
+pub(super) async fn component_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    component_id: ComponentId,
+) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+    let component = if component_id == ctx.owner_component_metadata().id {
         ctx.owner_component_metadata().clone()
     } else {
         ctx.state
             .component_service
-            .get_metadata(*component_id, None)
+            .get_metadata(component_id, None)
             .await?
     };
-    let environment_id = component.environment_id;
-    let owner = match agent {
-        Some(agent) => AgentOwnerPattern::Agent {
-            account: component.account_email,
-            application: component.application_name,
-            environment: component.environment_name,
-            component: component.component_name,
-            agent: AgentOwnerLeafPattern::Agent(agent.to_string()),
-        },
-        None => AgentOwnerPattern::ComponentAgents {
-            account: component.account_email,
-            application: component.application_name,
-            environment: component.environment_name,
-            component: component.component_name,
-        },
-    };
-    Ok((owner, environment_id))
+    if component.environment_id != ctx.owned_agent_id.environment_id {
+        return Err(WorkerExecutorError::invalid_request(
+            "The component does not belong to the caller's environment",
+        ));
+    }
+    Ok(component)
 }
 
-pub(super) async fn agent_operation_denied<Ctx: WorkerCtx>(
+pub(crate) async fn agent_operation_denied<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     agent_id: &AgentId,
     verb: AgentVerb,
     resource: AgentResourcePattern,
 ) -> Result<bool, WorkerExecutorError> {
-    let (owner, _) =
-        resolve_agent_owner(ctx, &agent_id.component_id, Some(&agent_id.agent_id)).await?;
+    let Some(owner) = resolve_agent_owner(ctx, agent_id).await? else {
+        return Ok(true);
+    };
     let target = agent_worker_target(owner, verb, resource);
     Ok(ctx.authorize_live_permission(&target).await?.is_err())
 }
@@ -178,8 +217,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<Resource<GetPromiseResultEntry>> {
-        let entry =
-            GetPromiseResultEntry::new(promise_id.into(), self.state.promise_service.clone());
+        let entry = GetPromiseResultEntry::new(
+            self.owned_agent_id().environment_id,
+            promise_id.into(),
+            self.state.promise_service.clone(),
+        );
         Ok(self.table().push(entry)?)
     }
 
@@ -246,7 +288,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match self
                     .public_state
                     .promise_service
-                    .complete(promise_id.clone(), data)
+                    .complete(
+                        self.owned_agent_id().environment_id,
+                        promise_id.clone(),
+                        data,
+                    )
                     .await
                 {
                     Ok(completed) => completed,
@@ -275,7 +321,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match self
                     .state
                     .worker_proxy
-                    .complete_promise(promise_id.clone(), data, auth_ctx)
+                    .complete_promise(
+                        self.owned_agent_id.environment_id,
+                        promise_id.clone(),
+                        data,
+                        auth_ctx,
+                    )
                     .await
                 {
                     Ok(completed) => completed,
@@ -404,7 +455,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await?;
                     let request = HostRequestGolemApiUpdateAgent {
-                        agent_id: agent_id.clone(),
+                        agent_id,
                         target_revision,
                         mode,
                     };
@@ -471,7 +522,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = 'result: {
             let handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
-                    let self_agent_id = self.agent_id().clone();
+                    let self_agent_id = *self.agent_id();
                     let denied = agent_operation_denied(
                         self,
                         &self_agent_id,
@@ -527,9 +578,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         AgentResourcePattern::Empty,
                     )
                     .await?;
-                    let request = HostRequestGolemApiAgentId {
-                        agent_id: agent_id.clone(),
-                    };
+                    let request = HostRequestGolemApiAgentId { agent_id };
                     if let Some(denial) = agent_operation_denial(denied) {
                         break 'result begun.start_live_denied(self, request, denial).await?;
                     }
@@ -580,13 +629,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn fork_agent(
         &mut self,
         source_agent_id: golem_api_1_x::host::AgentId,
-        target_agent_id: golem_api_1_x::host::AgentId,
         oplog_idx_cut_off: golem_api_1_x::host::OplogIndex,
-    ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
+    ) -> anyhow::Result<
+        Result<golem_api_1_x::host::AgentId, golem_api_1_x::host::AgentOperationError>,
+    > {
         let source_agent_id: AgentId = source_agent_id.into();
-        let target_agent_id: AgentId = target_agent_id.into();
-
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
+        let environment_id = self.owned_agent_id.environment_id;
+        let caller = *self.agent_id();
+        let caller_fingerprint = self
+            .public_state
+            .worker()
+            .get_initial_worker_metadata()
+            .fingerprint;
 
         let begun =
             DurableCallSession::<GolemApiForkWorker, NotCancellable>::begin_with_agent_authority(
@@ -594,8 +649,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 DurableFunctionType::WriteRemote,
             )
             .await?;
+        let key_position = begun.idempotency_key_position(self);
+        // The fork target is allocated from the call's position, so a replay of the call, and a
+        // retry of an incomplete one, reaches the agent that the first attempt created.
+        let request_at = move |start_index: OplogIndex| HostRequestGolemApiForkAgent {
+            source_agent_id,
+            target_agent_id: AgentId::allocated(
+                environment_id,
+                source_agent_id.type_tag(),
+                caller,
+                caller_fingerprint,
+                &key_position.derive(start_index),
+            ),
+            oplog_index_cut_off,
+        };
 
-        let result = 'result: {
+        let (target_agent_id, result) = 'result: {
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let denied = agent_operation_denied(
@@ -605,37 +674,45 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         AgentResourcePattern::Empty,
                     )
                     .await?;
-                    let request = HostRequestGolemApiForkAgent {
-                        source_agent_id: source_agent_id.clone(),
-                        target_agent_id: target_agent_id.clone(),
-                        oplog_index_cut_off,
-                    };
                     if let Some(denial) = agent_operation_denial(denied) {
-                        break 'result begun.start_live_denied(self, request, denial).await?;
+                        let (_, response, _) = begun
+                            .start_live_denied_at_index(self, denial, move |start_index| {
+                                Ok((request_at(start_index), None))
+                            })
+                            .await?;
+                        break 'result (None, response);
                     }
-                    begun.start_live(self, request).await?
+                    begun
+                        .start_live_at_index(self, move |start_index| Ok(request_at(start_index)))
+                        .await?
                 }
                 ResolvedCall::Replay(handle) => handle,
             };
+            let request = match handle.recorded_request(self).await {
+                Ok(request) => request,
+                Err(error) => return Err(handle.trap(error)),
+            };
+            let target_agent_id = request.target_agent_id;
             if !handle.is_live() {
                 match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Replayed(replayed) => {
+                        break 'result (Some(target_agent_id), replayed);
+                    }
                     CallReplayOutcome::Incomplete(live) => handle = live,
                 }
             }
 
+            let owned_source_agent_id = OwnedAgentId::new(environment_id, &source_agent_id);
             let retry_properties = RetryContext::golem_api("fork-agent");
             let result = loop {
                 let result = self
                     .state
                     .worker_proxy
                     .fork_worker(
-                        &source_agent_id,
+                        &owned_source_agent_id,
                         &target_agent_id,
                         &oplog_index_cut_off,
-                        Principal::Agent(AgentPrincipal {
-                            agent_id: self.agent_id().clone(),
-                        }),
+                        Caller::entry(self.self_principal()),
                         handle.agent_auth_ctx(),
                     )
                     .await;
@@ -653,12 +730,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             let result = result.map_err(|err| err.to_string());
-            handle
-                .complete(self, HostResponseGolemApiUnit { result })
-                .await?
+            (
+                Some(target_agent_id),
+                handle
+                    .complete(self, HostResponseGolemApiUnit { result })
+                    .await?,
+            )
         };
 
-        Ok(result.result.map_err(agent_operation_error))
+        Ok(match (result.result, target_agent_id) {
+            (Ok(()), Some(target_agent_id)) => Ok(target_agent_id.into()),
+            (Ok(()), None) => {
+                return Err(anyhow!("a fork without a recorded target succeeded"));
+            }
+            (Err(error), _) => Err(agent_operation_error(error)),
+        })
     }
 
     async fn revert_agent(
@@ -709,7 +795,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                                     .start_live_denied(
                                         self,
                                         HostRequestGolemApiRevertAgent {
-                                            agent_id: agent_id.clone(),
+                                            agent_id,
                                             target: target.clone(),
                                             resolved_revert: None,
                                         },
@@ -735,7 +821,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource)
                             .await?;
                     let request = HostRequestGolemApiRevertAgent {
-                        agent_id: agent_id.clone(),
+                        agent_id,
                         target: target.clone(),
                         resolved_revert: resolved_revert.clone(),
                     };
@@ -772,11 +858,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
 
             let retry_properties = RetryContext::golem_api("revert-agent");
+            let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
             let result = loop {
                 let result = self
                     .worker_proxy()
                     .revert(
-                        &agent_id,
+                        &owned_agent_id,
                         target.clone(),
                         resolved_revert.clone(),
                         handle.agent_auth_ctx(),
@@ -862,102 +949,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|err| anyhow!(err))
     }
 
-    async fn resolve_agent_id(
-        &mut self,
-        component_slug: String,
-        agent_id: String,
-    ) -> anyhow::Result<Option<golem_api_1_x::host::AgentId>> {
-        let component_id = self.resolve_component_id(component_slug).await?;
-        Ok(
-            component_id.map(|component_id| golem_api_1_x::host::AgentId {
-                component_id,
-                agent_id,
-            }),
-        )
-    }
-
-    async fn resolve_agent_id_strict(
-        &mut self,
-        component_slug: String,
-        agent_name: String,
-    ) -> anyhow::Result<Option<golem_api_1_x::host::AgentId>> {
-        let Some(component_id) = self.resolve_component_id(component_slug.clone()).await? else {
-            return Ok(None);
-        };
-        let agent_id = AgentId {
-            component_id: component_id.into(),
-            agent_id: agent_name.clone(),
-        };
-        let begun = DurableCallSession::<GolemApiResolveAgentIdStrict, NotCancellable>::begin(
-            self,
-            DurableFunctionType::WriteRemote,
-        )
-        .await?;
-
-        let result = 'result: {
-            let mut handle = match begun.resolve(self).await? {
-                ResolvedCall::Live(begun) => {
-                    let denied = agent_operation_denied(
-                        self,
-                        &agent_id,
-                        AgentVerb::View,
-                        AgentResourcePattern::Empty,
-                    )
-                    .await?;
-                    let request = HostRequestGolemApiComponentSlugAndAgentName {
-                        component_slug,
-                        agent_name,
-                    };
-                    if let Some(denial) = agent_operation_denial(denied) {
-                        break 'result begun.start_live_denied(self, request, denial).await?;
-                    }
-                    begun.start_live(self, request).await?
-                }
-                ResolvedCall::Replay(handle) => handle,
-            };
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
-                }
-            }
-
-            let retry_properties = RetryContext::golem_api("resolve-agent-id-strict");
-            let result = loop {
-                let owned_id = OwnedAgentId::new(self.owned_agent_id.environment_id, &agent_id);
-                let result = Ok(
-                    if self.state.worker_service.get(&owned_id).await?.is_some() {
-                        Some(agent_id.clone())
-                    } else {
-                        None
-                    },
-                );
-
-                match handle
-                    .try_trigger_retry_or_loop_with_properties(
-                        self,
-                        &result,
-                        classify_worker_executor_error,
-                        retry_properties.clone(),
-                    )
-                    .await?
-                {
-                    InternalRetryResult::Persist => break result,
-                    InternalRetryResult::RetryInternally => continue,
-                }
-            };
-            let result = result.map_err(|err| err.to_string());
-            handle
-                .complete(self, HostResponseGolemApiAgentId { result })
-                .await?
-        };
-
-        result
-            .result
-            .map(|opt| opt.map(golem_api_1_x::host::AgentId::from))
-            .map_err(|error| anyhow!(error))
-    }
-
     async fn fork(
         &mut self,
     ) -> anyhow::Result<Result<ForkResult, golem_api_1_x::host::AgentOperationError>> {
@@ -970,7 +961,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = 'result: {
             let mut handle = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
-                    let self_agent_id = self.agent_id().clone();
+                    let self_agent_id = *self.agent_id();
                     let denied = agent_operation_denied(
                         self,
                         &self_agent_id,
@@ -993,9 +984,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker()
                 .get_initial_worker_metadata()
                 .fingerprint;
-            let forked_phantom_id = Uuid::new_v5(
-                &source_fingerprint.0,
-                format!("golem:agent-fork:{}", fork_key.value).as_bytes(),
+            let target_agent_id = AgentId::allocated(
+                self.owned_agent_id.environment_id,
+                self.agent_id().type_tag(),
+                *self.agent_id(),
+                source_fingerprint,
+                &fork_key,
             );
             if !handle.is_live() {
                 match handle.replay(self).await? {
@@ -1006,25 +1000,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let retry_properties = RetryContext::golem_api("fork");
 
-            let new_name = if let Some(agent_id) = self.parsed_agent_id() {
-                match ParsedAgentKey::try_new(
-                    agent_id.agent_type.clone(),
-                    agent_id.parameters.clone(),
-                    Some(forked_phantom_id),
-                ) {
-                    Ok(parsed) => parsed.to_string(),
-                    Err(err) => {
-                        return Err(handle.trap(anyhow!(err)));
-                    }
-                }
-            } else {
-                format!("{}-{}", self.agent_id().agent_id, forked_phantom_id)
-            };
-
-            let target_agent_id = AgentId {
-                component_id: self.owner_component_metadata().id,
-                agent_id: new_name.clone(),
-            };
             // The forked worker must inherit the source state from the source-side fork call's
             // durable replay point. The source call completes with `ForkResult::Original`.
             // Force a commit so the eager `Start` is durable for the source's crash recovery.
@@ -1039,9 +1014,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let fork_request = CreateRequest::new(
                 CreateRequestKind::Fork,
                 None,
-                Principal::Agent(AgentPrincipal {
-                    agent_id: self.agent_id().clone(),
-                }),
+                Caller::entry(self.self_principal()),
                 &self.clone_as_inherited_stack(&self.state.invocation_state().current_span_id),
             );
             let fork_result = loop {
@@ -1055,7 +1028,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         oplog_index_cut_off,
                         copied_scope_start,
                         handle.invocation_id(),
-                        forked_phantom_id,
                         handle.agent_auth_ctx(),
                         fork_request.clone(),
                     )
@@ -1081,7 +1053,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseGolemApiFork {
-                        forked_phantom_id,
+                        forked_agent_id: Some(target_agent_id),
                         result: fork_result,
                     },
                 )
@@ -1090,8 +1062,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         match result.result {
             Ok(fork_result) => {
+                let forked_agent_id = result
+                    .forked_agent_id
+                    .ok_or_else(|| anyhow!("a successful fork recorded no target"))?;
                 let details = ForkDetails {
-                    forked_phantom_id: result.forked_phantom_id.into(),
+                    forked_agent_id: forked_agent_id.into(),
                 };
                 Ok(Ok(match fork_result {
                     golem_common::model::ForkResult::Original => ForkResult::Original(details),

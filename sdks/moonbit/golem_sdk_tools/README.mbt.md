@@ -134,9 +134,9 @@ arrays and maps are repeatable options, and other values are positionals. Explic
 recommended whenever the command-line surface matters. Repeatable list and map options without an
 authored default emit an empty list or map default, matching their invocation value when omitted.
 
-The exact qualified runtime types `@tool.Principal` and `@tool.ProviderOutput` are hidden invocation
+The exact qualified runtime types `@tool.InvocationContext` and `@tool.ProviderOutput` are hidden invocation
 parameters; annotate a provider output with `channel="stderr"` to select stderr, while an
-unannotated output selects stdout. Principal and provider-output parameters are not exposed by
+unannotated output selects stdout. Invocation-context and provider-output parameters are not exposed by
 generated clients; `@asyncCore.Stream[Byte]` inputs are accepted as client inputs. Declaring stdin
 or a provider output with `?` emits an optional stream (`required=false`). Either output
 selects the started-invocation client shape with independent optional stdout/stderr streams,
@@ -279,7 +279,7 @@ middleware. When omitted, metadata uses an empty-record schema matching the mani
 without applying defaults or filling omitted fields.
 
 A universal annotation applies to exactly one async free function. The grouped invocation and
-underlying wrappers keep tool metadata, typed input/results, errors, streams, and principal in the
+underlying wrappers keep tool metadata, typed input/results, errors, streams, and the invocation context in the
 generated WIT carrier types:
 
 ```moonbit nocheck
@@ -293,7 +293,7 @@ pub async fn audit(
 ] {
   ignore(invocation.tool_name())
   ignore(invocation.tool_metadata())
-  ignore(invocation.principal())
+  ignore(invocation.invocation_context())
   underlying.invoke_raw(
     invocation.command_path(),
     invocation.input(),

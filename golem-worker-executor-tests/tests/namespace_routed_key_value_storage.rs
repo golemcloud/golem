@@ -14,9 +14,8 @@
 
 use crate::WorkerExecutorTestDependencies;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
-use golem_common::model::component::ComponentId;
+use golem_common::model::AgentFingerprint;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
@@ -101,21 +100,18 @@ async fn build_namespace_routed_kvs(
 async fn routes_agent_namespaces_to_redis(deps: &WorkerExecutorTestDependencies) {
     let (kvs, redis, postgres, _postgres_container) = build_namespace_routed_kvs(deps).await;
 
-    let agent_id = AgentId {
-        component_id: ComponentId::new(),
-        agent_id: "route-test-agent".to_string(),
-    };
+    let agent_id = crate::fresh_owned_agent_id();
     let cases = [
         (
             KeyValueStorageNamespace::Worker {
-                agent_id: std::sync::Arc::new(agent_id.clone()),
+                owned_agent_id: agent_id.clone(),
             },
             "worker-route-key",
             b"worker-route-value".as_slice(),
         ),
         (
             KeyValueStorageNamespace::AgentInvocationResultIndex {
-                agent_id,
+                owned_agent_id: agent_id,
                 fingerprint: AgentFingerprint(uuid::Uuid::from_u128(1)),
             },
             "result-index-route-key",

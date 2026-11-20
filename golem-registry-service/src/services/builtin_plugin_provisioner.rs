@@ -258,6 +258,7 @@ async fn upload_or_update_component(
         .create(
             env_id,
             ComponentCreation {
+                package_metadata: None,
                 component_name: component_name.clone(),
                 config_schema: Default::default(),
                 component_provision_config: Default::default(),
@@ -294,6 +295,7 @@ async fn upload_or_update_component(
                     .update(
                         existing.id,
                         ComponentUpdate {
+                            package_metadata: None,
                             current_revision: existing.revision,
                             config_schema: None,
                             component_provision_config: None,

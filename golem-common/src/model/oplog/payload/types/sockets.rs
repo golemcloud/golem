@@ -21,7 +21,9 @@ use desert_rust::{
 };
 use wasmtime_wasi::p2::SocketError;
 use wasmtime_wasi::p2::bindings::sockets::ip_name_lookup::IpAddress;
-use wasmtime_wasi::p2::bindings::sockets::network::ErrorCode as SocketErrorCode;
+use wasmtime_wasi::p2::bindings::sockets::network::{
+    ErrorCode as SocketErrorCode, IpSocketAddress,
+};
 use wasmtime_wasi::p3::bindings::sockets::{
     ip_name_lookup as p3_ip_name_lookup, types as p3_socket_types,
 };
@@ -400,6 +402,18 @@ impl From<p3_socket_types::IpSocketAddress> for SerializableP3IpSocketAddress {
                 scope_id: Some(address.scope_id),
             },
         }
+    }
+}
+
+impl From<IpSocketAddress> for SerializableP3IpSocketAddress {
+    fn from(value: IpSocketAddress) -> Self {
+        p3_socket_types::IpSocketAddress::from(std::net::SocketAddr::from(value)).into()
+    }
+}
+
+impl From<SerializableP3IpSocketAddress> for IpSocketAddress {
+    fn from(value: SerializableP3IpSocketAddress) -> Self {
+        std::net::SocketAddr::from(p3_socket_types::IpSocketAddress::from(value)).into()
     }
 }
 

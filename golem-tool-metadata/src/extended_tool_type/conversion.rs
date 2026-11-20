@@ -296,6 +296,7 @@ fn native_command_node(
         name: command.name.clone(),
         aliases: command.aliases.clone(),
         doc: native_doc(&command.doc),
+        http: command.http.clone(),
         globals: native::Globals {
             options: command.globals.options.iter().map(native_option).collect(),
             flags: command.globals.flags.iter().map(native_flag).collect(),
@@ -353,7 +354,7 @@ impl ExtendedToolType {
         self.build_native_tool()
     }
 
-    fn build_native_tool(&self) -> Result<native::Tool, ToolBuildError> {
+    pub(super) fn build_native_tool(&self) -> Result<native::Tool, ToolBuildError> {
         let schema = merge_agent_graphs(collect_schema_graphs(self))
             .map_err(|error| ToolBuildError::EncodeError(error.to_string()))?;
         let commands = self
@@ -366,6 +367,7 @@ impl ExtendedToolType {
         Ok(native::Tool {
             version: self.version.clone(),
             requires_filesystem: self.requires_filesystem,
+            http_mount: self.http_mount.clone(),
             commands: native::CommandTree { nodes: commands },
             schema: native_schema,
         })

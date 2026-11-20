@@ -37,6 +37,61 @@ use test_r::test;
 
 test_r::enable!();
 
+mod recursive_internal_newtype {
+    use super::*;
+    use test_r::test;
+
+    #[derive(Serialize, Deserialize, PoemSchema)]
+    struct RecursivePayload {
+        children: Vec<RecursiveInternal>,
+    }
+
+    #[derive(Serialize, Deserialize, PoemSchema)]
+    #[serde(tag = "kind")]
+    enum RecursiveInternal {
+        Node(RecursivePayload),
+    }
+
+    #[derive(Serialize, Deserialize, PoemSchema)]
+    struct CollidingRecursivePayload {
+        children: Vec<CollidingRecursiveInternal>,
+        #[serde(rename = "kind")]
+        payload_kind: String,
+    }
+
+    #[derive(Serialize, Deserialize, PoemSchema)]
+    #[serde(tag = "kind")]
+    enum CollidingRecursiveInternal {
+        Node(CollidingRecursivePayload),
+    }
+
+    #[test]
+    fn recursive_internal_newtype_registers_from_enum_root() {
+        let registry = register::<RecursiveInternal>();
+        let value = RecursiveInternal::Node(RecursivePayload { children: vec![] });
+        let json = serde_json::to_value(value).unwrap();
+        validate(&registry, &RecursiveInternal::schema_ref(), &json).unwrap();
+    }
+
+    #[test]
+    fn recursive_internal_newtype_registers_from_payload_root() {
+        let registry = register::<RecursivePayload>();
+        let value = RecursivePayload {
+            children: vec![RecursiveInternal::Node(RecursivePayload {
+                children: vec![],
+            })],
+        };
+        let json = serde_json::to_value(value).unwrap();
+        validate(&registry, &RecursivePayload::schema_ref(), &json).unwrap();
+    }
+
+    #[test]
+    fn recursive_discriminator_collision_is_rejected_from_either_root() {
+        assert!(std::panic::catch_unwind(register::<CollidingRecursivePayload>).is_err());
+        assert!(std::panic::catch_unwind(register::<CollidingRecursiveInternal>).is_err());
+    }
+}
+
 // ----------------------------------------------------------------------
 // Representative types mirroring the real schema-model serde shapes.
 // ----------------------------------------------------------------------
@@ -140,6 +195,32 @@ enum ResultLike {
 enum InternalUnitLike {
     Pending,
     Done { code: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+#[serde(tag = "type")]
+enum InternalSharedPayloadLike {
+    Get(MetaLike),
+    Patch(MetaLike),
+    PathVariable(VariableLike),
+    RemainingPathVariable(VariableLike),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+#[serde(rename_all = "camelCase")]
+struct VariableLike {
+    variable_name: String,
+}
+
+#[derive(Serialize, Deserialize, PoemSchema)]
+struct PayloadWithTagField {
+    r#type: String,
+}
+
+#[derive(Serialize, Deserialize, PoemSchema)]
+#[serde(tag = "type")]
+enum InternalPayloadTagCollision {
+    Item(PayloadWithTagField),
 }
 
 /// Struct with a tuple-bearing field, mirrors `SchemaValue::Map`
@@ -390,6 +471,48 @@ fn internally_tagged_unit_variant_carries_only_tag() {
         validate(&registry, &InternalUnitLike::schema_ref(), &json)
             .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
     }
+}
+
+#[test]
+fn internally_tagged_newtypes_with_shared_payloads_keep_distinct_tags() {
+    let registry = register::<InternalSharedPayloadLike>();
+    for value in [
+        InternalSharedPayloadLike::Get(MetaLike::default()),
+        InternalSharedPayloadLike::Patch(MetaLike::default()),
+        InternalSharedPayloadLike::PathVariable(VariableLike {
+            variable_name: "id".to_string(),
+        }),
+        InternalSharedPayloadLike::RemainingPathVariable(VariableLike {
+            variable_name: "rest".to_string(),
+        }),
+    ] {
+        let json = serde_json::to_value(&value).unwrap();
+        validate(&registry, &InternalSharedPayloadLike::schema_ref(), &json)
+            .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
+    }
+
+    for invalid in [
+        json!({}),
+        json!({"type": "Unknown"}),
+        json!({"type": "PathVariable"}),
+        json!({"type": "RemainingPathVariable", "variableName": 42}),
+    ] {
+        assert!(
+            validate(
+                &registry,
+                &InternalSharedPayloadLike::schema_ref(),
+                &invalid
+            )
+            .is_err(),
+            "invalid value {invalid} must not validate"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "newtype payload declares discriminator `type`")]
+fn internally_tagged_newtype_rejects_payload_discriminator_collision() {
+    register::<InternalPayloadTagCollision>();
 }
 
 #[test]

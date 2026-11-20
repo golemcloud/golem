@@ -12,18 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::caller::Caller;
 use uuid::Uuid;
 
 use golem_common::model::InvocationId;
 
 use crate::worker::*;
 use chrono::{DateTime, Utc};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn enqueue_oplog_processor<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>
@@ -37,8 +40,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let worker = deps
             .active_agents()
-            .get_or_add_oplog_processor(deps, owned_agent_id, component_revision)
+            .get_or_add_oplog_processor(deps, owned_agent_id, component_id, component_revision)
             .await?;
+        // The batch runs as the processor agent itself, in both roles.
+        let mut invocation = invocation;
+        if let AgentInvocation::ProcessOplogEntries { caller, .. } = &mut invocation {
+            *caller = Caller::entry(worker.self_principal(deps.config().resolved_golem_issuer()));
+        }
         Self::start_if_needed(worker.clone()).await?;
         worker.invoke(invocation).await?;
         Ok(())
@@ -80,15 +88,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let no_cache = !ro.cacheable || is_no_cache(&ro.cfg.cache_policy);
             if !no_cache {
                 let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-                let principal_ref = if ro.cfg.uses_principal {
-                    Some(&ro.principal)
-                } else {
-                    None
-                };
                 let key = read_only_cache::build_read_only_cache_key(
                     &ro.method_name,
                     &ro.input,
-                    principal_ref,
+                    &ro.caller,
                     ro.component_revision,
                     cur_epoch,
                 );
@@ -188,7 +191,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The observer task does a final epoch recheck before insert
             // (`populate_read_only_cache`), so it needs the live atomic.
             let read_only_cache_epoch = self.read_only_cache_epoch.clone();
-            let agent_id = self.owned_agent_id.agent_id.clone();
+            let agent_id = self.owned_agent_id.agent_id;
             let idem = idempotency_key;
             tokio::spawn(async move {
                 let wait_result = obs_sub
@@ -217,7 +220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
     /// Admits a native external-tool invocation for this exact owner.
     ///
-    /// The caller is trusted to have authenticated the supplied principal and context at its
+    /// The caller is trusted to have authenticated the supplied caller and context at its
     /// ingress boundary. This method preserves ordinary invocation queue, idempotency, scope-card,
     /// result, and cache-invalidation semantics; it does not establish a separate permission
     /// boundary.
@@ -229,7 +232,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         if self.initial_worker_metadata.owner_kind == OwnerKind::OplogProcessor {
@@ -254,7 +257,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false,
                 None,
                 invocation_context,
-                principal,
+                caller,
                 scope_card,
             )
             .await?;
@@ -271,7 +274,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         stderr: bool,
         expected_deployment_revision: Option<DeploymentRevision>,
         invocation_context: InvocationContextStack,
-        principal: Principal,
+        caller: Caller,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocation, WorkerExecutorError> {
         let accepted_index = self
@@ -383,7 +386,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             stderr,
             activation,
             invocation_context,
-            principal,
+            caller,
             scope_card,
         };
         if already_accepted {
@@ -508,15 +511,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Use the same key shape as the `invoke` cache HIT path so a hit
             // there and a coalesced miss here see the same entry.
             let cur_epoch = self.read_only_cache_epoch.load(Ordering::SeqCst);
-            let principal_ref = if ro.cfg.uses_principal {
-                Some(&ro.principal)
-            } else {
-                None
-            };
             let key = read_only_cache::build_read_only_cache_key(
                 &ro.method_name,
                 &ro.input,
-                principal_ref,
+                &ro.caller,
                 ro.component_revision,
                 cur_epoch,
             );
@@ -609,7 +607,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // caller's wait would pick an arbitrary winner. The request that owns the
             // execution is the honest originator.
             let origin = TraceOrigin::capture_current();
-            let owner_agent_id = self.owned_agent_id.agent_id.clone();
+            let owner_agent_id = self.owned_agent_id.agent_id;
             let owner_idempotency_key = idempotency_key;
 
             let pending_or_final = async {
@@ -1406,11 +1404,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Refuses an inspection that would be the first start of an ephemeral agent: it would run
     /// the constructor before a schedule whose commit the caller may still be repairing. A
     /// worker that a delete has claimed gives the deletion error, as starting it would.
-    pub(crate) async fn ensure_inspection_may_start(&self) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn ensure_inspection_may_start(
+        &self,
+        owner: Option<&NewOwner>,
+    ) -> Result<(), WorkerExecutorError> {
+        {
+            let instance = self.instance.lock().await;
+            instance.ensure_not_deleting()?;
+            self.ensure_owns_key(owner)?;
+        }
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
         }
-        self.instance.lock().await.ensure_not_deleting()?;
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
@@ -1496,10 +1501,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         drop(instance_guard);
 
-        let mut wallet = receiver.await.unwrap()?;
-        let revoked_cards = self
-            .get_last_known_status()
+        // A stop answers or keeps a queued read. Its reply is dropped only when the invocation
+        // loop is dropped at executor shutdown, or unwinds from a panic, whose error a retry then
+        // gets. The caller retries the read on the agent's next owner.
+        let mut wallet = receiver
             .await
+            .map_err(|_| WorkerExecutorError::ShardingNotReady)??;
+        // The guard is dropped, so a deletion can stop the state actor before this read. A stopped
+        // actor that no deletion of this worker and no lost shard explains is retried in the same
+        // way: the executor is shutting down, or a deletion through a newer worker of the same
+        // oplog stopped it, and the retry then finds the agent missing.
+        let status = match self.try_get_last_known_status().await {
+            Err(WorkerExecutorError::Runtime { .. }) => Err(WorkerExecutorError::ShardingNotReady),
+            status => status,
+        }?;
+        let revoked_cards = status
             .pending_card_events
             .iter()
             .filter_map(|pending_event| match &pending_event.event {
@@ -1621,15 +1637,20 @@ pub(in crate::worker) fn inactive_ephemeral_agent_error() -> WorkerExecutorError
     WorkerExecutorError::invalid_request(INACTIVE_EPHEMERAL_AGENT_ERROR)
 }
 
+/// Checks the identity of an invocation's target. A KnownFresh invocation skips the lookup of
+/// an existing agent, so it is accepted only for an ephemeral instance whose ID derives from the
+/// invocation's owner key: no other invocation reaches that ID.
 pub(in crate::worker) fn validate_resolved_invocation_identity(
     agent_mode: AgentMode,
-    phantom_id: Option<Uuid>,
+    environment_id: EnvironmentId,
+    agent_id: &AgentId,
+    keyed: bool,
     idempotency_key: &IdempotencyKey,
     freshness_disposition: InvocationFreshnessDisposition,
 ) -> Result<(), WorkerExecutorError> {
-    if agent_mode == AgentMode::Ephemeral && phantom_id.is_none() {
+    if agent_mode == AgentMode::Ephemeral && keyed {
         return Err(WorkerExecutorError::invalid_request(
-            "An ephemeral invocation requires a final phantom agent ID",
+            "An ephemeral agent has no key: address it by ID",
         ));
     }
 
@@ -1643,8 +1664,10 @@ pub(in crate::worker) fn validate_resolved_invocation_identity(
         ));
     }
 
-    let expected_phantom_id = ephemeral_invocation_phantom_id(idempotency_key);
-    if phantom_id != Some(expected_phantom_id) {
+    let derived = agent_id
+        .type_id()
+        .map(|type_id| AgentId::ephemeral_invocation(environment_id, type_id, idempotency_key));
+    if derived.as_ref() != Some(agent_id) {
         return Err(WorkerExecutorError::invalid_request(
             "KnownFresh ephemeral agent id does not match the invocation idempotency key",
         ));

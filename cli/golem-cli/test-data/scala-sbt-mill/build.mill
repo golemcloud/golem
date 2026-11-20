@@ -1,0 +1,27 @@
+//| mill-version: 1.1.8
+package build
+
+import mill.*
+import mill.scalalib.*
+import org.scalajs.linker.interface.ModuleKind
+
+// The same component as build.sbt: same sources, Scala and Scala.js versions, dependencies and linker settings.
+object `package` extends golem.mill.GolemAutoRegister {
+  override def sources = Task.Sources(moduleDir / "src" / "main" / "scala")
+
+  def scalaVersion = "3.8.2"
+
+  override def scalaJSUseMainModuleInitializer = Task(false)
+
+  override def scalacOptions = Task(super.scalacOptions() :+ "-experimental")
+
+  override def scalaJSConfig = Task.Anon(super.scalaJSConfig().withModuleKind(ModuleKind.ESModule))
+
+  def mvnDeps = Seq(
+    mvn"cloud.golem::golem-scala-core::0.0.0-SNAPSHOT",
+    mvn"cloud.golem::golem-scala-model::0.0.0-SNAPSHOT",
+    mvn"cloud.golem::golem-scala-macros:0.0.0-SNAPSHOT"
+  )
+
+  override def golemBasePackage = Task(Some("buildtools"))
+}

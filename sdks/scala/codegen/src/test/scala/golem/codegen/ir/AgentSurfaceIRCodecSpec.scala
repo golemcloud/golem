@@ -40,7 +40,7 @@ class AgentSurfaceIRCodecSpec extends munit.FunSuite {
             name = "increment",
             params = List(ParamSurface("amount", "Int")),
             returnTypeExpr = "Int",
-            principalParams = List(false)
+            contextParams = List(false)
           )
         ),
         sourceScopes = List(
@@ -166,13 +166,13 @@ class AgentSurfaceIRCodecSpec extends munit.FunSuite {
               name = "greet",
               params = List(ParamSurface("name", "String"), ParamSurface("age", "Int")),
               returnTypeExpr = "String",
-              principalParams = List(false, false)
+              contextParams = List(false, false)
             ),
             MethodSurface(
               name = "reset",
               params = Nil,
               returnTypeExpr = "Unit",
-              principalParams = Nil
+              contextParams = Nil
             )
           )
         )

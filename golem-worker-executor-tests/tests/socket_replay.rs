@@ -22,12 +22,14 @@
 //! the durable sockets plan, the test says so and names the ticket that changes it.
 
 use crate::Tracing;
-use golem_common::model::agent::{ParsedAgentKey, UpdateRecord};
+use golem_common::model::agent::{
+    ParsedAgentKey, RevertToOplogIndex, RevertWorkerTarget, UpdateRecord,
+};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::{AgentId, OplogIndex};
+use golem_common::model::{OplogIndex, OwnedAgentId};
 use golem_common::schema::{FromSchema, TypedSchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
@@ -219,7 +221,7 @@ struct Session<'a> {
     executor: Option<TestWorkerExecutor>,
     component: ComponentDto,
     agent_id: ParsedAgentKey,
-    worker_id: AgentId,
+    worker_id: OwnedAgentId,
 }
 
 fn sockets() -> TestExecutorOverrides {
@@ -250,7 +252,7 @@ impl<'a> Session<'a> {
             .component_dep(&context.default_environment_id, component)
             .store()
             .await?;
-        let agent_id = agent_id!(AGENT_TYPE, name);
+        let agent_id = agent_key!(AGENT_TYPE, name);
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -736,7 +738,10 @@ async fn p3_tcp_receive_in_flight_at_a_crash_completes_with_connection_broken(
     // The waiting read has its own chunk Start once the guest asked for more bytes.
     tokio::time::timeout(WAIT, async {
         loop {
-            session.executor().commit_oplog(&session.worker_id).await?;
+            session
+                .executor()
+                .commit_oplog(&session.worker_id.agent_id)
+                .await?;
             if session
                 .starts("sockets::types::tcp-socket::receive-chunk")
                 .await?
@@ -855,8 +860,6 @@ async fn p3_udp_completed_exchange_replays_without_contacting_the_peer(
     let mut session =
         Session::start(deps, &context, host_api_tests, sockets(), "p3-udp-exchange").await?;
 
-    // A bind to port 0 is not recorded, so its port differs after replay. The agent binds a port
-    // the test reserved, and never returns its address.
     let local = free_udp_address().await?;
     let bound: Result<(), String> = session
         .call("p3_udp_bind", data_value!("u".to_string(), local.port()))
@@ -1076,6 +1079,1899 @@ async fn an_open_p2_tcp_socket_does_not_block_snapshots(
         peer.connections().len(),
         1,
         "recovery from the snapshot does not connect again"
+    );
+    session.finish().await
+}
+
+/// Whether the public oplog shows `bytes`, as text or as a byte list.
+async fn oplog_shows(session: &Session<'_>, bytes: &[u8]) -> anyhow::Result<bool> {
+    let rendered = format!("{:?}", session.oplog().await?);
+    Ok(rendered.contains(std::str::from_utf8(bytes)?) || rendered.contains(&format!("{bytes:?}")))
+}
+
+/// A connected P3 UDP socket stays connected after replay, on the same local address, and its
+/// send stores no bytes.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_connect_survives_replay_and_send_stores_no_bytes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "udp-conn").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), None::<u16>, b"udp-5c1e".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()));
+    assert_eq!(peer.receive().await?, (b"udp-5c1e".to_vec(), local));
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p3_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let remote_after: Result<String, String> = session
+        .call("p3_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), None::<u16>, b"after".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        (local_after, remote_after, sent),
+        (
+            Ok(local.to_string()),
+            Ok(format!("127.0.0.1:{}", peer.port())),
+            Ok(())
+        )
+    );
+    assert_eq!(peer.receive().await?, (b"after".to_vec(), local));
+    assert!(!oplog_shows(&session, b"udp-5c1e").await?);
+    assert!(!oplog_shows(&session, b"after").await?);
+    session.finish().await
+}
+
+/// A bind to port 0 records the port the OS chose, so replay returns the same address and the
+/// rebuilt socket sends from it.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_ephemeral_bind_keeps_its_port_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "udp-eph").await?;
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind", data_value!("u".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p3_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(!local.ends_with(":0"), "{local}");
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p3_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(local.clone()));
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(peer.port()), b"eph".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()));
+    let (data, source) = peer.receive().await?;
+    assert_eq!((data, source.to_string()), (b"eph".to_vec(), local));
+    session.finish().await
+}
+
+/// A connect on an unbound socket binds it implicitly. The recorded address comes back after
+/// replay, and the connected `send(None)` reaches the peer from it.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_implicit_bind_of_a_connect_survives_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "udp-impl").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p3_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p3_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(local.clone()));
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), None::<u16>, b"impl".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()));
+    let (data, source) = peer.receive().await?;
+    assert_eq!((data, source.to_string()), (b"impl".to_vec(), local));
+    session.finish().await
+}
+
+/// When the recorded local port is taken after the crash, the first live operation fails with
+/// `connection-broken`, and so does every later one; the getters still answer from the entry.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_taken_port_after_replay_reports_connection_broken(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-taken").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+
+    // The dropped executor releases the agent's native socket asynchronously; take the port as
+    // soon as it is free.
+    drop(session.executor.take());
+    let _squatter = tokio::time::timeout(WAIT, async {
+        loop {
+            match UdpSocket::bind(local).await {
+                Ok(socket) => break socket,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(50)).await
+                }
+                Err(error) => panic!("binding the recorded port failed: {error}"),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the old executor never released {local}"))?;
+    session.restart_executor().await?;
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    let sent_again: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    let local_after: Result<String, String> = session
+        .call("p3_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(
+        (sent, sent_again, local_after),
+        (
+            Err("ErrorCode::ConnectionBroken".to_string()),
+            Err("ErrorCode::ConnectionBroken".to_string()),
+            Ok(local.to_string())
+        )
+    );
+    assert_eq!(peer.received_soon().await, Vec::<Vec<u8>>::new());
+
+    // The loss is recorded: a second replay returns the same results without the squatter.
+    drop(_squatter);
+    session.restart_executor().await?;
+    let sent_later: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent_later, Err("ErrorCode::ConnectionBroken".to_string()));
+    session.finish().await
+}
+
+/// `disconnect` is not recorded, but the entry follows it on replay: the rebuilt socket is bound
+/// and not connected.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_replays_from_the_entry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session = Session::start(deps, &context, host_api_tests, sockets(), "udp-disc").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+
+    session.restart_executor().await?;
+    let remote: Result<String, String> = session
+        .call("p3_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    let again: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(other.port()), b"free".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        (remote, again, sent),
+        (
+            Err("ErrorCode::InvalidState".to_string()),
+            Err("ErrorCode::InvalidState".to_string()),
+            Ok(())
+        )
+    );
+    assert_eq!(other.receive().await?, (b"free".to_vec(), local));
+    session.finish().await
+}
+
+/// A completed P2 UDP exchange is not repeated by replay: the peer gets no second datagram, the
+/// received datagram comes from the oplog, and no sent bytes are stored. `start-bind`, `stream`,
+/// `check-send`, `send` and `receive` are recorded once each.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_completed_exchange_replays_without_contacting_the_peer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-exchange").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p2_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"p2-7a1f".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(peer.receive().await?, (b"p2-7a1f".to_vec(), local));
+
+    let (receive, answer) = tokio::join!(
+        session.call::<Result<(Vec<u8>, String), String>>(
+            "p2_udp_receive",
+            data_value!("u".to_string())
+        ),
+        peer.socket.send_to(b"world", local)
+    );
+    answer?;
+    assert_eq!(
+        receive?,
+        Ok((b"world".to_vec(), format!("127.0.0.1:{}", peer.port())))
+    );
+    let receives_before = session.starts("sockets::udp::receive").await?;
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(log, vec![received("u", b"world")]);
+    assert_eq!(
+        peer.received_soon().await,
+        Vec::<Vec<u8>>::new(),
+        "replay sends no datagram"
+    );
+    assert_eq!(session.starts("sockets::udp::start_bind").await?, 1);
+    assert_eq!(session.starts("sockets::udp::stream").await?, 1);
+    assert_eq!(session.starts("sockets::udp::send").await?, 1);
+    assert_eq!(session.starts("sockets::udp::check_send").await?, 1);
+    assert_eq!(
+        session.starts("sockets::udp::receive").await?,
+        receives_before
+    );
+    assert!(!oplog_shows(&session, b"p2-7a1f").await?);
+    session.finish().await
+}
+
+/// A connected P2 UDP socket gets its endpoint back after replay: the getters answer from the
+/// entry, and a connected `send` with no address reaches the peer from the recorded local port.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_connected_stream_survives_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-conn").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), local.port(), Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"before".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(peer.receive().await?, (b"before".to_vec(), local));
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let remote_after: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"after".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        (local_after, remote_after, sent),
+        (
+            Ok(local.to_string()),
+            Ok(format!("127.0.0.1:{}", peer.port())),
+            Ok(1)
+        )
+    );
+    assert_eq!(peer.receive().await?, (b"after".to_vec(), local));
+
+    // A live receive after the rebuild reads the native socket.
+    let (receive, answer) = tokio::join!(
+        session.call::<Result<(Vec<u8>, String), String>>(
+            "p2_udp_receive",
+            data_value!("u".to_string())
+        ),
+        peer.socket.send_to(b"reply", local)
+    );
+    answer?;
+    assert_eq!(
+        receive?,
+        Ok((b"reply".to_vec(), format!("127.0.0.1:{}", peer.port())))
+    );
+    session.finish().await
+}
+
+/// A bind to port 0 records the port the OS chose, so the rebuilt socket sends from it.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_ephemeral_bind_keeps_its_port_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-eph").await?;
+    let bound: Result<(), String> = session
+        .call("p2_udp_bind", data_value!("u".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(!local.ends_with(":0"), "{local}");
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(local.clone()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"eph".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    let (data, source) = peer.receive().await?;
+    assert_eq!((data, source.to_string()), (b"eph".to_vec(), local));
+    session.finish().await
+}
+
+/// The P2 `error-code` values as the fixture renders them with `Debug`.
+const P2_CONNECTION_RESET: &str = "ErrorCode { code: 15, name: \"connection-reset\", message: \"The TCP connection was reset.\" }";
+const P2_INVALID_STATE: &str = "ErrorCode { code: 9, name: \"invalid-state\", message: \"The operation is not valid in the socket's current state.\" }";
+
+/// When the recorded local port is taken after the crash, the first live operation fails with
+/// `connection-reset`, every later one does too, and the loss is recorded.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_taken_port_after_replay_reports_connection_reset(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-taken").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p2_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+
+    drop(session.executor.take());
+    let squatter = tokio::time::timeout(WAIT, async {
+        loop {
+            match UdpSocket::bind(local).await {
+                Ok(socket) => break socket,
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(50)).await
+                }
+                Err(error) => panic!("binding the recorded port failed: {error}"),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the old executor never released {local}"))?;
+    session.restart_executor().await?;
+    let checked: Result<u64, String> = session
+        .call("p2_udp_check_send", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(
+        (checked, sent, local_after),
+        (
+            Err(P2_CONNECTION_RESET.to_string()),
+            Err(P2_CONNECTION_RESET.to_string()),
+            Ok(local.to_string())
+        )
+    );
+    assert_eq!(peer.received_soon().await, Vec::<Vec<u8>>::new());
+
+    drop(squatter);
+    session.restart_executor().await?;
+    let sent_later: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(peer.port()), b"lost".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent_later, Err(P2_CONNECTION_RESET.to_string()));
+    assert_eq!(peer.received_soon().await, Vec::<Vec<u8>>::new());
+    session.finish().await
+}
+
+/// A `stream(None)` after a connected `stream` replays from the entry: the rebuilt socket is
+/// bound and not connected, and sends to another peer.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_restream_unconnected_replays_from_the_entry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-disc").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), local.port(), Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+
+    session.restart_executor().await?;
+    let remote: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"free".to_vec()),
+        )
+        .await?;
+    assert_eq!((remote, sent), (Err(P2_INVALID_STATE.to_string()), Ok(1)));
+    assert_eq!(other.receive().await?, (b"free".to_vec(), local));
+    session.finish().await
+}
+
+/// A connect fixes a wildcard local address. The entry takes the connected local address, so the
+/// getter answers the same after replay and the rebuilt socket sends from the same address.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_wildcard_bind_records_the_connected_local_address(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-wild").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams_at",
+            data_value!(
+                "u".to_string(),
+                "0.0.0.0:0".to_string(),
+                Some(format!("127.0.0.1:{}", peer.port()))
+            ),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        local.starts_with("127.0.0.1:") && !local.ends_with(":0"),
+        "{local}"
+    );
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(local.clone()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"wild".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    let (data, source) = peer.receive().await?;
+    assert_eq!((data, source.to_string()), (b"wild".to_vec(), local));
+    session.finish().await
+}
+
+/// A failed connect of a connected socket leaves the native socket disconnected. The entry
+/// records the state the call left, so the getters answer the same after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_failed_restream_records_the_state_it_leaves(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-fail").await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), local.port(), Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call(
+            "p2_udp_restream_to",
+            data_value!("u".to_string(), Some("8.8.8.8:12345".to_string())),
+        )
+        .await?;
+    assert!(
+        restreamed
+            .as_ref()
+            .is_err_and(|error| error.contains("invalid-argument")),
+        "{restreamed:?}"
+    );
+    let live_local: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let live_remote: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(
+        (live_local.clone(), live_remote.clone()),
+        (Ok(local.to_string()), Err(P2_INVALID_STATE.to_string()))
+    );
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    let remote_after: Result<String, String> = session
+        .call("p2_udp_remote_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!((local_after, remote_after), (live_local, live_remote));
+    session.finish().await
+}
+
+/// A disconnect can release an ephemeral port, and the next send binds a new one. The entry
+/// records the port that send used, so the rebuilt socket sends from it after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_send_after_disconnect_records_its_local_address(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-rel").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), 0u16, Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"one".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    let (_, source) = other.receive().await?;
+    let local: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local, Ok(source.to_string()));
+
+    session.restart_executor().await?;
+    let local_after: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(local_after, Ok(source.to_string()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"two".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?, (b"two".to_vec(), source));
+    session.finish().await
+}
+
+async fn local_address(session: &Session<'_>, slot: &str) -> anyhow::Result<String> {
+    session
+        .call::<Result<String, String>>("p3_udp_local_address", data_value!(slot.to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)
+}
+
+async fn send_to(
+    session: &Session<'_>,
+    slot: &str,
+    port: Option<u16>,
+    data: &[u8],
+) -> anyhow::Result<()> {
+    session
+        .call::<Result<(), String>>(
+            "p3_udp_send",
+            data_value!(slot.to_string(), port, data.to_vec()),
+        )
+        .await?
+        .map_err(anyhow::Error::msg)
+}
+
+/// A disconnect after an implicit bind releases the native port, so the entry no longer
+/// reports it. The next live send binds again on the unspecified address and records that
+/// address, and the getter reports it, live and after replay. The socket address policy allows a
+/// fixed port only on a loopback address, so the rebuild of that unconnected endpoint is refused
+/// and the socket is lost.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_after_an_implicit_bind_records_the_next_endpoint(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-impl-disc").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+    assert_eq!(local_address(&session, "u").await?, "0.0.0.0:0");
+
+    send_to(&session, "u", Some(peer.port()), b"live").await?;
+    let (data, source) = peer.receive().await?;
+    assert_eq!(data, b"live".to_vec());
+    let local = local_address(&session, "u").await?;
+    assert_eq!(local, format!("0.0.0.0:{}", source.port()));
+
+    session.restart_executor().await?;
+    assert_eq!(local_address(&session, "u").await?, local);
+    let sent: Result<(), String> = session
+        .call(
+            "p3_udp_send",
+            data_value!("u".to_string(), Some(peer.port()), b"replayed".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Err("ErrorCode::ConnectionBroken".to_string()));
+    session.finish().await
+}
+
+/// A connect selects the interface address of a wildcard bind, also when a send bound the
+/// socket implicitly. The entry records that address, and the rebuilt socket sends from it.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_connect_after_a_wildcard_bind_records_the_interface_address(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-wildcard").await?;
+
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind_any", data_value!("b".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("s".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    send_to(&session, "s", Some(peer.port()), b"first").await?;
+    peer.receive().await?;
+
+    let mut expected = Vec::new();
+    for slot in ["b", "s"] {
+        let wildcard = local_address(&session, slot).await?;
+        let port = wildcard
+            .strip_prefix("0.0.0.0:")
+            .expect("wildcard address")
+            .to_string();
+        let connected: Result<(), String> = session
+            .call("p3_udp_connect", data_value!(slot.to_string(), peer.port()))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let local = local_address(&session, slot).await?;
+        assert_eq!(local, format!("127.0.0.1:{port}"));
+        expected.push(local);
+    }
+
+    session.restart_executor().await?;
+    for (slot, local) in ["b", "s"].into_iter().zip(expected) {
+        assert_eq!(local_address(&session, slot).await?, local);
+        send_to(&session, slot, None, slot.as_bytes()).await?;
+        let (data, source) = peer.receive().await?;
+        assert_eq!(
+            (data, source.to_string()),
+            (slot.as_bytes().to_vec(), local)
+        );
+    }
+    session.finish().await
+}
+
+/// On Linux a UDP connect that fails with `EINVAL` dissolves the old association before it tries
+/// again, so the failed connect leaves the socket disconnected. The getter and a send to the
+/// connected peer then fail, live and after reconstruction, and the rebuild does not connect the
+/// socket to the old peer again.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_failed_connect_that_disconnects_replays_as_disconnected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "udp-failed-connect",
+    )
+    .await?;
+    let local = free_udp_address().await?;
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind", data_value!("u".to_string(), local.port()))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let failed: Result<(), String> = session
+        .call(
+            "p3_udp_connect_ipv4",
+            data_value!("u".to_string(), "8.8.8.8:9".to_string()),
+        )
+        .await?;
+    assert_eq!(failed, Err("ErrorCode::InvalidArgument".to_string()));
+
+    let disconnected = (
+        Err::<String, String>("ErrorCode::InvalidState".to_string()),
+        Err::<(), String>("ErrorCode::InvalidArgument".to_string()),
+    );
+    let live = (
+        session
+            .call::<Result<String, String>>("p3_udp_remote_address", data_value!("u".to_string()))
+            .await?,
+        session
+            .call::<Result<(), String>>(
+                "p3_udp_send",
+                data_value!("u".to_string(), None::<u16>, b"live".to_vec()),
+            )
+            .await?,
+    );
+    assert_eq!(live, disconnected);
+
+    session.restart_executor().await?;
+    let replayed = (
+        session
+            .call::<Result<String, String>>("p3_udp_remote_address", data_value!("u".to_string()))
+            .await?,
+        session
+            .call::<Result<(), String>>(
+                "p3_udp_send",
+                data_value!("u".to_string(), None::<u16>, b"replayed".to_vec()),
+            )
+            .await?,
+    );
+    assert_eq!(replayed, disconnected);
+    send_to(&session, "u", Some(other.port()), b"free").await?;
+    assert_eq!(other.receive().await?, (b"free".to_vec(), local));
+    session.finish().await
+}
+
+/// The endpoint rebuild binds the native socket on the recorded interface address and port, so
+/// Linux keeps both on a later disconnect, unlike the implicit bind or the wildcard bind on port 0
+/// that selected them. The entry records the rebuild and keeps them too: the getter reports the
+/// address the peer sees after the disconnect, live and after a second reconstruction.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "udp-rebuilt-disc",
+    )
+    .await?;
+
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("i".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let bound: Result<(), String> = session
+        .call("p3_udp_bind_any", data_value!("w".to_string(), 0u16))
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let mut ports = Vec::new();
+    for slot in ["i", "w"] {
+        let connected: Result<(), String> = session
+            .call("p3_udp_connect", data_value!(slot.to_string(), peer.port()))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let local = local_address(&session, slot).await?;
+        let port = local
+            .strip_prefix("127.0.0.1:")
+            .expect("interface address")
+            .to_string();
+        ports.push(port);
+    }
+
+    session.restart_executor().await?;
+    for (slot, port) in ["i", "w"].into_iter().zip(&ports) {
+        send_to(&session, slot, None, slot.as_bytes()).await?;
+        let (_, source) = peer.receive().await?;
+        assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
+        let disconnected: Result<(), String> = session
+            .call("p3_udp_disconnect", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(disconnected, Ok(()));
+        assert_eq!(
+            local_address(&session, slot).await?,
+            format!("127.0.0.1:{port}")
+        );
+        send_to(&session, slot, Some(other.port()), b"live").await?;
+        let (_, source) = other.receive().await?;
+        assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
+    }
+
+    session.restart_executor().await?;
+    for (slot, port) in ["i", "w"].into_iter().zip(&ports) {
+        assert_eq!(
+            local_address(&session, slot).await?,
+            format!("127.0.0.1:{port}")
+        );
+        send_to(&session, slot, Some(other.port()), b"replayed").await?;
+        let (_, source) = other.receive().await?;
+        assert_eq!(source.to_string(), format!("127.0.0.1:{port}"));
+    }
+    session.finish().await
+}
+
+/// P2 disconnects with a live `stream(none)`, which records the native local address it leaves.
+/// After an endpoint rebuild on the recorded interface address and port, the native socket keeps
+/// both on the disconnect, and the entry records them, live and after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_disconnect_after_an_endpoint_rebuild_keeps_the_rebuilt_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-rebuilt").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams_at",
+            data_value!(
+                "u".to_string(),
+                "0.0.0.0:0".to_string(),
+                Some(format!("127.0.0.1:{}", peer.port()))
+            ),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    let port = local
+        .strip_prefix("127.0.0.1:")
+        .expect("interface address")
+        .to_string();
+
+    session.restart_executor().await?;
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), None::<u16>, b"rebuilt".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(peer.receive().await?.1.to_string(), local);
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+    let after_disconnect: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(after_disconnect, Ok(format!("127.0.0.1:{port}")));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"live".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+
+    session.restart_executor().await?;
+    let replayed: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(replayed, Ok(format!("127.0.0.1:{port}")));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"again".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+    session.finish().await
+}
+
+/// A disconnect releases a port that a bind on port 0 selected, so the entry keeps the bind
+/// address with port 0. A rebuild then selects a new port at the first live operation, here
+/// `check-send`, which records it, so the getter and the source the peer sees agree, live and
+/// after replay.
+#[test]
+#[timeout("3m")]
+async fn p2_udp_check_send_records_the_port_a_rebuild_on_port_zero_selects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "p2-udp-zero").await?;
+    let bound: Result<(), String> = session
+        .call(
+            "p2_udp_bind_streams",
+            data_value!("u".to_string(), 0u16, Some(peer.port())),
+        )
+        .await?;
+    assert_eq!(bound, Ok(()));
+    let restreamed: Result<(), String> = session
+        .call("p2_udp_restream", data_value!("u".to_string(), None::<u16>))
+        .await?;
+    assert_eq!(restreamed, Ok(()));
+    let released: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(released, Ok("127.0.0.1:0".to_string()));
+
+    session.restart_executor().await?;
+    let permit: Result<u64, String> = session
+        .call("p2_udp_check_send", data_value!("u".to_string()))
+        .await?;
+    assert!(permit.is_ok(), "{permit:?}");
+    let local: String = session
+        .call::<Result<String, String>>("p2_udp_local_address", data_value!("u".to_string()))
+        .await?
+        .map_err(anyhow::Error::msg)?;
+    assert!(
+        local.starts_with("127.0.0.1:") && !local.ends_with(":0"),
+        "{local}"
+    );
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"one".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+
+    session.restart_executor().await?;
+    let replayed: Result<String, String> = session
+        .call("p2_udp_local_address", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(replayed, Ok(local.clone()));
+    let sent: Result<u64, String> = session
+        .call(
+            "p2_udp_send_to",
+            data_value!("u".to_string(), Some(other.port()), b"two".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(1));
+    assert_eq!(other.receive().await?.1.to_string(), local);
+    session.finish().await
+}
+
+/// The rebuild that a live receive performs binds the recorded port, and Linux keeps that port on
+/// a later disconnect. The guest drops the receive before it completes, so only the disconnect can
+/// record the port: the getter and the source of the next datagram agree with the native socket,
+/// live and after a second reconstruction.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_disconnect_after_an_abandoned_receive_keeps_the_rebuilt_port(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let other = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-abandoned").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let local = local_address(&session, "u").await?;
+    assert!(local.starts_with("127.0.0.1:"), "{local}");
+
+    session.restart_executor().await?;
+    let abandoned: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("u".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(abandoned, Ok(true));
+    // The rebuild bound the recorded port before the guest dropped the receive.
+    let taken = std::net::UdpSocket::bind(local.as_str());
+    assert_eq!(
+        taken.map(|_| ()).map_err(|error| error.kind()),
+        Err(std::io::ErrorKind::AddrInUse)
+    );
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+    assert_eq!(local_address(&session, "u").await?, local);
+    send_to(&session, "u", Some(other.port()), b"live").await?;
+    assert_eq!(other.receive().await?.1.to_string(), local);
+
+    session.restart_executor().await?;
+    assert_eq!(local_address(&session, "u").await?, local);
+    send_to(&session, "u", Some(other.port()), b"replayed").await?;
+    assert_eq!(other.receive().await?.1.to_string(), local);
+    session.finish().await
+}
+
+/// A disconnect after an implicit bind releases the port, and the socket stays bound without one:
+/// a receive waits. The rebuild after a reconstruction restores that state instead of leaving an
+/// unbound socket, whose receive fails with `invalid-state`.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_receive_after_a_released_disconnect_waits_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session =
+        Session::start(deps, &context, host_api_tests, sockets(), "udp-released").await?;
+    let created: Result<(), String> = session
+        .call("p3_udp_create", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(created, Ok(()));
+    let connected: Result<(), String> = session
+        .call("p3_udp_connect", data_value!("u".to_string(), peer.port()))
+        .await?;
+    assert_eq!(connected, Ok(()));
+    let disconnected: Result<(), String> = session
+        .call("p3_udp_disconnect", data_value!("u".to_string()))
+        .await?;
+    assert_eq!(disconnected, Ok(()));
+    assert_eq!(local_address(&session, "u").await?, "0.0.0.0:0");
+    let live: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("u".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(live, Ok(true));
+
+    session.restart_executor().await?;
+    let replayed: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("u".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(replayed, Ok(true));
+    send_to(&session, "u", Some(peer.port()), b"after").await?;
+    let (data, source) = peer.receive().await?;
+    assert_eq!(data, b"after".to_vec());
+    assert_eq!(
+        local_address(&session, "u").await?,
+        format!("0.0.0.0:{}", source.port())
+    );
+    session.finish().await
+}
+
+/// A disconnect releases the port of a socket bound on a loopback address with port 0 and keeps
+/// the address. The endpoint rebuild restores both: after a reconstruction a receive waits, a
+/// send leaves from the loopback address on a new port, and a connect to a remote address fails
+/// from the loopback source as it does live.
+#[test]
+#[timeout("3m")]
+async fn p3_udp_released_loopback_bind_keeps_its_address_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = UdpPeer::start().await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "udp-released-loopback",
+    )
+    .await?;
+    for slot in ["live", "rebuilt"] {
+        let bound: Result<(), String> = session
+            .call("p3_udp_bind", data_value!(slot.to_string(), 0u16))
+            .await?;
+        assert_eq!(bound, Ok(()));
+        let connected: Result<(), String> = session
+            .call("p3_udp_connect", data_value!(slot.to_string(), peer.port()))
+            .await?;
+        assert_eq!(connected, Ok(()));
+        let disconnected: Result<(), String> = session
+            .call("p3_udp_disconnect", data_value!(slot.to_string()))
+            .await?;
+        assert_eq!(disconnected, Ok(()));
+        assert_eq!(local_address(&session, slot).await?, "127.0.0.1:0");
+    }
+    let live = session
+        .call::<Result<(), String>>(
+            "p3_udp_connect_ipv4",
+            data_value!("live".to_string(), "8.8.8.8:9".to_string()),
+        )
+        .await?;
+    assert_eq!(live, Err("ErrorCode::InvalidArgument".to_string()));
+
+    session.restart_executor().await?;
+    let waits: Result<bool, String> = session
+        .call(
+            "p3_udp_receive_abandoned",
+            data_value!("rebuilt".to_string(), 200u64),
+        )
+        .await?;
+    assert_eq!(waits, Ok(true));
+    assert_eq!(local_address(&session, "rebuilt").await?, "127.0.0.1:0");
+    let replayed = session
+        .call::<Result<(), String>>(
+            "p3_udp_connect_ipv4",
+            data_value!("rebuilt".to_string(), "8.8.8.8:9".to_string()),
+        )
+        .await?;
+    assert_eq!(replayed, live);
+    send_to(&session, "rebuilt", Some(peer.port()), b"after").await?;
+    let (data, source) = peer.receive().await?;
+    assert_eq!(data, b"after".to_vec());
+    assert_eq!(source.ip().to_string(), "127.0.0.1");
+    assert_eq!(
+        local_address(&session, "rebuilt").await?,
+        source.to_string()
+    );
+    session.finish().await
+}
+
+/// A live P3 TCP send delivers each byte to the peer once and records only byte counts. Replay
+/// of the completed conversation neither connects nor sends again.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_completed_conversation_replays_without_contacting_the_peer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Fixed("pong 1")).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-conversation",
+    )
+    .await?;
+
+    let response: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_conversation",
+            data_value!(peer.port, b"ping-7f3a\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(response, Ok(b"pong 1\n".to_vec()));
+    peer.wait_until("the agent closes its connection", |connections| {
+        connections.iter().all(|connection| connection.closed)
+    })
+    .await?;
+    assert!(
+        !oplog_shows(&session, b"ping-7f3a").await?,
+        "a P3 TCP send records no bytes"
+    );
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::send-chunk")
+            .await?,
+        1
+    );
+
+    session.restart_executor().await?;
+    let log: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert_eq!(
+        log,
+        vec![received("conversation", b"pong 1\n")],
+        "replay returns the recorded bytes"
+    );
+    assert_eq!(
+        peer.connections(),
+        vec![Connection {
+            received: b"ping-7f3a\n".to_vec(),
+            closed: true,
+        }],
+        "replay neither connects nor sends again"
+    );
+
+    // The next conversation is live and opens the second connection.
+    let response: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_conversation",
+            data_value!(peer.port, b"again\n".to_vec()),
+        )
+        .await?;
+    assert_eq!(response, Ok(b"pong 1\n".to_vec()));
+    assert_eq!(peer.connections().len(), 2);
+    assert_eq!(peer.connections()[1].received, b"again\n".to_vec());
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::connect")
+            .await?,
+        2
+    );
+    session.finish().await
+}
+
+/// G4 and G1 on one pooled connection. A send stream kept open across invocations does not hold
+/// them: the parked send parent leaves the agent idle, so each call returns well before the
+/// tail-work deadline. After a restart, replay drains exactly the recorded writes, the next write
+/// is refused, and the send completes with `connection-broken`. Each byte reaches the peer once.
+#[test]
+#[timeout("5m")]
+async fn p3_tcp_send_kept_across_invocations_is_lost_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-kept",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+
+    let quick = Duration::from_secs(10);
+    let opened = tokio::time::timeout(
+        quick,
+        session.call::<Result<(), String>>("p3_tcp_open_send", data_value!("a".to_string())),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("opening the send stream held the invocation"))??;
+    assert_eq!(opened, Ok(()));
+    for part in [b"one".to_vec(), b"two".to_vec()] {
+        let written = tokio::time::timeout(
+            quick,
+            session.call::<Result<u32, String>>("p3_tcp_write", data_value!("a".to_string(), part)),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("a write held the invocation"))??;
+        assert_eq!(written, Ok(3));
+    }
+    peer.wait_until("both writes arrive", |connections| {
+        connections.len() == 1 && connections[0].received == b"onetwo"
+    })
+    .await?;
+    assert!(!oplog_shows(&session, b"onetwo").await?);
+
+    session.restart_executor().await?;
+    let written: Result<u32, String> = session
+        .call(
+            "p3_tcp_write",
+            data_value!("a".to_string(), b"three".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        written,
+        Ok(0),
+        "the live write after replay is not accepted"
+    );
+    let closed: Result<(), String> = session
+        .call("p3_tcp_close_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(closed, Err("ErrorCode::ConnectionBroken".to_string()));
+    peer.wait_until(
+        "the connection from before the restart closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"onetwo".to_vec());
+    assert_eq!(
+        session
+            .starts("sockets::types::tcp-socket::send-chunk")
+            .await?,
+        3,
+        "two replayed writes and the refused one"
+    );
+    session.finish().await
+}
+
+/// G1 across a crash inside an open send. The first part is sent live; the agent crashes during
+/// the pause. Recovery drains the recorded first part without sending it again, and the second
+/// part, written live after replay, is refused instead of being accepted and dropped.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_open_at_a_crash_refuses_live_writes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-crash",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let call = {
+        let executor = session.executor().clone();
+        let component = session.component.clone();
+        let agent_id = session.agent_id.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "p3_tcp_send_with_pause",
+                    data_value!(
+                        "a".to_string(),
+                        b"first".to_vec(),
+                        3000u64,
+                        b"second".to_vec()
+                    ),
+                )
+                .await
+        })
+    };
+    peer.wait_until("the first part arrives", |connections| {
+        connections.len() == 1 && connections[0].received == b"first"
+    })
+    .await?;
+    session
+        .executor()
+        .simulated_crash(&session.worker_id)
+        .await?;
+    let result = call.await??.into_typed::<Result<(), String>>()?;
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|error| error.contains("6 bytes were not accepted")),
+        "the live write after replay must not be accepted: {result:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(peer.connections().len(), 1, "no new connection");
+    assert_eq!(peer.connections()[0].received, b"first".to_vec());
+    session.finish().await
+}
+
+/// A guest that drops its socket right after opening the send stream. The stream owns the
+/// connection, so the bytes written afterwards reach the peer. The `send` import takes the native
+/// stream before it returns, while the task commits the parent `Start` later. Replay of the
+/// completed send neither reconnects nor needs the dropped socket.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_survives_dropping_the_socket(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-dropped-socket",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let sent: Result<(), String> = session
+        .call(
+            "p3_tcp_send_after_dropping_socket",
+            data_value!("a".to_string(), b"after-drop-9c1e".to_vec()),
+        )
+        .await?;
+    assert_eq!(sent, Ok(()));
+    peer.wait_until(
+        "the bytes arrive and the connection closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"after-drop-9c1e".to_vec());
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the send after the socket drop failed"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not reconnect");
+    session.finish().await
+}
+
+/// A peer that does not read holds back the send, so a guest write stays pending. The guest
+/// cancels it: the native write stops without a partial effect, its `send-chunk` child records
+/// no accepted bytes, and the cancel completes instead of waiting for the peer. The peer later
+/// reads exactly the accepted bytes, and the send replays after a restart without reconnecting.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_send_cancels_a_write_the_peer_holds_back(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let listener = tokio::net::TcpSocket::new_v4()?;
+    listener.set_recv_buffer_size(4096)?;
+    listener.bind("127.0.0.1:0".parse()?)?;
+    let listener = listener.listen(1)?;
+    let port = listener.local_addr()?.port();
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-held-back",
+    )
+    .await?;
+    let connect =
+        session.call::<Result<(), String>>("p3_tcp_connect", data_value!("a".to_string(), port));
+    let ((mut peer, _), connected) = tokio::try_join!(
+        async { Ok::<_, anyhow::Error>(listener.accept().await?) },
+        connect
+    )?;
+    assert_eq!(connected, Ok(()));
+
+    let sent: Result<(u64, String, Result<(), String>), String> = tokio::time::timeout(
+        Duration::from_secs(60),
+        session.call(
+            "p3_tcp_send_until_held_back",
+            data_value!("a".to_string(), 65536u32, 500u64),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("the cancelled write waited for the peer"))??;
+    let (accepted, ending, result) = sent.map_err(anyhow::Error::msg)?;
+    assert_eq!(ending, "cancelled");
+    assert_eq!(result, Ok(()));
+    assert!(accepted > 0, "the peer's buffers take the first writes");
+
+    let mut received = Vec::new();
+    tokio::time::timeout(Duration::from_secs(30), peer.read_to_end(&mut received)).await??;
+    assert_eq!(
+        received.len() as u64,
+        accepted,
+        "the peer gets exactly the accepted bytes"
+    );
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let chunks = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "sockets::types::tcp-socket::send-chunk")
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert!(
+        chunks.len() >= 2,
+        "the accepted writes and the cancelled one are recorded"
+    );
+    for start in &chunks {
+        assert!(
+            oplog.iter().any(|entry| matches!(&entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == *start)),
+            "the send-chunk child at {start} has a terminal"
+        );
+    }
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the cancelled write failed"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .is_err(),
+        "replay does not reconnect"
+    );
+    session.finish().await
+}
+
+/// The guest drops a P3 TCP socket right after it opens the receive stream, before the receive
+/// task runs. The stream owns the connection, so it still delivers the peer's bytes, and the
+/// completed receive replays without the dropped socket.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_receive_survives_dropping_the_socket(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"drop-7a3f", Reply::Silent).await?;
+    let mut session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-receive-dropped-socket",
+    )
+    .await?;
+    let received: Result<Vec<u8>, String> = session
+        .call(
+            "p3_tcp_receive_after_dropping_socket",
+            data_value!(peer.port, 9u32),
+        )
+        .await?;
+    assert_eq!(received, Ok(b"drop-7a3f".to_vec()));
+
+    session.restart_executor().await?;
+    let _: Vec<(String, Vec<u8>)> = session.call("received", data_value!()).await?;
+    assert!(
+        !session
+            .oplog()
+            .await?
+            .iter()
+            .any(|entry| matches!(entry, PublicOplogEntry::Error(_))),
+        "replay of the receive after the socket drop failed"
+    );
+    assert_eq!(peer.connections().len(), 1, "replay does not reconnect");
+    session.finish().await
+}
+
+/// A revert cut inside an open send parent. The cut keeps the send `Start` and its first write,
+/// and deletes the invocation of the second write. Recovery replays the retained write, the
+/// next write after the cut is refused instead of being sent, and the send parent completes
+/// with `connection-broken` under its original `Start`. The revert does not undo bytes that
+/// already reached the peer, and Golem does not reconnect.
+#[test]
+#[timeout("3m")]
+async fn p3_tcp_revert_inside_an_open_send_recovers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let peer = TcpPeer::start(b"", Reply::Silent).await?;
+    let session = Session::start(
+        deps,
+        &context,
+        host_api_tests,
+        sockets(),
+        "p3-tcp-send-revert",
+    )
+    .await?;
+    let _: Result<(), String> = session
+        .call("p3_tcp_connect", data_value!("a".to_string(), peer.port))
+        .await?;
+    let opened: Result<(), String> = session
+        .call("p3_tcp_open_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(opened, Ok(()));
+    for part in [b"one".to_vec(), b"two".to_vec()] {
+        let written: Result<u32, String> = session
+            .call("p3_tcp_write", data_value!("a".to_string(), part))
+            .await?;
+        assert_eq!(written, Ok(3));
+    }
+    peer.wait_until("both writes arrive", |connections| {
+        connections.len() == 1 && connections[0].received == b"onetwo"
+    })
+    .await?;
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let start_of = |name: &str| {
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == name)
+            })
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>()
+    };
+    let parent = start_of("sockets::types::tcp-socket::send");
+    let chunks = start_of("sockets::types::tcp-socket::send-chunk");
+    assert_eq!((parent.len(), chunks.len()), (1, 2));
+    let parent = parent[0];
+    // The last entry of the invocation that made the first write.
+    let cut = oplog
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > chunks[0]
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .expect("the first write finishes");
+    assert!(cut < chunks[1], "the cut deletes the second write");
+
+    session
+        .executor()
+        .revert(
+            &session.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: cut,
+            }),
+        )
+        .await?;
+
+    let written: Result<u32, String> = session
+        .call(
+            "p3_tcp_write",
+            data_value!("a".to_string(), b"three".to_vec()),
+        )
+        .await?;
+    assert_eq!(
+        written,
+        Ok(0),
+        "the live write after the cut is not accepted"
+    );
+    let closed: Result<(), String> = session
+        .call("p3_tcp_close_send", data_value!("a".to_string()))
+        .await?;
+    assert_eq!(closed, Err("ErrorCode::ConnectionBroken".to_string()));
+    peer.wait_until(
+        "the connection from before the revert closes",
+        |connections| connections.len() == 1 && connections[0].closed,
+    )
+    .await?;
+    assert_eq!(peer.connections()[0].received, b"onetwo".to_vec());
+
+    let oplog = session
+        .executor()
+        .get_oplog(&session.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "recovery after the cut failed: {oplog:?}"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == parent))
+            .count(),
+        1,
+        "the send parent completes once under its original Start"
+    );
+    let revert = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
+        .map(|entry| entry.oplog_index)
+        .expect("the revert is recorded");
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > revert
+                && matches!(&entry.entry, PublicOplogEntry::Start(start)
+                    if start.function_name == "sockets::types::tcp-socket::send-chunk"))
+            .count(),
+        1,
+        "only the refused write records a chunk after the revert"
     );
     session.finish().await
 }

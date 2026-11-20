@@ -31,6 +31,7 @@ use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
 use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::config::ConfigCatalog;
+pub use golem_package::{ManifestInitialCard, ManifestInitialCardBound, PluginInstallation};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -106,6 +107,14 @@ pub struct Application {
     pub manifest_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<golem_package::PackageIdentity>,
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::package::deserialize_pins"
+    )]
+    pub packages: golem_package::Pins,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub includes: Vec<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -1775,24 +1784,6 @@ pub struct InitialComponentFile {
     pub permissions: Option<AgentFilePermissions>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ManifestInitialCard {
-    #[serde(default)]
-    pub lower_bound: ManifestInitialCardBound,
-    #[serde(default)]
-    pub upper_bound: ManifestInitialCardBound,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ManifestInitialCardBound {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub positive: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub negative: Vec<String>,
-}
-
 // Common component-level fields merged from templates/components/presets.
 // This helper intentionally stays outside serde parsing: using flatten here would weaken
 // strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
@@ -1935,17 +1926,6 @@ pub struct PreinitializeJs {
     pub preinitialize_js: String,
     /// The path to the pre-initialized output WASM component
     pub into: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PluginInstallation {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<String>,
-    pub name: String,
-    pub version: String,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub parameters: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
