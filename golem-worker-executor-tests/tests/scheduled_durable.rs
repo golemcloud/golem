@@ -113,12 +113,18 @@ impl SchedulerStorage for HoldFirstWake {
         id: &ScheduleId,
         owner: uuid::Uuid,
         until: DateTime<Utc>,
+        now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError> {
-        self.inner.extend_lease(id, owner, until).await
+        self.inner.extend_lease(id, owner, until, now).await
     }
 
-    async fn ack(&self, id: &ScheduleId, owner: uuid::Uuid) -> Result<bool, SchedulerStorageError> {
-        self.inner.ack(id, owner).await
+    async fn ack(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.ack(id, owner, now).await
     }
 }
 
