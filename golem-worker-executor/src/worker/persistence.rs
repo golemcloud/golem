@@ -59,6 +59,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
         };
+        // A completed archive removes the live status cache. The status baseline stays.
         if result == Some(false) {
             self.worker_service()
                 .remove_cached_status(

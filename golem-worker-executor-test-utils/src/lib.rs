@@ -1298,12 +1298,8 @@ impl TestWorkerExecutor {
         receiver
     }
 
-    /// The clean status checkpoint of the agent, which a fold of its status starts from when the
-    /// cached status is gone.
-    pub async fn status_checkpoint(
-        &self,
-        agent_id: &AgentId,
-    ) -> anyhow::Result<Option<AgentStatusRecord>> {
+    /// The fingerprint of the current incarnation of the durable agent, from its `Create` entry.
+    pub async fn agent_fingerprint(&self, agent_id: &AgentId) -> anyhow::Result<AgentFingerprint> {
         use golem_worker_executor::services::HasOplogService;
 
         let services = self
@@ -1320,13 +1316,34 @@ impl TestWorkerExecutor {
         let OplogEntry::Create { parameters, .. } = create else {
             return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
         };
+        Ok(AgentFingerprint(parameters.instance_id))
+    }
+
+    /// The clean status checkpoint of the agent, which a fold of its status starts from when the
+    /// cached status is gone.
+    pub async fn status_checkpoint(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Option<AgentStatusRecord>> {
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
+        self.status_checkpoint_of(agent_id, fingerprint).await
+    }
+
+    /// The clean status checkpoint of the incarnation `fingerprint` of the durable agent. Reads no
+    /// oplog, so it also reads the checkpoint of a deleted incarnation.
+    pub async fn status_checkpoint_of(
+        &self,
+        agent_id: &AgentId,
+        fingerprint: AgentFingerprint,
+    ) -> anyhow::Result<Option<AgentStatusRecord>> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
         Ok(services
             .worker_service()
-            .read_status_checkpoint(
-                &owned_agent_id,
-                AgentFingerprint(parameters.instance_id),
-                AgentMode::Durable,
-            )
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
             .await?)
     }
 

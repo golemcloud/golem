@@ -86,7 +86,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Durable-call `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers | `DurableCallSession`, `ReplayableOneshot`, spawned store tasks |
 | `PendingUpdate` / `SuccessfulUpdate` / `FailedUpdate`, `Snapshot` hints, snapshot blobs | In-flight update decision, loaded snapshot bytes |
 | Validated operator revert/fork cuts and retained history | Replay cursor and runtime handles |
-| Agent status **folded from the oplog** (`worker/status.rs`) | Status cache / checkpoints (baselines only) |
+| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status.rs`, `AgentStatusCheckpoint`) | Status cache (baseline only) |
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
@@ -113,8 +113,11 @@ Status, clean-checkpoint, invocation-result-index, and durable-stream-index cach
 the current `Create.instance_id` (`AgentFingerprint`). Readers select them only after resolving the
 authoritative `Create` entry, while resident workers carry that fingerprint directly. A delayed
 writer from a deleted incarnation therefore cannot mix fields into its replacement's derived state.
-These namespaces have a renewable expiry and are rebuilt from the oplog after expiry or cache loss;
-metadata compare-and-mutate operations make each multi-field publication atomic. The flat cached
+The status cache, the invocation-result index and the durable-stream index have a renewable
+expiry and are rebuilt after expiry or cache loss. The clean checkpoint is the durable status
+baseline: it has no expiry, a completed archive keeps it, namespace routing stores it in the
+persistent backend, and only agent deletion removes it. A fold starts from it when the status
+cache is gone. Metadata compare-and-mutate operations make each multi-field publication atomic. The flat cached
 agent mode only chooses which oplog namespace to probe first and never proves existence or identity.
 `RunningWorkers` entries also include the fingerprint, so shard recovery admits only the recorded
 incarnation and removes only an exact stale member. A member is stale when its agent has no oplog,

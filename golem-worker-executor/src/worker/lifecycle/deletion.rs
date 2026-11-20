@@ -167,9 +167,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         // Stop any future background flush or clean-checkpoint write from resurrecting the cached
-        // status after the upcoming `WorkerService::remove`/`remove_cached_status` deletes it (the
-        // latter clears both the live cache and the checkpoint). Each awaits any in-flight write so
-        // none can land after the delete.
+        // status or the status baseline after the upcoming `WorkerService::remove` deletes them.
+        // Each awaits any in-flight write so none can land after the delete.
         if !self
             .deletion_stage_completed(WorkerDeletionStage::BarriersClosed)
             .await

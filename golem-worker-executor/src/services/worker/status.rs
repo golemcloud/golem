@@ -459,7 +459,78 @@ pub(super) fn reassemble_cached_status(
     Some(status)
 }
 
+/// The status that a read gives after a write of `status` to an empty split status hash.
+#[cfg(test)]
+pub(crate) fn stored_split_status(status: AgentStatusRecord) -> Option<AgentStatusRecord> {
+    let agent_mode = status.agent_mode;
+    let mut core = status;
+    let parts = split_status(&mut core);
+    let (sets, _) = compute_status_field_writes(None, &[], &core, &parts).ok()?;
+    reassemble_cached_status(
+        sets.into_iter()
+            .map(|(field, bytes)| (field, bytes::Bytes::from(bytes))),
+    )
+    .map(|status| AgentStatusRecord {
+        agent_mode,
+        ..status
+    })
+}
+
+/// The expiry of a split status hash. The live status cache expires after
+/// [`DERIVED_CACHE_EXPIRY`]. The status baseline in
+/// [`KeyValueStorageNamespace::AgentStatusCheckpoint`] never expires, because after a cut of the
+/// oplog no other record holds the status before the retained start.
+fn split_status_expiry(namespace: &KeyValueStorageNamespace) -> Option<std::time::Duration> {
+    match namespace {
+        KeyValueStorageNamespace::AgentStatus { .. } => Some(DERIVED_CACHE_EXPIRY),
+        KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => None,
+        _ => unreachable!("split status must use a status cache namespace"),
+    }
+}
+
 impl DefaultWorkerService {
+    /// Compares the `core` field of the split status hash in `namespace` with `expected_core`,
+    /// and on a match applies `sets` and `deletions` in one atomic write. With an `expiry`, the
+    /// write also refreshes the expiry of the hash. Without one, the write sets no expiry.
+    async fn compare_and_publish_split_status(
+        &self,
+        api_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        expiry: Option<std::time::Duration>,
+        expected_core: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+    ) -> Result<bool, String> {
+        let storage = self
+            .key_value_storage
+            .with_entity("worker", api_name, "agent_status");
+        match expiry {
+            Some(expiry) => {
+                storage
+                    .compare_and_mutate_many_raw(
+                        namespace,
+                        STATUS_CORE_FIELD,
+                        expected_core,
+                        sets,
+                        deletions,
+                        expiry,
+                    )
+                    .await
+            }
+            None => {
+                storage
+                    .compare_and_set_many_raw(
+                        namespace,
+                        STATUS_CORE_FIELD,
+                        expected_core,
+                        deletions,
+                        sets,
+                    )
+                    .await
+            }
+        }
+    }
+
     /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
     /// `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
     /// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes).
@@ -473,10 +544,11 @@ impl DefaultWorkerService {
         }
     }
 
-    /// Namespace holding the agent's *clean* status checkpoint. Same physical split layout as
-    /// [`Self::status_namespace`], but written only at structurally clean boundaries (snapshot
-    /// save / throttled idle) and never advanced by the background flusher, so it can serve as a
-    /// fold baseline that always predates any later jump region.
+    /// Namespace holding the agent's durable status baseline (the *clean* status checkpoint).
+    /// Same physical split layout as [`Self::status_namespace`], but written only at structurally
+    /// clean boundaries (snapshot save / throttled idle) and never advanced by the background
+    /// flusher, so it can serve as a fold baseline that always predates any later jump region. It
+    /// never expires, and only the deletion of the agent removes it.
     pub(super) fn checkpoint_namespace(
         agent_id: &AgentId,
         fingerprint: AgentFingerprint,
@@ -553,7 +625,8 @@ impl DefaultWorkerService {
     /// and received and source card transfers are written per key (only newly added/changed keys).
     ///
     /// Publication compares the exact serialized baseline `core` and atomically applies all sets,
-    /// stale-field deletions, and expiry. A mismatch reloads one complete hash snapshot and retries
+    /// stale-field deletions, and the expiry of the live cache (the status baseline has no
+    /// expiry, see [`split_status_expiry`]). A mismatch reloads one complete hash snapshot and retries
     /// with a full reconciliation guarded by that snapshot's raw core. Thus an expired hash or a
     /// concurrent publisher can never leave auxiliary fields from a different core generation.
     async fn write_status_fields(
@@ -569,6 +642,7 @@ impl DefaultWorkerService {
             KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => "checkpoint",
             _ => unreachable!("split status must use a status cache namespace"),
         };
+        let expiry = split_status_expiry(&namespace);
         let (mut expected_core, mut existing_fields, mut use_delta) =
             if let Some(previous) = previous_status {
                 let expected = serialize(&status_core(previous)).map_err(|err| {
@@ -605,15 +679,13 @@ impl DefaultWorkerService {
             let deletions: Vec<&str> = dels.iter().map(String::as_str).collect();
 
             let published = self
-                .key_value_storage
-                .with_entity("worker", "update_status", "agent_status")
-                .compare_and_mutate_many_raw(
+                .compare_and_publish_split_status(
+                    "update_status",
                     namespace.clone(),
-                    STATUS_CORE_FIELD,
+                    expiry,
                     expected_core.as_deref(),
                     &pairs,
                     &deletions,
-                    DERIVED_CACHE_EXPIRY,
                 )
                 .await
                 .map_err(|err| {
@@ -720,15 +792,13 @@ impl DefaultWorkerService {
                 .map(|(_, value)| &value[..]);
             let deletions: Vec<&str> = snapshot.iter().map(|(field, _)| field.as_str()).collect();
             if self
-                .key_value_storage
-                .with_entity("worker", "remove", "agent_status")
-                .compare_and_mutate_many_raw(
+                .compare_and_publish_split_status(
+                    "remove",
                     namespace.clone(),
-                    STATUS_CORE_FIELD,
+                    split_status_expiry(&namespace),
                     expected_core,
                     &[],
                     &deletions,
-                    DERIVED_CACHE_EXPIRY,
                 )
                 .await
                 .map_err(|err| {

@@ -1921,6 +1921,10 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
             .await
             .unwrap();
         service
+            .write_status_checkpoint(&owned_agent_id, fingerprint, None, status.clone())
+            .await
+            .unwrap();
+        service
             .set_assignment_tracking(&owned_agent_id, fingerprint, status)
             .await
             .unwrap();
@@ -2005,6 +2009,20 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
     assert_eq!(
         service
             .read_cached_status(&owned_agent_id, second)
+            .await
+            .unwrap(),
+        Some(second_status.clone())
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, first, AgentMode::Durable)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, second, AgentMode::Durable)
             .await
             .unwrap(),
         Some(second_status.clone())
@@ -3306,4 +3324,145 @@ fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
         agent_ids: vec![],
         examined_keys,
     }
+}
+
+/// A worker service over `storage` whose durable agent oplog holds a `Create` with
+/// `component_size` 1, followed by one interrupt, and the agent's fingerprint.
+fn status_baseline_test_service(
+    storage: Arc<InMemoryKeyValueStorage>,
+) -> (DefaultWorkerService, OwnedAgentId, AgentFingerprint) {
+    let component_id = ComponentId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id,
+        agent_id: "status-baseline".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let instance_id = Uuid::new_v4();
+    let create = OplogEntry::Create {
+        timestamp: Timestamp::now_utc(),
+        parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id,
+            component_id,
+            agent_type_name: None,
+            canonical_key: None,
+            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Durable,
+            component_revision: ComponentRevision::INITIAL,
+            env: Vec::new(),
+            environment_id,
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 1,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: Vec::new(),
+            original_phantom_id: None,
+            instance_id,
+            create_request: golem_common::model::oplog::CreateRequest::new(
+                golem_common::model::oplog::CreateRequestKind::GetOrCreate,
+                None,
+                golem_common::model::agent::Principal::anonymous(),
+                &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
+            ),
+        }),
+    };
+    let shard_service = Arc::new(ShardServiceDefault::new());
+    shard_service.install_unexpiring(4, &HashMap::new());
+    let service = DefaultWorkerService::new(
+        storage,
+        shard_service,
+        Arc::new(IndexTestOplogService::new(BTreeMap::from([
+            (OplogIndex::INITIAL, create),
+            (
+                OplogIndex::from_u64(2),
+                OplogEntry::Interrupted {
+                    timestamp: Timestamp::now_utc(),
+                },
+            ),
+        ]))),
+        Arc::new(IndexTestComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    (service, owned_agent_id, AgentFingerprint(instance_id))
+}
+
+/// A status baseline at the last index of the oplog of `status_baseline_test_service`, which
+/// no fold of that oplog gives: its component size is 7.
+fn marked_status_baseline() -> AgentStatusRecord {
+    AgentStatusRecord {
+        status: AgentStatus::Interrupted,
+        component_size: 7,
+        oplog_idx: OplogIndex::from_u64(2),
+        agent_mode: AgentMode::Durable,
+        ..AgentStatusRecord::default()
+    }
+}
+
+#[test]
+async fn a_cold_status_read_folds_from_the_baseline_of_its_own_incarnation_only() {
+    for (own, expected_size) in [(true, 7), (false, 1)] {
+        let (service, owned_agent_id, fingerprint) =
+            status_baseline_test_service(Arc::new(InMemoryKeyValueStorage::new()));
+        let baseline_fingerprint = if own {
+            fingerprint
+        } else {
+            AgentFingerprint(Uuid::new_v4())
+        };
+        service
+            .write_status_checkpoint(
+                &owned_agent_id,
+                baseline_fingerprint,
+                None,
+                marked_status_baseline(),
+            )
+            .await
+            .unwrap();
+
+        let status = service
+            .get(&owned_agent_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_known_status
+            .unwrap();
+
+        assert_eq!(status.component_size, expected_size, "own baseline: {own}");
+        assert_eq!(status.oplog_idx, OplogIndex::from_u64(2));
+    }
+}
+
+#[test]
+async fn removing_the_cached_status_keeps_the_status_baseline() {
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let (service, owned_agent_id, fingerprint) = status_baseline_test_service(storage);
+    let baseline = marked_status_baseline();
+    service
+        .write_cached_status(&owned_agent_id, fingerprint, None, baseline.clone())
+        .await
+        .unwrap();
+    service
+        .write_status_checkpoint(&owned_agent_id, fingerprint, None, baseline.clone())
+        .await
+        .unwrap();
+
+    service
+        .remove_cached_status(&owned_agent_id, fingerprint)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .read_cached_status(&owned_agent_id, fingerprint)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, fingerprint, AgentMode::Durable)
+            .await
+            .unwrap(),
+        Some(baseline)
+    );
 }

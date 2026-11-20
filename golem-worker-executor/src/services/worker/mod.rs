@@ -20,6 +20,8 @@ mod worker_service;
 #[cfg(test)]
 use running_workers::{StaleReason, stale_reason};
 #[cfg(test)]
+pub(crate) use status::stored_split_status;
+#[cfg(test)]
 use status::*;
 
 use super::component::ComponentService;
@@ -197,8 +199,8 @@ pub trait WorkerService: Send + Sync {
         on_stale: OnStale<'_>,
     ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    /// Deletes the worker: its cached status, its indexes, its oplog and its entry in the recovery
-    /// index, in that order.
+    /// Deletes the worker: its cached status, its status baseline, its indexes, its oplog and its
+    /// entry in the recovery index, in that order.
     ///
     /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
     /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
@@ -236,8 +238,9 @@ pub trait WorkerService: Send + Sync {
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
-    /// key and the dedicated `agent_mode` key), leaving the oplog untouched.
+    /// Deletes the cached status of the worker (the live cache and the dedicated `agent_mode`
+    /// key), and keeps the oplog and the durable status baseline. Only [`Self::remove`] deletes
+    /// the baseline.
     async fn remove_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,

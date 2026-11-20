@@ -49,7 +49,6 @@ impl NamespaceRoutedKeyValueStorage {
             KeyValueStorageNamespace::Worker { .. }
                 | KeyValueStorageNamespace::AgentStatus { .. }
                 | KeyValueStorageNamespace::AgentInvocationResultIndex { .. }
-                | KeyValueStorageNamespace::AgentStatusCheckpoint { .. }
                 | KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. }
         )
     }
@@ -429,10 +428,29 @@ mod tests {
         ));
         assert!(Arc::ptr_eq(
             storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatus {
-                agent_id: agent_id.into(),
+                agent_id: agent_id.clone().into(),
                 fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             }),
             &storage.cache,
+        ));
+    }
+
+    #[test]
+    fn the_status_baseline_uses_persistent_storage() {
+        let storage = NamespaceRoutedKeyValueStorage::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            Arc::new(InMemoryKeyValueStorage::new()),
+        );
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "status-baseline".to_string(),
+        };
+        assert!(Arc::ptr_eq(
+            storage.backend_for_namespace(&KeyValueStorageNamespace::AgentStatusCheckpoint {
+                agent_id: agent_id.into(),
+                fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
+            }),
+            &storage.persistent,
         ));
     }
 }

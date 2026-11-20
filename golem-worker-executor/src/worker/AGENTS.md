@@ -35,8 +35,10 @@ rewinding a cursor.
   `Finished` without another invocation.
 - Reads that require the completion's fresh status must use the state actor's FIFO status read; it
   waits behind the queued fold. The separately persisted status cache remains asynchronous.
-- Status (`status.rs`) is folded from the oplog; caches and checkpoints are baselines, never a
-  source of truth. Checkpoint only at clean boundaries.
+- Status (`status.rs`) is folded from a baseline and the oplog entries after it. The status cache
+  is a disposable baseline. The clean checkpoint (`AgentStatusCheckpoint`) is the durable status
+  baseline: no expiry, kept by an archive, removed only by agent deletion, and never read for
+  another fingerprint. Checkpoint only at clean boundaries.
 
 ## Eviction and retry
 
