@@ -286,6 +286,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component::ComponentDto",
             ),
             (
+                "ComponentPackageMetadata",
+                "golem_common::model::component::ComponentPackageMetadata",
+            ),
+            (
                 "ComponentUpdate",
                 "golem_common::model::component::ComponentUpdate",
             ),
@@ -612,6 +616,11 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
+            ("OplogScan", "golem_common::model::oplog::OplogScan"),
+            (
+                "OplogScanAllowance",
+                "golem_common::model::oplog::OplogScanAllowance",
+            ),
             (
                 "PublicOplogEntry",
                 "golem_common::model::oplog::PublicOplogEntry",

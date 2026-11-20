@@ -29,7 +29,6 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::json::NormalizedJsonValue;
-use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::payload::host_functions::HostFunctionName;
 use golem_common::model::oplog::payload::types::{
     SecretRevealAudit, SerializableDateTime, SerializableEntityBodyExecution,
@@ -51,6 +50,7 @@ use golem_common::model::oplog::{
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseSecretRevealed,
     HostStreamKind, LogLevel, OplogPayload,
 };
+use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::{
     CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
@@ -666,6 +666,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }));
     let owner = OwnedAgentId::new(
@@ -875,6 +876,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }));
     let oplog_service = Arc::new(
@@ -3237,4 +3239,184 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             }
         }
     }
+}
+
+#[test]
+async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("range-read").await;
+    let updated_revision = ComponentRevision::new(4).unwrap();
+    let mut indices = Vec::new();
+    for i in 0..12 {
+        let entry = if i == 2 {
+            OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: updated_revision,
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: None,
+            }
+        } else {
+            log_entry(0)
+        };
+        indices.push(oplog.add(entry).await.unwrap());
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let allowance = |entries| OplogScanAllowance {
+        entries,
+        millis: 600_000,
+    };
+    let read = |cursor: Option<OplogCursor>, from: OplogIndex, to: OplogIndex, count, a| {
+        get_public_oplog_range_page(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            owned_agent_id.component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            cursor,
+            from,
+            to,
+            PublicOplogPageLimits {
+                count,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            a,
+        )
+    };
+    let (from, to) = (indices[5], indices[8]);
+    // The entries before `from` count against the allowance: they hold the revision at `from`.
+    let charged_before = from.as_u64() - 1;
+
+    // A page of two, then a page that ends at `to`, though the oplog goes on.
+    let first = read(None, from, to, 2, allowance(100)).await.unwrap();
+    assert_eq!(
+        page_indices(&first.entries),
+        vec![(indices[5], true), (indices[6], true)]
+    );
+    assert_eq!(first.scan.charged_entries, charged_before + 2);
+    assert!(!first.scan.exhausted);
+    let cursor = first.next.clone().expect("the range goes on");
+    assert_eq!(cursor.next_oplog_index, indices[7].as_u64());
+    assert_eq!(
+        cursor.current_component_revision,
+        u64::from(updated_revision)
+    );
+    let second = read(Some(cursor), from, to, 10, allowance(100))
+        .await
+        .unwrap();
+    assert_eq!(
+        page_indices(&second.entries),
+        vec![(indices[7], true), (indices[8], true)]
+    );
+    assert_eq!(second.next, None);
+    assert_eq!(second.scan.charged_entries, 2);
+    assert!(!second.scan.exhausted);
+    assert!(second.last_index > to);
+
+    // Exactly the allowance completes the range; one entry less stops before `to`.
+    let exact = read(None, from, to, 10, allowance(charged_before + 4))
+        .await
+        .unwrap();
+    assert_eq!(exact.entries.len(), 4);
+    assert_eq!((exact.next, exact.scan.exhausted), (None, false));
+    let short = read(None, from, to, 10, allowance(charged_before + 3))
+        .await
+        .unwrap();
+    assert_eq!(short.entries.len(), 3);
+    assert!(short.scan.exhausted);
+    assert_eq!(
+        short.next.map(|cursor| cursor.next_oplog_index),
+        Some(to.as_u64())
+    );
+
+    // A page that its byte limit cuts short is charged with every entry that it read.
+    let cut = get_public_oplog_range_page(
+        Arc::new(PanicComponentService),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        owned_agent_id.component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        None,
+        from,
+        to,
+        PublicOplogPageLimits {
+            count: 10,
+            max_bytes: 1,
+            max_entry_bytes: 1_000_000,
+        },
+        allowance(100),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page_indices(&cut.entries), vec![(indices[5], true)]);
+    assert_eq!(cut.scan.charged_entries, charged_before + 4);
+    assert_eq!(
+        cut.next.map(|cursor| cursor.next_oplog_index),
+        Some(indices[6].as_u64())
+    );
+
+    // The allowance runs out while the read looks for the revision at `from`: no page, no cursor.
+    let before = read(None, from, to, 10, allowance(2)).await.unwrap();
+    assert!(before.entries.is_empty());
+    assert_eq!((before.next, before.scan.exhausted), (None, true));
+
+    // A cursor outside the range, or a range that ends before it starts, is refused.
+    let outside = OplogCursor {
+        next_oplog_index: indices[9].as_u64(),
+        current_component_revision: updated_revision.into(),
+        query_hash: OplogCursor::query_hash(None),
+    };
+    assert!(
+        read(Some(outside), from, to, 10, allowance(100))
+            .await
+            .is_err()
+    );
+    assert!(read(None, to, from, 10, allowance(100)).await.is_err());
+}
+
+#[test]
+fn a_range_read_never_gets_more_than_the_configured_allowance() {
+    let configured = ScanBudget {
+        entries: std::num::NonZeroU64::new(50).unwrap(),
+        time: std::time::Duration::from_secs(5),
+    };
+    assert_eq!(
+        oplog_range_allowance(None, configured),
+        OplogScanAllowance {
+            entries: 50,
+            millis: 5000
+        }
+    );
+    assert_eq!(
+        oplog_range_allowance(
+            Some(OplogScanAllowance {
+                entries: 7,
+                millis: 9000
+            }),
+            configured
+        ),
+        OplogScanAllowance {
+            entries: 7,
+            millis: 5000
+        }
+    );
+    assert_eq!(
+        oplog_range_allowance(
+            Some(OplogScanAllowance {
+                entries: 0,
+                millis: 0
+            }),
+            configured
+        ),
+        OplogScanAllowance {
+            entries: 0,
+            millis: 0
+        }
+    );
 }

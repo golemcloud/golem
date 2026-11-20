@@ -46,6 +46,119 @@ async fn cli(dir: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+#[timeout("45s")]
+async fn install_file_package_builds_without_instantiating_and_keeps_lock_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let manifest = format!(
+        "# keep me\nmanifestVersion: {}\napp: installer # keep me too\nenvironments:\n  local: {{ server: local }}\n",
+        versions::sdk::MANIFEST
+    );
+    fs::write(root.join("golem.yaml"), &manifest).unwrap();
+    for (name, instruction) in [("traps", "unreachable"), ("loops", "(loop br 0)")] {
+        let wasm = wat::parse_str(format!(
+            "(component (core module $m (func $start {instruction}) (start $start)) (core instance (instantiate $m)))"
+        )).unwrap();
+        let tar = format!("{name}.tar");
+        let digest = write_install_fixture(&root.join(&tar), name, wasm);
+        let result = run_cli(root, &["install", &format!("./{tar}")]).await;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let edited = fs::read_to_string(root.join("golem.yaml")).unwrap();
+        assert!(edited.contains("# keep me\n") && edited.contains("# keep me too\n"));
+        assert!(edited.contains("packages:") && edited.contains(&digest));
+    }
+    let lock = fs::read(root.join("golem.lock")).unwrap();
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+    assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+
+    let other = tempfile::tempdir().unwrap();
+    write_install_fixture(
+        &root.join("traps.tar"),
+        "traps",
+        b"different bytes".to_vec(),
+    );
+    let manifest_with_packages = fs::read_to_string(root.join("golem.yaml")).unwrap();
+    for file in ["golem.yaml", "golem.lock", "loops.tar", "traps.tar"] {
+        fs::copy(root.join(file), other.path().join(file)).unwrap();
+    }
+    assert_cli_error(other.path(), &["build"], "digest").await;
+
+    fs::write(
+        root.join("golem.yaml"),
+        manifest_with_packages.replacen("1.2.3", "2.0.0", 1),
+    )
+    .unwrap();
+    for command in ["build", "deploy"] {
+        assert_cli_error(root, &[command], "golem install").await;
+        assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+    }
+}
+
+async fn assert_cli_error(dir: &Path, args: &[&str], expected: &str) {
+    let result = run_cli(dir, args).await;
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&result.stderr),
+        String::from_utf8_lossy(&result.stdout)
+    );
+    assert!(
+        !result.status.success() && output.contains(expected),
+        "{args:?}: {output}"
+    );
+}
+
+// Assemble a package without a publisher-side build, which cannot extract these components.
+fn write_install_fixture(path: &Path, name: &str, wasm: Vec<u8>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut blobs = std::collections::BTreeMap::new();
+    let mut add = |media_type: &str, bytes: Vec<u8>| {
+        let hex = format!("{:x}", Sha256::digest(&bytes));
+        let descriptor = serde_json::json!({"mediaType": media_type, "digest": format!("sha256:{hex}"), "size": bytes.len()});
+        blobs.insert(format!("blobs/sha256/{hex}"), bytes);
+        descriptor
+    };
+    let wasm = add("application/wasm", wasm);
+    let config = add("application/vnd.golem.package.config.v1+json", serde_json::to_vec(&serde_json::json!({
+        "application": name, "package": {"name": name, "version": "1.2.3"},
+        "components": {format!("pkg:{name}"): {
+            "wasm": wasm["digest"], "metadata": {"agentTypes": [], "tools": [], "toolMiddlewares": []},
+            "configSchema": {},
+            "provision": {"config": null, "fileDefaults": [], "env": {}, "initialCard": null, "plugins": [], "files": null},
+            "agents": {}, "tools": {}, "toolMiddlewares": {}
+        }}
+    })).unwrap());
+    let media = "application/vnd.oci.image.manifest.v1+json";
+    let manifest = add(media, serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 2, "mediaType": media, "artifactType": "application/vnd.golem.package.v1",
+        "config": config, "layers": [wasm]
+    })).unwrap());
+    let digest = manifest["digest"].as_str().unwrap().to_owned();
+    blobs.insert(
+        "oci-layout".into(),
+        br#"{"imageLayoutVersion":"1.0.0"}"#.to_vec(),
+    );
+    blobs.insert("index.json".into(), serde_json::to_vec(&serde_json::json!({
+        "schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json", "manifests": [manifest]
+    })).unwrap());
+    let mut archive = tar::Builder::new(fs::File::create(path).unwrap());
+    for (path, content) in blobs {
+        let mut header = tar::Header::new_ustar();
+        header.set_mode(0o644);
+        header.set_size(content.len() as u64);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, path, content.as_slice())
+            .unwrap();
+    }
+    archive.finish().unwrap();
+    digest
+}
+
+#[test]
 #[timeout("2m")]
 async fn package_cli_is_reproducible_and_publish_dry_run_is_offline() {
     let endpoint = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -54,6 +167,7 @@ async fn package_cli_is_reproducible_and_publish_dry_run_is_offline() {
         r#"
 manifestVersion: {}
 app: packaged-tool
+package: {{ name: packaged-tool, version: 1.2.3 }}
 includes:
 - settings/golem.yaml
 environments:

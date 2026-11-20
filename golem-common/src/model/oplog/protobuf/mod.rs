@@ -17,8 +17,8 @@ use std::collections::{BTreeMap, HashMap};
 use crate::base_model::OplogIndex;
 use crate::model::component::PluginPriority;
 use crate::model::oplog::{
-    HostStreamKind, LogLevel, OplogCursor, OplogErrorKind, PluginInstallationDescription,
-    PublicTypedAgentConfigEntry,
+    HostStreamKind, LogLevel, OplogCursor, OplogErrorKind, OplogScan, OplogScanAllowance,
+    PluginInstallationDescription, PublicTypedAgentConfigEntry,
 };
 
 fn decode_attachment_observation(
@@ -94,6 +94,53 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
             next_oplog_index: value.next_oplog_index,
             current_component_revision: value.current_component_revision,
             query_hash: value.query_hash,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::OplogScanAllowance> for OplogScanAllowance {
+    fn from(value: golem_api_grpc::proto::golem::worker::OplogScanAllowance) -> Self {
+        Self {
+            entries: value.entries,
+            millis: value.millis,
+        }
+    }
+}
+
+impl From<OplogScanAllowance> for golem_api_grpc::proto::golem::worker::OplogScanAllowance {
+    fn from(value: OplogScanAllowance) -> Self {
+        Self {
+            entries: value.entries,
+            millis: value.millis,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogScan> for OplogScan {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::OplogScan,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            limit: value
+                .limit
+                .ok_or("Missing limit field in OplogScan")?
+                .into(),
+            charged_entries: value.charged_entries,
+            charged_millis: value.charged_millis,
+            exhausted: value.exhausted,
+        })
+    }
+}
+
+impl From<OplogScan> for golem_api_grpc::proto::golem::worker::OplogScan {
+    fn from(value: OplogScan) -> Self {
+        Self {
+            limit: Some(value.limit.into()),
+            charged_entries: value.charged_entries,
+            charged_millis: value.charged_millis,
+            exhausted: value.exhausted,
         }
     }
 }

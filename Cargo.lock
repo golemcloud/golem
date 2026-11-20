@@ -3994,6 +3994,7 @@ dependencies = [
  "tempfile",
  "test-r",
  "tokio",
+ "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "uuid",
@@ -4071,6 +4072,7 @@ dependencies = [
  "golem-mcp-import",
  "golem-model-mock",
  "golem-native-tool",
+ "golem-package",
  "golem-schema",
  "heck",
  "hmac 0.12.1",
@@ -4423,6 +4425,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-package"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "golem-common",
+ "golem-schema",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "test-r",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "golem-registry-service"
 version = "0.0.0"
 dependencies = [
@@ -4483,6 +4503,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-health",
  "tonic-reflection",

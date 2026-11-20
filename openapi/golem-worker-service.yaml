@@ -1006,6 +1006,40 @@ paths:
         required: false
         deprecated: false
         explode: true
+      - name: to
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: |-
+          The last oplog index of a range read, inclusive. A range read reads no entry after
+          it, and the response reports its scan in `scan`. It needs `from`, and no `query`.
+        required: false
+        deprecated: false
+        explode: true
+      - name: scanEntries
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: |-
+          The scan allowance that a range read may still spend: the number of oplog entries.
+          It goes with `scanMillis`. Without them, the read gets the configured allowance of
+          the server; the server never grants more than its configured allowance.
+        required: false
+        deprecated: false
+        explode: true
+      - name: scanMillis
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        description: |-
+          The scan allowance that a range read may still spend: the time in milliseconds. It
+          goes with `scanEntries`.
+        required: false
+        deprecated: false
+        explode: true
       responses:
         '200':
           description: ''
@@ -5413,6 +5447,8 @@ components:
         lastIndex:
           type: integer
           format: uint64
+        scan:
+          $ref: '#/components/schemas/OplogScan'
     Globals:
       type: object
       required:
@@ -6023,6 +6059,48 @@ components:
           type: integer
           format: uint64
         end:
+          type: integer
+          format: uint64
+    OplogScan:
+      type: object
+      title: OplogScan
+      description: The scan accounting of an oplog range read.
+      required:
+      - limit
+      - chargedEntries
+      - chargedMillis
+      - exhausted
+      properties:
+        limit:
+          $ref: '#/components/schemas/OplogScanAllowance'
+        chargedEntries:
+          type: integer
+          format: uint64
+          description: |-
+            The oplog entries that the read charged: the entries that it read to find the component
+            revision at the start of the range, and the entries that it read for the page, also those
+            that the byte limit of the page left out.
+        chargedMillis:
+          type: integer
+          format: uint64
+          description: The time that the read charged, rounded up to a millisecond.
+        exhausted:
+          type: boolean
+          description: The read stopped before the end of the range because it spent the allowance.
+    OplogScanAllowance:
+      type: object
+      title: OplogScanAllowance
+      description: |-
+        The scan allowance of an oplog range read: the number of oplog entries that it may read, and
+        how long it may read.
+      required:
+      - entries
+      - millis
+      properties:
+        entries:
+          type: integer
+          format: uint64
+        millis:
           type: integer
           format: uint64
     OptionShape:

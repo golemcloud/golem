@@ -377,6 +377,7 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_id = ParsedAgentKey::new(
@@ -457,6 +458,7 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_id = ParsedAgentKey::new(
@@ -553,6 +555,7 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_id = ParsedAgentKey::new(
