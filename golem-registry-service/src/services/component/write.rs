@@ -36,6 +36,7 @@ use golem_common::base_model::component_metadata::{
     AgentTypeProvisionConfig, ComponentProvisionConfig,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::TypedAgentConfigEntry;
@@ -386,6 +387,7 @@ impl ComponentWriteService {
                 .component_provision_config
                 .plugin_installations,
             &resolved_grants,
+            auth.access_account_id(),
         )?;
         let (component_initial_permissions, component_card_record) = self
             .prepare_component_initial_permission_card_record(
@@ -415,8 +417,11 @@ impl ComponentWriteService {
                 })?;
 
             let files = resolve_files_for_creation(agent_type_name, creation, &uploaded_files)?;
-            let plugins =
-                resolve_plugins_for_creation(&creation.plugin_installations, &resolved_grants)?;
+            let plugins = resolve_plugins_for_creation(
+                &creation.plugin_installations,
+                &resolved_grants,
+                auth.access_account_id(),
+            )?;
             let config =
                 validate_and_transform_config_entries(agent_type, creation.config.clone())?;
             let (initial_permission, card_record) = self.prepare_initial_permission_card_record(
@@ -445,6 +450,7 @@ impl ComponentWriteService {
             component_creation.tool_deployment_configs,
             &uploaded_files,
             &resolved_grants,
+            auth.access_account_id(),
         )?;
         let tool_middleware_deployment_metadata =
             resolve_tool_middleware_deployment_metadata_for_creation(
@@ -452,6 +458,7 @@ impl ComponentWriteService {
                 component_creation.tool_middleware_provision_configs,
                 &uploaded_files,
                 &resolved_grants,
+                auth.access_account_id(),
             )?;
 
         let component_metadata = analyze_and_validate_component_wasm(
@@ -654,7 +661,11 @@ impl ComponentWriteService {
                     &final_config_schema,
                     config.config,
                 )?,
-                plugins: resolve_plugins_for_creation(&config.plugin_installations, &grants)?,
+                plugins: resolve_plugins_for_creation(
+                    &config.plugin_installations,
+                    &grants,
+                    auth.access_account_id(),
+                )?,
                 files: resolve_component_files_for_creation(&config.files, &uploaded_files)?,
             };
         } else {
@@ -1099,6 +1110,9 @@ impl ComponentWriteService {
                     if let Some(new_parameters) = inner.new_parameters {
                         plugin.parameters = new_parameters;
                     };
+
+                    // The account that changes an installation is its installer from now on.
+                    plugin.installed_by = auth.access_account_id();
                 }
                 PluginInstallationAction::Install(inner) => {
                     // ensure the plugin priority and environment_plugin_grant_id is not already used
@@ -1144,6 +1158,7 @@ impl ComponentWriteService {
                             .oplog_processor_component_revision(),
                         plugin_name: environment_plugin_grant.plugin.name,
                         plugin_version: environment_plugin_grant.plugin.version,
+                        installed_by: auth.access_account_id(),
                     });
                 }
             }
@@ -1526,6 +1541,7 @@ fn resolve_tool_middleware_deployment_metadata_for_creation(
     mut configs: BTreeMap<ToolMiddlewareName, ToolProvisionConfigCreation>,
     uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>, ComponentError> {
     let definitions = tool_middleware_definitions_by_name(definitions)?;
     let mut result = BTreeMap::new();
@@ -1539,6 +1555,7 @@ fn resolve_tool_middleware_deployment_metadata_for_creation(
             config,
             uploaded_files,
             resolved_grants,
+            installed_by,
         )?;
         result.insert(
             name,
@@ -1561,6 +1578,7 @@ fn resolve_tool_deployment_metadata_for_creation(
     mut configs: BTreeMap<ToolName, ToolDeploymentConfigCreation>,
     uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<BTreeMap<ToolName, ToolDeploymentMetadata>, ComponentError> {
     let definitions = tool_definitions_by_name(tools)?;
     let mut result = BTreeMap::new();
@@ -1574,6 +1592,7 @@ fn resolve_tool_deployment_metadata_for_creation(
             config.provision,
             uploaded_files,
             resolved_grants,
+            installed_by,
         )?;
         result.insert(
             name,
@@ -1599,11 +1618,16 @@ fn resolve_tool_provision_config_for_creation(
     creation: ToolProvisionConfigCreation,
     uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<ToolProvisionConfig, ComponentError> {
     Ok(ToolProvisionConfig {
         config: creation.config,
         env: creation.env,
-        plugins: resolve_plugins_for_creation(&creation.plugin_installations, resolved_grants)?,
+        plugins: resolve_plugins_for_creation(
+            &creation.plugin_installations,
+            resolved_grants,
+            installed_by,
+        )?,
         files: resolve_tool_files_for_creation(tool_name, &creation.files, uploaded_files)?,
     })
 }
@@ -1928,6 +1952,7 @@ fn validate_and_transform_component_config_entries(
 fn resolve_plugins_for_creation(
     plugin_installations: &[PluginInstallation],
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<Vec<InstalledPlugin>, ComponentError> {
     let mut result: Vec<InstalledPlugin> = Vec::new();
 
@@ -1966,6 +1991,7 @@ fn resolve_plugins_for_creation(
             oplog_processor_component_revision: grant.plugin.oplog_processor_component_revision(),
             plugin_name: grant.plugin.name.clone(),
             plugin_version: grant.plugin.version.clone(),
+            installed_by,
         });
     }
 
@@ -2439,6 +2465,7 @@ mod tests {
         validate_component_config_schema, validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
     use golem_common::model::card::recipient::RecipientPattern;
     use golem_common::model::card::{
@@ -2769,6 +2796,7 @@ mod tests {
             BTreeMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            AccountId::new(),
         )
         .unwrap_err();
         assert!(matches!(
@@ -2794,6 +2822,7 @@ mod tests {
             )]),
             &HashMap::new(),
             &HashMap::new(),
+            AccountId::new(),
         )
         .unwrap_err();
         assert!(matches!(
@@ -2844,6 +2873,7 @@ mod tests {
             )]),
             &HashMap::new(),
             &HashMap::new(),
+            AccountId::new(),
         )
         .unwrap();
         assert_eq!(metadata[&name].definition, definition);

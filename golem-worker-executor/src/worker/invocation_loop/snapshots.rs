@@ -1,6 +1,6 @@
 use super::*;
+use crate::golem_started::GolemStartedWork;
 use golem_common::model::InvocationId;
-use golem_common::model::caller::Caller;
 use golem_common::model::oplog::UpdateFailureClass;
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -306,9 +306,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key,
-            // Nothing records this caller: the call is lowered and run directly, with no invocation
-            // entry. It is the value that the guest's caller() returns through its fallback.
-            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+            caller: GolemStartedWork::SelfInvocation {
+                agent: self.store.data().durable_ctx().self_principal(),
+            }
+            .caller(),
         };
         let lowered = match lower_invocation(
             save_snapshot_invocation,
@@ -515,9 +516,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let save_snapshot_invocation = AgentInvocation::SaveSnapshot {
             idempotency_key,
-            // Nothing records this caller: the call is lowered and run directly, with no invocation
-            // entry. It is the value that the guest's caller() returns through its fallback.
-            caller: Caller::entry(self.store.data().durable_ctx().self_principal()),
+            caller: GolemStartedWork::SelfInvocation {
+                agent: self.store.data().durable_ctx().self_principal(),
+            }
+            .caller(),
         };
         let lowered = match lower_invocation(
             save_snapshot_invocation,

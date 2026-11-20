@@ -122,12 +122,13 @@ fn remote_hash_input(release: &EnvironmentToolGrantWithDetails) -> DiffRemoteToo
         owner_account_email: release.release_owner.email.clone(),
         metadata_version: release.release.metadata_version.clone(),
         metadata_digest: release.release.metadata_digest,
-        provision: ToolProvisionConfig {
+        provision: (&ToolProvisionConfig {
             config: NormalizedJsonValue::new(json!({"marker": "publisher"})),
             env: BTreeMap::from([("OWNER_MARKER".to_string(), "publisher".to_string())]),
             plugins: Vec::new(),
             files: Vec::new(),
-        },
+        })
+            .into(),
         component_bindings: BTreeMap::new(),
         bindings: BTreeMap::from([(
             AgentTypeName(CALLER.to_string()),

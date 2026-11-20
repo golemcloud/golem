@@ -289,7 +289,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let invocation_caller = call.caller();
     let durable_ctx = store.data_mut().durable_ctx_mut();
-    durable_ctx.set_invocation_caller(invocation_caller);
+    durable_ctx.set_invocation_caller(Some(invocation_caller));
     durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = async {
         let result = dispatch_call(&mut store, instance, call, &display_name).await;
@@ -1426,7 +1426,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::SaveSnapshot => {
+        PreparedCall::SaveSnapshot { .. } => {
             let guest = load_save_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
             let result = run_guest_call_settled(store, async |accessor| {
@@ -1452,7 +1452,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
             }
         }
-        PreparedCall::LoadSnapshot { snapshot } => {
+        PreparedCall::LoadSnapshot { snapshot, .. } => {
             let guest = load_load_snapshot_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, true).await?;
             let result = run_guest_call_settled(store, async |accessor| {
@@ -1484,6 +1484,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             metadata,
             first_entry_index,
             entries,
+            ..
         } => {
             let guest = load_oplog_processor_guest(store, instance)?;
             let _usage = prepare_metered_guest_call(store, display_name, false).await?;
@@ -2113,9 +2114,12 @@ enum LoweredCall {
         caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
-    SaveSnapshot,
+    SaveSnapshot {
+        caller: golem_common::model::caller::Caller,
+    },
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        caller: golem_common::model::caller::Caller,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
@@ -2125,6 +2129,7 @@ enum LoweredCall {
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
+        caller: golem_common::model::caller::Caller,
     },
     ExternalTool {
         activation: Box<ToolActivationSnapshot>,
@@ -2155,9 +2160,12 @@ enum PreparedCall {
         caller: golem_common::model::caller::Caller,
         expected_output: Box<ExpectedInvokeOutput>,
     },
-    SaveSnapshot,
+    SaveSnapshot {
+        caller: golem_common::model::caller::Caller,
+    },
     LoadSnapshot {
         snapshot: golem_api_1_x::host::Snapshot,
+        caller: golem_common::model::caller::Caller,
     },
     ProcessOplogEntries {
         account_info: oplog_processor_exports::AccountInfo,
@@ -2167,6 +2175,7 @@ enum PreparedCall {
         metadata: golem_api_1_x::host::AgentMetadata,
         first_entry_index: u64,
         entries: Vec<golem_api_1_x::oplog::OplogEntry>,
+        caller: golem_common::model::caller::Caller,
     },
     ExternalTool {
         activation: std::sync::Arc<ToolActivationSnapshot>,
@@ -2187,14 +2196,14 @@ impl PreparedCall {
         matches!(self, Self::Invoke { .. } | Self::ExternalTool { .. })
     }
 
-    fn caller(&self) -> Option<golem_common::model::caller::Caller> {
+    fn caller(&self) -> golem_common::model::caller::Caller {
         match self {
             Self::Initialize { caller, .. }
             | Self::Invoke { caller, .. }
-            | Self::ExternalTool { caller, .. } => Some(caller.clone()),
-            Self::SaveSnapshot | Self::LoadSnapshot { .. } | Self::ProcessOplogEntries { .. } => {
-                None
-            }
+            | Self::ExternalTool { caller, .. }
+            | Self::SaveSnapshot { caller }
+            | Self::LoadSnapshot { caller, .. }
+            | Self::ProcessOplogEntries { caller, .. } => caller.clone(),
         }
     }
 }
@@ -2251,8 +2260,10 @@ fn materialize_call<Ctx: WorkerCtx>(
                 expected_output,
             }
         }
-        LoweredCall::SaveSnapshot => PreparedCall::SaveSnapshot,
-        LoweredCall::LoadSnapshot { snapshot } => PreparedCall::LoadSnapshot { snapshot },
+        LoweredCall::SaveSnapshot { caller } => PreparedCall::SaveSnapshot { caller },
+        LoweredCall::LoadSnapshot { snapshot, caller } => {
+            PreparedCall::LoadSnapshot { snapshot, caller }
+        }
         LoweredCall::ProcessOplogEntries {
             account_info,
             config,
@@ -2261,6 +2272,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             metadata,
             first_entry_index,
             entries,
+            caller,
         } => PreparedCall::ProcessOplogEntries {
             account_info,
             config,
@@ -2269,6 +2281,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             metadata,
             first_entry_index,
             entries,
+            caller,
         },
         LoweredCall::ExternalTool {
             activation,
@@ -2392,16 +2405,19 @@ pub fn lower_invocation(
         AgentInvocation::ManualUpdate { .. } => Err(WorkerExecutorError::invalid_request(
             "ManualUpdate should not be invoked as a wasm function directly".to_string(),
         )),
-        AgentInvocation::SaveSnapshot { .. } => Ok(LoweredInvocation {
+        AgentInvocation::SaveSnapshot { caller, .. } => Ok(LoweredInvocation {
             display_name: "save-snapshot".to_string(),
             read_only_method: None,
-            call: LoweredCall::SaveSnapshot,
+            call: LoweredCall::SaveSnapshot { caller },
         }),
-        AgentInvocation::LoadSnapshot { snapshot, .. } => Ok(LoweredInvocation {
+        AgentInvocation::LoadSnapshot {
+            snapshot, caller, ..
+        } => Ok(LoweredInvocation {
             display_name: "load-snapshot".to_string(),
             read_only_method: Some("load-snapshot".to_string()),
             call: LoweredCall::LoadSnapshot {
                 snapshot: snapshot.into(),
+                caller,
             },
         }),
         AgentInvocation::ProcessOplogEntries {
@@ -2410,6 +2426,7 @@ pub fn lower_invocation(
             metadata,
             first_entry_index,
             entries,
+            caller,
             ..
         } => {
             let component_id: core_wire::ComponentId = metadata.agent_id.component_id.into();
@@ -2439,6 +2456,7 @@ pub fn lower_invocation(
                     metadata,
                     first_entry_index: u64::from(first_entry_index),
                     entries,
+                    caller,
                 },
             })
         }

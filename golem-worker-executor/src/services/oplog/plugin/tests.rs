@@ -499,6 +499,7 @@ impl FakeComponentService {
                 plugin_version: "1.0.0".to_string(),
                 oplog_processor_component_id: Some(ComponentId::new()),
                 oplog_processor_component_revision: Some(ComponentRevision::INITIAL),
+                installed_by: golem_common::model::account::AccountId::new(),
             }],
         }
     }

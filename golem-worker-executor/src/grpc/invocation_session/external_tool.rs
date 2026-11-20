@@ -122,13 +122,9 @@ where
             let (worker, metadata, _response_lease) = if let Some(expected) = expected_fingerprint {
                 // The guard pins the named incarnation, and the response describes that worker,
                 // so a delete or re-create between reads cannot answer for another incarnation.
-                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
-                    self,
-                    &owned,
-                    caller,
-                    Some(expected),
-                )
-                .await?;
+                let (worker, response_lease) =
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, Some(expected))
+                        .await?;
                 let bound = scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime);
@@ -148,8 +144,7 @@ where
                     return Ok(response);
                 };
                 let (worker, response_lease) =
-                    Worker::get_exact_existing_suspended_for_response(self, &owned, caller, None)
-                        .await?;
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, None).await?;
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
@@ -351,13 +346,9 @@ where
         // A missing, replaced or deleting incarnation is answered before the call reads or
         // prepares it. A deletion that starts later cancels this session and waits for it before
         // it stops the agent.
-        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
-            self,
-            &owned,
-            caller.clone(),
-            expected_fingerprint,
-        )
-        .await?;
+        let (worker, _response_lease) =
+            Worker::get_exact_existing_suspended_for_response(self, &owned, expected_fingerprint)
+                .await?;
         let bound = scope
             .bind(&worker.tasks)
             .map_err(WorkerExecutorError::runtime);

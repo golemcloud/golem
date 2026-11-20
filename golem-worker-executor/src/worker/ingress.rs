@@ -31,20 +31,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        if !matches!(invocation, AgentInvocation::ProcessOplogEntries { .. }) {
+        let AgentInvocation::ProcessOplogEntries { caller, .. } = &invocation else {
             return Err(WorkerExecutorError::invalid_request(
                 "processor admission requires an oplog batch",
             ));
-        }
+        };
+        // A processor that does not exist yet is created by the first batch it receives.
         let worker = deps
             .active_agents()
-            .get_or_add_oplog_processor(deps, owned_agent_id, component_revision)
+            .get_or_add_oplog_processor(deps, owned_agent_id, component_revision, caller.clone())
             .await?;
-        // The batch runs as the processor agent itself, in both roles.
-        let mut invocation = invocation;
-        if let AgentInvocation::ProcessOplogEntries { caller, .. } = &mut invocation {
-            *caller = Caller::entry(worker.self_principal(deps.config().resolved_golem_issuer()));
-        }
         Self::start_if_needed(worker.clone()).await?;
         worker.invoke(invocation).await?;
         Ok(())

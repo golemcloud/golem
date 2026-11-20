@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::golem_started::{GolemStartedWork, agent_principal};
 use golem_common::model::agent::OwnerKind;
-use golem_common::model::caller::Caller;
+use golem_common::model::golem_issuer::GolemIssuer;
 
 /// An implementation of the `OplogProcessorPlugin` trait that runs a single instance of each
 /// used plugin on each worker executor node.
@@ -24,6 +25,7 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     shard_service: Arc<dyn ShardService>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
     worker_proxy: Arc<dyn WorkerProxy>,
+    golem_issuer: GolemIssuer,
 }
 
 // TODO: Once cross-environment RPC is enabled via host.wit, the cache key should
@@ -44,6 +46,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         shard_service: Arc<dyn ShardService>,
         worker_activator: Arc<dyn WorkerActivator<Ctx>>,
         worker_proxy: Arc<dyn WorkerProxy>,
+        golem_issuer: GolemIssuer,
     ) -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
@@ -51,6 +54,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             shard_service,
             worker_activator,
             worker_proxy,
+            golem_issuer,
         }
     }
 
@@ -182,6 +186,17 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             batch_last_index,
         );
 
+        let caller = GolemStartedWork::OplogProcessorBatch {
+            issuer: self.golem_issuer.clone(),
+            installed_by: plugin.installed_by,
+            processed_agent: agent_principal(
+                &self.golem_issuer,
+                &worker_metadata.owned_agent_id(),
+                &worker_metadata,
+            ),
+        }
+        .caller();
+
         let is_local = self.is_local(target_agent_id).await?;
 
         if is_local {
@@ -206,8 +221,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         metadata: worker_metadata.into(),
                         first_entry_index: initial_oplog_index,
                         entries,
-                        // Replaced with the processor agent when the batch is enqueued.
-                        caller: Caller::anonymous(),
+                        caller,
                     },
                 )
                 .await?;
@@ -309,6 +323,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     initial_oplog_index,
                     proto_entries,
                     &AuthCtx::System,
+                    &caller,
                 )
                 .await
                 .map_err(|e| {
@@ -390,6 +405,7 @@ impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
             shard_service: self.shard_service.clone(),
             worker_activator: self.worker_activator.clone(),
             worker_proxy: self.worker_proxy.clone(),
+            golem_issuer: self.golem_issuer.clone(),
         }
     }
 }

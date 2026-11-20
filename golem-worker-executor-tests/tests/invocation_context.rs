@@ -397,6 +397,67 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
     Ok(())
 }
 
+/// A manual update saves a snapshot on the old revision and loads it on the new one. Both run
+/// outside any invocation, with the agent itself in both roles.
+#[test]
+#[timeout("180s")]
+#[tracing::instrument]
+async fn manual_update_save_and_load_see_no_invocation_and_the_agent_itself(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let (user, user_text) = golem_user();
+    let probe = agent_id!(PROBE, format!("manual-update-{}", context.redis_prefix()));
+    let probe_id = executor.start_agent(&component.id, probe.clone()).await?;
+
+    let updated = executor
+        .update_component(&component.id, "golem_it_agent_sdk_rust_release")
+        .await?;
+    executor
+        .manual_update_worker(&probe_id, updated.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&probe_id, updated.revision, Duration::from_secs(30))
+        .await?;
+
+    let report: Report = serde_json::from_str(
+        &executor
+            .invoke_and_await_agent_as_caller(&component, &probe, user, "report", data_value!())
+            .await?
+            .into_typed::<String>()?,
+    )?;
+
+    let itself = agent_text_prefix(&probe_id);
+    for observed in [&report.saved, &report.loaded] {
+        let observed = observed
+            .as_ref()
+            .expect("the update runs both snapshot callbacks");
+        assert_eq!(observed.invocation_id, None);
+        assert!(
+            observed.original.starts_with(&itself),
+            "{}",
+            observed.original
+        );
+        assert!(
+            observed.immediate.starts_with(&itself),
+            "{}",
+            observed.immediate
+        );
+    }
+    assert_eq!(report.method_caller, caller_text(&user_text, &user_text));
+
+    drop(executor);
+    Ok(())
+}
+
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]

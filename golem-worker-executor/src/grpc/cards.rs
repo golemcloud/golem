@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use super::{
-    AuthCtx, CanStartWorker, CardId, DeliverCardTransferRequest, GetAgentWalletRequest,
-    GetAgentWalletResponse, GetAgentWalletSuccess, HasAll, HasComponentService,
-    InvocationFreshnessDisposition, PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, ParsedAgentKey,
-    StoredCard, UsesAllDeps, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
-    agent_monomorphization_context, card_matches_agent_recipient, extract_owned_agent_id, golem,
+    AuthCtx, CardId, DeliverCardTransferRequest, GetAgentWalletRequest, GetAgentWalletResponse,
+    GetAgentWalletSuccess, HasAll, HasComponentService, InvocationFreshnessDisposition,
+    PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, ParsedAgentKey, StoredCard, UsesAllDeps, Worker,
+    WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, agent_monomorphization_context,
+    card_matches_agent_recipient, extract_owned_agent_id, golem,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -119,13 +119,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if golem_common::model::agent::OwnerKind::is_reserved_instance_name(
                 &owned_agent_id.agent_id.agent_id,
             ) {
-                Worker::get_exact_existing_suspended_for_response(
-                    self,
-                    &owned_agent_id,
-                    request.caller()?,
-                    None,
-                )
-                .await?
+                Worker::get_exact_existing_suspended_for_response(self, &owned_agent_id, None)
+                    .await?
             } else {
                 self.get_or_create_pending_with_freshness(
                     &request,

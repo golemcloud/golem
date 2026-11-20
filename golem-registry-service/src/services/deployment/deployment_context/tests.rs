@@ -2694,7 +2694,7 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                     owner_account_email: remote.1.as_ref().unwrap().owner.email.clone(),
                     metadata_version: release.metadata_version.clone(),
                     metadata_digest: release.metadata_digest,
-                    provision: remote.0.provision.clone(),
+                    provision: (&remote.0.provision).into(),
                     component_bindings: BTreeMap::from([(
                         component.component_name.0.clone(),
                         effective,

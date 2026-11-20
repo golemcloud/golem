@@ -397,6 +397,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         component_revision: ComponentRevision,
+        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -413,7 +414,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 Some(component_revision),
                 None,
                 InvocationContextStack::fresh(),
-                Caller::anonymous(),
+                caller,
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::OplogProcessor,
                 CreateIntent::UNKEYED_INVOCATION,
@@ -509,12 +510,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        self.get_existing_with_fingerprint(deps, owned_agent_id, caller, None)
+        self.get_existing_with_fingerprint(deps, owned_agent_id, None)
             .await
     }
 
@@ -522,7 +522,6 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
@@ -531,7 +530,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
         let result = worker
-            .ensure_existing_with_fingerprint(caller, expected_fingerprint)
+            .ensure_existing_with_fingerprint(expected_fingerprint)
             .in_current_span()
             .await
             .and_then(|()| {

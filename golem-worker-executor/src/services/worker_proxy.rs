@@ -264,6 +264,7 @@ pub trait WorkerProxy: Send + Sync {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &Caller,
     ) -> Result<(), WorkerProxyError>;
 }
 
@@ -1140,6 +1141,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &Caller,
     ) -> Result<(), WorkerProxyError> {
         debug!(target_agent_id=%target_agent_id, "Processing oplog entries on remote agent");
 
@@ -1157,6 +1159,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     first_entry_index: first_entry_index.into(),
                     entries: entries.clone(),
                     auth_ctx: Some(auth_ctx.clone().into()),
+                    caller: Some(caller.clone().into()),
                 }))
             })
             .await?
