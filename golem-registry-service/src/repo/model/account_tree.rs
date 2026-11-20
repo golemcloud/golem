@@ -45,10 +45,16 @@ pub enum AccountTreeRepoError {
 
 error_forwarding!(AccountTreeRepoError, RepoError);
 
-/// An account's own lifecycle state. The effective state of an account also depends on its
-/// ancestors; see [`AccountLocalState::effective`].
+/// A lifecycle state of an account, ordered from least to most restrictive.
+///
+/// Each account stores its *own state*: the state set on the account itself. A change to an
+/// ancestor never overwrites it. The *effective state* of an account is the most restrictive own
+/// state of the account and its ancestors (`DeletionGrace` > `Suspended` > `Active`); see
+/// [`effective_state`]. For example, an `Active` child under a `Suspended` parent is effectively
+/// `Suspended`, and lifting the parent's suspension does not clear a suspension that the child
+/// has of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AccountLocalState {
+pub enum AccountLifecycleState {
     Active,
     Suspended,
     /// Deleted and restorable. The node keeps its sibling key, so its name stays reserved
@@ -56,36 +62,37 @@ pub enum AccountLocalState {
     DeletionGrace,
 }
 
-impl AccountLocalState {
-    /// The most restrictive state along an ancestry.
-    pub fn effective<'a>(chain: impl IntoIterator<Item = &'a AccountNode>) -> Self {
-        chain
-            .into_iter()
-            .map(|node| node.state)
-            .max()
-            .unwrap_or(AccountLocalState::Active)
-    }
+/// The effective state of the last node of a root-first ancestry: the most restrictive own state
+/// along it.
+pub fn effective_state<'a>(
+    chain: impl IntoIterator<Item = &'a AccountNode>,
+) -> AccountLifecycleState {
+    chain
+        .into_iter()
+        .map(|node| node.own_state)
+        .max()
+        .unwrap_or(AccountLifecycleState::Active)
 }
 
-impl From<AccountLocalState> for i16 {
-    fn from(value: AccountLocalState) -> Self {
+impl From<AccountLifecycleState> for i16 {
+    fn from(value: AccountLifecycleState) -> Self {
         match value {
-            AccountLocalState::Active => 0,
-            AccountLocalState::Suspended => 1,
-            AccountLocalState::DeletionGrace => 2,
+            AccountLifecycleState::Active => 0,
+            AccountLifecycleState::Suspended => 1,
+            AccountLifecycleState::DeletionGrace => 2,
         }
     }
 }
 
-impl TryFrom<i16> for AccountLocalState {
+impl TryFrom<i16> for AccountLifecycleState {
     type Error = anyhow::Error;
 
     fn try_from(value: i16) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(AccountLocalState::Active),
-            1 => Ok(AccountLocalState::Suspended),
-            2 => Ok(AccountLocalState::DeletionGrace),
-            other => Err(anyhow::anyhow!("Unknown account local state: {other}")),
+            0 => Ok(AccountLifecycleState::Active),
+            1 => Ok(AccountLifecycleState::Suspended),
+            2 => Ok(AccountLifecycleState::DeletionGrace),
+            other => Err(anyhow::anyhow!("Unknown account lifecycle state: {other}")),
         }
     }
 }
@@ -99,7 +106,7 @@ pub struct AccountNodeRecord {
     pub segment: String,
     pub depth: i16,
     pub display_name: Option<String>,
-    pub local_state: i16,
+    pub own_state: i16,
     pub current_revision: i64,
     pub created_at: SqlDateTime,
     pub updated_at: SqlDateTime,
@@ -114,7 +121,7 @@ pub struct AccountNodeRevisionRecord {
     pub parent_id: Option<Uuid>,
     pub segment: String,
     pub display_name: Option<String>,
-    pub local_state: i16,
+    pub own_state: i16,
     pub created_at: SqlDateTime,
     pub created_by: Uuid,
 }
@@ -126,7 +133,8 @@ pub struct AccountNodeChange {
     /// The new segment, or `None` to keep the current one. The root has no segment.
     pub segment: Option<AccountSegment>,
     pub display_name: Option<String>,
-    pub state: AccountLocalState,
+    /// The new own state of the node.
+    pub own_state: AccountLifecycleState,
 }
 
 /// A validated account tree node.
@@ -138,7 +146,8 @@ pub struct AccountNode {
     pub segment: Option<AccountSegment>,
     pub depth: usize,
     pub display_name: Option<String>,
-    pub state: AccountLocalState,
+    /// The state set on this account itself; see [`AccountLifecycleState`].
+    pub own_state: AccountLifecycleState,
     pub revision: u64,
 }
 
@@ -159,7 +168,7 @@ impl TryFrom<AccountNodeRecord> for AccountNode {
             segment,
             depth: usize::try_from(record.depth)?,
             display_name: record.display_name,
-            state: AccountLocalState::try_from(record.local_state)?,
+            own_state: AccountLifecycleState::try_from(record.own_state)?,
             revision: u64::try_from(record.current_revision)?,
         })
     }

@@ -262,7 +262,7 @@ async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps 
         account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
             pool.clone(),
         )),
-        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::new(pool.clone())),
+        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(pool.clone())),
@@ -1268,11 +1268,6 @@ async fn test_account_tree_failed_writes_leave_no_partial_state(
 }
 
 #[test]
-async fn test_account_tree_parent_is_immutable(#[dimension(postgres_variant)] deps: &Deps) {
-    crate::repo::account_tree::test_account_tree_parent_is_immutable(deps).await;
-}
-
-#[test]
 async fn test_account_tree_maximum_bounds_and_rename(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::account_tree::test_account_tree_maximum_bounds_and_rename(deps).await;
 }
@@ -1294,6 +1289,11 @@ async fn test_account_tree_cache_follows_ancestor_changes(
 #[test]
 async fn test_account_tree_cache_rejects_delayed_load(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::account_tree::test_account_tree_cache_rejects_delayed_load(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_expiry_backup(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_expiry_backup(deps).await;
 }
 
 #[test]

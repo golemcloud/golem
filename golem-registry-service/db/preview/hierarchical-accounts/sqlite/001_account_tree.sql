@@ -1,7 +1,11 @@
 -- Account tree: current projection and immutable history.
 --
--- Preview schema for hierarchical accounts. Tests apply it on top of the production migrations;
--- the production migration flow does not include it.
+-- Test-only schema for hierarchical accounts. Only the repository tests install it, on top of the
+-- production migrations. The production migrations do not include it, and no live repository or
+-- service reads it. HA-15 moves it into the production migrations and the active account path.
+--
+-- The repository never changes a node's parent or depth. The database does not enforce that rule;
+-- it enforces the parent foreign key, the sibling key, one root and the CHECK constraints below.
 
 CREATE TABLE account_nodes
 (
@@ -10,7 +14,7 @@ CREATE TABLE account_nodes
     segment          TEXT      NOT NULL,
     depth            SMALLINT  NOT NULL,
     display_name     TEXT,
-    local_state      SMALLINT  NOT NULL,
+    own_state        SMALLINT  NOT NULL,
     current_revision BIGINT    NOT NULL,
     created_at       TIMESTAMP NOT NULL,
     updated_at       TIMESTAMP NOT NULL,
@@ -27,8 +31,8 @@ CREATE TABLE account_nodes
             OR (parent_id IS NOT NULL AND segment <> '' AND depth BETWEEN 1 AND 8)),
     CONSTRAINT account_nodes_segment_length
         CHECK (length(segment) <= 64),
-    CONSTRAINT account_nodes_local_state
-        CHECK (local_state BETWEEN 0 AND 2),
+    CONSTRAINT account_nodes_own_state
+        CHECK (own_state BETWEEN 0 AND 2),
     CONSTRAINT account_nodes_revision
         CHECK (current_revision >= 0)
 );
@@ -38,15 +42,6 @@ CREATE UNIQUE INDEX account_nodes_single_root
     ON account_nodes (segment)
     WHERE parent_id IS NULL;
 
-CREATE TRIGGER account_nodes_immutable_parent
-    BEFORE UPDATE OF parent_id, depth
-    ON account_nodes
-    FOR EACH ROW
-    WHEN NEW.parent_id IS NOT OLD.parent_id OR NEW.depth <> OLD.depth
-BEGIN
-    SELECT RAISE(ABORT, 'account parent is immutable');
-END;
-
 -- History has no foreign key to the current row, so it outlives a purge.
 CREATE TABLE account_node_revisions
 (
@@ -55,7 +50,7 @@ CREATE TABLE account_node_revisions
     parent_id    UUID,
     segment      TEXT      NOT NULL,
     display_name TEXT,
-    local_state  SMALLINT  NOT NULL,
+    own_state    SMALLINT  NOT NULL,
     created_at   TIMESTAMP NOT NULL,
     created_by   UUID      NOT NULL,
 

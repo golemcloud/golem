@@ -120,7 +120,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
             db.pool.clone(),
         )),
-        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::new(db.pool.clone())),
+        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(db.pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
@@ -655,11 +655,6 @@ async fn test_account_tree_failed_writes_leave_no_partial_state(deps: &Deps) {
 }
 
 #[test]
-async fn test_account_tree_parent_is_immutable(deps: &Deps) {
-    crate::repo::account_tree::test_account_tree_parent_is_immutable(deps).await;
-}
-
-#[test]
 async fn test_account_tree_maximum_bounds_and_rename(deps: &Deps) {
     crate::repo::account_tree::test_account_tree_maximum_bounds_and_rename(deps).await;
 }
@@ -677,6 +672,11 @@ async fn test_account_tree_cache_follows_ancestor_changes(deps: &Deps) {
 #[test]
 async fn test_account_tree_cache_rejects_delayed_load(deps: &Deps) {
     crate::repo::account_tree::test_account_tree_cache_rejects_delayed_load(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_expiry_backup(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_expiry_backup(deps).await;
 }
 
 #[test]

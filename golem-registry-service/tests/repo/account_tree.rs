@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::{Deps, TestDb};
+use crate::repo::Deps;
 use assert2::{assert, let_assert};
 use async_trait::async_trait;
 use golem_common::model::account_path::{AccountPath, AccountSegment};
 use golem_registry_service::repo::account_tree::AccountTreeRepo;
 use golem_registry_service::repo::model::account_tree::{
-    AccountLocalState, AccountNode, AccountNodeChange, AccountNodeRecord,
-    AccountNodeRevisionRecord, AccountTreeRepoError, path_of_chain,
+    AccountLifecycleState, AccountNode, AccountNodeChange, AccountNodeRecord,
+    AccountNodeRevisionRecord, AccountTreeRepoError, effective_state, path_of_chain,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::registry_change::{ChangeEventId, RegistryChangeEvent};
 use golem_registry_service::services::account_tree_cache::AccountTreeCache;
-use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::RepoError;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -32,6 +31,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Notify;
 use uuid::Uuid;
+
+/// A maximum age that no test reaches, for tests that do not exercise expiry.
+pub const LONG_MAX_AGE: Duration = Duration::from_secs(3600);
 
 fn segment(value: &str) -> AccountSegment {
     AccountSegment::from_str(value).unwrap()
@@ -79,7 +81,7 @@ async fn update(
     deps: &Deps,
     node: &AccountNodeRecord,
     segment: Option<AccountSegment>,
-    state: AccountLocalState,
+    own_state: AccountLifecycleState,
 ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
     deps.account_tree_repo
         .update(
@@ -88,7 +90,7 @@ async fn update(
             AccountNodeChange {
                 segment,
                 display_name: node.display_name.clone(),
-                state,
+                own_state,
             },
             actor(),
         )
@@ -151,13 +153,13 @@ pub async fn test_account_tree_has_one_root(deps: &Deps) {
             deps,
             &root,
             Some(segment("root")),
-            AccountLocalState::Active
+            AccountLifecycleState::Active
         )
         .await
     );
     let_assert!(
         Err(AccountTreeRepoError::RootImmutable) =
-            update(deps, &root, None, AccountLocalState::DeletionGrace).await
+            update(deps, &root, None, AccountLifecycleState::DeletionGrace).await
     );
     let current = deps.account_tree_repo.get(root.account_id).await.unwrap();
     assert!(current.as_ref().map(|node| node.current_revision) == Some(root.current_revision));
@@ -226,15 +228,15 @@ pub async fn test_account_tree_failed_writes_leave_no_partial_state(deps: &Deps)
     // Renaming onto a sibling's segment conflicts and changes nothing.
     let_assert!(
         Err(AccountTreeRepoError::SiblingConflict) =
-            update(deps, &a, Some(segment("b")), AccountLocalState::Active).await
+            update(deps, &a, Some(segment("b")), AccountLifecycleState::Active).await
     );
     // A write that names an old revision conflicts and changes nothing.
-    let renamed = update(deps, &a, Some(segment("c")), AccountLocalState::Active)
+    let renamed = update(deps, &a, Some(segment("c")), AccountLifecycleState::Active)
         .await
         .unwrap();
     let_assert!(
         Err(AccountTreeRepoError::ConcurrentModification) =
-            update(deps, &a, Some(segment("d")), AccountLocalState::Active).await
+            update(deps, &a, Some(segment("d")), AccountLifecycleState::Active).await
     );
 
     let current = deps
@@ -250,42 +252,6 @@ pub async fn test_account_tree_failed_writes_leave_no_partial_state(deps: &Deps)
     assert!(revisions[1].segment == current.segment);
     // Only the committed rename journaled an event.
     assert!(account_events_since(deps, before).await == vec![a.account_id]);
-}
-
-pub async fn test_account_tree_parent_is_immutable(deps: &Deps) {
-    let root = root(deps).await;
-    let left = child(deps, root.account_id, &unique_segment(20)).await;
-    let right = child(deps, root.account_id, &unique_segment(20)).await;
-    let leaf = child(deps, left.account_id, &segment("leaf")).await;
-
-    let result = match &deps.test_db {
-        TestDb::Postgres(pool) => pool
-            .with_rw("account_tree_test", "move_parent")
-            .execute(
-                sqlx::query("UPDATE account_nodes SET parent_id = $1 WHERE account_id = $2")
-                    .bind(right.account_id)
-                    .bind(leaf.account_id),
-            )
-            .await
-            .map(|_| ()),
-        TestDb::Sqlite(pool) => pool
-            .with_rw("account_tree_test", "move_parent")
-            .execute(
-                sqlx::query("UPDATE account_nodes SET parent_id = $1 WHERE account_id = $2")
-                    .bind(right.account_id)
-                    .bind(leaf.account_id),
-            )
-            .await
-            .map(|_| ()),
-    };
-    let_assert!(Err(RepoError::InternalError(_)) = result);
-    let current = deps
-        .account_tree_repo
-        .get(leaf.account_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(current.parent_id == Some(left.account_id));
 }
 
 pub async fn test_account_tree_maximum_bounds_and_rename(deps: &Deps) {
@@ -323,7 +289,7 @@ pub async fn test_account_tree_maximum_bounds_and_rename(deps: &Deps) {
         deps,
         &chain[1],
         Some(new_top.clone()),
-        AccountLocalState::Active,
+        AccountLifecycleState::Active,
     )
     .await
     .unwrap();
@@ -380,7 +346,7 @@ pub async fn test_account_tree_grace_reserves_name_until_purge(deps: &Deps) {
             .await
     );
 
-    let customer = update(deps, &customer, None, AccountLocalState::DeletionGrace)
+    let customer = update(deps, &customer, None, AccountLifecycleState::DeletionGrace)
         .await
         .unwrap();
     let_assert!(
@@ -407,7 +373,7 @@ pub async fn test_account_tree_grace_reserves_name_until_purge(deps: &Deps) {
             )
             .await
     );
-    let nested = update(deps, &nested, None, AccountLocalState::DeletionGrace)
+    let nested = update(deps, &nested, None, AccountLifecycleState::DeletionGrace)
         .await
         .unwrap();
     deps.account_tree_repo
@@ -453,12 +419,13 @@ impl<T> SignalForTest
     }
 }
 
-/// Delegates to the real repository, counts reads and can hold an ancestry load after it has
-/// read the database.
+/// Delegates to the real repository, counts reads, can hold an ancestry load after it has
+/// read the database and can fail ancestry loads.
 struct ObservedRepo {
     inner: Arc<dyn AccountTreeRepo>,
     reads: AtomicUsize,
     hold: AtomicBool,
+    fail: AtomicBool,
     entered: Notify,
     release: Notify,
 }
@@ -469,6 +436,7 @@ impl ObservedRepo {
             inner,
             reads: AtomicUsize::new(0),
             hold: AtomicBool::new(false),
+            fail: AtomicBool::new(false),
             entered: Notify::new(),
             release: Notify::new(),
         })
@@ -540,6 +508,11 @@ impl AccountTreeRepo for ObservedRepo {
 
     async fn get_ancestry(&self, account_id: Uuid) -> Result<Vec<AccountNodeRecord>, RepoError> {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(RepoError::InternalError(anyhow::anyhow!(
+                "injected load failure"
+            )));
+        }
         let result = self.inner.get_ancestry(account_id).await;
         if self.hold.swap(false, Ordering::SeqCst) {
             self.entered.notify_one();
@@ -589,7 +562,7 @@ pub async fn test_account_tree_cache_follows_ancestor_changes(deps: &Deps) {
     let leaf = child(deps, team.account_id, &segment("leaf")).await;
 
     let repo = ObservedRepo::new(deps.account_tree_repo.clone());
-    let cache = AccountTreeCache::new(repo.clone(), 64);
+    let cache = AccountTreeCache::new(repo.clone(), 64, LONG_MAX_AGE);
     let leaf_path = path(&format!("/{}/team/leaf", top.as_str()));
 
     let cold = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
@@ -608,18 +581,18 @@ pub async fn test_account_tree_cache_follows_ancestor_changes(deps: &Deps) {
         deps,
         &team,
         Some(segment("renamed")),
-        AccountLocalState::Active,
+        AccountLifecycleState::Active,
     )
     .await
     .unwrap();
-    update(deps, &acme, None, AccountLocalState::Suspended)
+    update(deps, &acme, None, AccountLifecycleState::Suspended)
         .await
         .unwrap();
     deliver_events(deps, &cache, since).await;
 
     let fresh = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
     assert!(chain_path(&fresh) == path(&format!("/{}/renamed/leaf", top.as_str())));
-    assert!(AccountLocalState::effective(&fresh) == AccountLocalState::Suspended);
+    assert!(effective_state(&fresh) == AccountLifecycleState::Suspended);
     assert!(fresh.last().unwrap().revision == leaf.current_revision as u64);
     assert!(fresh[2].revision == team.current_revision as u64);
     assert!(cache.resolve(&leaf_path).await.unwrap().is_none());
@@ -632,7 +605,7 @@ pub async fn test_account_tree_cache_rejects_delayed_load(deps: &Deps) {
     let leaf = child(deps, acme.account_id, &segment("leaf")).await;
 
     let repo = ObservedRepo::new(deps.account_tree_repo.clone());
-    let cache = Arc::new(AccountTreeCache::new(repo.clone(), 64));
+    let cache = Arc::new(AccountTreeCache::new(repo.clone(), 64, LONG_MAX_AGE));
 
     // The load reads the old ancestry, then stalls before it reaches the cache.
     repo.hold.store(true, Ordering::SeqCst);
@@ -644,7 +617,7 @@ pub async fn test_account_tree_cache_rejects_delayed_load(deps: &Deps) {
     entered.await;
 
     let since = latest_event_id(deps).await;
-    update(deps, &acme, None, AccountLocalState::Suspended)
+    update(deps, &acme, None, AccountLifecycleState::Suspended)
         .await
         .unwrap();
     deliver_events(deps, &cache, since).await;
@@ -652,10 +625,57 @@ pub async fn test_account_tree_cache_rejects_delayed_load(deps: &Deps) {
 
     // The racing caller sees the value it read; the cache does not keep it.
     let delayed = load.await.unwrap();
-    assert!(AccountLocalState::effective(&delayed) == AccountLocalState::Active);
+    assert!(effective_state(&delayed) == AccountLifecycleState::Active);
     assert!(cache.is_empty());
     let fresh = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
-    assert!(AccountLocalState::effective(&fresh) == AccountLocalState::Suspended);
+    assert!(effective_state(&fresh) == AccountLifecycleState::Suspended);
+}
+
+pub async fn test_account_tree_cache_expiry_backup(deps: &Deps) {
+    let root = root(deps).await;
+    let acme = child(deps, root.account_id, &unique_segment(20)).await;
+    let leaf = child(deps, acme.account_id, &segment("leaf")).await;
+
+    let max_age = Duration::from_secs(1);
+    let repo = ObservedRepo::new(deps.account_tree_repo.clone());
+    let cache = AccountTreeCache::new(repo.clone(), 64, max_age);
+
+    cache.ancestry(leaf.account_id).await.unwrap().unwrap();
+    // The load started before this instant, so its nodes expire by `loaded + max_age`.
+    let loaded = std::time::Instant::now();
+    assert!(repo.reads() == 1);
+
+    // The suspension commits, but its notification never reaches the cache.
+    update(deps, &acme, None, AccountLifecycleState::Suspended)
+        .await
+        .unwrap();
+
+    // Frequent hits inside the maximum age serve the cached chain and do not renew its age.
+    while loaded.elapsed() < max_age / 2 {
+        let warm = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
+        assert!(effective_state(&warm) == AccountLifecycleState::Active);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(repo.reads() == 1);
+
+    // After the maximum age the read reloads instead of serving the stale chain.
+    tokio::time::sleep((max_age + Duration::from_millis(50)).saturating_sub(loaded.elapsed()))
+        .await;
+    let refreshed = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
+    assert!(repo.reads() == 2);
+    assert!(effective_state(&refreshed) == AccountLifecycleState::Suspended);
+
+    // A failed reload of an expired chain returns the error, with no stale fallback.
+    let reloaded = std::time::Instant::now();
+    tokio::time::sleep((max_age + Duration::from_millis(50)).saturating_sub(reloaded.elapsed()))
+        .await;
+    repo.fail.store(true, Ordering::SeqCst);
+    let_assert!(Err(RepoError::InternalError(_)) = cache.ancestry(leaf.account_id).await);
+    assert!(repo.reads() == 3);
+    repo.fail.store(false, Ordering::SeqCst);
+    let recovered = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
+    assert!(repo.reads() == 4);
+    assert!(effective_state(&recovered) == AccountLifecycleState::Suspended);
 }
 
 pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
@@ -668,7 +688,7 @@ pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
 
     let repo = ObservedRepo::new(deps.account_tree_repo.clone());
     let capacity = AccountPath::MAX_DEPTH + 1;
-    let cache = Arc::new(AccountTreeCache::new(repo.clone(), capacity));
+    let cache = Arc::new(AccountTreeCache::new(repo.clone(), capacity, LONG_MAX_AGE));
     for leaf in &leaves {
         cache.ancestry(leaf.account_id).await.unwrap().unwrap();
     }
@@ -680,7 +700,7 @@ pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
         deps,
         first,
         Some(segment("moved")),
-        AccountLocalState::Active,
+        AccountLifecycleState::Active,
     )
     .await
     .unwrap();
@@ -692,7 +712,7 @@ pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
     // A lagged subscription may have dropped an account event, so the cache clears.
     let last = leaves.last().unwrap();
     cache.ancestry(last.account_id).await.unwrap().unwrap();
-    update(deps, last, None, AccountLocalState::Suspended)
+    update(deps, last, None, AccountLifecycleState::Suspended)
         .await
         .unwrap();
     let (sender, receiver) = tokio::sync::broadcast::channel(1);
@@ -718,7 +738,7 @@ pub async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
     .await;
     assert!(cleared.is_ok());
     let fresh = cache.ancestry(last.account_id).await.unwrap().unwrap();
-    assert!(AccountLocalState::effective(&fresh) == AccountLocalState::Suspended);
+    assert!(effective_state(&fresh) == AccountLifecycleState::Suspended);
     drop(sender);
     invalidation.await.unwrap();
 }
@@ -734,7 +754,7 @@ pub async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(deps:
     let sibling = child(deps, team.account_id, &segment("sibling")).await;
 
     let repo = ObservedRepo::new(deps.account_tree_repo.clone());
-    let cache = Arc::new(AccountTreeCache::new(repo.clone(), 64));
+    let cache = Arc::new(AccountTreeCache::new(repo.clone(), 64, LONG_MAX_AGE));
 
     // Load A reads the old ancestry of the leaf and stalls before it installs.
     repo.hold.store(true, Ordering::SeqCst);
@@ -750,11 +770,11 @@ pub async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(deps:
         deps,
         &team,
         Some(segment("renamed")),
-        AccountLocalState::Active,
+        AccountLifecycleState::Active,
     )
     .await
     .unwrap();
-    update(deps, &acme, None, AccountLocalState::Suspended)
+    update(deps, &acme, None, AccountLifecycleState::Suspended)
         .await
         .unwrap();
     let new_sibling_path = path(&format!("/{}/renamed/sibling", top.as_str()));
@@ -763,23 +783,23 @@ pub async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(deps:
     // Load B reads the new state through the shared ancestors and installs it.
     let newer = cache.ancestry(sibling.account_id).await.unwrap().unwrap();
     assert!(chain_path(&newer) == new_sibling_path);
-    assert!(AccountLocalState::effective(&newer) == AccountLocalState::Suspended);
+    assert!(effective_state(&newer) == AccountLifecycleState::Suspended);
 
     // Load A finishes. Its caller may see the snapshot it read.
     repo.release.notify_one();
     let delayed = load_a.await.unwrap();
-    assert!(AccountLocalState::effective(&delayed) == AccountLocalState::Active);
+    assert!(effective_state(&delayed) == AccountLifecycleState::Active);
 
     // Later reads served from the cache keep the newer state, by ID and by path.
     let reads = repo.reads();
     let warm = cache.ancestry(sibling.account_id).await.unwrap().unwrap();
     assert!(chain_path(&warm) == new_sibling_path);
-    assert!(AccountLocalState::effective(&warm) == AccountLocalState::Suspended);
+    assert!(effective_state(&warm) == AccountLifecycleState::Suspended);
     let by_path = cache.resolve(&new_sibling_path).await.unwrap().unwrap();
     assert!(by_path == warm);
     assert!(repo.reads() == reads);
     assert!(cache.resolve(&old_sibling_path).await.unwrap().is_none());
     let leaf_now = cache.ancestry(leaf.account_id).await.unwrap().unwrap();
     assert!(chain_path(&leaf_now) == path(&format!("/{}/renamed/leaf", top.as_str())));
-    assert!(AccountLocalState::effective(&leaf_now) == AccountLocalState::Suspended);
+    assert!(effective_state(&leaf_now) == AccountLifecycleState::Suspended);
 }

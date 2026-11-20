@@ -18,7 +18,7 @@
 //! Record invariants:
 //!
 //! - Only the root has no parent. The database enforces one root, the parent foreign key and the
-//!   unique `(parent_id, segment)` sibling key. A node's parent and depth never change.
+//!   unique `(parent_id, segment)` sibling key.
 //! - A node in deletion grace keeps its row, so its sibling key stays reserved until purge.
 //!   Equal segments under different parents do not conflict.
 //! - Every write updates the current row, appends the matching history row and, for a change
@@ -29,11 +29,16 @@
 //! - Path and ancestry reads are single statements, so each result comes from one database
 //!   snapshot.
 //!
-//! The tables are a preview schema in `db/preview/hierarchical-accounts`, which the production
-//! migration flow does not run yet. [`preview_schema`] exposes it for tests.
+//! The repository never changes a node's parent or depth: creation derives the depth and
+//! [`AccountNodeChange`] has neither field. The database does not enforce this rule.
+//!
+//! The tables are a test-only schema in `db/preview/hierarchical-accounts`. Only the repository
+//! tests install it, through [`preview_schema`]. The production migrations do not include it, and
+//! no live repository or service uses this code. HA-15 moves the schema into the production
+//! migrations and the active account path, with its own migration and active-path tests.
 
 use crate::repo::model::account_tree::{
-    AccountLocalState, AccountNodeChange, AccountNodeRecord, AccountNodeRevisionRecord,
+    AccountLifecycleState, AccountNodeChange, AccountNodeRecord, AccountNodeRevisionRecord,
     AccountTreeRepoError,
 };
 use crate::repo::registry_change::{
@@ -48,9 +53,10 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, SqlDateTime};
 use indoc::indoc;
+use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
-/// The preview schema scripts, in order. They run after the production migrations.
+/// The test-only schema scripts, in order. Tests run them after the production migrations.
 pub mod preview_schema {
     pub const POSTGRES: &[&str] = &[include_str!(
         "../../db/preview/hierarchical-accounts/postgres/001_account_tree.sql"
@@ -78,7 +84,7 @@ pub trait AccountTreeRepo: Send + Sync {
         actor: Uuid,
     ) -> Result<AccountNodeRecord, AccountTreeRepoError>;
 
-    /// Renames a node, changes its display name or changes its local state. The root can change
+    /// Renames a node, changes its display name or changes its own state. The root can change
     /// only its display name.
     async fn update(
         &self,
@@ -113,18 +119,142 @@ pub trait AccountTreeRepo: Send + Sync {
     ) -> Result<Vec<AccountNodeRevisionRecord>, RepoError>;
 }
 
+pub struct LoggedAccountTreeRepo<Repo: AccountTreeRepo> {
+    repo: Repo,
+}
+
+static SPAN_NAME: &str = "account tree repository";
+
+impl<Repo: AccountTreeRepo> LoggedAccountTreeRepo<Repo> {
+    pub fn new(repo: Repo) -> Self {
+        Self { repo }
+    }
+
+    fn span_id(account_id: Uuid) -> Span {
+        info_span!(SPAN_NAME, account_id=%account_id)
+    }
+
+    fn span_parent(parent_id: Uuid) -> Span {
+        info_span!(SPAN_NAME, parent_id=%parent_id)
+    }
+
+    fn span_path(path: &AccountPath) -> Span {
+        info_span!(SPAN_NAME, account_path=%path)
+    }
+}
+
+#[async_trait]
+impl<Repo: AccountTreeRepo> AccountTreeRepo for LoggedAccountTreeRepo<Repo> {
+    async fn create_root(
+        &self,
+        account_id: Uuid,
+        display_name: Option<String>,
+        actor: Uuid,
+    ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
+        self.repo
+            .create_root(account_id, display_name, actor)
+            .instrument(Self::span_id(account_id))
+            .await
+    }
+
+    async fn create_child(
+        &self,
+        account_id: Uuid,
+        parent_id: Uuid,
+        segment: AccountSegment,
+        display_name: Option<String>,
+        actor: Uuid,
+    ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
+        let span = info_span!(SPAN_NAME, account_id=%account_id, parent_id=%parent_id);
+        self.repo
+            .create_child(account_id, parent_id, segment, display_name, actor)
+            .instrument(span)
+            .await
+    }
+
+    async fn update(
+        &self,
+        account_id: Uuid,
+        expected_revision: u64,
+        change: AccountNodeChange,
+        actor: Uuid,
+    ) -> Result<RequiresNotificationSignal<AccountNodeRecord>, AccountTreeRepoError> {
+        self.repo
+            .update(account_id, expected_revision, change, actor)
+            .instrument(Self::span_id(account_id))
+            .await
+    }
+
+    async fn purge(
+        &self,
+        account_id: Uuid,
+        expected_revision: u64,
+        actor: Uuid,
+    ) -> Result<RequiresNotificationSignal<()>, AccountTreeRepoError> {
+        self.repo
+            .purge(account_id, expected_revision, actor)
+            .instrument(Self::span_id(account_id))
+            .await
+    }
+
+    async fn get(&self, account_id: Uuid) -> Result<Option<AccountNodeRecord>, RepoError> {
+        self.repo
+            .get(account_id)
+            .instrument(Self::span_id(account_id))
+            .await
+    }
+
+    async fn get_ancestry(&self, account_id: Uuid) -> Result<Vec<AccountNodeRecord>, RepoError> {
+        self.repo
+            .get_ancestry(account_id)
+            .instrument(Self::span_id(account_id))
+            .await
+    }
+
+    async fn resolve_path(&self, path: &AccountPath) -> Result<Vec<AccountNodeRecord>, RepoError> {
+        self.repo
+            .resolve_path(path)
+            .instrument(Self::span_path(path))
+            .await
+    }
+
+    async fn list_children(&self, parent_id: Uuid) -> Result<Vec<AccountNodeRecord>, RepoError> {
+        self.repo
+            .list_children(parent_id)
+            .instrument(Self::span_parent(parent_id))
+            .await
+    }
+
+    async fn get_history(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<AccountNodeRevisionRecord>, RepoError> {
+        self.repo
+            .get_history(account_id)
+            .instrument(Self::span_id(account_id))
+            .await
+    }
+}
+
 pub struct DbAccountTreeRepo<DBP: Pool> {
     db_pool: DBP,
 }
 
 static METRICS_SVC_NAME: &str = "account_tree";
 
-const NODE_COLUMNS: &str = "account_id, parent_id, segment, depth, display_name, local_state, \
+const NODE_COLUMNS: &str = "account_id, parent_id, segment, depth, display_name, own_state, \
     current_revision, created_at, updated_at, modified_by";
 
 impl<DBP: Pool> DbAccountTreeRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
         Self { db_pool }
+    }
+
+    pub fn logged(db_pool: DBP) -> LoggedAccountTreeRepo<Self>
+    where
+        Self: AccountTreeRepo,
+    {
+        LoggedAccountTreeRepo::new(Self::new(db_pool))
     }
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
@@ -170,7 +300,7 @@ impl DbAccountTreeRepo<PostgresPool> {
             .bind(&record.segment)
             .bind(record.depth)
             .bind(&record.display_name)
-            .bind(record.local_state)
+            .bind(record.own_state)
             .bind(record.current_revision)
             .bind(&record.created_at)
             .bind(&record.updated_at)
@@ -186,7 +316,7 @@ impl DbAccountTreeRepo<PostgresPool> {
         tx.execute(
             sqlx::query(indoc! { r#"
                 INSERT INTO account_node_revisions
-                    (account_id, revision, parent_id, segment, display_name, local_state,
+                    (account_id, revision, parent_id, segment, display_name, own_state,
                      created_at, created_by)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#})
@@ -195,7 +325,7 @@ impl DbAccountTreeRepo<PostgresPool> {
             .bind(record.parent_id)
             .bind(&record.segment)
             .bind(&record.display_name)
-            .bind(record.local_state)
+            .bind(record.own_state)
             .bind(&record.updated_at)
             .bind(record.modified_by),
         )
@@ -239,7 +369,7 @@ fn new_node(
         segment,
         depth,
         display_name,
-        local_state: AccountLocalState::Active.into(),
+        own_state: AccountLifecycleState::Active.into(),
         current_revision: 0,
         created_at: now.clone(),
         updated_at: now,
@@ -340,7 +470,7 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                         .ok_or(AccountTreeRepoError::NotFound)?;
                     let segment = match (&current.parent_id, change.segment) {
                         (None, Some(_)) => return Err(AccountTreeRepoError::RootImmutable),
-                        (None, None) if change.state != AccountLocalState::Active => {
+                        (None, None) if change.own_state != AccountLifecycleState::Active => {
                             return Err(AccountTreeRepoError::RootImmutable);
                         }
                         (_, Some(segment)) => segment.as_str().to_string(),
@@ -350,7 +480,7 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                         .fetch_optional_as(
                             sqlx::query_as(&format!(
                                 "UPDATE account_nodes \
-                                 SET segment = $1, display_name = $2, local_state = $3, \
+                                 SET segment = $1, display_name = $2, own_state = $3, \
                                      current_revision = current_revision + 1, updated_at = $4, \
                                      modified_by = $5 \
                                  WHERE account_id = $6 AND current_revision = $7 \
@@ -358,7 +488,7 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                             ))
                             .bind(&segment)
                             .bind(&change.display_name)
-                            .bind(i16::from(change.state))
+                            .bind(i16::from(change.own_state))
                             .bind(SqlDateTime::now())
                             .bind(actor)
                             .bind(account_id)
@@ -403,18 +533,18 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                     if current.current_revision != expected {
                         return Err(AccountTreeRepoError::ConcurrentModification);
                     }
-                    if current.local_state != i16::from(AccountLocalState::DeletionGrace) {
+                    if current.own_state != i16::from(AccountLifecycleState::DeletionGrace) {
                         return Err(AccountTreeRepoError::NotInDeletionGrace);
                     }
                     let deleted = tx
                         .execute(
                             sqlx::query(
                                 "DELETE FROM account_nodes \
-                                 WHERE account_id = $1 AND current_revision = $2 AND local_state = $3",
+                                 WHERE account_id = $1 AND current_revision = $2 AND own_state = $3",
                             )
                             .bind(account_id)
                             .bind(expected)
-                            .bind(i16::from(AccountLocalState::DeletionGrace)),
+                            .bind(i16::from(AccountLifecycleState::DeletionGrace)),
                         )
                         .await
                         .map_err(|err| {
@@ -493,7 +623,7 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
         self.with_ro("get_history")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT account_id, revision, parent_id, segment, display_name, local_state,
+                    SELECT account_id, revision, parent_id, segment, display_name, own_state,
                            created_at, created_by
                     FROM account_node_revisions
                     WHERE account_id = $1

@@ -29,7 +29,8 @@ use golem_common::config::DbPostgresConfig;
 use golem_common::model::account_path::{AccountPath, AccountSegment};
 use golem_registry_service::repo::account_tree::{AccountTreeRepo, DbAccountTreeRepo};
 use golem_registry_service::repo::model::account_tree::{
-    AccountLocalState, AccountNodeChange, AccountNodeRecord, AccountTreeRepoError,
+    AccountLifecycleState, AccountNodeChange, AccountNodeRecord, AccountTreeRepoError,
+    effective_state,
 };
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::registry_change::{
@@ -174,7 +175,7 @@ async fn suspend(tree: &Arc<dyn AccountTreeRepo>, node: &AccountNodeRecord) {
             AccountNodeChange {
                 segment: None,
                 display_name: node.display_name.clone(),
-                state: AccountLocalState::Suspended,
+                own_state: AccountLifecycleState::Suspended,
             },
             Uuid::new_v4(),
         )
@@ -182,8 +183,8 @@ async fn suspend(tree: &Arc<dyn AccountTreeRepo>, node: &AccountNodeRecord) {
         .unwrap();
 }
 
-async fn leaf_state(cache: &AccountTreeCache, leaf: Uuid) -> AccountLocalState {
-    AccountLocalState::effective(&cache.ancestry(leaf).await.unwrap().unwrap())
+async fn leaf_state(cache: &AccountTreeCache, leaf: Uuid) -> AccountLifecycleState {
+    effective_state(&cache.ancestry(leaf).await.unwrap().unwrap())
 }
 
 fn spawn_cache_invalidation(
@@ -207,8 +208,12 @@ async fn fixture(config: &DbPostgresConfig, pool: &PostgresPool) -> Fixture {
     let mut tasks = tokio::task::JoinSet::new();
     notifier.start_background_tasks(&mut tasks);
 
-    let tree: Arc<dyn AccountTreeRepo> = Arc::new(DbAccountTreeRepo::new(pool.clone()));
-    let cache = Arc::new(AccountTreeCache::new(tree.clone(), 64));
+    let tree: Arc<dyn AccountTreeRepo> = Arc::new(DbAccountTreeRepo::logged(pool.clone()));
+    let cache = Arc::new(AccountTreeCache::new(
+        tree.clone(),
+        64,
+        crate::repo::account_tree::LONG_MAX_AGE,
+    ));
     let invalidation = spawn_cache_invalidation(cache.clone(), &notifier);
     let events = notifier.subscribe();
 
@@ -246,7 +251,7 @@ async fn fixture(config: &DbPostgresConfig, pool: &PostgresPool) -> Fixture {
     let probe_seen = {
         let start = Instant::now();
         loop {
-            if leaf_state(&cache, probe.account_id).await == AccountLocalState::Suspended {
+            if leaf_state(&cache, probe.account_id).await == AccountLifecycleState::Suspended {
                 break true;
             }
             if start.elapsed() > Duration::from_secs(10) {
@@ -260,7 +265,7 @@ async fn fixture(config: &DbPostgresConfig, pool: &PostgresPool) -> Fixture {
         "the live notification path did not reach the cache"
     );
 
-    assert!(leaf_state(&cache, leaf.account_id).await == AccountLocalState::Active);
+    assert!(leaf_state(&cache, leaf.account_id).await == AccountLifecycleState::Active);
     Fixture {
         proxy,
         tree,
@@ -277,7 +282,7 @@ async fn fixture(config: &DbPostgresConfig, pool: &PostgresPool) -> Fixture {
 async fn becomes_suspended(cache: &AccountTreeCache, leaf: Uuid, timeout: Duration) -> bool {
     let start = Instant::now();
     loop {
-        if leaf_state(cache, leaf).await == AccountLocalState::Suspended {
+        if leaf_state(cache, leaf).await == AccountLifecycleState::Suspended {
             return true;
         }
         if start.elapsed() > timeout {
@@ -378,8 +383,8 @@ pub async fn test_notifier_resets_cache_after_journal_expiry(db: &PostgresDb) {
     let fixture = fixture(&config, &pool).await;
     let leaf_path = AccountPath::from_str(&format!("/{}/leaf", fixture.acme.segment)).unwrap();
     assert!(
-        AccountLocalState::effective(&fixture.cache.resolve(&leaf_path).await.unwrap().unwrap())
-            == AccountLocalState::Active
+        effective_state(&fixture.cache.resolve(&leaf_path).await.unwrap().unwrap())
+            == AccountLifecycleState::Active
     );
 
     fixture.proxy.cut_and_hold().await;
@@ -417,7 +422,7 @@ pub async fn test_notifier_resets_cache_after_journal_expiry(db: &PostgresDb) {
     );
     let by_path = fixture.cache.resolve(&leaf_path).await.unwrap().unwrap();
     assert!(by_path.last().unwrap().account_id == fixture.leaf.account_id);
-    assert!(AccountLocalState::effective(&by_path) == AccountLocalState::Suspended);
+    assert!(effective_state(&by_path) == AccountLifecycleState::Suspended);
 }
 
 async fn record_unrelated_event(db: &PostgresDb) {
