@@ -549,7 +549,7 @@ impl ComponentService for FakeComponentService {
                     .to_polymorphic_card(),
                     plugins: self.installed_plugins.clone(),
                     env: BTreeMap::new(),
-                    config: Vec::new(),
+                    config: Default::default(),
                     files: Vec::new(),
                 },
             )])

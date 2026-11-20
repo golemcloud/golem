@@ -33,6 +33,7 @@ impl ComponentDto {
                             env: config.env.clone(),
                             config: config
                                 .config
+                                .captures()
                                 .iter()
                                 .map(|e| {
                                     Ok((
@@ -187,6 +188,7 @@ impl ComponentDto {
                 config: metadata
                     .component_provision_config()
                     .config
+                    .captures()
                     .iter()
                     .map(|entry| {
                         (
@@ -352,7 +354,7 @@ mod tests {
             )]),
         );
         let wasm_hash = diff::Hash::empty();
-        let dto = ComponentDto {
+        let mut dto = ComponentDto {
             id: ComponentId::new(),
             revision: ComponentRevision::new(1).unwrap(),
             environment_id: EnvironmentId::new(),
@@ -389,6 +391,23 @@ mod tests {
             tool_middleware_deployment_configs: BTreeMap::new(),
         };
 
+        assert_eq!(
+            dto.to_diffable().unwrap().hash().unwrap(),
+            expected.hash().unwrap()
+        );
+
+        dto.metadata
+            .component_provision_config
+            .config
+            .source_meta
+            .insert(
+                "/limits/maximum".into(),
+                crate::model::component_metadata::ConfigSourceMetadata {
+                    source: "golem.yaml".into(),
+                    path: vec!["config".into(), "limits".into(), "maximum".into()],
+                    layer: "prod".into(),
+                },
+            );
         assert_eq!(
             dto.to_diffable().unwrap().hash().unwrap(),
             expected.hash().unwrap()

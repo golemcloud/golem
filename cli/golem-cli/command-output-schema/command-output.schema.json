@@ -190,6 +190,12 @@
       "$ref": "#/definitions/clean"
     },
     {
+      "$ref": "#/definitions/config.list"
+    },
+    {
+      "$ref": "#/definitions/config.get"
+    },
+    {
       "$ref": "#/definitions/deploy.plan"
     },
     {
@@ -4424,6 +4430,63 @@
       },
       "additionalProperties": false
     },
+    "ConfigOrigin": {
+      "type": "object",
+      "required": ["file", "path", "layer"],
+      "properties": {
+        "file": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "layer": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "StaticConfigSource": {
+      "type": "object",
+      "required": ["path", "origin"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "origin": { "$ref": "#/definitions/ConfigOrigin" }
+      },
+      "additionalProperties": false
+    },
+    "StaticConfigFieldView": {
+      "type": "object",
+      "required": ["component", "agentType", "path", "schema", "fill", "sources", "catalogOrigin"],
+      "properties": {
+        "component": { "type": "string" },
+        "agentType": { "type": ["string", "null"] },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "fill": {},
+        "sources": { "type": "array", "items": { "$ref": "#/definitions/StaticConfigSource" } },
+        "catalogOrigin": { "oneOf": [{ "$ref": "#/definitions/ConfigOrigin" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "config.list": {
+      "type": "object",
+      "description": "Static declarations, effective fills and source layers from the local manifest and built component metadata. This is not deployed-state inspection.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "config list",
+      "required": ["$type", "fields"],
+      "properties": {
+        "$type": { "const": "config.list" },
+        "fields": { "type": "array", "items": { "$ref": "#/definitions/StaticConfigFieldView" } }
+      },
+      "additionalProperties": false
+    },
+    "config.get": {
+      "type": "object",
+      "description": "One exact static declaration with its effective local fill and source layers. Secret values are excluded.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "config get",
+      "required": ["$type", "field"],
+      "properties": {
+        "$type": { "const": "config.get" },
+        "field": { "$ref": "#/definitions/StaticConfigFieldView" }
+      },
+      "additionalProperties": false
+    },
     "deploy.plan": {
       "type": "object",
       "description": "May be emitted by `golem deploy` when planning includes deployment or environment setup changes. Other deploy output documents may also appear in the same command run.",
@@ -4433,6 +4496,7 @@
         "$type",
         "deploymentDiff",
         "environmentSetup",
+        "staticConfig",
         "toolPublications"
       ],
       "properties": {
@@ -4444,6 +4508,10 @@
         },
         "toolPublications": {
           "$ref": "#/definitions/ToolPublicationPlan"
+        },
+        "staticConfig": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/StaticConfigFieldView" }
         },
         "environmentSetup": {
           "oneOf": [
@@ -4650,14 +4718,10 @@
     },
     "component.manifest-trace": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem component manifest-trace`.",
+      "description": "Manifest property traces and ordered config inputs. resolvedConfig is null by default; --resolved adds schema-validated static values and provenance from local built components, not deployed state.",
       "x-golem-output-mode": "single",
       "x-golem-command": "component manifest-trace",
-      "required": [
-        "$type",
-        "componentName",
-        "properties"
-      ],
+      "required": ["$type", "componentName", "properties", "resolvedConfig"],
       "properties": {
         "$type": {
           "const": "component.manifest-trace"
@@ -4667,6 +4731,15 @@
         },
         "properties": {
           "$ref": "#/definitions/ComponentLayerProperties"
+        },
+        "resolvedConfig": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/StaticConfigFieldView" }
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -4683,7 +4756,7 @@
         "clean",
         "configSchema",
         "nodeHttpRouters",
-        "config",
+        "configInputs",
         "env",
         "plugins",
         "files",
@@ -4701,7 +4774,10 @@
         "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
         "configSchema": { "$ref": "#/definitions/ComponentLayerConfigSchemaProperty" },
         "nodeHttpRouters": { "$ref": "#/definitions/ComponentLayerNodeHttpRoutersProperty" },
-        "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
+        "configInputs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ConfigLayer" }
+        },
         "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
         "env": { "$ref": "#/definitions/ComponentLayerStringMapProperty" },
         "pluginsMergeMode": { "$ref": "#/definitions/VecMergeMode" },
@@ -4835,7 +4911,8 @@
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "value_type": { "$ref": "#/definitions/SchemaType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" },
+        "default_value": { "$ref": "#/definitions/SchemaValue", "description": "Native schema value for a static declaration default." }
       },
       "additionalProperties": false
     },
@@ -5482,59 +5559,17 @@
         { "type": "array", "items": { "type": "string" } }
       ]
     },
-    "ComponentLayerJsonProperty": {
+    "ConfigLayer": {
       "type": "object",
-      "required": ["value", "trace"],
+      "required": ["origin", "value"],
       "properties": {
-        "value": { "$ref": "#/definitions/JsonValue" },
-        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerJsonTraceElem" } }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerJsonTraceElem": {
-      "oneOf": [
-        { "$ref": "#/definitions/ComponentLayerJsonObjectMergeTraceElem" },
-        { "$ref": "#/definitions/ComponentLayerJsonReplaceTraceElem" },
-        { "$ref": "#/definitions/ComponentLayerJsonSkipTraceElem" }
-      ]
-    },
-    "ComponentLayerJsonObjectMergeTraceElem": {
-      "type": "object",
-      "required": ["type", "id"],
-      "properties": {
-        "type": { "const": "object-merge" },
-        "id": { "$ref": "#/definitions/ComponentLayerId" },
-        "selection": { "type": "string" },
-        "insertedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } },
-        "updatedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerJsonReplaceTraceElem": {
-      "type": "object",
-      "required": ["type", "id", "mode", "newValue"],
-      "properties": {
-        "type": { "const": "replace" },
-        "id": { "$ref": "#/definitions/ComponentLayerId" },
-        "selection": { "type": "string" },
-        "mode": { "$ref": "#/definitions/JsonMergeMode" },
-        "newValue": { "$ref": "#/definitions/JsonValue" }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerJsonSkipTraceElem": {
-      "type": "object",
-      "required": ["type", "id"],
-      "properties": {
-        "type": { "const": "skip" },
-        "id": { "$ref": "#/definitions/ComponentLayerId" },
-        "selection": { "type": "string" }
+        "origin": { "$ref": "#/definitions/ConfigOrigin" },
+        "value": { "$ref": "#/definitions/JsonValue" }
       },
       "additionalProperties": false
     },
     "VecMergeMode": { "type": "string", "enum": ["append", "prepend", "replace"] },
     "MapMergeMode": { "type": "string", "enum": ["upsert", "replace", "remove"] },
-    "JsonMergeMode": { "type": "string", "enum": ["merge-object-replace-other"] },
     "StringMap": {
       "type": "object",
       "additionalProperties": { "type": "string" }
@@ -6396,11 +6431,65 @@
       "type": "object",
       "required": ["env", "config", "plugins", "files", "initialPermissions"],
       "properties": {
-        "env": { "type": "object", "additionalProperties": { "type": "string" } },
-        "config": { "type": "array", "items": { "$ref": "#/definitions/TypedAgentConfigEntry" } },
-        "plugins": { "type": "array", "items": { "$ref": "#/definitions/InstalledPlugin" } },
-        "files": { "type": "array", "items": { "$ref": "#/definitions/InitialAgentFile" } },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "config": { "$ref": "#/definitions/OwnerConfig" },
+        "plugins": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/InstalledPlugin" }
+        },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/InitialAgentFile" }
+        },
         "initialPermissions": { "$ref": "#/definitions/PolymorphicCard" }
+      },
+      "additionalProperties": false
+    },
+    "OwnerConfig": {
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/OwnerConfigEntry" }
+        },
+        "sourceMeta": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ConfigSourceMetadata"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OwnerConfigEntry": {
+      "type": "object",
+      "required": ["path", "source"],
+      "properties": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "source": { "$ref": "#/definitions/OwnerConfigSource" }
+      },
+      "additionalProperties": false
+    },
+    "OwnerConfigSource": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "const": "captured" },
+        "value": { "$ref": "#/definitions/TypedSchemaValue" }
+      },
+      "additionalProperties": false
+    },
+    "ConfigSourceMetadata": {
+      "type": "object",
+      "required": ["source", "path", "layer"],
+      "properties": {
+        "source": { "type": "string" },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "layer": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -8346,7 +8435,8 @@
       "properties": {
         "source": { "type": "string", "enum": ["Local", "Secret"] },
         "path": { "type": "array", "items": { "type": "string" } },
-        "value_type": { "$ref": "#/definitions/SchemaType" }
+        "value_type": { "$ref": "#/definitions/SchemaType" },
+        "default_value": { "$ref": "#/definitions/SchemaValue", "description": "Native schema value for a static declaration default." }
       },
       "additionalProperties": false
     },
@@ -11184,6 +11274,14 @@
     {
       "type": "clean",
       "rustType": "CleanResult"
+    },
+    {
+      "type": "config.list",
+      "rustType": "ConfigListView"
+    },
+    {
+      "type": "config.get",
+      "rustType": "ConfigGetView"
     },
     {
       "type": "deploy.plan",

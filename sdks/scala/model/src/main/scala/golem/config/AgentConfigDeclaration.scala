@@ -16,7 +16,7 @@
 
 package golem.config
 
-import golem.schema.SchemaGraph
+import golem.schema.{SchemaGraph, SchemaValue}
 
 sealed trait AgentConfigSource extends Product with Serializable
 
@@ -25,8 +25,13 @@ object AgentConfigSource {
   case object Secret extends AgentConfigSource
 }
 
+/**
+ * A config leaf in the owning agent's schema graph. An absent default differs
+ * from a native option-none value.
+ */
 final case class AgentConfigDeclaration(
   source: AgentConfigSource,
   path: List[String],
-  valueType: SchemaGraph
+  valueType: SchemaGraph,
+  defaultValue: Option[SchemaValue] = None
 )

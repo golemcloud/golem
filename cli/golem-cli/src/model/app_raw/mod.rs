@@ -30,6 +30,7 @@ use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
 use golem_common::schema::ComponentConfigSchema;
+use golem_common::schema::config::ConfigCatalog;
 pub use golem_package::{ManifestInitialCard, ManifestInitialCardBound, PluginInstallation};
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -140,6 +141,8 @@ pub struct Application {
     pub version: Option<AppVersionSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub config: IndexMap<EnvironmentName, ConfigCatalog>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub secret_defaults: IndexMap<EnvironmentName, JsonObject>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -575,7 +578,7 @@ where
                         "'*' must be used as the whole {kind} scope, not as a list entry"
                     )));
                 }
-                crate::args::parse_agent_config_path(path).map_err(|error| {
+                golem_common::model::split_config_path(path).map_err(|error| {
                     serde::de::Error::custom(format!("invalid {kind} path '{path}': {error}"))
                 })?;
             }
@@ -721,7 +724,7 @@ impl ToolMiddlewareInstallation {
                 ManifestSecretKeyScope::Keys(paths) => paths
                     .into_iter()
                     .map(|path| {
-                        crate::args::parse_agent_config_path(&path)
+                        golem_common::model::split_config_path(&path)
                             .map(|segments| {
                                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments)
                             })

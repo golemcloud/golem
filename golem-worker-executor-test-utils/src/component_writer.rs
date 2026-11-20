@@ -14,7 +14,7 @@
 
 use anyhow::{Context, anyhow};
 use golem_common::base_model::component_metadata::{
-    AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports,
+    AgentTypeProvisionConfig, ComponentProvisionConfig, KnownExports, OwnerConfig,
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountEmail;
@@ -194,7 +194,7 @@ impl FileSystemComponentWriter {
             .len();
 
         let agent_type_provision_configs =
-            with_default_initial_permissions(agent_type_provision_configs, &agent_types);
+            with_default_agent_provision_configs(agent_type_provision_configs, &agent_types)?;
 
         let metadata = LocalFileSystemComponentMetadata {
             account_id,
@@ -635,23 +635,36 @@ impl From<LocalFileSystemComponentMetadata> for Component {
     }
 }
 
-fn with_default_initial_permissions(
+fn with_default_agent_provision_configs(
     mut provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     agent_types: &[AgentTypeSchema],
-) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
+) -> anyhow::Result<BTreeMap<AgentTypeName, AgentTypeProvisionConfig>> {
     for agent_type in agent_types {
-        provision_configs
-            .entry(agent_type.type_name.clone())
-            .or_insert_with(|| AgentTypeProvisionConfig {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            provision_configs.entry(agent_type.type_name.clone())
+        {
+            let schema = golem_common::schema::config::ConfigSchema::from_declarations(
+                &agent_type.schema,
+                &agent_type.config,
+                &golem_common::schema::config::ConfigOrigin {
+                    file: agent_type.type_name.0.clone().into(),
+                    path: vec!["config".into()],
+                    layer: "code".into(),
+                },
+            )?;
+            let mut captures = Vec::new();
+            schema.capture_missing_defaults(&mut captures);
+            entry.insert(AgentTypeProvisionConfig {
                 initial_permissions: default_test_agent_initial_permissions_for_account(
                     AccountEmail::new("test@golem"),
                 )
                 .to_polymorphic_card(),
                 env: BTreeMap::new(),
-                config: Vec::new(),
+                config: OwnerConfig::from_captures(captures),
                 plugins: Vec::new(),
                 files: Vec::new(),
             });
+        }
     }
-    provision_configs
+    Ok(provision_configs)
 }

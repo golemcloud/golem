@@ -142,14 +142,20 @@ object JsAgentMethod {
 
 @js.native
 sealed trait JsAgentConfigDeclaration extends js.Object {
-  def source: JsAgentConfigSource = js.native
-  def path: js.Array[String]      = js.native
-  def valueType: Int              = js.native
+  def source: JsAgentConfigSource                 = js.native
+  def path: js.Array[String]                      = js.native
+  def valueType: Int                              = js.native
+  def defaultValue: js.UndefOr[JsSchemaValueTree] = js.native
 }
 object JsAgentConfigDeclaration {
-  def apply(source: JsAgentConfigSource, path: js.Array[String], valueType: Int): JsAgentConfigDeclaration =
+  def apply(
+    source: JsAgentConfigSource,
+    path: js.Array[String],
+    valueType: Int,
+    defaultValue: js.UndefOr[JsSchemaValueTree] = js.undefined
+  ): JsAgentConfigDeclaration =
     js.Dynamic
-      .literal("source" -> source, "path" -> path, "valueType" -> valueType)
+      .literal("source" -> source, "path" -> path, "valueType" -> valueType, "defaultValue" -> defaultValue)
       .asInstanceOf[JsAgentConfigDeclaration]
 }
 

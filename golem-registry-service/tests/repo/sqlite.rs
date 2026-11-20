@@ -278,6 +278,16 @@ async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
 }
 
 #[test]
+async fn test_shared_config_lifecycle(deps: &Deps) {
+    crate::repo::shared_config::lifecycle(deps).await;
+}
+
+#[test]
+async fn test_shared_config_schema_and_secret_identity(deps: &Deps) {
+    crate::repo::shared_config::schema_and_secret_identity(deps).await;
+}
+
+#[test]
 async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
     crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
 }

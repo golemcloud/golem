@@ -168,7 +168,9 @@ pub struct ReflectedConfigDeclaration {
   path : Array[String]
   source : @golemcloud/golem_sdk/interface/golem/agent/common.AgentConfigSource
   schema : SchemaRef
+  default_value : @schema_model.SchemaValue?
 } derive(Eq, @debug.Debug)
+pub fn ReflectedConfigDeclaration::default_value(Self) -> @schema_model.SchemaValue?
 pub fn ReflectedConfigDeclaration::path(Self) -> Array[String]
 pub fn ReflectedConfigDeclaration::schema(Self) -> SchemaRef
 pub fn ReflectedConfigDeclaration::source(Self) -> @golemcloud/golem_sdk/interface/golem/agent/common.AgentConfigSource

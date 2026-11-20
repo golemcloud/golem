@@ -18,7 +18,7 @@ package golem.runtime
 
 import golem.config.{AgentConfigDeclaration, AgentConfigSource}
 import golem.runtime.http.{HttpEndpointDetails, HttpMountDetails}
-import golem.schema.{MetadataEnvelope, SchemaBuilder, SchemaGraph}
+import golem.schema.{MetadataEnvelope, SchemaBuilder, SchemaGraph, SchemaValue}
 import golem.schema.wire.{GraphEncoder, SchemaWire, WitSchemaGraph}
 
 final case class WireParameterMetadata(name: String, source: FieldSource, schema: Int, metadata: MetadataEnvelope)
@@ -38,7 +38,12 @@ final case class WireMethodMetadata(
   httpEndpoints: List[HttpEndpointDetails],
   readOnly: Option[ReadOnlyConfig]
 )
-final case class WireConfigDeclaration(source: AgentConfigSource, path: List[String], schema: Int)
+final case class WireConfigDeclaration(
+  source: AgentConfigSource,
+  path: List[String],
+  schema: Int,
+  defaultValue: Option[SchemaValue] = None
+)
 
 /**
  * Generated metadata contains one compiler-emitted pool and indices into it.
@@ -90,7 +95,7 @@ final case class WireAgentMetadata(
       methods.map(reflectedMethod),
       reflectedConstructor,
       httpMount,
-      config.map(c => AgentConfigDeclaration(c.source, c.path, graph(c.schema))),
+      config.map(c => AgentConfigDeclaration(c.source, c.path, graph(c.schema), c.defaultValue)),
       snapshotting
     )
 
@@ -125,7 +130,9 @@ object WireAgentMetadata {
       }
       WireMethodMetadata(m.name, m.description, m.prompt, m.mode, input, output, m.httpEndpoints, m.readOnly)
     }
-    val config = metadata.config.map(c => WireConfigDeclaration(c.source, c.path, encoder.encodeType(c.valueType.root)))
+    val config = metadata.config.map(c =>
+      WireConfigDeclaration(c.source, c.path, encoder.encodeType(c.valueType.root), c.defaultValue)
+    )
     WireAgentMetadata(
       metadata.name,
       metadata.kind,

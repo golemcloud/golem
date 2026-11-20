@@ -90,7 +90,10 @@ private[golem] object AgentRequestBuilder {
             case AgentConfigSource.Secret => "secret"
           },
           c.path.toJSArray,
-          c.schema
+          c.schema,
+          c.defaultValue
+            .map(v => SchemaWireInterop.valueTreeToJs(golem.schema.wire.SchemaWire.schemaValueToWit(v)))
+            .orUndefined
         )
       }.toJSArray,
       metadata.httpMount.map(encodeHttpMount).orUndefined
@@ -158,7 +161,7 @@ private[golem] object AgentRequestBuilder {
       case AgentConfigSource.Local  => "local"
       case AgentConfigSource.Secret => "secret"
     }
-    AgentTypeEncoderV2.ConfigDecl(source, decl.path, decl.valueType)
+    AgentTypeEncoderV2.ConfigDecl(source, decl.path, decl.valueType, decl.defaultValue)
   }
 
   private def encodeHttpMount(mount: HttpMountDetails): JsHttpMountDetails =

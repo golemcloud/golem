@@ -16,10 +16,20 @@
 
 package golem.runtime.autowire
 
+import golem.config.{AgentConfigDeclaration, AgentConfigSource}
 import golem.host.SchemaWireInterop
 import golem.host.js.JsSnapshotting
 import golem.host.js.schema._
-import golem.runtime.{AgentMetadata, AgentTypeKind, ConstructorMetadata, InputMetadata, MethodMetadata, OutputMetadata}
+import golem.reflection.Reflection
+import golem.runtime.{
+  AgentMetadata,
+  AgentTypeKind,
+  ConstructorMetadata,
+  InputMetadata,
+  MethodMetadata,
+  OutputMetadata,
+  WireAgentMetadata
+}
 import golem.runtime.http.{FileMapping, FileResponseHeader, HttpEndpointDetails, HttpMethod, HttpMountDetails}
 import golem.schema.{IntoSchema, SchemaConflictError, SchemaGraph, SchemaType, SchemaTypeBody, SchemaTypeDef}
 import golem.schema.wire.SchemaWire
@@ -297,19 +307,74 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           typeAt(at.schema, fields(1).schema) == graphOf[Greeting].root
         )
       },
-      test("config declarations carry source/path + resolvable valueType index") {
-        val req = baseRequest(config =
-          List(
-            AgentTypeEncoderV2.ConfigDecl("local", List("db", "host"), graphOf[Greeting])
+      test("config defaults survive metadata emission and host reflection without JSON normalization") {
+        val declarations = List(
+          AgentConfigDeclaration(
+            AgentConfigSource.Local,
+            List("db", "host"),
+            graphOf[Greeting],
+            Some(golem.schema.SchemaValue.RecordValue(List(golem.schema.SchemaValue.StringValue("db.example"))))
+          ),
+          AgentConfigDeclaration(
+            AgentConfigSource.Local,
+            List("optional"),
+            graphOf[Option[String]],
+            Some(golem.schema.SchemaValue.OptionValue(None))
+          ),
+          AgentConfigDeclaration(
+            AgentConfigSource.Secret,
+            List("password"),
+            graphOf[String].copy(root =
+              SchemaType(SchemaTypeBody.SecretType(golem.schema.SecretSpec(graphOf[String].root)))
+            )
           )
         )
-        val at  = AgentTypeEncoderV2.encode(req)
-        val cfg = at.config(0)
-        assertTrue(
-          cfg.source == "local",
-          cfg.path.toList == List("db", "host"),
-          typeAt(at.schema, cfg.valueType) == graphOf[Greeting].root
+        val metadata = AgentMetadata(
+          "ConfiguredAgent",
+          AgentTypeKind.Regular,
+          None,
+          None,
+          Nil,
+          ConstructorMetadata(None, "", None),
+          config = declarations
         )
+        val dynamic  = AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(metadata, "durable"))
+        val compiled = AgentRequestBuilder.fromWire(WireAgentMetadata.fromModel(metadata), "durable")
+        val global   = js.Dynamic.global.globalThis
+        val previous = global.selectDynamic("__golemScalaTestHost")
+        global.updateDynamic("__golemScalaTestHost")(
+          js.Dynamic.literal(
+            "getAgentType" -> js.Any.fromFunction1((name: String) =>
+              JsRegisteredAgentType(
+                if (name == "compiled") compiled else dynamic
+              )
+            )
+          )
+        )
+        try {
+          val reflected = List("dynamic", "compiled").map(name => Reflection.getAgentType(name).toOption.flatten.get)
+          assertTrue(
+            List(dynamic, compiled).forall(at =>
+              at.config.toList
+                .map(
+                  _.defaultValue.toOption.map(value =>
+                    SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(value))
+                  )
+                ) == declarations.map(_.defaultValue) &&
+                at.config.toList.map(_.path.toList) == declarations.map(_.path) &&
+                at.config.toList.map(_.source) == List("local", "local", "secret") &&
+                at.config.toList.zip(declarations).forall { case (config, declaration) =>
+                  typeAt(at.schema, config.valueType) == declaration.valueType.root
+                }
+            ),
+            reflected.forall(
+              _.config.map(_.defaultValue) == declarations.map(_.defaultValue)
+            ),
+            reflected.forall(_.config.map(_.path) == declarations.map(_.path)),
+            reflected.forall(_.config.map(_.source) == List("local", "local", "secret")),
+            reflected.forall(_.config.map(_.schema.graph.root) == declarations.map(_.valueType.root))
+          )
+        } finally global.updateDynamic("__golemScalaTestHost")(previous)
       },
       test("shared defs are merged once: same type used twice has one def entry") {
         // Two constructor params of the same record type must merge to a single

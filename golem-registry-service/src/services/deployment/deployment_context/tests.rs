@@ -60,6 +60,134 @@ fn test_environment() -> Environment {
     }
 }
 
+#[test]
+fn static_config_readiness_validates_each_owner_and_missing_values() {
+    use golem_common::model::agent::TypedAgentConfigEntry;
+    use golem_common::model::component::AgentTypeInitialPermissions;
+    use golem_common::model::component_metadata::{
+        AgentTypeProvisionConfig, ComponentProvisionConfig, OwnerConfig,
+    };
+    use golem_common::schema::{ComponentConfigSchema, TypedSchemaValue};
+
+    for agent_owner in [false, true] {
+        for (ty, default, capture, nested, accepted) in [
+            (SchemaType::u32(), None, None, false, false),
+            (SchemaType::u32(), Some("23"), None, false, false),
+            (
+                SchemaType::u32(),
+                Some("23"),
+                Some((SchemaType::u32(), SchemaValue::U32(0))),
+                false,
+                true,
+            ),
+            (
+                SchemaType::u32(),
+                Some("23"),
+                Some((
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                )),
+                false,
+                false,
+            ),
+            (
+                SchemaType::option(SchemaType::string()),
+                None,
+                None,
+                false,
+                true,
+            ),
+            (
+                SchemaType::option(SchemaType::string()),
+                None,
+                Some((
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                )),
+                false,
+                false,
+            ),
+            (
+                SchemaType::option(SchemaType::string()),
+                None,
+                None,
+                true,
+                false,
+            ),
+        ] {
+            let path = if nested {
+                vec!["group".into(), "value".into()]
+            } else {
+                vec!["value".into()]
+            };
+            let declaration = AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path,
+                value_type: ty,
+                default_value: default.map(|value| SchemaValue::U32(value.parse().unwrap())),
+            };
+            let captures = capture
+                .into_iter()
+                .map(|(ty, value)| TypedAgentConfigEntry {
+                    path: declaration.path.clone(),
+                    value: TypedSchemaValue::new(SchemaGraph::anonymous(ty), value),
+                })
+                .collect::<Vec<_>>();
+            let mut component = test_tool_component("owner", BTreeMap::new());
+            let mut agent = agent_type_with_secret_config(
+                AgentTypeName("Owner".into()),
+                vec![],
+                SchemaType::string(),
+            );
+            agent.config = vec![declaration.clone()];
+            component.metadata = if agent_owner {
+                ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    vec![],
+                    vec![agent.clone()],
+                    BTreeMap::from([(
+                        agent.type_name,
+                        AgentTypeProvisionConfig {
+                            initial_permissions: AgentTypeInitialPermissions::default()
+                                .to_polymorphic_card(),
+                            env: BTreeMap::new(),
+                            config: OwnerConfig::from_captures(captures),
+                            plugins: vec![],
+                            files: vec![],
+                        },
+                    )]),
+                )
+            } else {
+                component.metadata.with_component_config(
+                    ComponentConfigSchema {
+                        schema: SchemaGraph::empty(),
+                        declarations: vec![declaration],
+                    },
+                    ComponentProvisionConfig {
+                        config: OwnerConfig::from_captures(captures),
+                        ..Default::default()
+                    },
+                )
+            };
+            let context = DeploymentContext {
+                environment: test_environment(),
+                components: BTreeMap::from([(component.component_name.clone(), component)]),
+                http_api_deployments: BTreeMap::new(),
+                mcp_deployments: BTreeMap::new(),
+                registered_agent_types: HashMap::new(),
+            };
+            let mut errors = vec![];
+            context.validate_static_config(&mut errors);
+            assert_eq!(
+                errors.is_empty(),
+                accepted,
+                "agent={agent_owner}: {errors:?}"
+            );
+            assert!(errors.iter().all(|error| matches!(error, DeployValidationError::InvalidStaticConfig { agent_type_name, .. } if agent_type_name.is_some() == agent_owner)));
+        }
+    }
+}
+
 fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
     SecuritySchemeDetails {
         id: golem_common::model::security_scheme::SecuritySchemeId::new(),
@@ -787,7 +915,7 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
     let provision = |file| AgentTypeProvisionConfig {
         files: vec![file],
         env: BTreeMap::new(),
-        config: vec![],
+        config: Default::default(),
         plugins: vec![],
         initial_permissions: golem_common::model::card::PolymorphicCard {
             card_id: golem_common::model::card::CardId::new(),
@@ -1485,6 +1613,7 @@ fn agent_type_with_secret_config(
         snapshotting: Snapshotting::Disabled(Default::default()),
         config: vec![AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path,
             value_type,
         }],

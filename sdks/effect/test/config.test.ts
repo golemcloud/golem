@@ -46,10 +46,10 @@ describe("Config 1.6", () => {
         ["local", ["database", "port"]],
         ["secret", ["database", "password"]],
       ])
-      expect(compiled.declarations([4, 7, 9])).toEqual([
-        { source: "local", path: ["greeting"], valueType: 4 },
-        { source: "local", path: ["database", "port"], valueType: 7 },
-        { source: "secret", path: ["database", "password"], valueType: 9 },
+      expect(compiled.declarations([4, 7, 9])).toStrictEqual([
+        { source: "local", path: ["greeting"], valueType: 4, defaultValue: undefined },
+        { source: "local", path: ["database", "port"], valueType: 7, defaultValue: undefined },
+        { source: "secret", path: ["database", "password"], valueType: 9, defaultValue: undefined },
       ])
     }),
   )

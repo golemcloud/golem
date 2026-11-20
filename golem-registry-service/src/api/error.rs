@@ -163,7 +163,8 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpDeploymentUnknownSecurityScheme { .. } => {
             api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
         }
-        DeployValidationError::InvalidMcpImport { .. }
+        DeployValidationError::InvalidStaticConfig { .. }
+        | DeployValidationError::InvalidMcpImport { .. }
         | DeployValidationError::McpImportToolHasDefaultToolName { .. }
         | DeployValidationError::McpImportNotReadWithDefaultToolName { .. } => {
             api::error_code::deployment_validation::FAILED

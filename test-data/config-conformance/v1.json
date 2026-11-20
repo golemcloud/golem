@@ -1,0 +1,632 @@
+{
+  "version": 1,
+  "schemas": {
+    "reference": {
+      "graph": {
+        "defs": [
+          {
+            "id": "Settings",
+            "name": "Settings",
+            "body": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "label",
+                    "body": { "kind": "string", "value": {} }
+                  },
+                  { "name": "count", "body": { "kind": "u32", "value": {} } }
+                ]
+              }
+            }
+          },
+          {
+            "id": "Choice",
+            "name": "Choice",
+            "body": {
+              "kind": "union",
+              "value": {
+                "spec": {
+                  "branches": [
+                    {
+                      "tag": "Text",
+                      "body": { "kind": "string", "value": {} },
+                      "discriminator": {
+                        "rule": "prefix",
+                        "value": { "prefix": "selected:" }
+                      }
+                    },
+                    {
+                      "tag": "Other",
+                      "body": { "kind": "string", "value": {} },
+                      "discriminator": {
+                        "rule": "prefix",
+                        "value": { "prefix": "other:" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "root": { "kind": "record", "value": { "fields": [] } }
+      },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["settings"],
+          "value_type": { "kind": "ref", "value": { "id": "Settings" } },
+          "default_value": "{\"label\":\"code-default\",\"count\":31}"
+        },
+        {
+          "source": "Local",
+          "path": ["choice"],
+          "value_type": { "kind": "ref", "value": { "id": "Choice" } },
+          "default_value": "\"selected:value\""
+        },
+        {
+          "source": "Local",
+          "path": ["slots"],
+          "value_type": {
+            "kind": "tuple",
+            "value": {
+              "elements": [
+                {
+                  "kind": "option",
+                  "value": { "inner": { "kind": "s32", "value": {} } }
+                },
+                {
+                  "kind": "option",
+                  "value": { "inner": { "kind": "s32", "value": {} } }
+                },
+                { "kind": "string", "value": {} }
+              ]
+            }
+          },
+          "default_value": "[null,7,\"retained\"]"
+        },
+        {
+          "source": "Local",
+          "path": ["omitted"],
+          "value_type": {
+            "kind": "option",
+            "value": { "inner": { "kind": "string", "value": {} } }
+          }
+        }
+      ]
+    },
+    "recordUnion": {
+      "graph": {
+        "defs": [
+          {
+            "id": "Delivery",
+            "name": "Delivery",
+            "body": {
+              "kind": "union",
+              "value": {
+                "spec": {
+                  "branches": [
+                    {
+                      "tag": "mail",
+                      "body": {
+                        "kind": "record",
+                        "value": {
+                          "fields": [
+                            {
+                              "name": "kind",
+                              "body": { "kind": "string", "value": {} }
+                            },
+                            {
+                              "name": "address",
+                              "body": { "kind": "string", "value": {} }
+                            },
+                            {
+                              "name": "attempts",
+                              "body": { "kind": "u32", "value": {} }
+                            }
+                          ]
+                        }
+                      },
+                      "discriminator": {
+                        "rule": "field-equals",
+                        "value": { "fieldName": "kind", "literal": "mail" }
+                      }
+                    },
+                    {
+                      "tag": "queue",
+                      "body": {
+                        "kind": "record",
+                        "value": {
+                          "fields": [
+                            {
+                              "name": "kind",
+                              "body": { "kind": "string", "value": {} }
+                            },
+                            {
+                              "name": "queueName",
+                              "body": { "kind": "string", "value": {} }
+                            }
+                          ]
+                        }
+                      },
+                      "discriminator": {
+                        "rule": "field-equals",
+                        "value": { "fieldName": "kind", "literal": "queue" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "root": { "kind": "record", "value": { "fields": [] } }
+      },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["delivery"],
+          "value_type": { "kind": "ref", "value": { "id": "Delivery" } },
+          "default_value": "{\"kind\":\"mail\",\"address\":\"ops@example.test\",\"attempts\":3}"
+        }
+      ]
+    },
+    "recursive": {
+      "graph": {
+        "defs": [
+          {
+            "id": "Node",
+            "name": "Node",
+            "body": {
+              "kind": "record",
+              "value": {
+                "fields": [
+                  {
+                    "name": "displayName",
+                    "body": { "kind": "string", "value": {} }
+                  },
+                  {
+                    "name": "next",
+                    "body": {
+                      "kind": "option",
+                      "value": {
+                        "inner": { "kind": "ref", "value": { "id": "Node" } }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "root": { "kind": "record", "value": { "fields": [] } }
+      },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["tree"],
+          "value_type": { "kind": "ref", "value": { "id": "Node" } },
+          "default_value": "{\"displayName\":\"outer\",\"next\":{\"displayName\":\"inner\",\"next\":null}}"
+        }
+      ]
+    },
+    "canonicalName": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["maxChars"],
+          "value_type": { "kind": "u32", "value": {} },
+          "default_value": "19"
+        }
+      ]
+    },
+    "required": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["required"],
+          "value_type": { "kind": "string", "value": {} }
+        }
+      ]
+    },
+    "optionalDefault": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["optional"],
+          "value_type": {
+            "kind": "option",
+            "value": { "inner": { "kind": "string", "value": {} } }
+          },
+          "default_value": "\"from-code\""
+        }
+      ]
+    },
+    "emptyValues": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["enabled"],
+          "value_type": { "kind": "bool", "value": {} },
+          "default_value": "true"
+        },
+        {
+          "source": "Local",
+          "path": ["names"],
+          "value_type": {
+            "kind": "list",
+            "value": { "element": { "kind": "string", "value": {} } }
+          },
+          "default_value": "[\"from-code\"]"
+        },
+        {
+          "source": "Local",
+          "path": ["label"],
+          "value_type": { "kind": "string", "value": {} },
+          "default_value": "\"from-code\""
+        }
+      ]
+    },
+    "invalidDefault": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["count"],
+          "value_type": { "kind": "u32", "value": {} },
+          "default_value": "\"not-a-number\""
+        }
+      ]
+    },
+    "reservedName": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["$reserved"],
+          "value_type": { "kind": "string", "value": {} }
+        }
+      ]
+    },
+    "nestedSecret": {
+      "graph": { "root": { "kind": "record", "value": { "fields": [] } } },
+      "declarations": [
+        {
+          "source": "Local",
+          "path": ["payload"],
+          "value_type": {
+            "kind": "option",
+            "value": {
+              "inner": {
+                "kind": "list",
+                "value": {
+                  "element": {
+                    "kind": "secret",
+                    "value": {
+                      "spec": { "inner": { "kind": "string", "value": {} } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "staticCases": [
+    {
+      "id": "static/code-defaults",
+      "schema": "reference",
+      "catalog": {},
+      "layers": [],
+      "expected": {
+        "settings": { "label": "code-default", "count": 31 },
+        "choice": "selected:value",
+        "slots": [null, 7, "retained"],
+        "omitted": null
+      }
+    },
+    {
+      "id": "static/partial-record-and-zero",
+      "schema": "reference",
+      "catalog": {},
+      "layers": [{ "settings": { "count": 0 } }],
+      "expected": {
+        "settings": { "label": "code-default", "count": 0 },
+        "choice": "selected:value",
+        "slots": [null, 7, "retained"],
+        "omitted": null
+      }
+    },
+    {
+      "id": "static/exact-catalog-selector",
+      "schema": "reference",
+      "catalog": { "labels": { "support_default": "from-catalog" } },
+      "layers": [
+        { "settings": { "label": { "$config": "labels.support_default" } } }
+      ],
+      "expected": {
+        "settings": { "label": "from-catalog", "count": 31 },
+        "choice": "selected:value",
+        "slots": [null, 7, "retained"],
+        "omitted": null
+      }
+    },
+    {
+      "id": "static/positional-absence-and-branch",
+      "schema": "reference",
+      "catalog": {},
+      "layers": [{ "choice": "other:changed", "slots": [11, null, "third"] }],
+      "expected": {
+        "settings": { "label": "code-default", "count": 31 },
+        "choice": "other:changed",
+        "slots": [11, null, "third"],
+        "omitted": null
+      }
+    },
+    {
+      "id": "static/same-union-case-merges",
+      "schema": "recordUnion",
+      "catalog": {},
+      "layers": [{ "delivery": { "attempts": 0 } }],
+      "expected": {
+        "delivery": {
+          "kind": "mail",
+          "address": "ops@example.test",
+          "attempts": 0
+        }
+      }
+    },
+    {
+      "id": "static/discriminator-replaces-old-case",
+      "schema": "recordUnion",
+      "catalog": {},
+      "layers": [{ "delivery": { "kind": "queue", "queueName": "jobs" } }],
+      "expected": { "delivery": { "kind": "queue", "queueName": "jobs" } }
+    },
+    {
+      "id": "static/selected-discriminator",
+      "schema": "recordUnion",
+      "catalog": { "selectedKind": "queue" },
+      "layers": [
+        {
+          "delivery": {
+            "kind": { "$config": "selectedKind" },
+            "queueName": "selected-jobs"
+          }
+        }
+      ],
+      "expected": {
+        "delivery": { "kind": "queue", "queueName": "selected-jobs" }
+      }
+    },
+    {
+      "id": "static/recursive-default",
+      "schema": "recursive",
+      "catalog": {},
+      "layers": [],
+      "expected": {
+        "tree": {
+          "displayName": "outer",
+          "next": { "displayName": "inner", "next": null }
+        }
+      }
+    },
+    {
+      "id": "static/null-clears-default",
+      "schema": "optionalDefault",
+      "catalog": {},
+      "layers": [{ "optional": null }],
+      "expected": { "optional": null }
+    },
+    {
+      "id": "static/false-and-empty-are-supplied",
+      "schema": "emptyValues",
+      "catalog": {},
+      "layers": [{ "enabled": false, "names": [], "label": "" }],
+      "expected": { "enabled": false, "names": [], "label": "" }
+    },
+    {
+      "id": "static/canonical-field-name",
+      "schema": "canonicalName",
+      "catalog": {},
+      "layers": [{ "maxChars": 0 }],
+      "expected": { "maxChars": 0 }
+    },
+    {
+      "id": "errors/missing-required",
+      "schema": "required",
+      "catalog": {},
+      "layers": [],
+      "error": "missing config binding or value"
+    },
+    {
+      "id": "errors/wrong-field-case",
+      "schema": "canonicalName",
+      "catalog": {},
+      "layers": [{ "max_chars": 0 }],
+      "error": "unknown config field"
+    },
+    {
+      "id": "errors/wrong-catalog-case",
+      "schema": "reference",
+      "catalog": { "labels": { "support_default": "available" } },
+      "layers": [
+        { "settings": { "label": { "$config": "labels.Support_default" } } }
+      ],
+      "error": "unknown catalog path"
+    },
+    {
+      "id": "errors/broken-selector-not-default",
+      "schema": "reference",
+      "catalog": {},
+      "layers": [{ "settings": { "label": { "$config": "missing" } } }],
+      "error": "unknown catalog path"
+    },
+    {
+      "id": "errors/invalid-supplied-value-not-default",
+      "schema": "reference",
+      "catalog": {},
+      "layers": [{ "settings": { "count": "invalid" } }],
+      "error": "invalid supplied config value"
+    },
+    {
+      "id": "errors/missing-positional-element",
+      "schema": "reference",
+      "catalog": {},
+      "layers": [{ "slots": [null, "third"] }],
+      "error": "invalid supplied config value"
+    },
+    {
+      "id": "errors/invalid-canonical-default",
+      "schema": "invalidDefault",
+      "catalog": {},
+      "layers": [],
+      "error": "invalid code default"
+    },
+    {
+      "id": "errors/reserved-field-name",
+      "schema": "reservedName",
+      "catalog": {},
+      "layers": [],
+      "error": "leading '$'"
+    },
+    {
+      "id": "errors/recursive-secret-wrapper",
+      "schema": "nestedSecret",
+      "catalog": {},
+      "layers": [],
+      "error": "Secret"
+    }
+  ],
+  "sourceCases": [
+    {
+      "id": "source/omitted-shared-optional",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": {},
+      "layers": [],
+      "expected": { "kind": "captured-absence" }
+    },
+    {
+      "id": "source/later-catalog-does-not-attach",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": { "live": { "$kind": "shared", "$init": "later" } },
+      "layers": [],
+      "expected": { "kind": "captured-absence" }
+    },
+    {
+      "id": "source/bound-null-is-live",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": { "live": { "$kind": "shared", "$init": null } },
+      "layers": [{ "setting": { "$config": "live" } }],
+      "expected": { "kind": "shared", "catalogPath": ["live"] }
+    },
+    {
+      "id": "source/omission-preserves-inheritance",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": { "live": { "$kind": "shared", "$init": "present" } },
+      "layers": [{ "setting": { "$config": "live" } }, {}],
+      "expected": { "kind": "shared", "catalogPath": ["live"] }
+    },
+    {
+      "id": "source/broken-supplied-selector",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": {},
+      "layers": [{ "setting": { "$config": "missing" } }],
+      "error": "unknown catalog path"
+    },
+    {
+      "id": "source/anonymous-null-is-not-omission",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": {},
+      "layers": [{ "setting": null }],
+      "error": "Shared fields require"
+    },
+    {
+      "id": "source/static-is-not-shared",
+      "kind": "shared",
+      "type": {
+        "kind": "option",
+        "value": { "inner": { "kind": "string", "value": {} } }
+      },
+      "catalog": { "plain": null },
+      "layers": [{ "setting": { "$config": "plain" } }],
+      "error": "Shared fields require"
+    },
+    {
+      "id": "source/shared-list-needs-binding",
+      "kind": "shared",
+      "type": {
+        "kind": "list",
+        "value": { "element": { "kind": "string", "value": {} } }
+      },
+      "catalog": {},
+      "layers": [],
+      "error": "missing config binding or value"
+    },
+    {
+      "id": "source/secret-needs-binding",
+      "kind": "secret",
+      "type": { "kind": "string", "value": {} },
+      "catalog": {},
+      "layers": [],
+      "error": "missing config binding or value"
+    },
+    {
+      "id": "source/direct-secret",
+      "kind": "secret",
+      "type": { "kind": "string", "value": {} },
+      "catalog": { "credential": { "$kind": "secret" } },
+      "layers": [{ "setting": { "$secret": "credential" } }],
+      "expected": { "kind": "secret", "catalogPath": ["credential"] }
+    }
+  ],
+  "reference": {
+    "schema": "reference",
+    "agentType": "StaticDefaultsAgent",
+    "deployment": { "settings": { "label": "deployment", "count": 43 } },
+    "creation": { "settings": { "label": "creation", "count": 59 } },
+    "expectedDeploymentRead": {
+      "settings": { "label": "deployment", "count": 43 },
+      "choice": { "Text": "selected:value" },
+      "slots": [null, 7, "retained"],
+      "omitted": null
+    },
+    "expectedRead": {
+      "settings": { "label": "creation", "count": 59 },
+      "choice": { "Text": "selected:value" },
+      "slots": [null, 7, "retained"],
+      "omitted": null
+    }
+  }
+}

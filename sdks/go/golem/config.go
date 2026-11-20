@@ -24,6 +24,7 @@ import (
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Config and secrets.
@@ -75,10 +76,11 @@ import (
 // is Secret[T] so the schema graph carries a secret(inner) node; for local
 // config it is the value type directly.
 type configDecl struct {
-	source   common.AgentConfigSource
-	path     []string
-	typ      reflect.Type
-	restrict *engine.Restriction
+	source       common.AgentConfigSource
+	path         []string
+	typ          reflect.Type
+	restrict     *engine.Restriction
+	defaultValue witTypes.Option[types.SchemaValueTree]
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It
@@ -336,9 +338,10 @@ func (d *definitions) buildConfigDecls(g *engine.GraphBuilder, cds []configDecl)
 	out := make([]common.AgentConfigDeclaration, 0, len(cds))
 	for _, cd := range cds {
 		out = append(out, common.AgentConfigDeclaration{
-			Source:    cd.source,
-			Path:      cd.path,
-			ValueType: g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
+			Source:       cd.source,
+			Path:         cd.path,
+			ValueType:    g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
+			DefaultValue: cd.defaultValue,
 		})
 	}
 	return out

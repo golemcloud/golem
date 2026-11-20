@@ -24835,6 +24835,11 @@ components:
             type: string
         value_type:
           $ref: '#/components/schemas/SchemaType'
+        default_value:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
       required:
       - source
       - path
@@ -25101,9 +25106,7 @@ components:
           additionalProperties:
             type: string
         config:
-          type: array
-          items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+          $ref: '#/components/schemas/OwnerConfig'
         plugins:
           type: array
           items:
@@ -25646,9 +25649,7 @@ components:
           additionalProperties:
             type: string
         config:
-          type: array
-          items:
-            $ref: '#/components/schemas/TypedAgentConfigEntry'
+          $ref: '#/components/schemas/OwnerConfig'
         plugins:
           type: array
           items:
@@ -25778,6 +25779,23 @@ components:
         required:
         - kind
         - keys
+    ConfigSourceMetadata:
+      title: ConfigSourceMetadata
+      type: object
+      properties:
+        source:
+          description: Portable source label, not a local absolute path or initializer contents.
+          type: string
+        path:
+          type: array
+          items:
+            type: string
+        layer:
+          type: string
+      required:
+      - source
+      - path
+      - layer
     CorsOptions:
       title: CorsOptions
       type: object
@@ -28171,6 +28189,54 @@ components:
             $ref: '#/components/schemas/SchemaType'
         required:
         - tag
+        - value
+    OwnerConfig:
+      title: OwnerConfig
+      description: |-
+        Revisioned operational config. Source metadata is optional audit information;
+        consumers must not use it to resolve or authorize a value.
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/OwnerConfigEntry'
+        sourceMeta:
+          description: |-
+            JSON Pointer keys address fields and nested members without conflating
+            record member names, dotted declaration paths, or list indices.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ConfigSourceMetadata'
+      required:
+      - entries
+    OwnerConfigEntry:
+      title: OwnerConfigEntry
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        source:
+          $ref: '#/components/schemas/OwnerConfigSource'
+      required:
+      - path
+      - source
+    OwnerConfigSource:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - captured
+          value:
+            $ref: '#/components/schemas/TypedSchemaValue'
+        required:
+        - kind
         - value
     Page_AccountSummaryReport:
       title: Page_AccountSummaryReport

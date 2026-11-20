@@ -4227,6 +4227,7 @@ mod tests {
         agent_type.mode = AgentMode::Durable;
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["api".to_string(), "key".to_string()],
             value_type: SchemaType::string(),
         });
@@ -4288,6 +4289,7 @@ mod tests {
         };
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["settings".to_string()],
             value_type: SchemaType::ref_to(TypeId::new("settings")),
         });
@@ -4334,6 +4336,7 @@ mod tests {
         agent_type.mode = AgentMode::Durable;
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["config".to_string(), "path".to_string()],
             value_type: SchemaType::path(PathSpec {
                 direction: PathDirection::Input,
@@ -4383,6 +4386,7 @@ mod tests {
         agent_type.mode = AgentMode::Durable;
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["prompt".to_string()],
             value_type: golem_common::schema::unstructured::unstructured_text_schema_type(
                 golem_common::schema::schema_type::TextRestrictions::default(),
@@ -4424,6 +4428,7 @@ mod tests {
         agent_type.mode = AgentMode::Durable;
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["limits".to_string(), "retry-count".to_string()],
             value_type: SchemaType::U32 {
                 restrictions: Some(NumericRestrictions {
@@ -4483,6 +4488,7 @@ mod tests {
         };
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["api".to_string(), "key".to_string()],
             value_type: SchemaType::string(),
         });

@@ -18,6 +18,7 @@ package golem.config
 
 import golem.schema.IntoSchema
 import golem.schema.{SchemaGraph, SchemaType, SchemaTypeBody, SecretSpec}
+import golem.runtime.{AgentMetadata, AgentTypeKind, ConstructorMetadata, WireAgentMetadata}
 import zio.blocks.schema.Schema
 import zio.test._
 
@@ -67,6 +68,41 @@ object ConfigIntrospectionSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ConfigIntrospectionSpec")(
+      test("wire metadata preserves canonical defaults, absent defaults, and explicit null") {
+        val declarations = List(
+          AgentConfigDeclaration(
+            AgentConfigSource.Local,
+            List("db", "host"),
+            IntoSchema[String].graph,
+            Some(golem.schema.SchemaValue.StringValue("db.example"))
+          ),
+          AgentConfigDeclaration(
+            AgentConfigSource.Local,
+            List("optional"),
+            IntoSchema[Option[String]].graph,
+            Some(golem.schema.SchemaValue.OptionValue(None))
+          ),
+          AgentConfigDeclaration(AgentConfigSource.Secret, List("db", "password"), secretGraph[String])
+        )
+        val metadata = AgentMetadata(
+          "ConfiguredAgent",
+          AgentTypeKind.Regular,
+          None,
+          None,
+          Nil,
+          ConstructorMetadata(None, "", None),
+          config = declarations
+        )
+        val wire = WireAgentMetadata.fromModel(metadata)
+        assertTrue(
+          wire.config.map(_.defaultValue) == List(
+            Some(golem.schema.SchemaValue.StringValue("db.example")),
+            Some(golem.schema.SchemaValue.OptionValue(None)),
+            None
+          ),
+          wire.reflected.config == declarations
+        )
+      },
       suite("primitive root leaf")(
         test("String produces one local declaration") {
           val decls = ConfigIntrospection.declarations[String]()

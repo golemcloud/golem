@@ -31,6 +31,7 @@ test "collect_entries_of - primitive String is a LOCAL declaration" {
   )
   debug_inspect(entries.length(), content="1")
   debug_inspect(entries[0].source, content="LOCAL")
+  assert_eq(entries[0].default_value, None)
   debug_inspect(
     entries[0].path,
     content=(
@@ -56,6 +57,7 @@ test "collect_entries_of - Secret is a SECRET declaration over the inner type" {
   )
   debug_inspect(entries.length(), content="1")
   debug_inspect(entries[0].source, content="SECRET")
+  assert_eq(entries[0].default_value, None)
   debug_inspect(
     entries[0].value_type.root,
     content=(
@@ -99,11 +101,13 @@ test "wire configuration declarations share one type pool and preserve secret wr
     ["api", "key"],
   )
   assert_eq(local_entries[0].source, @common.AgentConfigSource::LOCAL)
+  assert_eq(local_entries[0].default_value, None)
   assert_eq(local_entries[0].path, ["limits", "max"])
   assert_eq(local_entries[0].value_type, 1)
   assert_eq(encoder.nodes[0].body, @types.U64Type(None))
   assert_eq(encoder.nodes[1].body, @types.OptionType(0))
   assert_eq(secret[0].source, @common.AgentConfigSource::SECRET)
+  assert_eq(secret[0].default_value, None)
   assert_eq(secret[0].path, ["api", "key"])
   assert_eq(secret[0].value_type, 3)
   assert_eq(encoder.nodes[2].body, @types.StringType)

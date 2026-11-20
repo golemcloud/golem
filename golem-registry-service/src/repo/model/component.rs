@@ -183,6 +183,7 @@ impl ComponentRevisionRecord {
             },
             config: provision
                 .config
+                .captures()
                 .iter()
                 .map(|entry| {
                     Ok((entry.path.join("."), NormalizedJsonValue::new(
@@ -239,6 +240,7 @@ impl ComponentRevisionRecord {
                             env: config.env.clone(),
                             config: config
                                 .config
+                                .captures()
                                 .iter()
                                 .map(|e| {
                                     Ok((

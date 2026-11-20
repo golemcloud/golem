@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::validated_to_anyhow;
+use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
+use crate::app::context::{BuildContext, validated_to_anyhow};
 
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
 use crate::command_handler::Handlers;
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::component::staging::ComponentStager;
+use crate::command_handler::config::prepare_static_config;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
@@ -27,9 +29,10 @@ use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::agent::{AgentActionError, AgentUpdateMode};
-use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
+use crate::model::app::{
+    ApplicationComponentSelectMode, BuildConfig, ComponentDependency, DynamicHelpSections,
+};
 use crate::model::app_raw;
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
@@ -63,6 +66,7 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
+use golem_common::cascade::property::Property;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
@@ -70,8 +74,8 @@ use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
-    AgentConfigEntryDto, AgentFilePath, ComponentId, ComponentName, ComponentRevision,
-    ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginPriority,
+    AgentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    InitialAgentFile, InstalledPlugin, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff;
@@ -135,9 +139,10 @@ impl ComponentCommandHandler {
                     self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
-                ComponentSubcommand::ManifestTrace { component_name } => {
-                    self.cmd_manifest_trace(component_name).await
-                }
+                ComponentSubcommand::ManifestTrace {
+                    component_name,
+                    resolved,
+                } => self.cmd_manifest_trace(component_name, resolved).await,
             }
         })
     }
@@ -337,37 +342,66 @@ impl ComponentCommandHandler {
     async fn cmd_manifest_trace(
         &self,
         _component_names: OptionalComponentNames,
+        resolved: bool,
     ) -> anyhow::Result<()> {
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        let views = self.prepare_manifest_traces(resolved).await?;
+
+        for view in views {
+            log_action(
+                "Showing",
+                format!(
+                    "manifest trace for {}",
+                    view.component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
+            self.ctx.log_handler().log_output(view)?;
+        }
+        Ok(())
+    }
+
+    async fn prepare_manifest_traces(
+        &self,
+        resolved: bool,
+    ) -> anyhow::Result<Vec<ComponentManifestTraceView>> {
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
         let component_names = app_ctx
             .application()
             .component_names()
             .cloned()
             .collect::<Vec<_>>();
+        let mut views = Vec::new();
         for component_name in component_names {
-            log_action(
-                "Showing",
-                format!(
-                    "manifest trace for {}",
-                    component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = self.ctx.log_handler().decorated_indent_primary();
-            self.ctx
-                .log_handler()
-                .log_output(ComponentManifestTraceView {
-                    component_name: component_name.clone(),
-                    properties: app_ctx
-                        .application()
-                        .component(&component_name)
-                        .layer_properties()
-                        .with_compacted_traces(),
-                })?
+            let resolved_config = if resolved {
+                let metadata = extract_and_store_component_metadata(
+                    &BuildContext::new(app_ctx, &BuildConfig::new()),
+                    &component_name,
+                )
+                .await
+                .context("Resolved manifest traces require built component Wasm; run `golem build` first")?;
+                Some(prepare_static_config(
+                    app_ctx.application(),
+                    &component_name,
+                    &metadata.agent_types,
+                    |_| true,
+                )?)
+            } else {
+                None
+            };
+            views.push(ComponentManifestTraceView {
+                component_name: component_name.clone(),
+                properties: app_ctx
+                    .application()
+                    .component(&component_name)
+                    .layer_properties()
+                    .with_compacted_traces(),
+                resolved_config,
+            });
         }
 
-        Ok(())
+        Ok(views)
     }
 
     pub async fn update_agents_by_components(
@@ -1945,6 +1979,18 @@ impl ComponentCommandHandler {
         let installed = app_ctx.installed_components.get(component_name);
         let wasm_path =
             installed.map_or_else(|| component.wasm(), |installed| installed.wasm_path.clone());
+        validate_component_config_root(
+            &component.config_schema().declarations,
+            &agent_types,
+            component.config().as_ref(),
+        )?;
+        let static_config = if deploy {
+            prepare_static_config(app_ctx.application(), component_name, &agent_types, |_| {
+                true
+            })?
+        } else {
+            Vec::new()
+        };
 
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
@@ -1963,13 +2009,6 @@ impl ComponentCommandHandler {
                 Ok(values.to_vec())
             }
         };
-        let config = |agent: &AgentTypeName, entries| {
-            if deploy {
-                resolve_config_values(component_name, agent, entries)
-            } else {
-                Ok(entries)
-            }
-        };
 
         for agent_type in &agent_types {
             let Some(resolved_agent) = resolved_agents.agent(&agent_type.type_name) else {
@@ -1986,10 +2025,11 @@ impl ComponentCommandHandler {
                 agent_type.type_name.clone(),
                 AgentTypeManifestProvisionConfig {
                     env: env(resolved_agent.env())?,
-                    config: config(
-                        &agent_type.type_name,
-                        materialize_agent_config_entries(agent_type, resolved_agent.config()),
-                    )?,
+                    config: static_config
+                        .iter()
+                        .filter(|field| field.agent_type.as_ref() == Some(&agent_type.type_name))
+                        .map(|field| field.config_entry())
+                        .collect(),
                     initial_card: resolved_agent
                         .initial_card()
                         .map(initial_permission_from_manifest_card)
@@ -2035,14 +2075,12 @@ impl ComponentCommandHandler {
             wasm_path,
             package_metadata: installed.map(|installed| installed.package_metadata.clone()),
             config_schema: component.config_schema().clone(),
-            component_config: config(
-                &AgentTypeName("component".to_string()),
-                materialize_config_entries(
-                    &component.config_schema().declarations,
-                    &agent_types,
-                    component.config().as_ref(),
-                )?,
-            )?,
+            component_config: static_config
+                .iter()
+                .filter(|field| field.agent_type.is_none())
+                .map(|field| field.config_entry())
+                .collect(),
+            static_config,
             component_initial_card: component
                 .initial_card()
                 .map(initial_permission_from_manifest_card)
@@ -3287,7 +3325,7 @@ fn resolve_secret_scope(
                         ));
                         continue;
                     }
-                    match crate::args::parse_agent_config_path(raw_path) {
+                    match golem_common::model::split_config_path(raw_path) {
                         Ok(segments) => {
                             canonical_paths.insert(
                                 CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments),
@@ -3342,7 +3380,7 @@ fn resolve_config_scope(
                         ));
                         continue;
                     }
-                    match crate::args::parse_agent_config_path(raw_path) {
+                    match golem_common::model::split_config_path(raw_path) {
                         Ok(segments) => canonical_paths.insert(
                             CanonicalAgentConfigPath::from_path_in_unknown_casing(&segments),
                         ),
@@ -3530,97 +3568,13 @@ fn resolve_plugin_parameters(
     )
 }
 
-fn resolve_config_values(
-    component_name: &ComponentName,
-    agent_type_name: &AgentTypeName,
-    entries: Vec<AgentConfigEntryDto>,
-) -> anyhow::Result<Vec<AgentConfigEntryDto>> {
-    let renderer = crate::command_handler::template::EnvVarRenderer::new();
-
-    let mut resolved_entries = Vec::with_capacity(entries.len());
-    let mut validation = ValidationBuilder::new();
-    validation.with_context(
-        vec![
-            ("component", component_name.to_string()),
-            ("agentType", agent_type_name.0.clone()),
-        ],
-        |validation| {
-            for entry in entries {
-                let raw_value: serde_json::Value = entry.value.clone().into();
-                match renderer.render_json_value(&raw_value) {
-                    Ok(resolved_value) => {
-                        resolved_entries.push(AgentConfigEntryDto {
-                            path: entry.path,
-                            value: resolved_value.into(),
-                        });
-                    }
-                    Err(err) => {
-                        let template = raw_value.to_string();
-                        let missing_env_vars = renderer.missing_env_vars(&template, &err);
-                        let path = entry.path.join(".");
-                        let error_message = if missing_env_vars.is_empty() {
-                            format!(
-                                "Failed to substitute environment variable(s) for config {}",
-                                path.log_color_highlight()
-                            )
-                        } else {
-                            format!(
-                                "Failed to substitute environment variable(s) ({}) for config {}",
-                                missing_env_vars
-                                    .iter()
-                                    .map(|key| key.log_color_highlight())
-                                    .join(", "),
-                                path.log_color_highlight()
-                            )
-                        };
-                        let mut context = vec![
-                            ("path", path),
-                            ("template", template),
-                            (
-                                "error",
-                                err.to_string().log_color_error_highlight().to_string(),
-                            ),
-                        ];
-                        if !missing_env_vars.is_empty() {
-                            context.push(("missing", missing_env_vars.join(", ")));
-                        }
-                        validation.with_context(context, |validation| {
-                            validation.add_error(error_message)
-                        });
-                    }
-                }
-            }
-        },
-    );
-
-    validated_to_anyhow(
-        &format!(
-            "Failed to prepare config values for component: {}",
-            component_name.as_str().log_color_highlight()
-        ),
-        validation.build(resolved_entries),
-        None,
-    )
-}
-
-fn materialize_agent_config_entries(
-    agent_type: &AgentTypeSchema,
-    config_root: Option<&serde_json::Value>,
-) -> Vec<AgentConfigEntryDto> {
-    let Some(config_root) = config_root else {
-        return vec![];
-    };
-
-    project_local_config_entries(&agent_type.config, config_root)
-}
-
-fn materialize_config_entries(
+fn validate_component_config_root(
     declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
     agent_types: &[AgentTypeSchema],
     config_root: Option<&serde_json::Value>,
-) -> anyhow::Result<Vec<AgentConfigEntryDto>> {
+) -> anyhow::Result<()> {
     let Some(config_root) = config_root else {
-        return Ok(vec![]);
+        return Ok(());
     };
 
     let agent_local_paths = agent_types
@@ -3629,9 +3583,7 @@ fn materialize_config_entries(
         .filter(|declaration| declaration.source == AgentConfigSource::Local)
         .map(|declaration| &declaration.path)
         .collect::<Vec<_>>();
-    validate_component_config(config_root, declarations, &agent_local_paths)?;
-
-    Ok(project_local_config_entries(declarations, config_root))
+    validate_component_config(config_root, declarations, &agent_local_paths)
 }
 
 fn validate_component_config(
@@ -3645,10 +3597,10 @@ fn validate_component_config(
     let undeclared = collect_unused_leaf_paths(config_root, |path| {
         declarations
             .iter()
-            .any(|declaration| path.starts_with(&declaration.path))
+            .any(|declaration| config_path_matches_declaration(path, &declaration.path))
             || agent_local_paths
                 .iter()
-                .any(|declaration| path.starts_with(declaration))
+                .any(|declaration| config_path_matches_declaration(path, declaration))
     });
     if !undeclared.is_empty() {
         bail!(
@@ -3673,20 +3625,11 @@ fn validate_component_config(
     Ok(())
 }
 
-fn project_local_config_entries(
-    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
-    config_root: &serde_json::Value,
-) -> Vec<AgentConfigEntryDto> {
-    declarations
-        .iter()
-        .filter(|decl| decl.source == AgentConfigSource::Local)
-        .filter_map(|decl| {
-            value_at_path(config_root, &decl.path).map(|value| AgentConfigEntryDto {
-                path: decl.path.clone(),
-                value: value.clone().into(),
-            })
-        })
-        .collect()
+fn config_path_matches_declaration(path: &[String], declaration: &[String]) -> bool {
+    path.starts_with(declaration)
+        || path
+            .split_last()
+            .is_some_and(|(last, group)| last == "$config" && declaration.starts_with(group))
 }
 
 fn collect_unused_agent_config_paths(
@@ -3707,7 +3650,7 @@ fn collect_unused_agent_config_paths(
     let mut unused = collect_unused_leaf_paths(config_root, |path| {
         declared_paths
             .iter()
-            .any(|declared_path| path.starts_with(declared_path))
+            .any(|declared_path| config_path_matches_declaration(path, declared_path))
     })
     .into_iter()
     .map(|path| path.join("."))
@@ -3768,9 +3711,7 @@ fn identity_read_warning(unreadable: &[&str]) -> String {
 
 #[cfg(test)]
 mod component_config_tests {
-    use super::{
-        materialize_config_entries, project_local_config_entries, validate_component_config,
-    };
+    use super::{validate_component_config, validate_component_config_root};
     use golem_common::model::agent::AgentConfigSource;
     use golem_common::schema::SchemaType;
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
@@ -3780,6 +3721,7 @@ mod component_config_tests {
     fn declaration(source: AgentConfigSource, path: &[&str]) -> AgentConfigDeclarationSchema {
         AgentConfigDeclarationSchema {
             source,
+            default_value: None,
             path: path.iter().map(|segment| segment.to_string()).collect(),
             value_type: SchemaType::string(),
         }
@@ -3787,8 +3729,8 @@ mod component_config_tests {
 
     #[test]
     fn zero_agent_component_rejects_undeclared_config() {
-        let error =
-            materialize_config_entries(&[], &[], Some(&json!({ "unknown": "value" }))).unwrap_err();
+        let error = validate_component_config_root(&[], &[], Some(&json!({ "unknown": "value" })))
+            .unwrap_err();
         assert!(error.to_string().contains("no local declaration"));
         assert!(error.to_string().contains("unknown"));
     }
@@ -3796,24 +3738,16 @@ mod component_config_tests {
     #[test]
     fn component_config_requires_object_root() {
         for root in [json!("invalid"), json!(["invalid"]), json!(null)] {
-            assert!(materialize_config_entries(&[], &[], Some(&root)).is_err());
+            assert!(validate_component_config_root(&[], &[], Some(&root)).is_err());
         }
-        assert!(
-            materialize_config_entries(&[], &[], None)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            materialize_config_entries(&[], &[], Some(&json!({})))
-                .unwrap()
-                .is_empty()
-        );
+        validate_component_config_root(&[], &[], None).unwrap();
+        validate_component_config_root(&[], &[], Some(&json!({}))).unwrap();
     }
 
     #[test]
     fn zero_agent_component_rejects_locally_supplied_secret() {
         let declarations = vec![declaration(AgentConfigSource::Secret, &["token"])];
-        let error = materialize_config_entries(
+        let error = validate_component_config_root(
             &declarations,
             &[],
             Some(&json!({ "token": "not-a-secret-reference" })),
@@ -3824,11 +3758,16 @@ mod component_config_tests {
     }
 
     #[test]
-    fn agent_only_default_is_valid_but_not_projected_to_component_config() {
+    fn agent_only_default_is_valid_component_config() {
         let agent_path = vec!["agent".to_string(), "prompt".to_string()];
         let root = json!({ "agent": { "prompt": "helpful" } });
         validate_component_config(&root, &[], &[&agent_path]).unwrap();
-        assert!(project_local_config_entries(&[], &root).is_empty());
+        validate_component_config(
+            &json!({"agent": {"$config": "prompts"}}),
+            &[],
+            &[&agent_path],
+        )
+        .unwrap();
     }
 }
 

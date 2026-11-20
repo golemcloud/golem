@@ -849,6 +849,22 @@ pub fn render_config_path(path: &[String]) -> String {
     path.join(".")
 }
 
+/// Split an exact dotted config path without CLI quoting, escaping or recasing.
+pub fn split_config_path(input: &str) -> anyhow::Result<Vec<String>> {
+    input
+        .split('.')
+        .map(|segment| {
+            if segment.is_empty() {
+                anyhow::bail!("empty path segment");
+            }
+            if segment.contains(['"', '\\']) {
+                anyhow::bail!("config paths do not support quoting or escaping");
+            }
+            Ok(segment.to_owned())
+        })
+        .collect()
+}
+
 #[cfg(feature = "full")]
 fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
     use heck::ToLowerCamelCase;

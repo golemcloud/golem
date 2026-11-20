@@ -28,7 +28,6 @@ use crate::model::app::{
     BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSource, BridgeSdkTargetSubject,
     ComponentDependency, CustomBridgeSdkTarget,
 };
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
@@ -39,6 +38,7 @@ use crate::model::tool_deployment::{
 };
 use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
+use golem_common::cascade::property::Property;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
@@ -2974,6 +2974,7 @@ components:
         };
         config_agent.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["limits".to_string()],
             value_type: SchemaType::quota_token(Default::default()),
         });
@@ -2999,6 +3000,7 @@ components:
         };
         agent.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
+            default_value: None,
             path: vec!["credentials".to_string()],
             value_type: SchemaType::secret(Default::default()),
         });

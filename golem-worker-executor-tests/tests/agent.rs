@@ -1143,6 +1143,106 @@ method_failure_test!(
 );
 
 #[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn static_config_defaults_and_creation_overrides_survive_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    check_static_config_reconstruction(last_unique_id, deps, agent_sdk_rust).await
+}
+
+async fn check_static_config_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    guest: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let reference = &corpus["reference"];
+    let agent_type = reference["agentType"].as_str().unwrap();
+    let entries = |layer: &str| {
+        reference[layer]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(path, value)| AgentConfigEntryDto {
+                path: vec![path.clone()],
+                value: value.clone().into(),
+            })
+            .collect()
+    };
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, guest)
+        .with_agent_config(agent_type, entries("deployment"))
+        .store()
+        .await?;
+    let agent_id = agent_key!(agent_type, "captured-defaults");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::new(),
+            entries("creation"),
+        )
+        .await?;
+    let deployed_agent_id = agent_key!(agent_type, "deployment-defaults");
+    let reads = [
+        (&deployed_agent_id, &reference["expectedDeploymentRead"]),
+        (&agent_id, &reference["expectedRead"]),
+    ];
+    for (id, expected) in reads {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(&actual)?,
+            expected
+        );
+    }
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    for (id, expected) in reads {
+        let actual = executor
+            .invoke_and_await_agent(&component, id, "read", data_value!())
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(&actual)?,
+            expected
+        );
+    }
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for entry in &oplog {
+        if let PublicOplogEntry::Start(_) = &entry.entry {
+            assert!(
+                oplog.iter().any(|terminal| matches!(
+                    &terminal.entry,
+                    PublicOplogEntry::End(end) if end.start_index == entry.oplog_index
+                )),
+                "config call at {} must have its recorded result",
+                entry.oplog_index
+            );
+        }
+    }
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        3,
+    );
+    Ok(())
+}
+
+#[test]
 #[tracing::instrument]
 async fn agent_self_rpc_is_not_allowed(
     last_unique_id: &LastUniqueId,

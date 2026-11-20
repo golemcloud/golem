@@ -21,6 +21,7 @@ import {
 } from 'golem:agent/host@2.0.0';
 import { SchemaRef } from '../src/schema/ref';
 import {
+  GraphEncoder,
   field,
   schemaGraphToWit,
   schemaValueToWit,
@@ -313,6 +314,52 @@ describe('agent reflection', () => {
 
     expect(vi.mocked(WasmRpc.getById).mock.calls.at(-1)).toEqual(['ReflectedEcho', ECHO_AGENT_ID]);
     expect(client.method('echo').definition.name).toBe('echo');
+  });
+
+  it.each([
+    undefined,
+    v.option(undefined),
+    v.option(v.string('null')),
+    v.option(v.string('hello\nworld')),
+  ])('preserves the raw config default %s through reflection', (defaultValue) => {
+    const registered = registeredType();
+    const encoder = new GraphEncoder(new Map());
+    encoder.encodeType(t.string());
+    const localType = encoder.encodeType(t.option(t.string()));
+    const secretType = encoder.encodeType(t.secret(t.string()));
+    registered.agentType.schema = encoder.finish();
+    registered.agentType.config = [
+      {
+        source: 'local',
+        path: ['service', 'label'],
+        valueType: localType,
+        defaultValue: defaultValue === undefined ? undefined : schemaValueToWit(defaultValue),
+      },
+      { source: 'secret', path: ['service', 'token'], valueType: secretType },
+    ];
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registered);
+
+    const reflected = getAgentType('ReflectedEcho')!;
+
+    expect(reflected.config[0]).toMatchObject({
+      source: 'local',
+      path: ['service', 'label'],
+      defaultValue,
+    });
+    const reflectedDefault = reflected.config[0].defaultValue;
+    if (reflectedDefault?.tag === 'option') {
+      const inner = reflectedDefault.value;
+      if (inner?.tag === 'string') {
+        inner.value = 'mutated';
+      }
+    }
+    expect(reflected.config[0].defaultValue).toEqual(defaultValue);
+    expect(reflected.config[0].schema.unpackJson(v.option(undefined))).toBeNull();
+    expect(reflected.config[1]).toMatchObject({
+      source: 'secret',
+      path: ['service', 'token'],
+      defaultValue: undefined,
+    });
   });
 
   it('rejects getById of an unknown or wrong-type ID with a typed not-found error', async () => {

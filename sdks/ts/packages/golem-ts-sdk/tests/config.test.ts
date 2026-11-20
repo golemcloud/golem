@@ -50,6 +50,7 @@ describe('agent config (single-record + s.secret marker)', () => {
     const at = get('configured')!;
     expect(at).toBeDefined();
     expect(at.config).toHaveLength(2);
+    expect(at.config.every((declaration) => declaration.defaultValue === undefined)).toBe(true);
 
     const byPath = Object.fromEntries(at.config.map((c) => [c.path.join('.'), c]));
 

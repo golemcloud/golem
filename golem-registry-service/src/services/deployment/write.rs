@@ -442,6 +442,8 @@ impl DeploymentWriteService {
         let mut errors = Vec::new();
         let mut warnings: Vec<super::DeployValidationWarning> = Vec::new();
 
+        deployment_context.validate_static_config(&mut errors);
+
         if data.replace_incompatible_agent_secrets && compatibility_check_enabled {
             errors.push(DeployValidationError::ResetOverrideRequiresCompatibilityCheckDisabled);
         }

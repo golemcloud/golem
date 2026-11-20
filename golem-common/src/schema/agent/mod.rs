@@ -534,6 +534,10 @@ pub struct AgentConfigDeclarationSchema {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaType,
+    /// Static data in `value_type`. `Some(SchemaValue::Option { inner: None })` is an
+    /// explicit optional default; `None` means that no default was declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<SchemaValue>,
 }
 
 /// Component-owned configuration declarations. Unlike an agent schema this contract can be
@@ -635,6 +639,17 @@ impl AgentTypeSchema {
                 &dependency.methods,
             )?;
         }
+        #[cfg(feature = "full")]
+        crate::schema::config::ConfigSchema::from_declarations(
+            &self.schema,
+            &self.config,
+            &crate::schema::config::ConfigOrigin {
+                file: format!("<{}>", self.type_name).into(),
+                path: vec!["config".into()],
+                layer: "code".into(),
+            },
+        )
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 }

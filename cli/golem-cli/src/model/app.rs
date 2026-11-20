@@ -21,15 +21,11 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
-use crate::model::cascade::error::StoreGetValueError;
-use crate::model::cascade::layer::Layer;
-use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::{OptionalProperty, OptionalPropertyTraceElem};
 use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
-use crate::model::cascade::store::Store;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
@@ -40,6 +36,10 @@ use crate::model::tool_deployment::{
 };
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
+use golem_common::cascade::error::StoreGetValueError;
+use golem_common::cascade::layer::Layer;
+use golem_common::cascade::property::Property;
+use golem_common::cascade::store::Store;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
@@ -52,6 +52,9 @@ use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddl
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::ComponentConfigSchema;
+use golem_common::schema::config::{
+    ConfigCatalogSources, ConfigError, ConfigFieldPlan, ConfigLayer, ConfigOrigin, ConfigSchema,
+};
 use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -883,6 +886,7 @@ pub struct Application {
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
     mcp_imports: BTreeMap<EnvironmentName, WithSource<Vec<app_raw::McpImport>>>,
+    config_catalogs: BTreeMap<EnvironmentName, ConfigCatalogSources>,
     agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
     retry_policy_defaults:
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
@@ -1369,6 +1373,27 @@ impl Application {
             .map(PathBuf::as_path)
     }
 
+    pub fn config_catalog(&self) -> Option<&ConfigCatalogSources> {
+        self.config_catalogs.get(self.environment_name())
+    }
+
+    /// Resolve owner inputs only after its declaration schema is available.
+    /// This does not provision resources or materialize runtime handles.
+    pub fn resolve_config(
+        &self,
+        schema: &ConfigSchema,
+        layers: &[ConfigLayer],
+        code_origin: &ConfigOrigin,
+    ) -> Result<Vec<ConfigFieldPlan>, ConfigError> {
+        schema.resolve(
+            self.config_catalogs
+                .get(self.environment_name())
+                .unwrap_or(&ConfigCatalogSources::default()),
+            layers,
+            code_origin,
+        )
+    }
+
     pub fn resolve_agents(
         &self,
         mapping: &BTreeMap<AgentTypeName, ComponentName>,
@@ -1428,16 +1453,21 @@ impl Application {
             .add_layer(AgentLayer {
                 id: base_component_id.clone(),
                 parents: vec![],
+                source: self.component(component_name).source().to_path_buf(),
                 properties: AgentLayerPropertiesKind::ComponentBase {
                     properties: Box::new(component_base),
                     tool_bindings: component_tool_bindings,
+                    config_layers: self
+                        .component(component_name)
+                        .layer_properties()
+                        .config_layers
+                        .clone(),
                     config: self
                         .component(component_name)
                         .layer_properties()
                         .config
                         .clone(),
                 },
-                source: self.component(component_name).source().to_path_buf(),
             })
             .map_err(|err| anyhow!(err.to_string()))
             .with_context(|| {
@@ -1514,6 +1544,7 @@ impl Application {
                         properties: AgentLayerPropertiesKind::ComponentTemplate {
                             properties: Box::new(template_agent_props),
                             tool_bindings: template_layer_props.tool_bindings.clone(),
+                            config_layers: template_layer_props.config_layers.clone(),
                             config: template_layer_props.config,
                         },
                     })
@@ -1658,6 +1689,11 @@ impl Application {
                     .map(|tool| &tool.declaration)
             })
             .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
+        let mut config_path = vec!["tools".to_owned()];
+        if declaration_override.is_some() {
+            config_path.push("middleware".into());
+        }
+        config_path.push(tool_name.to_string());
         let mut store = Store::new();
 
         let (mut latest_parent, template_apply_context) = match component_name {
@@ -1745,6 +1781,7 @@ impl Application {
                 properties: ToolLayerPropertiesKind::Common(Box::new(ToolLayerInput::from_raw(
                     declaration.value.tool_layer_properties(),
                     &declaration.source,
+                    &config_path,
                 ))),
             })
             .map_err(|error| anyhow!(error.to_string()))?;
@@ -1762,6 +1799,8 @@ impl Application {
                         presets: ToolLayerInput::from_raw_presets(
                             presets.env_presets,
                             &declaration.source,
+                            &config_path,
+                            APP_ENV_PRESET_PREFIX,
                         ),
                         default_preset: EMPTY_STR.to_string(),
                     }
@@ -1779,6 +1818,8 @@ impl Application {
                         presets: ToolLayerInput::from_raw_presets(
                             presets.custom_presets,
                             &declaration.source,
+                            &config_path,
+                            "",
                         ),
                         default_preset,
                     },
@@ -2648,12 +2689,55 @@ impl Layer for ComponentLayer {
                 selection,
                 properties.config_schema.value().clone(),
             );
+            if properties.config_schema.value().is_some() {
+                let mut path = vec![
+                    if id.is_template() {
+                        "componentTemplates"
+                    } else {
+                        "components"
+                    }
+                    .into(),
+                    id.name().to_owned(),
+                ];
+                if let Some(preset) = &preset {
+                    path.extend(["presets".into(), preset.clone()]);
+                }
+                path.push("configSchema".into());
+                value.config_schema_origin = Some(ConfigOrigin {
+                    file: self.source.clone(),
+                    path,
+                    layer: id.to_string(),
+                });
+            }
 
             value.node_http_routers.apply_layer(
                 id,
                 selection,
                 properties.node_http_routers.value().clone(),
             );
+            if let Some(config) = properties.config.value() {
+                let mut path = vec![
+                    if id.is_template() {
+                        "componentTemplates"
+                    } else {
+                        "components"
+                    }
+                    .into(),
+                    id.name().to_owned(),
+                ];
+                if let Some(preset) = &preset {
+                    path.extend(["presets".into(), preset.clone()]);
+                }
+                path.push("config".into());
+                value.config_layers.push(ConfigLayer {
+                    origin: ConfigOrigin {
+                        file: self.source.clone(),
+                        path,
+                        layer: id.to_string(),
+                    },
+                    value: config.clone(),
+                });
+            }
             if properties.node_http_routers.value().is_some() {
                 value.node_http_routers_origin = Some((self.source.clone(), id.clone(), preset));
             }
@@ -2751,6 +2835,10 @@ impl<'a> Agent<'a> {
 
     pub fn config(&self) -> Option<&JsonValue> {
         self.resolved.properties.config.as_ref()
+    }
+
+    pub fn config_layers(&self) -> &[ConfigLayer] {
+        &self.resolved.layer_properties.config_layers
     }
 
     pub fn config_source_at(&self, path: &[String]) -> Option<&Path> {
@@ -2965,11 +3053,16 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
+    #[serde(skip)]
+    pub config_schema_origin: Option<ConfigOrigin>,
     pub node_http_routers:
         OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
     #[serde(skip)]
     node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
+    #[serde(skip)]
     pub config: JsonProperty<ComponentLayer>,
+    #[serde(rename = "configInputs")]
+    pub config_layers: Vec<ConfigLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
@@ -3008,9 +3101,11 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
             config_schema: value.config_schema.into(),
+            config_schema_origin: None,
             node_http_routers: value.node_http_routers.into(),
             node_http_routers_origin: None,
             config: value.agent_properties.config.into(),
+            config_layers: Vec::new(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
@@ -3173,10 +3268,16 @@ enum ToolLayerPropertiesKind {
 struct ToolLayerInput {
     properties: app_raw::ToolLayerProperties,
     files: Vec<ToolProvisionFile>,
+    #[serde(skip)]
+    config_layers: Vec<ConfigLayer>,
 }
 
 impl ToolLayerInput {
-    fn from_raw(mut properties: app_raw::ToolLayerProperties, source: &Path) -> Self {
+    fn from_raw(
+        mut properties: app_raw::ToolLayerProperties,
+        source: &Path,
+        path: &[String],
+    ) -> Self {
         let files = properties
             .files
             .take()
@@ -3187,16 +3288,39 @@ impl ToolLayerInput {
                 file,
             })
             .collect();
-        Self { properties, files }
+        let config_layers = properties
+            .config
+            .iter()
+            .map(|value| ConfigLayer {
+                origin: ConfigOrigin {
+                    file: source.to_path_buf(),
+                    path: path.iter().cloned().chain(["config".into()]).collect(),
+                    layer: String::new(),
+                },
+                value: value.clone(),
+            })
+            .collect();
+        Self {
+            properties,
+            files,
+            config_layers,
+        }
     }
 
     fn from_raw_presets(
         presets: IndexMap<String, app_raw::ToolLayerProperties>,
         source: &Path,
+        path: &[String],
+        preset_prefix: &str,
     ) -> IndexMap<String, Self> {
         presets
             .into_iter()
-            .map(|(name, properties)| (name, Self::from_raw(properties, source)))
+            .map(|(name, properties)| {
+                let mut path = path.to_vec();
+                path.extend(["presets".into(), format!("{preset_prefix}{name}")]);
+                let input = Self::from_raw(properties, source, &path);
+                (name, input)
+            })
             .collect()
     }
 
@@ -3206,6 +3330,7 @@ impl ToolLayerInput {
             properties.file_sources.value().len()
         );
         Self {
+            config_layers: properties.config_layers.clone(),
             properties: app_raw::ToolLayerProperties {
                 config: properties.config.value().clone(),
                 env_merge_mode: None,
@@ -3297,6 +3422,13 @@ impl Layer for ToolLayer {
 
         for layer in property_layers_to_apply {
             let properties = &layer.properties;
+            for config in &layer.config_layers {
+                let mut config = config.clone();
+                if config.origin.layer.is_empty() {
+                    config.origin.layer = id.to_string();
+                }
+                value.config_layers.push(config);
+            }
             value
                 .config
                 .apply_layer(id, selection, properties.config.clone());
@@ -3338,6 +3470,8 @@ pub struct ToolLayerProperties {
     )]
     pub applied_layers: Vec<(ToolLayerId, Option<String>)>,
     config: JsonProperty<ToolLayer>,
+    #[serde(skip)]
+    pub config_layers: Vec<ConfigLayer>,
     env: MapProperty<ToolLayer, String, String>,
     plugins: VecProperty<ToolLayer, app_raw::PluginInstallation>,
     files: VecProperty<ToolLayer, ToolProvisionFile>,
@@ -3470,11 +3604,15 @@ enum AgentLayerPropertiesKind {
     ComponentBase {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<AgentLayer>,
+        #[serde(skip)]
+        config_layers: Vec<ConfigLayer>,
         config: JsonProperty<ComponentLayer>,
     },
     ComponentTemplate {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<ComponentLayer>,
+        #[serde(skip)]
+        config_layers: Vec<ConfigLayer>,
         config: JsonProperty<ComponentLayer>,
     },
     Common(Box<app_raw::AgentLayerProperties>),
@@ -3510,21 +3648,27 @@ impl Layer for AgentLayer {
             AgentLayerPropertiesKind::ComponentBase {
                 properties,
                 tool_bindings,
+                config_layers,
                 ..
             } => {
                 value.tool_bindings = tool_bindings.clone();
-                (vec![properties.as_ref()], None)
+                value.config_layers.extend(config_layers.clone());
+                (vec![(properties.as_ref(), None)], None)
             }
             AgentLayerPropertiesKind::ComponentTemplate {
                 properties,
                 tool_bindings,
+                config_layers,
                 ..
             } => {
                 value.tool_bindings.apply_template(&self.id, tool_bindings);
-                (vec![properties.as_ref()], None)
+                value.config_layers.extend(config_layers.clone());
+                (vec![(properties.as_ref(), None)], None)
             }
             AgentLayerPropertiesKind::Empty => (vec![], None),
-            AgentLayerPropertiesKind::Common(properties) => (vec![properties.as_ref()], None),
+            AgentLayerPropertiesKind::Common(properties) => {
+                (vec![(properties.as_ref(), None)], None)
+            }
             AgentLayerPropertiesKind::Presets {
                 presets,
                 default_preset,
@@ -3534,6 +3678,15 @@ impl Layer for AgentLayer {
                         presets
                             .get(&selector.environment.0)
                             .into_iter()
+                            .map(|properties| {
+                                (
+                                    properties,
+                                    Some(format!(
+                                        "{APP_ENV_PRESET_PREFIX}{}",
+                                        selector.environment.0
+                                    )),
+                                )
+                            })
                             .collect::<Vec<_>>(),
                         Some(format!("{APP_ENV_PRESET_PREFIX}{}", selector.environment.0)),
                     )
@@ -3550,14 +3703,18 @@ impl Layer for AgentLayer {
 
                     if selected.is_empty() {
                         (
-                            presets.get(default_preset).into_iter().collect::<Vec<_>>(),
+                            presets
+                                .get(default_preset)
+                                .map(|properties| (properties, Some(default_preset.clone())))
+                                .into_iter()
+                                .collect::<Vec<_>>(),
                             Some(default_preset.to_string()),
                         )
                     } else {
                         (
                             selected
                                 .iter()
-                                .map(|(preset, _)| *preset)
+                                .map(|(preset, name)| (*preset, Some((*name).to_owned())))
                                 .collect::<Vec<_>>(),
                             Some(selected.iter().map(|(_, name)| *name).join(", ")),
                         )
@@ -3572,7 +3729,26 @@ impl Layer for AgentLayer {
             value.applied_layers.push((id.clone(), selection.cloned()));
         }
 
-        for properties in property_layers_to_apply {
+        for (properties, preset) in property_layers_to_apply {
+            if let AgentLayerId::AgentCommon(name)
+            | AgentLayerId::AgentEnvironmentPresets(name)
+            | AgentLayerId::AgentCustomPresets(name) = id
+                && let Some(config) = &properties.config
+            {
+                let mut path = vec!["agents".into(), name.0.clone()];
+                if let Some(preset) = preset {
+                    path.extend(["presets".into(), preset]);
+                }
+                path.push("config".into());
+                value.config_layers.push(ConfigLayer {
+                    origin: ConfigOrigin {
+                        file: self.source.clone(),
+                        path,
+                        layer: id.to_string(),
+                    },
+                    value: config.clone(),
+                });
+            }
             match &self.properties {
                 AgentLayerPropertiesKind::ComponentBase { config, .. }
                 | AgentLayerPropertiesKind::ComponentTemplate { config, .. } => {
@@ -3634,6 +3810,8 @@ pub struct AgentLayerProperties {
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     config: JsonProperty<AgentLayer>,
+    #[serde(skip)]
+    config_layers: Vec<ConfigLayer>,
     initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
     env: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
@@ -4187,15 +4365,15 @@ mod app_builder {
         PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
-    use crate::model::cascade::error::StoreGetValueError;
-    use crate::model::cascade::property::Property;
-    use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
+    use golem_common::cascade::error::StoreGetValueError;
+    use golem_common::cascade::property::Property;
+    use golem_common::cascade::store::Store;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -4208,6 +4386,7 @@ mod app_builder {
     };
     use golem_common::model::tool::{BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL, DEFAULT_TOOLS};
     use golem_common::model::tool_middleware::ToolMiddlewareName;
+    use golem_common::schema::config::{ConfigCatalogSources, ConfigOrigin};
     use indexmap::IndexMap;
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map};
@@ -4622,6 +4801,8 @@ mod app_builder {
             BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
         mcp_imports: BTreeMap<EnvironmentName, WithSource<Vec<app_raw::McpImport>>>,
 
+        config_catalogs: BTreeMap<EnvironmentName, ConfigCatalogSources>,
+
         bridge_sdks: WithSource<BridgeSdks>,
 
         agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
@@ -4684,6 +4865,11 @@ mod app_builder {
             for app in apps {
                 builder.add_raw_app(&mut validation, app);
             }
+            for catalog in builder.config_catalogs.values() {
+                if let Err(error) = catalog.validate() {
+                    validation.add_error(error.to_string());
+                }
+            }
             builder.add_default_tools(&component_presets.environment);
 
             builder.validate_environment_preset_references(&mut validation);
@@ -4718,6 +4904,7 @@ mod app_builder {
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
                 mcp_imports: builder.mcp_imports,
+                config_catalogs: builder.config_catalogs,
                 agent_secrets_defaults: builder.agent_secret_defaults,
                 retry_policy_defaults: builder.retry_policy_defaults,
                 resource_definition_defaults: builder.resource_definition_defaults,
@@ -5171,6 +5358,17 @@ mod app_builder {
                     for (environment, releases) in app.application.tool_middleware_releases {
                         if self.add_entity_source(UniqueSourceCheckedEntityKey::ToolMiddlewareReleases(environment.clone()), &app.source) {
                             self.tool_middleware_releases.insert(environment, WithSource::new(app.source.to_path_buf(), releases));
+                        }
+                    }
+
+                    for (environment, catalog) in app.application.config {
+                        let origin = ConfigOrigin {
+                            file: app.source.clone(),
+                            path: vec!["config".into(), environment.0.clone()],
+                            layer: "catalog".into(),
+                        };
+                        if let Err(error) = self.config_catalogs.entry(environment).or_default().add(&catalog, &origin) {
+                            validation.add_error(error.to_string());
                         }
                     }
 
@@ -6399,14 +6597,18 @@ mod test {
         includes_from_yaml_file,
     };
     use crate::model::app_raw;
-    use crate::model::cascade::property::Property;
     use crate::model::language::GuestLanguage;
+    use golem_common::cascade::property::Property;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
     use golem_common::model::tool::ToolFilesystemAccess;
+    use golem_common::schema::config::{
+        ConfigFieldKind, ConfigFieldSchema, ConfigOrigin, ConfigSchema, ConfigSourcePlan,
+    };
+    use golem_common::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaValue};
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -6414,6 +6616,233 @@ mod test {
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
+
+    #[test]
+    fn config_catalog_resolves_retained_agent_and_tool_layers() {
+        let source = indoc! { r#"
+            app: catalog-app
+            environments:
+              local:
+                server: local
+            config:
+              local:
+                selected: CATALOG_BODY
+                live: { $kind: shared }
+            componentTemplates:
+              base:
+                config:
+                  setting: { left: 1, right: 2 }
+            components:
+              app:main:
+                templates: base
+                componentWasm: main.wasm
+            agents:
+              test-agent:
+                config:
+                  setting: { $config: selected }
+                presets:
+                  app-env:local:
+                    config: { integration: { $config: live } }
+            tools:
+              grep:
+                config:
+                  setting: { $config: selected }
+        "# };
+        let schema = ConfigSchema {
+            graph: SchemaGraph::empty(),
+            descriptors: BTreeMap::new(),
+            fields: vec![
+                ConfigFieldSchema {
+                    path: vec!["setting".into()],
+                    kind: ConfigFieldKind::Static,
+                    value_type: SchemaType::record(vec![
+                        NamedFieldType {
+                            name: "left".into(),
+                            body: SchemaType::u32(),
+                            metadata: Default::default(),
+                        },
+                        NamedFieldType {
+                            name: "right".into(),
+                            body: SchemaType::u32(),
+                            metadata: Default::default(),
+                        },
+                    ]),
+                    default: None,
+                },
+                ConfigFieldSchema {
+                    path: vec!["integration".into()],
+                    kind: ConfigFieldKind::Shared,
+                    value_type: SchemaType::option(SchemaType::string()),
+                    default: None,
+                },
+                ConfigFieldSchema {
+                    path: vec!["port".into()],
+                    kind: ConfigFieldKind::Static,
+                    value_type: SchemaType::u32(),
+                    default: Some(SchemaValue::U32(4000)),
+                },
+            ],
+        };
+        for (body, valid) in [("{ left: 13, right: 29 }", true), ("{ left: 13 }", false)] {
+            let (app, tmp) = load_app_for_env(&source.replace("CATALOG_BODY", body), "local", &[]);
+            let code = ConfigOrigin {
+                file: "metadata.wasm".into(),
+                path: vec![],
+                layer: "code".into(),
+            };
+            with_resolved_agent(&app, "app:main", "test-agent", |agent| {
+                let result = app.resolve_config(&schema, agent.config_layers(), &code);
+                assert_eq!(result.is_ok(), valid);
+                if let Ok(plan) = result {
+                    assert_eq!(
+                        plan[0].source,
+                        ConfigSourcePlan::Static(SchemaValue::Record {
+                            fields: vec![SchemaValue::U32(13), SchemaValue::U32(29)]
+                        })
+                    );
+                    assert_eq!(
+                        plan[1].source,
+                        ConfigSourcePlan::Shared {
+                            catalog_path: vec!["live".into()]
+                        }
+                    );
+                    assert_eq!(
+                        plan[1].origins[&vec!["integration".into()]].path,
+                        vec![
+                            "agents",
+                            "test-agent",
+                            "presets",
+                            "app-env:local",
+                            "config",
+                            "integration"
+                        ]
+                    );
+                    assert_eq!(
+                        plan[0].catalog_origin.as_ref().unwrap().file,
+                        tmp.path().join("golem.yaml")
+                    );
+                    assert_eq!(
+                        plan[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(4000))
+                    );
+                    assert_eq!(plan[2].origins[&vec!["port".into()]].layer, "code");
+                    let mut next_schema = schema.clone();
+                    next_schema.fields[2].default = Some(SchemaValue::U32(5000));
+                    let next = app
+                        .resolve_config(&next_schema, agent.config_layers(), &code)
+                        .unwrap();
+                    assert_eq!(next[0].source, plan[0].source);
+                    assert_eq!(
+                        next[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(5000))
+                    );
+                    assert_eq!(
+                        plan[2].source,
+                        ConfigSourcePlan::Static(SchemaValue::U32(4000))
+                    );
+                }
+            });
+            let tool = app
+                .resolve_tool_provision(
+                    &ToolName::try_from("grep").unwrap(),
+                    &parse_component_name("app:main"),
+                )
+                .unwrap();
+            let result = app.resolve_config(&schema, &tool.layer_properties.config_layers, &code);
+            assert_eq!(result.is_ok(), valid);
+            if let Ok(plan) = result {
+                assert_eq!(plan[1].source, ConfigSourcePlan::CapturedAbsence);
+            }
+        }
+    }
+
+    #[test]
+    fn config_catalog_sources_preserve_files_and_reject_duplicate_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root_source = tmp.path().join("golem.yaml");
+        let catalog_source = tmp.path().join("included.yaml");
+        for duplicate in [false, true] {
+            let mut root = indoc! {r#"
+                app: catalog-app
+                environments:
+                  local: { server: local }
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+                    config: { setting: { $config: values.port } }
+            "#}
+            .to_owned();
+            if duplicate {
+                root.push_str("\nconfig:\n  local:\n    values: { other: 19 }\n");
+            }
+            let apps = vec![
+                app_raw::ApplicationWithSource::from_yaml_string(root_source.clone(), &root)
+                    .unwrap(),
+                app_raw::ApplicationWithSource::from_yaml_string(
+                    catalog_source.clone(),
+                    "config:\n  local:\n    values: { port: 8123 }\n",
+                )
+                .unwrap(),
+            ];
+            let preload = Application::preload_from_raw_apps(&apps)
+                .into_product()
+                .0
+                .unwrap();
+            let (app, _, errors) = Application::from_raw_apps(
+                tmp.path().to_path_buf(),
+                preload.application_name,
+                preload.environments,
+                preload.local_server,
+                selector("local", &[]),
+                apps,
+            )
+            .into_product();
+            if duplicate {
+                assert!(
+                    errors
+                        .iter()
+                        .any(|error| error.contains("included.yaml:config.local.values")
+                            && error.contains("golem.yaml:config.local.values")),
+                    "{errors:?}"
+                );
+            } else {
+                assert!(errors.is_empty(), "{errors:?}");
+                let app = app.unwrap();
+                let schema = ConfigSchema {
+                    graph: SchemaGraph::empty(),
+                    descriptors: BTreeMap::new(),
+                    fields: vec![ConfigFieldSchema {
+                        path: vec!["setting".into()],
+                        kind: ConfigFieldKind::Static,
+                        value_type: SchemaType::u32(),
+                        default: None,
+                    }],
+                };
+                let code = ConfigOrigin {
+                    file: "metadata.wasm".into(),
+                    path: vec![],
+                    layer: "code".into(),
+                };
+                let component_name = parse_component_name("app:main");
+                let component = app.component(&component_name);
+                let plan = app
+                    .resolve_config(&schema, &component.layer_properties().config_layers, &code)
+                    .unwrap();
+                assert_eq!(
+                    plan[0].source,
+                    ConfigSourcePlan::Static(SchemaValue::U32(8123))
+                );
+                assert_eq!(
+                    plan[0].origins[&vec!["setting".into()]].file,
+                    catalog_source
+                );
+                assert_eq!(
+                    plan[0].origins[&vec!["setting".into()]].path,
+                    vec!["config", "local", "values", "port"]
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_layer_non_matching_defaults() {

@@ -5122,6 +5122,7 @@ mod tests {
         agent_type.mode = AgentMode::Durable;
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["settings".to_string()],
             value_type: SchemaType::option(SchemaType::string()),
         });
@@ -5294,6 +5295,7 @@ mod tests {
         let mut agent_type = minimal_agent_type("AlphaAgent");
         agent_type.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
+            default_value: None,
             path: vec!["foo".to_string()],
             value_type: SchemaType::string(),
         });

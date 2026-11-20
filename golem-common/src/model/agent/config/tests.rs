@@ -42,6 +42,7 @@ fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
                 source: AgentConfigSource::Local,
                 path: vec!["baseline".to_string(), "value".to_string()],
                 value_type: SchemaType::ref_to(type_id.clone()),
+                default_value: None,
             }],
         },
         Default::default(),

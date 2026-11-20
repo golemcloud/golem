@@ -18,6 +18,7 @@ use crate::log::LogColorize;
 use crate::model::app::{ComponentLayerId, ComponentLayerProperties, InitialComponentFile};
 use crate::model::app_raw;
 use crate::model::cli_output::StructuredOutput;
+use crate::model::config::StaticConfigFieldView;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::language::GuestLanguage;
 use crate::model::masking::{
@@ -219,8 +220,15 @@ impl Masked for ComponentView {
             }
 
             if let Some(secret_paths) = secret_config_paths_by_agent_type.get(&agent_type_name.0) {
-                provision_config.config =
-                    mask_typed_agent_config_entries(config, &provision_config.config, secret_paths);
+                provision_config.config.entries =
+                    golem_common::model::component_metadata::OwnerConfig::from_captures(
+                        mask_typed_agent_config_entries(
+                            config,
+                            &provision_config.config.captures(),
+                            secret_paths,
+                        ),
+                    )
+                    .entries;
             }
         }
 
@@ -502,6 +510,7 @@ pub struct ComponentDeployProperties {
     pub package_metadata: Option<golem_common::model::component::ComponentPackageMetadata>,
     pub config_schema: ComponentConfigSchema,
     pub component_config: Vec<AgentConfigEntryDto>,
+    pub static_config: Vec<crate::model::config::StaticConfigFieldView>,
     pub component_initial_card: Option<ParsedInitialPermissionCard>,
     pub component_env: BTreeMap<String, String>,
     pub component_files: Vec<InitialComponentFile>,
@@ -1317,8 +1326,8 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
             )
             .fmt_field_optional(
                 &format!("{}Agent config", prefix),
-                provision_config.config.as_slice(),
-                !provision_config.config.is_empty(),
+                provision_config.config.captures().as_slice(),
+                !provision_config.config.entries.is_empty(),
                 format_typed_config,
             )
             .fmt_field_optional(
@@ -1528,6 +1537,7 @@ impl StructuredOutput for ComponentGetView {
 pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
     pub properties: ComponentLayerProperties,
+    pub resolved_config: Option<Vec<StaticConfigFieldView>>,
 }
 
 impl StructuredOutput for ComponentManifestTraceView {
@@ -1545,17 +1555,14 @@ impl StructuredOutput for ComponentManifestTraceView {
 
 impl TextOutput for ComponentManifestTraceView {
     fn log(&self) {
-        log_manifest_trace_properties(&self.properties);
+        match self.to_masked_value(MaskingConfig::show_secrets()) {
+            Ok(value) => log_manifest_trace_value(&value),
+            Err(error) => logln(format!("<failed to render manifest trace: {error:#}>")),
+        }
     }
 
     fn log_masked(self, config: MaskingConfig) -> anyhow::Result<()> {
-        if config.show_secrets {
-            self.log();
-        } else {
-            let mut properties = serde_json::to_value(&self.properties)?;
-            mask_component_layer_properties(&mut properties);
-            log_manifest_trace_value(&properties);
-        }
+        log_manifest_trace_value(&self.to_masked_value(config)?);
         Ok(())
     }
 }
@@ -1563,25 +1570,23 @@ impl TextOutput for ComponentManifestTraceView {
 impl ComponentManifestTraceView {
     fn to_masked_value(&self, config: MaskingConfig) -> anyhow::Result<Value> {
         let mut value = serde_json::to_value(self)?;
-        if !config.show_secrets
-            && let Some(properties) = value
-                .as_object_mut()
-                .and_then(|object| object.get_mut("properties"))
-        {
-            mask_component_layer_properties(properties);
+        if !config.show_secrets {
+            if let Some(properties) = value.get_mut("properties") {
+                mask_component_layer_properties(properties);
+            }
+            if let Some(fields) = value
+                .get_mut("resolvedConfig")
+                .and_then(Value::as_array_mut)
+            {
+                for field in fields {
+                    if let Some(fill) = field.get_mut("fill") {
+                        mask_json_leaf_values(fill);
+                    }
+                }
+            }
         }
         Ok(value)
     }
-}
-
-fn log_manifest_trace_properties(properties: &ComponentLayerProperties) {
-    let rendered = if SHOULD_COLORIZE.should_colorize() {
-        to_colored_json(properties)
-    } else {
-        serde_json::to_string_pretty(properties).map_err(Into::into)
-    };
-
-    log_manifest_trace_rendered(rendered);
 }
 
 fn log_manifest_trace_value(properties: &Value) {
@@ -1610,8 +1615,18 @@ fn mask_component_layer_properties(properties: &mut Value) {
         return;
     };
 
-    if let Some(config) = properties.get_mut("config") {
-        mask_config_property_payloads(config);
+    if let Some(inputs) = properties
+        .get_mut("configInputs")
+        .and_then(Value::as_array_mut)
+    {
+        for input in inputs {
+            if let Some(value) = input.get_mut("value") {
+                mask_json_leaf_values(value);
+            }
+        }
+    }
+    if let Some(schema) = properties.get_mut("configSchema") {
+        mask_config_schema_defaults(schema);
     }
     if let Some(env) = properties.get_mut("env") {
         mask_sensitive_keyed_values(env);
@@ -1621,31 +1636,23 @@ fn mask_component_layer_properties(properties: &mut Value) {
     }
 }
 
-fn mask_config_property_payloads(value: &mut Value) {
+fn mask_config_schema_defaults(value: &mut Value) {
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                match key.as_str() {
-                    "value" | "newValue" => mask_json_leaf_values(value),
-                    "insertedEntries" | "updatedEntries" => mask_json_object_values(value),
-                    _ => mask_config_property_payloads(value),
+                if key == "default_value" {
+                    *value = serde_json::json!({ "kind": "string", "value": mask_secret() });
+                } else {
+                    mask_config_schema_defaults(value);
                 }
             }
         }
         Value::Array(values) => {
             for value in values {
-                mask_config_property_payloads(value);
+                mask_config_schema_defaults(value);
             }
         }
         _ => {}
-    }
-}
-
-fn mask_json_object_values(value: &mut Value) {
-    if let Some(object) = value.as_object_mut() {
-        for value in object.values_mut() {
-            mask_json_leaf_values(value);
-        }
     }
 }
 

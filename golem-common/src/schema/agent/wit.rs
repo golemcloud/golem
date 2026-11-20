@@ -48,7 +48,7 @@ use crate::schema::graph::SchemaGraph;
 use golem_schema::Empty;
 use golem_schema::schema::wit::{
     DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_metadata, decode_typed,
-    encode_metadata, encode_typed,
+    decode_value, encode_metadata, encode_typed, encode_value,
 };
 
 /// Generated `golem:agent/common@2.0.0` types used as the wire shape.
@@ -459,6 +459,7 @@ fn encode_config_declaration(
         source: c.source.into(),
         path: c.path.clone(),
         value_type,
+        default_value: c.default_value.as_ref().map(encode_value).transpose()?,
     })
 }
 
@@ -472,6 +473,7 @@ fn decode_config_declaration(
         source: c.source.into(),
         path: c.path.clone(),
         value_type,
+        default_value: c.default_value.as_ref().map(decode_value).transpose()?,
     })
 }
 
@@ -1230,6 +1232,7 @@ mod tests {
             source: AgentConfigSource::Local,
             path: vec!["api".to_string(), "key".to_string()],
             value_type: SchemaType::string(),
+            default_value: Some(crate::schema::SchemaValue::String("default-key".into())),
         }];
 
         AgentTypeSchema {

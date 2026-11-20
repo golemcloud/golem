@@ -9,8 +9,8 @@ import { AgentHostClient } from "../src/host/AgentHostClient.js"
 import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 import { getAgentType, getAgentTypeByAgentId, getAllAgentTypes } from "../src/Reflection.js"
 import { SchemaRef } from "../src/SchemaRef.js"
-import { emptyMetadata, field, t, type SchemaGraph } from "../src/internal/schema-model/model.js"
-import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
+import { emptyMetadata, field, t, v, type SchemaGraph } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { createScopeCard } from "../src/internal/scopeCard.js"
 import {
   agentIdFor,
@@ -258,6 +258,66 @@ describe("reflection", () => {
         ),
       ).toMatchObject({ _tag: "Failure", failure: { _tag: "RpcCallError", cause: conflict } })
     }).pipe(Effect.provide(Layer.mergeAll(host, rpc)))
+  })
+
+  it.effect("preserves canonical defaults and their owning schemas in discovery", () => {
+    const raw = registration()
+    const valueType = raw.agentType.schema.root
+    const optionalType = raw.agentType.schema.typeNodes.length
+    raw.agentType.schema.typeNodes.push({
+      body: { tag: "option-type", val: valueType },
+      metadata,
+    })
+    const defaultValue = schemaValueToWit(
+      v.record([
+        v.string("configured"),
+        v.option(v.record([v.string("last"), v.option(undefined)])),
+      ]),
+    )
+    raw.agentType.config = [
+      { path: ["service.config", "tree"], source: "local", valueType, defaultValue },
+      { path: ["absent"], source: "local", valueType: optionalType },
+      {
+        path: ["explicitNull"],
+        source: "local",
+        valueType: optionalType,
+        defaultValue: schemaValueToWit(v.option(undefined)),
+      },
+    ]
+    return Effect.gen(function* () {
+      const identity = agentIdFor("recursive")
+      const discoveries = [
+        (yield* getAgentType("Recursive"))!,
+        (yield* getAgentTypeByAgentId(identity))!,
+        (yield* getAllAgentTypes)[0]!,
+      ]
+      for (const reflected of discoveries) {
+        expect(
+          reflected.config.map(({ path, source, defaultValue }) => ({
+            path,
+            source,
+            defaultValue,
+          })),
+        ).toEqual([
+          { path: ["service.config", "tree"], source: "local", defaultValue },
+          { path: ["absent"], source: "local", defaultValue: undefined },
+          {
+            path: ["explicitNull"],
+            source: "local",
+            defaultValue: schemaValueToWit(v.option(undefined)),
+          },
+        ])
+        const declaration = reflected.config[0]!
+        expect(declaration.schema.graph.defs).toBe(reflected.constructorInput.graph.defs)
+        expect(declaration.schema.unpackJson(declaration.defaultValue!)).toEqual({
+          label: "configured",
+          next: { label: "last", next: null },
+        })
+        expect(Object.isFrozen(declaration)).toBe(true)
+        declaration.defaultValue!.valueNodes.pop()
+        expect(declaration.defaultValue).toEqual(defaultValue)
+      }
+    }).pipe(Effect.provide(hostLayer(raw)))
   })
 
   it.effect("validates reflected config before opening a scoped RPC connection", () => {
