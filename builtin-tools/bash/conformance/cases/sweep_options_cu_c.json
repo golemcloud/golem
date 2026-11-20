@@ -1,0 +1,5946 @@
+{
+  "tier": "sweep",
+  "description": "Option sweep, part C: seq, shuf, sleep, sort, split, stat, tac, tail, tee, touch, tr, truncate,\ntsort, uniq, unlink, wc, yes, rev, which, file and printf (the builtin, `command printf` and\n`env printf`).\n\nNondeterministic commands run only in deterministic forms: shuf with one candidate, `-n 0` or a\nfixed --random-source; sleep 0; stat on times that `touch -d` set. Error paths fold GNU's curly\nquotes into ASCII ones, as in part A.",
+  "cases": [
+    {
+      "name": "opt seq: operands 5",
+      "script": "seq 5",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 3 7",
+      "script": "seq 3 7",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 7 3",
+      "script": "seq 7 3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1 3 10",
+      "script": "seq 1 3 10",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 10 -3 1",
+      "script": "seq 10 -3 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 0.5 0.5 2",
+      "script": "seq 0.5 0.5 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1 0.1 1.3",
+      "script": "seq 1 0.1 1.3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands -2 2",
+      "script": "seq -2 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands -- -3 -1",
+      "script": "seq -- -3 -1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1e1 12",
+      "script": "seq 1e1 12",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 0x10 0x12",
+      "script": "seq 0x10 0x12",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1 1",
+      "script": "seq 1 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 2 1 1",
+      "script": "seq 2 1 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1.50 3",
+      "script": "seq 1.50 3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1.0 0.25 2",
+      "script": "seq 1.0 0.25 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands -1 -0.5 0",
+      "script": "seq -1 -0.5 0",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 9 1 11",
+      "script": "seq 9 1 11",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 5 -1 5",
+      "script": "seq 5 -1 5",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 1 10000000000 30000000000",
+      "script": "seq 1 10000000000 30000000000",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 0 0.000001 0.000003",
+      "script": "seq 0 0.000001 0.000003",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: operands 18446744073709551615 18446744073709551617",
+      "script": "seq 18446744073709551615 18446744073709551617",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -w 8 11",
+      "script": "seq -w 8 11",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -w -- -5 5",
+      "script": "seq -w -- -5 5",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -w 1 0.5 2",
+      "script": "seq -w 1 0.5 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -s , 1 4",
+      "script": "seq -s , 1 4",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -s '' 1 3",
+      "script": "seq -s '' 1 3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -s '\\n\\t' 1 3",
+      "script": "seq -s '\\n\\t' 1 3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option --separator=: 1 3",
+      "script": "seq --separator=: 1 3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option --equal-width 98 101",
+      "script": "seq --equal-width 98 101",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f %03g 8 11",
+      "script": "seq -f %03g 8 11",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f '%.2f' 1 0.5 2",
+      "script": "seq -f '%.2f' 1 0.5 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f '%e' 1 2",
+      "script": "seq -f '%e' 1 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f 'x%gy' 1 2",
+      "script": "seq -f 'x%gy' 1 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f '%%%g' 1 2",
+      "script": "seq -f '%%%g' 1 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option --format=%5.1f 1 2",
+      "script": "seq --format=%5.1f 1 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f %G 1e10 1e10",
+      "script": "seq -f %G 1e10 1e10",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f %a 1 1",
+      "script": "seq -f %a 1 1",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -s, -w 9 11",
+      "script": "seq -s, -w 9 11",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: option -f '%-5g|' 1 2",
+      "script": "seq -f '%-5g|' 1 2",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: zero increment",
+      "script": "{ seq 1 0 3; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: invalid number",
+      "script": "{ seq a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: missing operand",
+      "script": "{ seq; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: extra operand",
+      "script": "{ seq 1 2 3 4; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: format without directive",
+      "script": "{ seq -f abc 1 2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: format integer directive",
+      "script": "{ seq -f %d 1 2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: format two directives",
+      "script": "{ seq -f '%g %g' 1 2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: equal width with format",
+      "script": "{ seq -w -f %g 1 2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: nan",
+      "script": "{ seq nan; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: inf first",
+      "script": "seq inf 1; echo \"status=$?\"",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: head of infinite",
+      "script": "seq 1 inf | head -n 3",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: unknown option",
+      "script": "{ seq -q 1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.seq",
+        "cmd.seq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt seq: negative increment ascending",
+      "script": "seq 1 -1 3; echo \"status=$?\"",
+      "tags": [
+        "cmd.seq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: count zero",
+      "script": "printf 'a\\nb\\n' | shuf -n 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: single echo",
+      "script": "shuf -e only",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: single range",
+      "script": "shuf -i 5-5",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: repeat single",
+      "script": "shuf -r -n 3 -e x",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: repeat range single",
+      "script": "shuf -r -i 7-7 --head-count=2",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: empty input",
+      "script": "shuf </dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: single line file",
+      "script": "printf 'one\\n' >/tmp/f; shuf /tmp/f",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: zero terminated single",
+      "script": "shuf -z -e a | od -An -c",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: output file",
+      "script": "shuf -e z -o /tmp/out; cat /tmp/out",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: sorted output is a permutation",
+      "script": "seq 1 20 | shuf | sort -n | tr '\\n' ' '; echo",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: count bound",
+      "script": "seq 1 20 | shuf -n 5 | wc -l",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: range permutation",
+      "script": "shuf -i 1-9 | sort | tr -d '\\n'; echo",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: random source",
+      "script": "printf '%0200d' 0 >/tmp/r; seq 1 5 | shuf --random-source=/tmp/r",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: random source range",
+      "script": "printf '%0200d' 7 >/tmp/r; shuf -i 1-6 --random-source=/tmp/r",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: invalid range",
+      "script": "{ shuf -i 5-1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: range not numeric",
+      "script": "{ shuf -i a-b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: invalid count",
+      "script": "{ shuf -n x -e a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: echo and range",
+      "script": "{ shuf -e a -i 1-2; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: extra operand",
+      "script": "{ shuf /tmp/a /tmp/b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: missing file",
+      "script": "{ shuf /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: repeat without input",
+      "script": "{ shuf -r -n 2 </dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: random source missing",
+      "script": "{ shuf --random-source=/tmp/nosuch -e a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: negative count",
+      "script": "{ shuf -n -1 -e a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.shuf",
+        "cmd.shuf.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt shuf: count larger than input",
+      "script": "shuf -n 5 -e a",
+      "tags": [
+        "cmd.shuf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0",
+      "script": "sleep 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0.01",
+      "script": "sleep 0.01; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0s",
+      "script": "sleep 0s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0m",
+      "script": "sleep 0m; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0h",
+      "script": "sleep 0h; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0d",
+      "script": "sleep 0d; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0 0",
+      "script": "sleep 0 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval .001",
+      "script": "sleep .001; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 1e-3",
+      "script": "sleep 1e-3; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0x0",
+      "script": "sleep 0x0; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: interval 0.0s 0.0m",
+      "script": "sleep 0.0s 0.0m; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: invalid suffix",
+      "script": "{ sleep 1x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sleep",
+        "cmd.sleep.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: negative",
+      "script": "{ sleep -1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sleep",
+        "cmd.sleep.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: missing operand",
+      "script": "{ sleep; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sleep",
+        "cmd.sleep.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: invalid among valid",
+      "script": "{ sleep 0 x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sleep",
+        "cmd.sleep.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: empty operand",
+      "script": "{ sleep ''; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sleep",
+        "cmd.sleep.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: unknown option",
+      "script": "{ sleep --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sleep",
+        "cmd.sleep.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sleep: double dash",
+      "script": "sleep -- 0; echo \"status=$?\"",
+      "tags": [
+        "cmd.sleep"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option none",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort  /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -b",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -b /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -d",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -d /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -f",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -f /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -g",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -g /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -i",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -i /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -M",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -M /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -h",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -h /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -n",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -n /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -r",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -r /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -V",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -V /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -s",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -s /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -u",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -u /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -fu",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -fu /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -nr",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -nr /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -bn",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -bn /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -df",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -df /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -rf",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -rf /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --sort=numeric",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --sort=numeric /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --sort=general-numeric",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --sort=general-numeric /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --sort=human-numeric",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --sort=human-numeric /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --sort=month",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --sort=month /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --sort=version",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --sort=version /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --ignore-case --unique",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --ignore-case --unique /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -n -u",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -n -u /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --reverse --numeric-sort",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --reverse --numeric-sort /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -c",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -c /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -C",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -C /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --check=quiet",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --check=quiet /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --check=diagnose-first",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --check=diagnose-first /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --debug",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --debug /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -S 1K",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -S 1K /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --parallel=1",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --parallel=1 /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option --batch-size=2",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort --batch-size=2 /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: option -T /tmp",
+      "script": "printf 'banana\\nApple\\ncherry\\napple\\n10\\n9\\n 2\\n-1\\n' >/tmp/s; sort -T /tmp /tmp/s; echo \"status=$?\"",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2 /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2n",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2n /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2,2n",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2,2n /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2,2n -k1,1",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2,2n -k1,1 /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2,2nr -k3",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2,2nr -k3 /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k1.2",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k1.2 /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k3,3 -k1,1r",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k3,3 -k1,1r /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2n,2 -s",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2n,2 -s /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k 1,1 -u",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k 1,1 -u /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2,2 -t ' '",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2,2 -t ' ' /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k1,1 -k2,2n -r",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k1,1 -k2,2n -r /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2.1,2.1",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2.1,2.1 /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k3b",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k3b /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2,2g",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2,2g /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key -k2h,2",
+      "script": "printf 'b 2 x\\na 10 y\\nc 2 a\\na 1 z\\n' >/tmp/k; sort -k2h,2 /tmp/k",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: field separator",
+      "script": "printf 'x:3\\ny:1\\nz:2\\n' | sort -t: -k2n",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: field separator long",
+      "script": "printf 'x,3\\ny,1\\n' | sort --field-separator=, --key=2",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: separator tab",
+      "script": "printf 'a\\t2\\nb\\t1\\n' | sort -t \"$(printf '\\t')\" -k2",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: separator nul",
+      "script": "printf 'a\\0002\\nb\\0001\\n' | sort -t '\\0' -k2 | od -An -c",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: human numbers",
+      "script": "printf '1K\\n2M\\n512\\n1G\\n3k\\n' | sort -h",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: general numeric",
+      "script": "printf '1e3\\n-inf\\nnan\\n2.5\\n0x10\\n' | sort -g",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: month names",
+      "script": "printf 'mar\\nJan\\n  feb\\nxyz\\nDEC\\n' | sort -M",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: version sort",
+      "script": "printf 'a1.10\\na1.9\\na1.9a\\na1\\n' | sort -V",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: dictionary order",
+      "script": "printf 'a-c\\nab\\na c\\n' | sort -d",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: ignore nonprinting",
+      "script": "printf 'b\\na\\001c\\na\\n' | sort -i | od -An -c",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: unique with keys",
+      "script": "printf 'a 1\\na 2\\nb 1\\n' | sort -u -k1,1",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: stable",
+      "script": "printf 'b 1\\na 2\\nb 0\\na 1\\n' | sort -s -k1,1",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: last resort comparison",
+      "script": "printf 'b 1\\na 2\\nb 0\\na 1\\n' | sort -k1,1",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: zero terminated",
+      "script": "printf 'b\\0a\\0c\\0' | sort -z | od -An -c",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: output file",
+      "script": "printf 'b\\na\\n' >/tmp/f; sort -o /tmp/f /tmp/f; cat /tmp/f",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: output long",
+      "script": "printf 'b\\na\\n' | sort --output=/tmp/o; cat /tmp/o",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: merge",
+      "script": "printf 'a\\nc\\n' >/tmp/1; printf 'b\\nd\\n' >/tmp/2; sort -m /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: merge unsorted input",
+      "script": "printf 'c\\na\\n' >/tmp/1; printf 'b\\n' >/tmp/2; sort -m /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: several files",
+      "script": "printf 'c\\n' >/tmp/1; printf 'a\\nb\\n' >/tmp/2; sort /tmp/1 /tmp/2",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: files0 from",
+      "script": "printf 'c\\n' >/tmp/1; printf 'a\\n' >/tmp/2; printf '/tmp/1\\0/tmp/2\\0' >/tmp/l; sort --files0-from=/tmp/l",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: check disorder message",
+      "script": "{ printf 'a\\nc\\nb\\n' | sort -c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: check unique",
+      "script": "{ printf 'a\\na\\n' | sort -cu; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: check with file name",
+      "script": "{ printf 'b\\na\\n' >/tmp/f; sort -c /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: invalid key",
+      "script": "{ sort -k 0 /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: invalid key field char",
+      "script": "{ sort -k 1.x /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: incompatible options",
+      "script": "{ sort -n -g /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: multi-char separator",
+      "script": "{ sort -t ab /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: missing file",
+      "script": "{ sort /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: check two files",
+      "script": "{ sort -c /dev/null /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: invalid buffer size",
+      "script": "{ sort -S x /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: invalid sort word",
+      "script": "{ sort --sort=bogus /dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: random with source",
+      "script": "printf '%0100d' 0 >/tmp/r; printf 'a\\nb\\na\\n' | sort -R --random-source=/tmp/r | sort | uniq -c",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: reverse unique keeps first",
+      "script": "printf 'A\\na\\nb\\n' | sort -f -u -r",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: numeric with thousands",
+      "script": "printf '1,000\\n999\\n' | sort -n",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: numeric decimals and signs",
+      "script": "printf '+1\\n-0.5\\n.5\\n-.5\\n0\\n' | sort -n",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: blank lines",
+      "script": "printf 'b\\n\\na\\n\\n' | sort | od -An -c",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: no trailing newline",
+      "script": "printf 'b\\na' | sort",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: unknown option",
+      "script": "{ sort --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.sort",
+        "cmd.sort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key with leading blanks",
+      "script": "printf 'x   b\\nx a\\n' | sort -k2",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key with b modifier",
+      "script": "printf 'x   b\\nx a\\n' | sort -k2b",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: key end before start field",
+      "script": "printf 'a b\\nb a\\n' | sort -k2,1",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt sort: compress program refused or ignored",
+      "script": "printf 'b\\na\\n' | sort --compress-program=cat",
+      "tags": [
+        "cmd.sort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -l 3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l 3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -l3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --lines=4",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --lines=4 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -b 5",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -b 5 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -b 1K",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -b 1K in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --bytes=7",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --bytes=7 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -C 6",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -C 6 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --line-bytes=10",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --line-bytes=10 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n 3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n 3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n 2/3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n 2/3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n l/3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n l/3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n l/2/3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n l/2/3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n r/3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n r/3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n r/2/3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n r/2/3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -a 3 -l 5",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -a 3 -l 5 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -d -l 4",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -d -l 4 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --numeric-suffixes=5 -l 4",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --numeric-suffixes=5 -l 4 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -x -l 3",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -x -l 3 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --hex-suffixes=10 -l 4",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --hex-suffixes=10 -l 4 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --additional-suffix=.txt -l 5",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --additional-suffix=.txt -l 5 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -e -n 15",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -e -n 15 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -n 15",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n 15 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -t , -l 2",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -t , -l 2 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -u -n r/2",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -u -n r/2 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -d -a 1 -l 5",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -d -a 1 -l 5 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option --verbose -l 5",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --verbose -l 5 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: option -l 100",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l 100 in; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: prefix",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l 5 in part-; ls",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: stdin",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 4 | split -l 2; ls",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: stdin dash with prefix",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 4 | split -l 2 - pre; ls",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: separator chunks",
+      "script": "mkdir /tmp/p; cd /tmp/p; printf 'a,b,c,d' | split -t , -l 2; for f in x*; do printf '%s:' \"$f\"; tr '\\n' ' ' <\"$f\"; echo; done",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: nul separator",
+      "script": "mkdir /tmp/p; cd /tmp/p; printf 'a\\0b\\0c\\0' | split -t '\\0' -l 2; od -An -c xaa",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: chunk to stdout",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n 2/2 in",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: round robin to stdout",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n r/1/3 in",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: suffixes exhausted",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -a 1 -l 1 -b 1 in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: suffixes too short",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 30 | split -a 1 -l 1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: invalid lines",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l 0 in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: invalid bytes",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -b x in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: invalid chunks",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n 0 in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: chunk out of range",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -n 4/3 in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: two modes",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l 2 -b 3 in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: missing file",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: extra operand",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split in a b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: multi-char separator",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -t ab in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: suffix with slash",
+      "script": "{ mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split --additional-suffix=a/b in; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.split",
+        "cmd.split.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: filter",
+      "script": "mkdir /tmp/p; cd /tmp/p; seq 1 10 >in; split -l 5 --filter='cat >$FILE.f' in; ls",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt split: empty input",
+      "script": "mkdir /tmp/p; cd /tmp/p; split </dev/null; ls; echo \"status=$?\"",
+      "tags": [
+        "cmd.split"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %n",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%n' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %N",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%N' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %s",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%s' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %F",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%F' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %Y",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%Y' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %y",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%y' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %X",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%X' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %x",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%x' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %n:%s:%F",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%n:%s:%F' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %%",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%%' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %h",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%h' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format [%10n]",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '[%10n]' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format [%-10s]",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '[%-10s]' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %.3Y",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%.3Y' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %.9y",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%.9y' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %Hd",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%Hd' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %Lr",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%Lr' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format %q",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; TZ=UTC stat -c '%q' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format directory type",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c %F d",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format empty file type",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c %F e",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format symlink",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c '%F %N' l",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: dereference",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -L -c '%F %s' l",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: dereference long",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat --dereference -c '%F' l",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: printf escapes",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat --printf='%n\\t%s\\n' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: printf no newline",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat --printf='%s' f; echo",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format adds newline",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c '%s\\t' f | od -An -c",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: several files",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c '%n %s' f e",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: format long option",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat --format=%s f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: missing file",
+      "script": "{ stat /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.stat",
+        "cmd.stat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: missing continues",
+      "script": "{ mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c %n f nosuch e; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.stat",
+        "cmd.stat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: missing operand",
+      "script": "{ stat; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.stat",
+        "cmd.stat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: unknown directive",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c '%j' f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: stdin dash",
+      "script": "mkdir -p /tmp/st/d; cd /tmp/st; printf 12345 >f; printf '' >e; ln -s f l; touch -d '2001-02-03 04:05:06.5 UTC' f; stat -c %F - <f",
+      "tags": [
+        "cmd.stat"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt stat: unknown option",
+      "script": "{ stat --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.stat",
+        "cmd.stat.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: file",
+      "script": "printf 'a\\nb\\nc\\n' >/tmp/f; tac /tmp/f",
+      "tags": [
+        "cmd.tac"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: no trailing newline",
+      "script": "printf 'a\\nb' | tac | od -An -c",
+      "tags": [
+        "cmd.tac"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: two files",
+      "script": "printf '1\\n2\\n' >/tmp/a; printf '3\\n4\\n' >/tmp/b; tac /tmp/a /tmp/b",
+      "tags": [
+        "cmd.tac"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: stdin dash",
+      "script": "printf '1\\n2\\n' | tac -",
+      "tags": [
+        "cmd.tac"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: empty lines",
+      "script": "printf '\\n\\na\\n' | tac | od -An -c",
+      "tags": [
+        "cmd.tac"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: missing file",
+      "script": "{ tac /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tac",
+        "cmd.tac.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: separator",
+      "script": "{ printf 'a,b,c,' | tac -s ,; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tac",
+        "cmd.tac.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: before",
+      "script": "{ printf 'a\\nb\\n' | tac -b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tac",
+        "cmd.tac.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tac: empty input",
+      "script": "tac </dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.tac"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option none",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail  /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n 3",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n 3 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n +18",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n +18 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n 0",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n 0 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n +0",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n +0 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -c 6",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -c 6 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -c +50",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -c +50 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -c 0",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -c 0 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -3",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -3 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option +18",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail +18 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -2c",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -2c /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option --lines=2",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail --lines=2 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option --bytes=3",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail --bytes=3 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n 1K",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n 1K /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -q",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -q /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -v",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -v /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n 2 -v",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n 2 -v /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n -2",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n -2 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -c -4",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -c -4 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option --silent",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail --silent /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option --quiet",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail --quiet /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -n1",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n1 /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: option -c 1b",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -c 1b /tmp/n",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: two files",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n 1 /tmp/n /tmp/m",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: two files quiet",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -q -n 1 /tmp/n /tmp/m",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: stdin",
+      "script": "seq 1 5 | tail -n 2",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: stdin plus",
+      "script": "seq 1 5 | tail -n +4",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: zero terminated",
+      "script": "printf 'a\\0b\\0c\\0' | tail -z -n 2 | od -An -c",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: no trailing newline",
+      "script": "printf 'a\\nb\\nc' | tail -n 2 | od -An -c",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: missing file",
+      "script": "{ seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail /tmp/nosuch /tmp/m; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: invalid count",
+      "script": "{ tail -n x /tmp/n; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: directory",
+      "script": "{ mkdir /tmp/d; tail /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: retry without follow",
+      "script": "{ seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail --retry -n 1 /tmp/m; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: sleep without follow",
+      "script": "{ seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -s 1 -n 1 /tmp/m; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: pid without follow",
+      "script": "{ seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail --pid=1 -n 1 /tmp/m; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: huge count",
+      "script": "seq 1 20 >/tmp/n; seq 21 23 >/tmp/m; tail -n 99999999999999999999 /tmp/m",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: unknown option",
+      "script": "{ tail --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tail",
+        "cmd.tail.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tail: long lines",
+      "script": "printf '%0300d\\n%0300d\\n' 1 2 | tail -n 1 | wc -c",
+      "tags": [
+        "cmd.tail"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: files",
+      "script": "echo hi | tee /tmp/a /tmp/b; cat /tmp/a /tmp/b",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: append",
+      "script": "echo 1 >/tmp/a; echo 2 | tee -a /tmp/a >/dev/null; cat /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: append long",
+      "script": "echo 1 >/tmp/a; echo 2 | tee --append /tmp/a; cat /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: ignore interrupts",
+      "script": "echo x | tee -i /tmp/a; cat /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: no files",
+      "script": "echo x | tee",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: dash is a file",
+      "script": "cd /tmp; echo x | tee -; ls",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: missing directory continues",
+      "script": "{ echo x | tee /tmp/nosuch/a /tmp/b; echo \"status=$?\"; cat /tmp/b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tee",
+        "cmd.tee.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: p option",
+      "script": "echo x | tee -p /tmp/a; cat /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: output error warn",
+      "script": "echo x | tee --output-error=warn /tmp/a; cat /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: output error exit",
+      "script": "echo x | tee --output-error=exit /tmp/a; cat /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: output error invalid",
+      "script": "{ echo x | tee --output-error=bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tee",
+        "cmd.tee.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: directory operand",
+      "script": "{ mkdir /tmp/d; echo x | tee /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tee",
+        "cmd.tee.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: unknown option",
+      "script": "{ tee --bogus </dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tee",
+        "cmd.tee.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tee: binary data",
+      "script": "printf '\\000\\377' | tee /tmp/a | od -An -tx1; od -An -tx1 /tmp/a",
+      "tags": [
+        "cmd.tee"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date 2001-02-03",
+      "script": "TZ=UTC touch -d '2001-02-03' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date 2001-02-03 04:05:06",
+      "script": "TZ=UTC touch -d '2001-02-03 04:05:06' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date 2001-02-03T04:05:06Z",
+      "script": "TZ=UTC touch -d '2001-02-03T04:05:06Z' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date @1000000000",
+      "script": "TZ=UTC touch -d '@1000000000' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date 2001-02-03 04:05:06.123456789 UTC",
+      "script": "TZ=UTC touch -d '2001-02-03 04:05:06.123456789 UTC' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date Feb 3 2001 UTC",
+      "script": "TZ=UTC touch -d 'Feb 3 2001 UTC' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date 2001-02-03 +1 day",
+      "script": "TZ=UTC touch -d '2001-02-03 +1 day' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date 2001-02-03 04:05 +0200",
+      "script": "TZ=UTC touch -d '2001-02-03 04:05 +0200' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp 200102030405",
+      "script": "TZ=UTC touch -t 200102030405 /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp 0102030405",
+      "script": "TZ=UTC touch -t 0102030405 /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp 02030405",
+      "script": "TZ=UTC touch -t 02030405 /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp 200102030405.06",
+      "script": "TZ=UTC touch -t 200102030405.06 /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp 02030405.59",
+      "script": "TZ=UTC touch -t 02030405.59 /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp 197001010000.00",
+      "script": "TZ=UTC touch -t 197001010000.00 /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: creates",
+      "script": "touch /tmp/f; [ -f /tmp/f ] && wc -c </tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: no create",
+      "script": "touch -c /tmp/f; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: no create long",
+      "script": "touch --no-create /tmp/f; ls /tmp",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: reference",
+      "script": "touch -d @1000000000 /tmp/r; touch -r /tmp/r /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: reference long",
+      "script": "touch -d @1000000000 /tmp/r; touch --reference=/tmp/r /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: reference with date adjustment",
+      "script": "touch -d @1000000000 /tmp/r; touch -r /tmp/r -d '+1 hour' /tmp/f; TZ=UTC stat -c '%y' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: modification only",
+      "script": "touch -d @1000000000 /tmp/f; touch -m -d @2000000000 /tmp/f; TZ=UTC stat -c '%Y %X' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: access only",
+      "script": "touch -d @1000000000 /tmp/f; touch -a -d @2000000000 /tmp/f; TZ=UTC stat -c '%Y %X' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: time word",
+      "script": "touch -d @1000000000 /tmp/f; touch --time=mtime -d @3 /tmp/f; stat -c '%Y %X' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: time word access",
+      "script": "touch -d @1000000000 /tmp/f; touch --time=atime -d @3 /tmp/f; stat -c '%Y %X' /tmp/f",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: f ignored",
+      "script": "touch -f /tmp/f; echo \"status=$?\"",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: no dereference",
+      "script": "cd /tmp; touch -d @5 t; ln -s t l; touch -h -d @9 l; stat -c %Y t",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: dereference by default",
+      "script": "cd /tmp; touch -d @5 t; ln -s t l; touch -d @9 l; stat -c %Y t",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: several files",
+      "script": "touch -d @7 /tmp/a /tmp/b; stat -c '%n %Y' /tmp/a /tmp/b",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: invalid date",
+      "script": "{ touch -d 'not a date' /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: invalid stamp",
+      "script": "{ touch -t 20011 /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: stamp bad seconds",
+      "script": "{ touch -t 200102030405.61 /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: missing reference",
+      "script": "{ touch -r /tmp/nosuch /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: missing operand",
+      "script": "{ touch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: missing directory",
+      "script": "{ touch /tmp/nosuch/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: invalid time word",
+      "script": "{ touch --time=bogus /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: date and stamp",
+      "script": "{ touch -d @1 -t 200101010000 /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.touch",
+        "cmd.touch.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: obsolete stamp operand",
+      "script": "touch 01020304 /tmp/f; ls /tmp",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt touch: directory",
+      "script": "mkdir /tmp/d; touch -d @8 /tmp/d; stat -c %Y /tmp/d",
+      "tags": [
+        "cmd.touch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments a-z A-Z",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr a-z A-Z",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '[:lower:]' '[:upper:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '[:lower:]' '[:upper:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '[:upper:]' '[:lower:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '[:upper:]' '[:lower:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:digit:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:digit:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:alpha:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:alpha:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:alnum:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:alnum:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:space:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:space:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:blank:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:blank:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:punct:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:punct:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:cntrl:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:cntrl:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:print:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:print:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:graph:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:graph:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d '[:xdigit:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d '[:xdigit:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -s ' '",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -s ' '",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -s '[:space:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -s '[:space:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -c '[:alnum:]' _",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -c '[:alnum:]' _",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -cd '[:alpha:]\\n'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -cd '[:alpha:]\\n'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -cs '[:alpha:]' '\\n'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -cs '[:alpha:]' '\\n'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -ds l ' '",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -ds l ' '",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -t abcdefgh 12",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -t abcdefgh 12",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments abcdef 12",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr abcdef 12",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments lo 'x*'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr lo 'x*'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments lo '[x*]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr lo '[x*]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments 'lo' '[x*1]y'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr 'lo' '[x*1]y'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments a-e '[=a=]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr a-e '[=a=]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '[=l=]' L",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '[=l=]' L",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '\\t' T",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '\\t' T",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '\\n' ' '",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '\\n' ' '",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments ' ' '\\012'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr ' ' '\\012'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '\\054' ';'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '\\054' ';'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -s 'l'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -s 'l'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -s lo LO",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -s lo LO",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments o-l x",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr o-l x",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments 'H-L' 'h-l'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr 'H-L' 'h-l'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d ', !'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d ', !'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '[:upper:][:digit:]' 'X'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '[:upper:][:digit:]' 'X'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -C '[:alpha:]' '.'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -C '[:alpha:]' '.'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments --delete l",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr --delete l",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments --squeeze-repeats ' '",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr --squeeze-repeats ' '",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments --complement --delete 'a-z\\n'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr --complement --delete 'a-z\\n'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments --truncate-set1 'lo' 'x'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr --truncate-set1 'lo' 'x'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '\\\\' x",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '\\\\' x",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments 'a\\-z' _",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr 'a\\-z' _",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -- -a _",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -- -a _",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '[a*3]' x",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '[a*3]' x",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments 0-9 '[#*]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr 0-9 '[#*]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '[:lower:]' '[:lower:]'",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '[:lower:]' '[:lower:]'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments -d 'a-z' A-Z",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr -d 'a-z' A-Z",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '\\101' x",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '\\101' x",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: arguments '\\x41' x",
+      "script": "printf 'Hello, World! 123\\tTabs\\n  spaced  out  \\n' | tr '\\x41' x",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: missing operand",
+      "script": "{ echo x | tr; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: missing second set",
+      "script": "{ echo x | tr a; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: extra operand",
+      "script": "{ echo x | tr a b c; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: delete with two sets",
+      "script": "{ echo x | tr -d a b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: invalid class",
+      "script": "{ echo x | tr '[:bogus:]' x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: reversed range",
+      "script": "{ echo x | tr z-a x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: class in set2",
+      "script": "{ echo x | tr a '[:digit:]'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: upper to digit",
+      "script": "{ echo x | tr '[:upper:]' '[:digit:]'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: repeat in set1",
+      "script": "{ echo x | tr '[a*]' x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: two repeats in set2",
+      "script": "{ echo x | tr ab '[x*][y*]'; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: empty set2",
+      "script": "{ echo x | tr a ''; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: equivalence multiple chars",
+      "script": "{ echo x | tr '[=ab=]' x; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: trailing backslash",
+      "script": "echo 'a\\' | tr '\\' x; echo \"status=$?\"",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: multibyte input",
+      "script": "printf 'été\\n' | tr t T",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: multibyte set",
+      "script": "printf 'été\\n' | tr 'é' e | od -An -c",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: file operand rejected",
+      "script": "{ printf 'x\\n' >/tmp/f; tr a b /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: nul bytes",
+      "script": "printf 'a\\0b\\0' | tr '\\0' '\\n'",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: high bytes",
+      "script": "printf '\\377\\200' | tr '\\377' 'x' | od -An -c",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: set1 longer than set2",
+      "script": "echo abcd | tr abcd xy",
+      "tags": [
+        "cmd.tr"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tr: unknown option",
+      "script": "{ echo x | tr --bogus a b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tr",
+        "cmd.tr.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 0",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '0' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 4",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '4' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 20",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '20' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size +5",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '+5' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size -3",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '-3' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size <5",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '<5' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size <20",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '<20' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size >5",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '>5' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size >20",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '>20' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size /4",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '/4' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size %4",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '%4' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 1K",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '1K' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 1KB",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '1KB' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 2k",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '2k' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size 0x10",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s '0x10' /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: size long",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate --size=3 /tmp/f; cat /tmp/f; echo",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: extends with zeros",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s 12 /tmp/f; od -An -c /tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: creates",
+      "script": "truncate -s 3 /tmp/new; wc -c </tmp/new",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: no create",
+      "script": "truncate -c -s 3 /tmp/new; echo \"status=$?\"; ls /tmp",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: reference",
+      "script": "printf 'abcdefghij' >/tmp/f; printf abc >/tmp/r; truncate -r /tmp/r /tmp/f; cat /tmp/f; echo",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: reference relative",
+      "script": "printf 'abcdefghij' >/tmp/f; printf abc >/tmp/r; truncate -r /tmp/r -s +2 /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: several files",
+      "script": "printf 'abcdefghij' >/tmp/f; cp /tmp/f /tmp/g; truncate -s 2 /tmp/f /tmp/g; cat /tmp/f /tmp/g; echo",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: missing size",
+      "script": "{ printf 'abcdefghij' >/tmp/f; truncate /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: invalid size",
+      "script": "{ printf 'abcdefghij' >/tmp/f; truncate -s x /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: missing operand",
+      "script": "{ truncate -s 1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: missing reference",
+      "script": "{ printf 'abcdefghij' >/tmp/f; truncate -r /tmp/nosuch /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: missing directory",
+      "script": "{ truncate -s 1 /tmp/nosuch/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: directory operand",
+      "script": "{ mkdir /tmp/d; truncate -s 1 /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: negative absolute",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -s -20 /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: division by zero",
+      "script": "{ printf 'abcdefghij' >/tmp/f; truncate -s /0 /tmp/f; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.truncate",
+        "cmd.truncate.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt truncate: io blocks",
+      "script": "printf 'abcdefghij' >/tmp/f; truncate -o -s 0 /tmp/f; wc -c </tmp/f",
+      "tags": [
+        "cmd.truncate"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: pairs",
+      "script": "printf 'a b\\nb c\\na d\\n' | tsort",
+      "tags": [
+        "cmd.tsort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: self pair",
+      "script": "printf 'a a\\nb b\\n' | tsort",
+      "tags": [
+        "cmd.tsort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: cycle",
+      "script": "{ printf 'a b\\nb a\\n' | tsort; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tsort",
+        "cmd.tsort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: cycle with others",
+      "script": "{ printf 'x y\\na b\\nb c\\nc a\\n' | tsort; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tsort",
+        "cmd.tsort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: odd tokens",
+      "script": "{ echo a b c | tsort; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tsort",
+        "cmd.tsort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: file operand",
+      "script": "printf '1 2\\n2 3\\n' >/tmp/t; tsort /tmp/t",
+      "tags": [
+        "cmd.tsort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: missing file",
+      "script": "{ tsort /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tsort",
+        "cmd.tsort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: extra operand",
+      "script": "{ tsort /tmp/a /tmp/b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.tsort",
+        "cmd.tsort.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: tokens across lines",
+      "script": "printf 'a\\nb c\\nd\\n' | tsort",
+      "tags": [
+        "cmd.tsort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: empty input",
+      "script": "tsort </dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.tsort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt tsort: tabs and spaces",
+      "script": "printf 'a\\t\\tb\\n  b   c\\n' | tsort",
+      "tags": [
+        "cmd.tsort"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option none",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq  /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -c",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -c /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -d",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -d /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -D",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -D /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -u",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -u /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -i",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -i /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -ic",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -ic /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -f 1",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -f 1 /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -f1 -c",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -f1 -c /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -s 1",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -s 1 /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -s 2 -c",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -s 2 -c /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -w 1",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -w 1 /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -w 1 -c",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -w 1 -c /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -f 1 -w 1",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -f 1 -w 1 /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -dc",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -dc /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -u -c",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -u -c /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --all-repeated=separate",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --all-repeated=separate /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --all-repeated=prepend",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --all-repeated=prepend /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --all-repeated=none",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --all-repeated=none /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --group",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --group=prepend",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group=prepend /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --group=append",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group=append /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --group=both",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group=both /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --group=separate -i",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group=separate -i /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --count --repeated",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --count --repeated /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --skip-fields=1 --unique",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --skip-fields=1 --unique /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option --check-chars=1 -D",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --check-chars=1 -D /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -i -D",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -i -D /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -s 10",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -s 10 /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: option -f 5",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -f 5 /tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: output file",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq /tmp/u /tmp/o; cat /tmp/o",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: stdin dash",
+      "script": "printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq - </tmp/u",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: zero terminated",
+      "script": "printf 'a\\0a\\0b\\0' | uniq -z | od -An -c",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: no trailing newline",
+      "script": "printf 'a\\na' | uniq -c",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: group with count",
+      "script": "{ printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group -c /tmp/u; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: all repeated with count",
+      "script": "{ printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -D -c /tmp/u; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: invalid skip",
+      "script": "{ printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -f x /tmp/u; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: invalid group",
+      "script": "{ printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq --group=bogus /tmp/u; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: missing file",
+      "script": "{ uniq /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: extra operand",
+      "script": "{ printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq /tmp/u /tmp/o /tmp/p; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: blank fields",
+      "script": "printf ' a\\n\\ta\\n' | uniq -f 1 -c",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: empty input",
+      "script": "uniq </dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.uniq"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt uniq: obsolete skip",
+      "script": "{ printf 'a 1\\na 1\\nA 1\\nb 2\\nb 3\\nc x\\nc x\\nc x\\n' >/tmp/u; uniq -1 /tmp/u; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.uniq",
+        "cmd.uniq.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unlink: file",
+      "script": "printf x >/tmp/f; unlink /tmp/f; ls /tmp",
+      "tags": [
+        "cmd.unlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unlink: symlink",
+      "script": "cd /tmp; printf x >f; ln -s f l; unlink l; ls",
+      "tags": [
+        "cmd.unlink"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unlink: directory",
+      "script": "{ mkdir /tmp/d; unlink /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.unlink",
+        "cmd.unlink.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unlink: missing operand",
+      "script": "{ unlink; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.unlink",
+        "cmd.unlink.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unlink: extra operand",
+      "script": "{ unlink /tmp/a /tmp/b; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.unlink",
+        "cmd.unlink.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt unlink: missing file",
+      "script": "{ unlink /tmp/nosuch; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.unlink",
+        "cmd.unlink.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option none",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc  /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -c",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -c /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -m",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -m /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -l",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -l /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -w",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -w /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -L",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -L /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -lw",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -lw /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -cm",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -cm /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option -lwcmL",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -lwcmL /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option --bytes",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --bytes /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option --chars",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --chars /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option --lines",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --lines /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option --words",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --words /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: option --max-line-length",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --max-line-length /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total auto",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --total=auto /tmp/w /tmp/v",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total auto one file",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -l --total=auto /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total always",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --total=always /tmp/w /tmp/v",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total always one file",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -l --total=always /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total only",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --total=only /tmp/w /tmp/v",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total only one file",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -l --total=only /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total never",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc --total=never /tmp/w /tmp/v",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: total never one file",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc -l --total=never /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: two files",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc /tmp/w /tmp/v",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: stdin",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc </tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: stdin dash with file",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; cat /tmp/v | wc -l - /tmp/w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: files0 from",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; printf '/tmp/w\\0/tmp/v\\0' >/tmp/l; wc -l --files0-from=/tmp/l",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: files0 from stdin",
+      "script": "printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; printf '/tmp/v\\0' | wc -c --files0-from=-",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: files0 with operand",
+      "script": "{ printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; printf '/tmp/v\\0' >/tmp/l; wc --files0-from=/tmp/l /tmp/w; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wc",
+        "cmd.wc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: missing file",
+      "script": "{ printf 'one two\\nthree  four five\\n\\nété \\tsix' >/tmp/w; printf 'a\\n' >/tmp/v; wc /tmp/nosuch /tmp/v; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wc",
+        "cmd.wc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: directory",
+      "script": "{ mkdir /tmp/d; wc /tmp/d; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wc",
+        "cmd.wc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: invalid total",
+      "script": "{ wc --total=bogus </dev/null; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wc",
+        "cmd.wc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: invalid utf8",
+      "script": "printf 'a\\377b c\\n' | wc -mwc",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: max line with tabs",
+      "script": "printf 'a\\tb\\n' | wc -L",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: max line multibyte",
+      "script": "printf 'ééé\\n中文\\n' | wc -L",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: empty input",
+      "script": "wc </dev/null",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: words across nonprinting",
+      "script": "printf 'a\\001b c\\n' | wc -w",
+      "tags": [
+        "cmd.wc"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt wc: unknown option",
+      "script": "{ wc --bogus; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.wc",
+        "cmd.wc.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: default",
+      "script": "yes | head -n 2",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: words",
+      "script": "yes a b | head -n 2",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: empty word",
+      "script": "yes '' | head -n 2 | od -An -c",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: help",
+      "script": "yes --help | head -n 1",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: version status",
+      "script": "yes --version >/dev/null; echo \"status=$?\"",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: double dash",
+      "script": "yes -- --help | head -n 1",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: unknown option",
+      "script": "{ yes --bogus | head -n 1; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.yes",
+        "cmd.yes.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt yes: long line",
+      "script": "yes \"$(printf '%0100d' 0)\" | head -n 3 | wc -c",
+      "tags": [
+        "cmd.yes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: stdin",
+      "script": "printf 'abc\\nxy\\n' | rev",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: file",
+      "script": "printf 'hello\\n' >/tmp/f; rev /tmp/f",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: two files",
+      "script": "printf 'ab\\n' >/tmp/a; printf 'cd\\n' >/tmp/b; rev /tmp/a /tmp/b",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: no trailing newline",
+      "script": "printf 'abc' | rev; echo",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: multibyte",
+      "script": "printf 'éta\\n' | rev",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: empty lines",
+      "script": "printf '\\n\\nab\\n' | rev | od -An -c",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: tabs",
+      "script": "printf 'a\\tb\\n' | rev | od -An -c",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt rev: stdin dash",
+      "script": "printf 'ab\\n' | rev -",
+      "tags": [
+        "cmd.rev"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt which: missing command",
+      "script": "which nosuchcommand; echo \"status=$?\"",
+      "tags": [
+        "cmd.which"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: empty",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: ascii text",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'hello\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: utf8 text",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'été\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: crlf text",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'a\\r\\nb\\r\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: no trailing newline",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'abc' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: shell script",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '#!/bin/sh\\necho hi\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: bash script",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '#!/bin/bash\\necho hi\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: python script",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '#!/usr/bin/env python3\\nprint(1)\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: json",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '{\"a\": [1, 2]}\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: binary data",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '\\000\\001\\002\\377' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: gzip magic",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '\\037\\213\\010\\000\\000\\000\\000\\000\\000\\003' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: png magic",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '\\211PNG\\r\\n\\032\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: pdf magic",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '%%PDF-1.4\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: zip magic",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'PK\\003\\004' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: elf magic",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '\\177ELF\\002\\001\\001' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: html",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '<!DOCTYPE html>\\n<html></html>\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: xml",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '<?xml version=\"1.0\"?>\\n<a/>\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: long lines",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '%0400d\\n' 0 >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: latin1 text",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'caf\\351\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: utf16 bom",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '\\377\\376a\\000' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: utf8 bom",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '\\357\\273\\277hi\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: c source",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '#include <stdio.h>\\nint main(void) { return 0; }\\n' >f; file f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: directory",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; file d",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: symlink",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf x >t; ln -s t l; file l",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: symlink follow",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'x\\n' >t; ln -s t l; file -L l",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: dangling symlink",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; ln -s nosuch l; file l",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: brief",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'hi\\n' >f; file -b f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: mime",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'hi\\n' >f; file -i f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: mime type",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'hi\\n' >f; file --mime-type f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: mime type brief",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '{}\\n' >f; file -b --mime-type f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: mime encoding",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'hi\\n' >f; file --mime-encoding f",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: missing file",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; file nosuch; echo \"status=$?\"",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: several",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf '' >e; printf 'x\\n' >t; file e t d",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: no operand",
+      "script": "{ file; } 2>/tmp/err; echo \"status=$?\"; sed \"s/[‘’]/'/g\" /tmp/err",
+      "tags": [
+        "cmd.file",
+        "cmd.file.error",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: stdin dash",
+      "script": "printf 'hello\\n' | file -",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: separator",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'x\\n' >t; file -F '|' t",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: no pad",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'x\\n' >t; printf '' >longername; file -N t longername",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt file: names from file",
+      "script": "mkdir -p /tmp/fi/d; cd /tmp/fi; printf 'x\\n' >t; printf 't\\nd\\n' >list; file -f list",
+      "tags": [
+        "cmd.file"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin decimal",
+      "script": "printf '%d\\n' 42 -7; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin integer i",
+      "script": "printf '%i\\n' 010 0x1f; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin octal",
+      "script": "printf '%o\\n' 8; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin unsigned",
+      "script": "printf '%u\\n' 3; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin hex",
+      "script": "printf '%x %X\\n' 255 255; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin alt hex",
+      "script": "printf '%#x %#o\\n' 255 8; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin float",
+      "script": "printf '%f\\n' 3.14159; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin float F",
+      "script": "printf '%F\\n' 2.5; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin exponent",
+      "script": "printf '%e %E\\n' 12345.678 0.00012; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin general",
+      "script": "printf '%g %G\\n' 0.0001 1e20; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin hex float",
+      "script": "printf '%a\\n' 0; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin char",
+      "script": "printf '%c|\\n' hello; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin string",
+      "script": "printf '%s|\\n' a 'b c'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin width",
+      "script": "printf '[%5s][%-5s]\\n' ab cd; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin precision string",
+      "script": "printf '[%.2s]\\n' abcdef; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin star width",
+      "script": "printf '[%*d]\\n' 6 42; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin star precision",
+      "script": "printf '[%.*f]\\n' 2 3.14159; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin negative star width",
+      "script": "printf '[%*d]\\n' -6 42; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin zero pad",
+      "script": "printf '%05d\\n' 42; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin plus flag",
+      "script": "printf '%+d %+d\\n' 5 -5; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin space flag",
+      "script": "printf '% d|\\n' 5; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin precision int",
+      "script": "printf '%.3d\\n' 7; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin percent",
+      "script": "printf '100%%\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin reuse format",
+      "script": "printf '%s=%s\\n' a 1 b 2 c; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin missing args",
+      "script": "printf '%s|%d|%f\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin char constant",
+      "script": "printf '%d %d\\n' \"'A\" '\"z'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin b escapes",
+      "script": "printf '%b\\n' 'a\\tb\\\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin b octal",
+      "script": "printf '%b\\n' '\\0101\\101'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin b stop",
+      "script": "printf '%b-%s\\n' 'x\\cy' z; echo; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin q quoting",
+      "script": "printf '%q\\n' 'a b' \"it's\" ''; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin escape sequences",
+      "script": "printf '\\a\\b\\f\\r\\v\\e' | od -An -c; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin octal escape",
+      "script": "printf '\\101\\60\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin hex escape",
+      "script": "printf '\\x41\\x4a\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin unicode escape",
+      "script": "printf '\\u00e9\\U0001F600\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin backslash c in format",
+      "script": "printf 'a\\cb'; echo; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin unknown escape",
+      "script": "printf '\\q\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin time format epoch",
+      "script": "printf '%(%Y-%m-%d)T\\n' 0; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin time format default",
+      "script": "printf '[%(%H)T]\\n' 3600; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin invalid number",
+      "script": "printf '%d\\n' abc; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin partial number",
+      "script": "printf '%d\\n' 12abc; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin float invalid",
+      "script": "printf '%f\\n' x; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin overflow",
+      "script": "printf '%d\\n' 99999999999999999999; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin negative unsigned",
+      "script": "printf '%u\\n' -1; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin invalid directive",
+      "script": "printf '%y\\n' 1; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin no format",
+      "script": "printf ; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin dash dash",
+      "script": "printf -- '%s\\n' x; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin format looks like option",
+      "script": "printf -x; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin trailing percent",
+      "script": "printf 'abc%'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin large precision",
+      "script": "printf '%.30f\\n' 1; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin hex input float",
+      "script": "printf '%f\\n' 0x10; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin inf and nan",
+      "script": "printf '%f %f\\n' inf nan; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin string with width star missing",
+      "script": "printf '[%*s]\\n' 3; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin length modifiers",
+      "script": "printf '%ld %hd %lld\\n' 1 2 3; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin big hex",
+      "script": "printf '%x\\n' 18446744073709551615; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin alternate g",
+      "script": "printf '%#g\\n' 1; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin left zero",
+      "script": "printf '%-05d|\\n' 3; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin c of number",
+      "script": "printf '%c\\n' 65; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin b with percent",
+      "script": "printf '%b\\n' '100%'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin q with newline",
+      "script": "printf '%q\\n' \"$(printf 'a\\nb')\"; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin Q precision",
+      "script": "printf '%.3Q\\n' abcdef; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command decimal",
+      "script": "command printf '%d\\n' 42 -7; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command integer i",
+      "script": "command printf '%i\\n' 010 0x1f; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command octal",
+      "script": "command printf '%o\\n' 8; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command unsigned",
+      "script": "command printf '%u\\n' 3; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command hex",
+      "script": "command printf '%x %X\\n' 255 255; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command alt hex",
+      "script": "command printf '%#x %#o\\n' 255 8; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command float",
+      "script": "command printf '%f\\n' 3.14159; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command float F",
+      "script": "command printf '%F\\n' 2.5; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command exponent",
+      "script": "command printf '%e %E\\n' 12345.678 0.00012; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command general",
+      "script": "command printf '%g %G\\n' 0.0001 1e20; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command hex float",
+      "script": "command printf '%a\\n' 0; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command char",
+      "script": "command printf '%c|\\n' hello; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env decimal",
+      "script": "env printf '%d\\n' 42; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env string",
+      "script": "env printf '%s|\\n' a 'b c'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env q quoting",
+      "script": "env printf '%q\\n' 'a b'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env b escapes",
+      "script": "env printf '%b\\n' 'a\\tb'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env invalid number",
+      "script": "env printf '%d\\n' abc; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env hex escape",
+      "script": "env printf '\\x41\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env missing args",
+      "script": "env printf '%s|%d\\n'; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: env no format",
+      "script": "env printf ; echo \" status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v assigns",
+      "script": "printf -v x '%05d' 42; echo \"[$x]\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v array element",
+      "script": "printf -v a[2] '%s' hi; echo \"${a[2]}\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v reuse format",
+      "script": "printf -v x '%s,' a b c; echo \"$x\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v invalid name",
+      "script": "printf -v 1x '%s' a; echo \"status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v missing name",
+      "script": "printf -v; echo \"status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v with b stop",
+      "script": "printf -v x 'a%bz' 'b\\cc'; echo \"[$x]\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v keeps trailing newlines",
+      "script": "printf -v x 'a\\n\\n'; echo \"${#x}\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v in function local",
+      "script": "f() { local x; printf -v x %s in; echo \"$x\"; }; f; echo \"[${x-unset}]\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v nameref",
+      "script": "declare -n r=t; printf -v r %s via; echo \"$t\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: v readonly",
+      "script": "readonly x=1; printf -v x %s 2; echo \"status=$? x=$x\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin redirect",
+      "script": "printf '%s\\n' a >/tmp/p; cat /tmp/p",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: builtin in pipeline",
+      "script": "printf '%s\\n' c a b | sort",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: unknown option",
+      "script": "printf -z x; echo \"status=$?\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    },
+    {
+      "name": "opt printf: command v rejected",
+      "script": "command printf -v x y; echo \"status=$? [${x-unset}]\"",
+      "tags": [
+        "cmd.printf"
+      ],
+      "options": {}
+    }
+  ]
+}

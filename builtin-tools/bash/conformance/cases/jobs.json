@@ -1,0 +1,934 @@
+{
+  "tier": "pr",
+  "description": "Jobs, traps and signals in the cooperative process model.\n\nCases print facts derived from process numbers (equality, status), never the numbers themselves,\nsince the two shells number processes differently. Scripts that leave a job running redirect its\noutput, so the oracle does not wait for it to close the captured streams.",
+  "cases": [
+    {
+      "name": "jobs: job cap counts disowned jobs",
+      "script": "for i in $(seq 1 300); do sleep 30 >/dev/null 2>&1 & disown; done 2>/tmp/err; echo \"refused=$(grep -c retry /tmp/err)\"; kill 0",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 143,
+        "stdout": {
+          "text": "refused=44\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "bash-tool runs at most 256 background jobs at once in a call, counting jobs started in subshells and disowned ones; bash has no such cap"
+      }
+    },
+    {
+      "name": "jobs: job cap counts jobs of every subshell",
+      "script": "for s in 1 2; do ( for i in $(seq 1 200); do sleep 30 >/dev/null 2>&1 & done 2>>/tmp/err; : >/tmp/done$s; wait ) & done; until [ -e /tmp/done1 ] && [ -e /tmp/done2 ]; do sleep 0.05; done; echo \"refused=$(grep -c retry /tmp/err)\"; kill 0",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 143,
+        "stdout": {
+          "text": "refused=146\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "bash-tool runs at most 256 background jobs at once in a call, counting jobs started in subshells and disowned ones; bash has no such cap"
+      }
+    },
+    {
+      "name": "jobs: job cap bounds a fork tree",
+      "script": "f() { if [ \"$1\" -gt 0 ]; then f $(($1-1)) & f $(($1-1)) & wait; else echo >>/tmp/leaves; sleep 30 >/dev/null 2>&1; fi; }; : >/tmp/leaves; f 9 2>/tmp/err & for i in $(seq 200); do [ -s /tmp/err ] && break; [ \"$(wc -l </tmp/leaves)\" = 512 ] && break; sleep 0.05; done; [ -s /tmp/err ] && echo capped || echo uncapped; kill 0",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 143,
+        "stdout": {
+          "text": "capped\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "bash-tool runs at most 256 background jobs at once in a call, counting jobs started in subshells and disowned ones; bash has no such cap"
+      }
+    },
+    {
+      "name": "jobs: jobs that finish at once never hit the cap",
+      "script": "for i in $(seq 300); do : >/tmp/f$i & done 2>/tmp/err; wait; ls /tmp | grep -c '^f'; cat /tmp/err",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trapped signal interrupts wait",
+      "script": "trap 'kill $c; echo stopped; exit 1' TERM; (while :; do sleep 0.05; done) & c=$!; (sleep 0.2; kill $$) & wait $c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait returns 128 plus the trapped signal",
+      "script": "trap 'echo caught' TERM; sleep 0.8 & (sleep 0.2; kill $$) & wait %1; echo st=$?; wait 2>/dev/null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a job started in a subshell outlives it",
+      "script": "( { sleep 0.2; echo late; } & ); sleep 0.6; echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a job started in a subshell keeps its effect",
+      "script": "( (sleep 0.2; echo written > /tmp/f) & ); sleep 1.5; cat /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: command substitution waits for a job holding its output",
+      "script": "x=$( { sleep 0.2; echo hi; } & ); echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: command substitution does not wait for a job writing elsewhere",
+      "script": "x=$( sleep 0.3 >/dev/null & ); echo \"[$x]\"; sleep 0.5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a job started in a pipeline stage outlives the stage",
+      "script": "{ { sleep 0.2; echo late; } & } | cat; echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a job started by bash -c outlives it",
+      "script": "bash -c '{ sleep 0.2; echo late >/tmp/f; } &'; sleep 0.5; cat /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait for a disowned pid",
+      "script": "sleep 0.1 & p=$!; disown; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a disowned job is stopped and reported at the end of the call",
+      "script": "(sleep 0.3; echo late >/tmp/f) & disown; echo started\n#--call--\nsleep 0.8; cat /tmp/f",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": "started\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job [1] (pid 2, hangup): ( sleep 0.3; echo late > /tmp/f )\ncat: /tmp/f: No such file or directory\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started, and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "jobs: a job orphaned by its subshell is stopped and reported at the end of the call",
+      "script": "( sleep 5 >/dev/null 2>&1 & ); echo end",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "end\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job (pid 3, hangup): sleep 5 > /dev/null 2>&1\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started, and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "jobs: EXIT trap runs when a signal ends the script",
+      "script": "trap 'echo cleanup' EXIT; kill $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap's exit keeps the signal status",
+      "script": "trap 'echo cleanup; exit 5' EXIT; kill $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap runs when a watchdog kills the script",
+      "script": "trap 'echo cleanup' EXIT; ( sleep 0.1; kill $$ ) & while :; do sleep 0.05; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap runs after HUP",
+      "script": "trap 'echo exit-trap' EXIT; kill -HUP $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap runs after INT",
+      "script": "trap 'echo exit-trap' EXIT; kill -INT $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: KILL skips the EXIT trap",
+      "script": "trap 'echo exit-trap' EXIT; kill -KILL $$; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a command substitution",
+      "script": "x=$(trap 'echo inner-exit' EXIT; echo body); echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a pipeline stage",
+      "script": "{ trap 'echo stage-exit' EXIT; echo stage-body; } | cat",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a background subshell",
+      "script": ": >/tmp/lock; ( trap 'rm -f /tmp/lock' EXIT; sleep 0.1 ) & wait; test -e /tmp/lock && echo leaked || echo removed",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a background group",
+      "script": "{ trap 'echo job-exit' EXIT; echo job; } & wait; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a job killed while it sleeps",
+      "script": "( trap 'echo job-cleanup' EXIT; sleep 5 >/dev/null ) & p=$!; sleep 0.1; kill $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a job killed in a loop",
+      "script": "( trap 'echo job-cleanup' EXIT; while :; do sleep 0.02; done ) & p=$!; sleep 0.1; kill $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap writes to the subshell's redirection",
+      "script": "( trap 'echo sub' EXIT; echo in ) >/tmp/f; echo out; cat /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap of a stage ended by SIGPIPE",
+      "script": "{ trap 'echo bye >&2' EXIT; while :; do echo x; done; } | head -1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap of a substitution ended by a signal",
+      "script": "x=$(trap 'echo bye' EXIT; kill $BASHPID); echo \"[$x] $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap of a child shell ended by a signal",
+      "script": "bash -c 'trap \"echo child-exit\" EXIT; kill $$' 2>/dev/null; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap of sh -c writes to its redirection",
+      "script": "sh -c 'trap \"echo bye\" EXIT; echo in' >/tmp/f; echo out; cat /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: children do not run the caller's EXIT trap",
+      "script": "trap 'echo P' EXIT; echo x | cat; ( echo sub ); y=$(echo s); { echo job; } & wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trap installs every signal of a list",
+      "script": "trap 'echo cleanup' EXIT INT QUIT TERM; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trap keeps the valid handlers around an invalid name",
+      "script": "trap 'echo cleanup' EXIT BOGUS TERM; echo st=$?; trap -p TERM",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trap by signal numbers",
+      "script": "trap 'echo cleanup' 0 1 2 3 15; echo st=$?; trap -p QUIT",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trap clears and ignores signal lists",
+      "script": "trap - INT QUIT TERM; echo st=$?; trap '' HUP INT QUIT TERM; echo st=$?; trap -p QUIT",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: USR1 terminates a job by default",
+      "script": "sleep 5 & p=$!; kill -USR1 $p; wait $p 2>/dev/null; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a job catches USR1",
+      "script": "(trap 'echo got-usr1' USR1; while :; do sleep 0.02; done) & p=$!; sleep 0.1; kill -USR1 $p; sleep 0.1; kill $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background jobs ignore QUIT",
+      "script": "sleep 0.5 & p=$!; sleep 0.1; kill -QUIT $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: signals whose default action is to ignore",
+      "script": "sleep 5 & p=$!; kill -CHLD $p; kill -WINCH $p; kill -URG $p; kill -CONT $p; kill -0 $p && echo alive; kill $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: STOP and CONT",
+      "script": "( sleep 0.2; echo t ) & p=$!; kill -STOP $p; sleep 0.4; echo before; kill -CONT $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: TERM to a stopped job waits for CONT",
+      "script": "sleep 0.2 & p=$!; kill -STOP $p; kill $p; echo st=$?; kill -CONT $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: KILL ends a stopped job",
+      "script": "sleep 0.2 & p=$!; kill -STOP $p; kill -KILL $p; wait $p 2>/dev/null; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a job continues a stopped script",
+      "script": "( sleep 0.1; kill -CONT $$ ) & kill -STOP $$; echo resumed $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trap accepts KILL and STOP",
+      "script": "trap 'echo x' KILL; echo st=$?; trap 'echo y' STOP; echo st=$?; trap -p KILL; trap -p STOP",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: real-time signal names",
+      "script": "trap 'echo x' RTMIN; trap -p RTMIN; trap 'echo y' SIGRTMAX-2; trap -p 62; trap 'echo z' 34; trap -p 34",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill -l table",
+      "script": "kill -l; echo \"st=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: trap -l table",
+      "script": "trap -l; echo \"st=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill -l numbers and statuses",
+      "script": "kill -l 143 15 TERM SIGTERM 9 64 65 0 127 128 256 271; echo \"st=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill -l names",
+      "script": "kill -l USR1 sigusr2 RTMIN RTMIN+1 RTMAX-1 35 50 63 131 137 138 130 129 192 hup SIGhup bogus; echo \"st=$?\"; kill -l 34; echo \"[$?]\"; kill -L 9",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill signal specification errors",
+      "script": "kill -s 99 $$; echo st=$?; kill -n 99 $$; echo st=$?; kill -99 $$; echo st=$?; kill -n 9x $$; echo st=$?; kill -9x $$; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill usage",
+      "script": "kill; echo st=$?; kill -s TERM; echo st=$?; kill -s; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill of something that is not a pid",
+      "script": "kill abc; echo $?; kill -- -abc; echo $?; kill 1.5; echo $?; kill ''; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill by job name",
+      "script": "kill %sleep; echo $?; sleep 0.3 & kill %sleep; wait; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill by job substring",
+      "script": "sleep 0.3 & kill %?lee; echo $?; wait %1 2>/dev/null; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: ambiguous job name",
+      "script": "sleep 0.3 & sleep 0.3 & kill %sleep; echo $?; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill 0 ends the script",
+      "script": "kill 0; echo after $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill 0 with a TERM trap",
+      "script": "trap 'echo caught' TERM; kill 0; echo after $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill 0 from a subshell",
+      "script": "( kill 0; echo inner ); echo after $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill 0 ends background jobs with the script",
+      "script": "sleep 30 >/dev/null 2>&1 & sleep 30 >/dev/null 2>&1 & disown; echo started; kill 0",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill 0 reaches a job whose subshell has ended",
+      "script": "( sleep 30 >/dev/null 2>&1 & ); echo started; kill 0",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill -l of a death status",
+      "script": "sleep 5 & p=$!; kill $p; wait $p; kill -l $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: INT reaches a job that has not started",
+      "script": "sleep 0.5 & p=$!; kill -INT $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: INT is ignored once a job runs",
+      "script": "sleep 0.5 & p=$!; sleep 0.1; kill -INT $p; wait $p; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -n",
+      "script": "sleep 0.3 & jobs -n; echo st=$?; jobs -n; echo st=$?; wait; true & sleep 0.1; jobs -n; echo st=$?; jobs; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs with job specs",
+      "script": "sleep 0.2 & sleep 0.1; jobs %1; jobs %2; echo st=$?; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: suspend without job control",
+      "script": "suspend; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs shows a job killed by a signal",
+      "script": "sleep 5 & kill %1; sleep 0.1; jobs; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: exec stdout into tee",
+      "script": "exec > >(tee /tmp/log); echo hello; echo world; sleep 0.2; cat /tmp/log >&2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: exec stdout and stderr into tee",
+      "script": "exec > >(tee /tmp/log) 2>&1; echo hello; echo world >&2\n#--call--\ncat /tmp/log",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: exec a descriptor into a process substitution",
+      "script": "exec 3> >(cat); echo into3 >&3; exec 3>&-; sleep 0.1; echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: exec stdout into a filter",
+      "script": "exec > >(tr a-z A-Z); echo hello",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: exit in the last pipeline stage",
+      "script": "printf 'a\\nb\\n' | while read -r l; do [ \"$l\" = b ] && exit 1; done; echo \"continued $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: exit in a single-command stage",
+      "script": "echo x | exit 3; echo \"after $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: break in a pipeline stage",
+      "script": "for i in 1 2; do echo x | break; echo \"in $i\"; done; echo \"st=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: return in a pipeline stage",
+      "script": "f() { echo x | return 5; echo \"after $?\"; }; f; echo \"f=$?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: bash -c gets its own $$",
+      "script": "a=$$; b=$(bash -c 'echo $$'); [ \"$a\" != \"$b\" ] && echo differs",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: concurrent sh -c children do not share $$",
+      "script": "{ for i in 1 2 3; do sh -c 'echo \"job $1\" > /tmp/t.$$; sleep 0.2; cat /tmp/t.$$' sh \"$i\" & done; wait; } | sort; ls /tmp | grep -c '^t\\.'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill $$ in bash -c ends only the child",
+      "script": "bash -c 'kill $$; echo not'; echo \"after child: $?\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill $BASHPID ends only the subshell",
+      "script": "(kill $BASHPID; echo x); echo main=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: BASHPID differs in every subshell",
+      "script": "a=$BASHPID; b=$(echo $BASHPID); ( c=$BASHPID; [ \"$a\" != \"$c\" ] && echo sub ); [ \"$a\" != \"$b\" ] && echo subst; echo x | { read; d=$BASHPID; [ \"$a\" != \"$d\" ] && echo stage; }; [ \"$a\" = \"$$\" ] && echo main",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: EXIT trap in a subshell that kills itself",
+      "script": "( trap 'echo sub-exit' EXIT; kill $BASHPID; echo not ); echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: $! survives wait",
+      "script": "sleep 0.01 & p=$!; wait; [ \"$!\" = \"$p\" ] && echo kept",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: $! survives disown and wait -n",
+      "script": "sleep 0.01 & p=$!; disown; [ \"$!\" = \"$p\" ] && echo disown; sleep 0.01 & q=$!; wait -n; [ \"$!\" = \"$q\" ] && echo waitn; sleep 0.1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: $! inside a subshell",
+      "script": "sleep 0.1 & p=$!; ( [ \"$!\" = \"$p\" ] && echo inherited ); wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background job reads a piped group's input",
+      "script": "echo hi | { cat & wait; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background job reads a piped subshell's input",
+      "script": "echo hi | ( cat & wait )",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background job reads a redirected group's input",
+      "script": "{ cat & wait; } <<< hi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background job in a nested subshell reads nothing",
+      "script": "echo hi | { ( cat & wait ); }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background job in a piped function",
+      "script": "f() { cat & wait; }; echo hi | f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: redirected function call does not keep input",
+      "script": "f() { cat & wait; }; f <<< hi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: background jobs share piped input",
+      "script": "seq 20000 | { { wc -l >/tmp/r1; } & { wc -l >/tmp/r2; } & wait; }; echo $(( $(cat /tmp/r1) + $(cat /tmp/r2) ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: loop input reaches a background job",
+      "script": "while read l; do echo \"got $l\"; cat & wait; done <<< $'a\\nb\\nc'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait for a parent's job in a stage",
+      "script": "sleep 0.3 & p=$!; wait $p 2>/dev/null | cat; echo ${PIPESTATUS[*]}; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill %1 from a stage",
+      "script": "sleep 0.5 & kill %1 2>/dev/null | cat; wait %1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: kill %1 from a stage reports no such job",
+      "script": "sleep 0.3 & kill %1 | cat; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait for a sibling from a job",
+      "script": "sleep 0.3 & s=$!; ( wait $s 2>/dev/null; echo \"in job $?\" ) & wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait in a stage has no jobs to wait for",
+      "script": "sleep 0.3 & wait | cat; echo \"${PIPESTATUS[*]}\"; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a stage lists the parent's jobs",
+      "script": "sleep 0.3 & jobs | cat; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a second wait on a pid",
+      "script": "(exit 3) & p=$!; wait $p; wait $p; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: waited jobs leave the table",
+      "script": "for i in 1 2 3; do true & wait $!; done; jobs; echo end",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: job numbers restart after reaping",
+      "script": "true & wait $!; sleep 3 & kill %1; wait %1 2>/dev/null; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: many waited jobs stay fast",
+      "script": "for i in $(seq 3000); do true & wait $!; done; jobs; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs prints subshells and groups on one line",
+      "script": "( sleep 0.3; echo x >/dev/null ) & { sleep 0.3; true; } & sleep 0.3 | cat & jobs; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -l for a pipeline job",
+      "script": "sleep 0.3 | cat | cat & jobs -l | while IFS= read -r l; do p=${l%%[R|]*}; echo \"${#p}:${l#\"$p\"}\"; done; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -p for a pipeline job",
+      "script": "sleep 0.3 | cat & jobs -p | wc -l; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -l for a simple job",
+      "script": "sleep 0.3 & jobs -l | while IFS= read -r l; do p=${l%%[R|]*}; echo \"${#p}:${l#\"$p\"}\"; done; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs states after a job ends",
+      "script": "(exit 3) & sleep 0.1; jobs; sleep 5 & kill -9 %1; sleep 0.1; jobs; sleep 5 & kill -USR1 %1; sleep 0.1; jobs",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs text of redirected and nested commands",
+      "script": "( sleep 0.3; echo x ) >/dev/null & { sleep 0.3; } 2>/dev/null & { true & sleep 0.3; } & echo x | ( cat ) >/dev/null & x=1 sleep 0.3 >/dev/null 2>&1 & jobs; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: declare -f prints pipelines and redirections as bash does",
+      "script": "f() { a | b 2>&1; ( c; d ) > /dev/null; { e; } >&2 2>&1; cat <&3; }; declare -f f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: stopped-job note is one line",
+      "script": "( sleep 5; echo x ) >/dev/null & echo started",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "started\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job [1] (pid 2, hangup): ( sleep 5; echo x ) > /dev/null\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started, and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "jobs: a HUP handler that computes before exiting",
+      "script": "(trap 'for i in $(seq 300); do :; done; echo handled >/tmp/h; exit 0' HUP; while :; do :; done) >/dev/null & echo main\n#--call--\ncat /tmp/h",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "main\nhandled\n"
+        },
+        "stderr": {
+          "text": "bash: stopped job [1] (pid 2, hangup): ( trap 'for i in $(seq 300); do :; done; echo handled >/tmp/h; exit 0' HUP; while :; do :; done ) > /dev/null\n"
+        },
+        "reason": "a job cannot outlive its call: bash-tool stops every job still running when the call ends, wherever it was started, and reports it; bash leaves it running"
+      }
+    },
+    {
+      "name": "jobs: wait -n honours its ids",
+      "script": "(sleep 0.4; exit 3) & a=$!; (sleep 0.1; exit 4) & b=$!; (exit 5) & c=$!; wait -n $a $b; echo $?; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait on a reaped job spec",
+      "script": "sleep 0.1 & wait -n; wait %1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n with nothing to wait for",
+      "script": "wait -n; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n in a command substitution",
+      "script": "x=$(sleep 0.1 & wait -n; echo $?); echo \"[$x]\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n in a pipeline stage",
+      "script": "{ (sleep 0.1; exit 3) & wait -n; echo \"stage $?\"; } | cat",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n in a background job",
+      "script": "( (sleep 0.1; exit 5) & wait -n; echo \"job $?\" ) & wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n for a parent's job in a stage",
+      "script": "sleep 0.2 & wait -n | cat; echo \"${PIPESTATUS[*]}\"; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n returns for a trapped signal",
+      "script": "trap 'echo caught' TERM; sleep 0.8 & (sleep 0.2; kill $$) & wait -n %1; echo st=$?; wait 2>/dev/null",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n reports jobs in the order they end",
+      "script": "(sleep 0.3; exit 1) & (sleep 0.1; exit 2) & wait -n; echo $?; wait -n; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -x replaces job specs",
+      "script": "sleep 0.2 & jobs -x echo %1 %% %+ a%1 '%1 x' | { read a b c d e f; [ \"$a $b $c\" = \"$$ $$ $$\" ] && echo \"groups $d $e $f\"; }; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -x passes other words through",
+      "script": "sleep 0.2 & jobs -x echo %2 %sleepy; echo st=$?; wait; jobs -x echo %1; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -x runs functions, statuses and missing commands",
+      "script": "sleep 0.2 & f() { echo \"f:$#\"; }; jobs -x f %1 x; echo st=$?; jobs -x false; echo st=$?; jobs -x; echo st=$?; jobs -x nosuchcmd; echo st=$?; x=1; jobs -x x=2; echo st=$? x=$x; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -x options",
+      "script": "sleep 0.2 & jobs -l -x echo hi; echo st=$?; jobs -xl echo hi; echo st=$?; jobs -r -x echo hi; r=$(jobs -x -- echo -n %1); [ \"$r\" = \"$$\" ] && echo dashdash; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a redirected background subshell catches signals itself",
+      "script": "( trap 'echo caught; exit 3' TERM; while :; do sleep 0.01; done ) >/tmp/o & p=$!; sleep 0.1; kill $p; wait $p; echo st=$?; cat /tmp/o",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: a redirected background subshell keeps its redirected input",
+      "script": "echo hi >/tmp/in; ( cat & wait ) </tmp/in & wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs -x in a stage and a subshell",
+      "script": "sleep 0.2 & jobs -x echo %1 | { read x; [ \"$x\" = \"$$\" ] && echo stage; }; ( jobs -x echo %1 ); wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait for a job spec twice",
+      "script": "(exit 3) & wait %1; echo $?; wait %1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait without operands keeps no statuses",
+      "script": "(exit 3) & p=$!; wait; wait $p 2>/dev/null; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: jobs keeps the status of a job it reported",
+      "script": "(exit 3) & p=$!; sleep 0.1; jobs >/dev/null; wait $p; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n reaps the job it reports",
+      "script": "(sleep 0.1; exit 7) & p=$!; wait -n $p; echo $?; wait $p; echo $?; wait -n; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait -n with a non-child",
+      "script": "wait -n 99999; echo $?; sleep 0.1 & wait -n 99999 $!; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait on something that is not a job",
+      "script": "wait abc; echo $?; wait %abc; echo $?; wait %; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: wait on an ambiguous job name",
+      "script": "sleep 0.2 & sleep 0.2 & wait %sleep; echo $?; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: ls diagnostics before the listing under 2>&1",
+      "script": "echo x >/tmp/f; ls /tmp/nosuch /tmp/f 2>&1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: md5sum interleaves under 2>&1",
+      "script": "echo a >/tmp/a; echo b >/tmp/b; md5sum /tmp/a /tmp/missing /tmp/b 2>&1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: cksum interleaves under 2>&1",
+      "script": "echo a >/tmp/a; cksum /tmp/a /tmp/missing /tmp/a 2>&1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: nl interleaves under 2>&1",
+      "script": "echo a >/tmp/a; nl /tmp/a /tmp/missing /tmp/a 2>&1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: rm interleaves under 2>&1",
+      "script": "echo a >/tmp/a; rm -v /tmp/missing /tmp/a 2>&1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: md5sum -c interleaves under 2>&1",
+      "script": "echo a >/tmp/a; md5sum /tmp/a >/tmp/sums; echo '0123456789abcdef0123456789abcdef  /tmp/missing' >>/tmp/sums; md5sum /tmp/a >>/tmp/sums; md5sum -c /tmp/sums 2>&1; echo st=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "jobs: separate streams keep their contents",
+      "script": "echo a >/tmp/a; md5sum /tmp/a /tmp/missing /tmp/a 2>/tmp/err; cat /tmp/err",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

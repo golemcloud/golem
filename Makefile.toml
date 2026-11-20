@@ -2461,18 +2461,28 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.prepare-builtin-bash-conformance]
+description = "Installs and checks types, lint and formatting for the Bash conformance harness"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error bun install --cwd builtin-tools/bash/conformance --frozen-lockfile
+exec --fail-on-error bun run --cwd builtin-tools/bash/conformance check
+'''
+
 [tasks.test-builtin-bash-pipelines]
 description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, and the feature checklist"
+dependencies = ["prepare-builtin-bash-conformance"]
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
-exec --fail-on-error python3 builtin-tools/bash/conformance/test_conformance.py
-exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py check --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
-exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py coverage --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+exec --fail-on-error bun run --cwd builtin-tools/bash/conformance test
+exec --fail-on-error bun builtin-tools/bash/conformance/conformance.ts check --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+exec --fail-on-error bun builtin-tools/bash/conformance/conformance.ts coverage --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
 '''
 
 [tasks.test-builtin-bash-sweep]
 description = "Runs Brush's compatibility suite on the Bash shell against its baseline, and checks every matrix case (both tiers) against its recorded golden"
+dependencies = ["prepare-builtin-bash-conformance"]
 script_runner = "@shell"
 script = '''
 builtin-tools/bash/conformance/compat/ci.sh ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
@@ -2480,9 +2490,10 @@ builtin-tools/bash/conformance/compat/ci.sh ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 
 [tasks.test-builtin-bash-oracle-drift]
 description = "Re-checks every recorded golden (both tiers) against a live Bash oracle, to catch one whose answer has since changed. `stale` only needs Docker, not a built wasm. Not run on every push -- see the Oracle drift workflow's paths/schedule triggers."
-script_runner = "@shell"
+dependencies = ["prepare-builtin-bash-conformance"]
+script_runner = "@duckscript"
 script = '''
-python3 builtin-tools/bash/conformance/conformance.py stale
+exec --fail-on-error bun builtin-tools/bash/conformance/conformance.ts stale
 '''
 
 [tasks.check-builtin-bash-deny]

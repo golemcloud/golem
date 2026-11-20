@@ -1,0 +1,164 @@
+{
+  "tier": "pr",
+  "description": "Error paths for commands that had none: exit status and diagnostic for bad usage.\n\nNetwork failures are not here: Wasmtime cannot make HTTP requests locally, so they are covered by\nthe Golem integration tests.",
+  "cases": [
+    {
+      "name": "join: unsorted input and missing file",
+      "script": "printf 'b 1\\na 2\\n' >/tmp/l; printf 'a x\\n' >/tmp/r; join /tmp/l /tmp/r; echo status=$?; join /tmp/nosuch /tmp/r; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "ln: missing target and existing link",
+      "script": "ln /tmp/nosuch /tmp/l; echo status=$?; : >/tmp/t; ln -s /tmp/t /tmp/s; ln -s /tmp/t /tmp/s; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=1\nstatus=1\n"
+        },
+        "stderr": {
+          "text": "ln: failed to access '/tmp/nosuch': No such file or directory\nln: failed to create symbolic link to '/tmp/t': links to absolute paths are unsupported in bash-tool; use a relative target\nln: failed to create symbolic link to '/tmp/t': links to absolute paths are unsupported in bash-tool; use a relative target\n"
+        },
+        "reason": "fixture (symlinks): links to absolute paths are refused, since WASI cannot create them"
+      }
+    },
+    {
+      "name": "mkdir: existing and missing parent",
+      "script": "mkdir /tmp/d; mkdir /tmp/d; echo status=$?; mkdir /tmp/a/b/c; echo status=$?; mkdir -p /tmp/a/b/c; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "printf: missing and extra arguments",
+      "script": "printf '%s %s\\n' only; printf '%d\\n' x; echo status=$?; printf; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "sh: missing script operand",
+      "script": "sh -c; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "sh: unreadable script file",
+      "script": "sh /tmp/nosuch.sh; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "sh: /tmp/nosuch.sh: running a script file is unsupported in bash-tool; use `source /tmp/nosuch.sh` or `sh -c`\n"
+        },
+        "reason": "fixture (script-files): running a script file by path is refused; source it or use sh -c"
+      }
+    },
+    {
+      "name": "sleep: invalid intervals",
+      "script": "sleep x; echo status=$?; sleep -1; echo status=$?; sleep; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "split: missing input",
+      "script": "split /tmp/nosuch /tmp/out; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "yes: write error to a closed pipe",
+      "script": "yes | head -n 2; echo status=${PIPESTATUS[0]}",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "curl: unsupported protocol",
+      "script": "curl -sS gopher2://example/ ; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "curl: malformed URL",
+      "script": "curl -sS 'http://[bad' ; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=3\n"
+        },
+        "stderr": {
+          "text": "curl: (3) URL rejected: Malformed input to a URL function\n"
+        },
+        "reason": "curl reads [ in a URL as a glob range and points at it; bash-tool reports the malformed URL, with the same status"
+      }
+    },
+    {
+      "name": "curl: missing option argument",
+      "script": "curl -o; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "wget: missing URL",
+      "script": "wget; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "curl: invalid time values",
+      "script": "for v in -1 -0 +3 ' 3' .5 5. nan inf abc ''; do curl -s -m \"$v\" http://127.0.0.1:1/; echo \"m=[$v] status=$?\"; done; curl -s --max-time -1 http://127.0.0.1:1/; echo status=$?; curl -s --connect-timeout nan http://127.0.0.1:1/; echo status=$?; curl -s --retry-delay -1 http://127.0.0.1:1/; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "curl: time values too large",
+      "script": "curl -s -m 9223372036854775 http://127.0.0.1:1/; echo status=$?; curl -s -m 99999999999999999999 http://127.0.0.1:1/; echo status=$?; curl -s -m 1.9999999999999999999 http://127.0.0.1:1/; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "wget: invalid time periods",
+      "script": "for v in -1 -1m 1e3 nan inf 1e300 abc 3x ''; do wget -q -T \"$v\" http://127.0.0.1:1/; echo \"T=[$v] status=$?\"; done; wget -q --timeout=-2 http://127.0.0.1:1/; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    }
+  ]
+}
