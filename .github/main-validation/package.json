@@ -1,0 +1,24 @@
+{
+  "name": "golem-main-validation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "format": "dprint fmt",
+    "format:check": "dprint check",
+    "lint": "oxlint --deny-warnings",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run lint && npm run format:check",
+    "test": "bun test --timeout 180000"
+  },
+  "dependencies": {
+    "effect": "4.1.2",
+    "smol-toml": "1.9.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "@types/node": "24.19.2",
+    "dprint": "0.65.0",
+    "oxlint": "1.94.0",
+    "typescript": "7.0.2"
+  }
+}
