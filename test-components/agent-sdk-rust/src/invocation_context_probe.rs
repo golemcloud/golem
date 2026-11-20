@@ -21,15 +21,30 @@ struct Observation {
 
 /// `"<kind> <pair text>"`, or `"anonymous"`. It never includes claims.
 fn principal_text(principal: &Principal) -> String {
-    match principal {
-        Principal::Oidc(oidc) => format!("oidc:{}", oidc.sub),
-        Principal::Agent(agent) => format!("agent:{}", golem_rust::Uuid::from(agent.agent_id.uuid)),
-        Principal::GolemUser(user) => format!(
-            "golem-user:{}",
-            golem_rust::Uuid::from(user.account_id.uuid.clone())
-        ),
-        Principal::Anonymous => "anonymous".to_string(),
-    }
+    principal.to_string()
+}
+
+fn caller_text(caller: &Caller) -> String {
+    format!(
+        "original={} immediate={} tokens={}",
+        principal_text(caller.original()),
+        principal_text(caller.immediate()),
+        caller.tokens().len()
+    )
+}
+
+/// The hex blake3 of the `original` principal's claims JSON text, and the text's length in
+/// bytes, as `<hex>:<length>`. A principal without claims counts as the empty text.
+fn claims_digest(caller: &Caller) -> String {
+    let claims = match caller.original() {
+        Principal::User(user) => user.claims_json(),
+        _ => "",
+    };
+    format!(
+        "{}:{}",
+        blake3::hash(claims.as_bytes()).to_hex(),
+        claims.len()
+    )
 }
 
 fn observe() -> Observation {
