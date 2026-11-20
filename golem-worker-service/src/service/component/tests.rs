@@ -28,6 +28,81 @@ use test_r::test;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+/// A tool deployment of `component` that registers `definition` as `tool_name` and binds it to
+/// each of `owners`.
+pub(crate) fn tool_deployment_state(
+    component: &Component,
+    tool_name: &str,
+    definition: golem_common::schema::tool::Tool,
+    owners: impl IntoIterator<Item = golem_common::model::tool::ToolBindingOwner>,
+) -> golem_common::model::tool::ToolDeploymentState {
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::tool::{
+        CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
+        ToolProvisionConfig, ToolRegistration, ToolSource,
+    };
+    let tool_name = ToolName::try_from(tool_name).unwrap();
+    let registration = ToolRegistration {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        definition: definition.clone(),
+        provision: ToolProvisionConfig::default(),
+        component_bindings: std::collections::BTreeMap::new(),
+        source: ToolSource::Component {
+            component_id: component.id,
+            component_revision: component.revision,
+            component_name: component.component_name.clone(),
+        },
+        owner_account_id: component.account_id,
+        owner_account_email: component.account_email.clone(),
+        metadata_version: "0.1.0".into(),
+        metadata_digest: Default::default(),
+    };
+    let tool_bindings = owners
+        .into_iter()
+        .map(|owner| {
+            let binding = CompiledToolBinding {
+                deployment_revision: DeploymentRevision::INITIAL,
+                release_id: None,
+                owner: owner.clone(),
+                tool_name: tool_name.clone(),
+                version: definition.version.clone(),
+                metadata_version: registration.metadata_version.clone(),
+                metadata_digest: Default::default(),
+                account_id: component.account_id,
+                account_email: component.account_email.clone(),
+                parameters: golem_common::base_model::json::NormalizedJsonValue::new(
+                    serde_json::json!({}),
+                ),
+                config_keys_readable: Default::default(),
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: Default::default(),
+                source: registration.source.clone(),
+            };
+            (
+                owner,
+                std::collections::BTreeMap::from([(tool_name.clone(), binding)]),
+            )
+        })
+        .collect();
+    ToolDeploymentState {
+        deployment_revision: DeploymentRevision::INITIAL,
+        registered_tools: std::collections::BTreeMap::from([(
+            tool_name,
+            RegisteredTool {
+                type_id: golem_common::model::type_id::TypeId::try_from(1_u32).unwrap(),
+                registration,
+            },
+        )]),
+        tool_bindings,
+        mcp_imports: Vec::new(),
+        registered_tool_middlewares: std::collections::BTreeMap::new(),
+        tool_middleware_chains: std::collections::BTreeMap::new(),
+        tool_middleware_configuration: Default::default(),
+    }
+}
+
 pub(crate) struct TestRegistry {
     revisions: Vec<Component>,
     pub(crate) deployed: Mutex<Option<Component>>,

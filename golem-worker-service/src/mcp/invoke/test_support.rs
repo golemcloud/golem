@@ -289,13 +289,59 @@ impl RegistryService for HarnessRegistryService {
     }
 }
 
+/// The definition of the harness's native tool `native`: one command without input or output
+/// streams.
+fn native_tool_definition() -> golem_common::schema::tool::Tool {
+    use golem_common::schema::tool::{
+        CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
+    };
+    Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        http_mount: None,
+        schema: SchemaGraph::empty(),
+        commands: CommandTree {
+            nodes: vec![CommandNode {
+                name: "native".to_string(),
+                aliases: vec![],
+                doc: Doc::default(),
+                http: None,
+                globals: Default::default(),
+                subcommands: vec![],
+                body: Some(CommandBody {
+                    positionals: Positionals::default(),
+                    options: vec![],
+                    flags: vec![],
+                    constraints: vec![],
+                    stdin: None,
+                    stdout: None,
+                    stderr: None,
+                    result: None,
+                    errors: vec![],
+                    annotations: None,
+                }),
+            }],
+        },
+    }
+}
+
 struct StaticComponentService {
     component: Component,
+    tool_state: golem_common::model::tool::ToolDeploymentState,
 }
 
 #[async_trait]
 impl ComponentService for StaticComponentService {
     async fn invalidate_current(&self) {}
+
+    async fn get_tool_deployment_state(
+        &self,
+        _: EnvironmentId,
+        component_id: ComponentId,
+        _: ComponentRevision,
+    ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, ComponentServiceError> {
+        Ok((self.component.id == component_id).then(|| self.tool_state.clone()))
+    }
 
     async fn get_current_by_id_in_cache(&self, component_id: ComponentId) -> Option<Component> {
         (self.component.id == component_id).then(|| self.component.clone())
@@ -1118,7 +1164,19 @@ impl InvocationHarness {
 
         Self {
             worker_service: Arc::new(WorkerService::new(
-                Arc::new(StaticComponentService { component }),
+                Arc::new(StaticComponentService {
+                    tool_state: crate::service::component::tests::tool_deployment_state(
+                        &component,
+                        "native",
+                        native_tool_definition(),
+                        [
+                            golem_common::model::tool::ToolBindingOwner::ComponentBaseline {
+                                component_id,
+                            },
+                        ],
+                    ),
+                    component,
+                }),
                 Arc::new(AllowAllAuthService),
                 Arc::new(NoopLimitService),
                 worker_client,
@@ -1195,42 +1253,11 @@ impl InvocationHarness {
 
     /// A native tool `native` of the harness's component, without input or output streams.
     fn native_export(&self) -> golem_service_base::mcp::CompiledMcpToolExport {
-        use golem_common::schema::tool::{
-            CommandBody, CommandNode, CommandTree, Doc, Positionals, Tool,
-        };
-        let definition = Tool {
-            version: "1.0.0".to_string(),
-            requires_filesystem: false,
-            http_mount: None,
-            schema: SchemaGraph::empty(),
-            commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: "native".to_string(),
-                    aliases: vec![],
-                    doc: Doc::default(),
-                    http: None,
-                    globals: Default::default(),
-                    subcommands: vec![],
-                    body: Some(CommandBody {
-                        positionals: Positionals::default(),
-                        options: vec![],
-                        flags: vec![],
-                        constraints: vec![],
-                        stdin: None,
-                        stdout: None,
-                        stderr: None,
-                        result: None,
-                        errors: vec![],
-                        annotations: None,
-                    }),
-                }],
-            },
-        };
         let mut export = golem_service_base::mcp::native_tool::compile_native_tool_exports(
             self.component_id,
             "test:owner".try_into().unwrap(),
             "native".try_into().unwrap(),
-            &definition,
+            &native_tool_definition(),
             None,
             None,
         )

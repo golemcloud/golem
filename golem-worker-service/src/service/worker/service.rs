@@ -2562,10 +2562,20 @@ impl WorkerService {
             let component = self
                 .creating_component(environment_id, component_id)
                 .await?;
+            let command_path = self
+                .canonical_tool_command_path(
+                    &component,
+                    &ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    },
+                    &tool.tool_name,
+                    &tool.command_path,
+                )
+                .await?;
             let owner_key =
                 request_key.owner_key(&golem_common::model::InvocationOperation::tool_operation(
                     &tool.tool_name,
-                    &tool.command_path,
+                    &command_path,
                 ));
             let target = RoutedTarget::fresh_tool_owner(
                 AgentId::external_tool_owner(environment_id, component.id, &owner_key),
@@ -2576,6 +2586,9 @@ impl WorkerService {
                 &agent_owner(&component, target.agent_id, None),
                 &[permission],
             )?;
+            if let Some(tool) = start.external_tool.as_mut() {
+                tool.command_path = command_path;
+            }
             (target, component)
         } else {
             let constructor = start
@@ -3158,23 +3171,20 @@ impl WorkerService {
         let env_name = EnvironmentName::try_from(start.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let operation = golem_common::model::InvocationOperation::tool_operation(
-            &start.tool_name,
-            &start.command_path,
-        );
         let (agent_id, component_id) = match start.target {
             PublicNativeToolTarget::Agent { agent_id } => (Some(agent_id), None),
             PublicNativeToolTarget::Component { component_id } => {
                 (None, Some(ComponentId(component_id)))
             }
         };
-        let (routed, component, expected_callee_fingerprint, fresh_owner) = self
+        let (routed, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 start.environment_id,
                 agent_id,
                 component_id,
                 &request_key,
-                &operation,
+                &start.tool_name,
+                &start.command_path,
                 false,
                 AgentVerb::Invoke,
                 &auth,
@@ -3205,7 +3215,7 @@ impl WorkerService {
         };
         let target = SessionInvocationTarget::ExternalTool {
             tool_name: start.tool_name.clone(),
-            command_path: start.command_path.clone(),
+            command_path: command_path.clone(),
         };
         let identity = SessionAgentIdentity {
             component_id: component_id.0,
@@ -3241,7 +3251,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: start.tool_name,
-                command_path: start.command_path,
+                command_path,
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
@@ -3747,7 +3757,8 @@ impl WorkerService {
 
     /// The target of a tool call: an existing agent, or a fresh owner on a component of the
     /// environment. Returns the target, the component, the expected fingerprint of an
-    /// existing agent, and whether the owner is fresh.
+    /// existing agent, whether the owner is fresh, and the canonical form of the command path,
+    /// from which the invocation ID and a fresh owner's agent ID are derived.
     #[allow(clippy::too_many_arguments)]
     async fn tool_target(
         &self,
@@ -3755,11 +3766,18 @@ impl WorkerService {
         agent_id: Option<AgentId>,
         component_id: Option<ComponentId>,
         request_key: &InvocationRequestKey,
-        operation: &str,
+        tool_name: &str,
+        command_path: &[String],
         lookup: bool,
         verb: AgentVerb,
         auth: &AuthCtx,
-    ) -> WorkerResult<(RoutedTarget, Component, Option<AgentFingerprint>, bool)> {
+    ) -> WorkerResult<(
+        RoutedTarget,
+        Component,
+        Option<AgentFingerprint>,
+        bool,
+        Vec<String>,
+    )> {
         match (agent_id, component_id) {
             (Some(agent_id), None) => {
                 let agent = self
@@ -3776,18 +3794,47 @@ impl WorkerService {
                             .to_string(),
                     ));
                 }
+                let owner = match (&agent.metadata.owner_kind, &agent.metadata.agent_type_name) {
+                    (OwnerKind::ComponentAgent, Some(agent_type_name)) => {
+                        ToolBindingOwner::AgentType {
+                            agent_type_name: agent_type_name.clone(),
+                        }
+                    }
+                    _ => ToolBindingOwner::ComponentBaseline {
+                        component_id: agent.component.id,
+                    },
+                };
+                let command_path = self
+                    .canonical_tool_command_path(&agent.component, &owner, tool_name, command_path)
+                    .await?;
                 let fingerprint = agent.metadata.fingerprint;
-                Ok((agent.routed(), agent.component, Some(fingerprint), false))
+                Ok((
+                    agent.routed(),
+                    agent.component,
+                    Some(fingerprint),
+                    false,
+                    command_path,
+                ))
             }
             (None, Some(component_id)) if !lookup => {
                 let component = self
                     .creating_component(environment_id, Some(component_id))
                     .await?;
+                let command_path = self
+                    .canonical_tool_command_path(
+                        &component,
+                        &ToolBindingOwner::ComponentBaseline { component_id },
+                        tool_name,
+                        command_path,
+                    )
+                    .await?;
+                let operation =
+                    golem_common::model::InvocationOperation::tool_operation(&tool_name, &command_path);
                 let target = RoutedTarget::fresh_tool_owner(
                     AgentId::external_tool_owner(
                         environment_id,
                         component_id,
-                        &request_key.owner_key(operation),
+                        &request_key.owner_key(&operation),
                     ),
                     component_id,
                 );
@@ -3796,7 +3843,7 @@ impl WorkerService {
                     &agent_owner(&component, target.agent_id, None),
                     &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
                 )?;
-                Ok((target, component, None, true))
+                Ok((target, component, None, true, command_path))
             }
             _ => Err(WorkerServiceError::TypeChecker(
                 "exactly one of agent_id and component_id is required, and a lookup names the agent"
@@ -3856,17 +3903,14 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32
             }
         };
-        let operation = golem_common::model::InvocationOperation::tool_operation(
-            &request.tool_name,
-            &request.command_path,
-        );
-        let (target, component, expected_callee_fingerprint, fresh_owner) = self
+        let (target, component, expected_callee_fingerprint, fresh_owner, command_path) = self
             .tool_target(
                 environment_id,
                 request.agent_id,
                 request.component_id,
                 &request_key,
-                &operation,
+                &request.tool_name,
+                &request.command_path,
                 lookup,
                 agent_verb_for_invocation_mode(proto_mode),
                 &auth,
@@ -3914,7 +3958,7 @@ impl WorkerService {
             origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: request.tool_name,
-                command_path: request.command_path,
+                command_path,
                 input,
                 stdin: false,
                 stdout: false,
@@ -4016,6 +4060,24 @@ impl WorkerService {
                 ));
             }
         };
+        let (definition, deployment_revision) = self
+            .effective_tool_definition(&component, &owner, &request.tool_name)
+            .await?;
+        Ok(NativeToolDefinition {
+            definition,
+            component_revision: component.revision,
+            deployment_revision,
+        })
+    }
+
+    /// The definition of the tool named `tool_name` as `owner` of `component` sees it, with the
+    /// deployment revision that selected it.
+    async fn effective_tool_definition(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+    ) -> WorkerResult<(golem_common::schema::tool::Tool, DeploymentRevision)> {
         let state = self
             .component_service
             .get_tool_deployment_state(component.environment_id, component.id, component.revision)
@@ -4025,14 +4087,13 @@ impl WorkerService {
                     "no tool deployment is active for the target".to_string(),
                 )
             })?;
-        let tool_name = ToolName::try_from(request.tool_name.as_str())
-            .map_err(WorkerServiceError::TypeChecker)?;
+        let tool_name = ToolName::try_from(tool_name).map_err(WorkerServiceError::TypeChecker)?;
         let registered = state.registered_tools.get(&tool_name).ok_or_else(|| {
             WorkerServiceError::TypeChecker(format!("tool '{tool_name}' is not registered"))
         })?;
         if !state
             .tool_bindings
-            .get(&owner)
+            .get(owner)
             .is_some_and(|bindings| bindings.contains_key(&tool_name))
         {
             return Err(WorkerServiceError::TypeChecker(format!(
@@ -4041,15 +4102,33 @@ impl WorkerService {
         }
         let definition = state
             .tool_middleware_chains
-            .get(&owner)
+            .get(owner)
             .and_then(|chains| chains.get(&tool_name))
             .map(|chain| chain.effective_definition.clone())
             .unwrap_or_else(|| registered.registration.definition.clone());
-        Ok(NativeToolDefinition {
-            definition,
-            component_revision: component.revision,
-            deployment_revision: state.deployment_revision,
-        })
+        Ok((definition, state.deployment_revision))
+    }
+
+    /// The canonical form of `command_path` in the tool named `tool_name` as `owner` of
+    /// `component` sees it. Invocation IDs are derived from the canonical form, so an alias and
+    /// the name of a command give the same ID.
+    async fn canonical_tool_command_path(
+        &self,
+        component: &Component,
+        owner: &ToolBindingOwner,
+        tool_name: &str,
+        command_path: &[String],
+    ) -> WorkerResult<Vec<String>> {
+        let (definition, _) = self
+            .effective_tool_definition(component, owner, tool_name)
+            .await?;
+        definition
+            .canonical_command_path(command_path)
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(format!(
+                    "command path {command_path:?} does not name a command of tool '{tool_name}'"
+                ))
+            })
     }
 
     /// REST invoke: on the agent with `agentId`, which must have the type, or on the agent of
@@ -5657,6 +5736,53 @@ mod tests {
         ))
     }
 
+    /// The harness's tool `weather`: one subcommand `current`, with the alias `now`.
+    fn weather_tool_definition() -> golem_common::schema::tool::Tool {
+        use golem_common::schema::tool::{
+            CommandBody, CommandIndex, CommandNode, CommandTree, Doc, Tool,
+        };
+        let body = CommandBody {
+            positionals: Default::default(),
+            options: vec![],
+            flags: vec![],
+            constraints: vec![],
+            stdin: None,
+            stdout: None,
+            stderr: None,
+            result: None,
+            errors: vec![],
+            annotations: None,
+        };
+        Tool {
+            version: "1.0.0".into(),
+            requires_filesystem: false,
+            http_mount: None,
+            schema: SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![
+                    CommandNode {
+                        name: "weather".into(),
+                        aliases: vec![],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![CommandIndex(1)],
+                        body: None,
+                    },
+                    CommandNode {
+                        name: "current".into(),
+                        aliases: vec!["now".into()],
+                        doc: Doc::default(),
+                        http: None,
+                        globals: Default::default(),
+                        subcommands: vec![],
+                        body: Some(body),
+                    },
+                ],
+            },
+        }
+    }
+
     impl RestHarness {
         fn new(mode: AgentMode) -> Self {
             Self::new_with_method_schema(mode, InputSchema::Parameters(vec![]), OutputSchema::Unit)
@@ -5730,12 +5856,23 @@ mod tests {
                 Duration::from_secs(60),
             ));
             let agent_types = agent_type_resolver(registry);
+            let tool_state = crate::service::component::tests::tool_deployment_state(
+                &component,
+                "weather",
+                weather_tool_definition(),
+                [
+                    ToolBindingOwner::ComponentBaseline { component_id },
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type_name.clone(),
+                    },
+                ],
+            );
 
             Self {
                 worker_service: WorkerService::new(
                     Arc::new(StaticComponentService {
                         components: vec![component],
-                        tool_state: None,
+                        tool_state: Some(tool_state),
                         tool_queries: Mutex::new(vec![]),
                     }),
                     Arc::new(AllowAllAuthService),
@@ -9363,7 +9500,8 @@ mod tests {
     #[test]
     async fn native_tool_fresh_owner_uses_reserved_identity_and_native_wire_shape() {
         let harness = RestHarness::new(AgentMode::Durable);
-        let request = harness.tool_request();
+        let mut request = harness.tool_request();
+        request.command_path = vec!["now".to_string()];
         let key = RestHarness::tool_key();
         harness
             .worker_client
@@ -9427,6 +9565,7 @@ mod tests {
         assert!(tool.fresh_owner);
         assert!(!tool.stdin && !tool.stdout);
         assert_eq!(tool.tool_name, "weather");
+        assert_eq!(tool.command_path, ["current"]);
         assert!(matches!(
             response.result,
             Some(NativeToolResult::Success(_))
