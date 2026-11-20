@@ -27,7 +27,8 @@ use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
-    OplogViewerServer, open_in_browser, oplog_page_entry_view, serve_oplog_viewer,
+    OplogViewerServer, open_in_browser, oplog_page_entry_in_full, oplog_page_entry_view,
+    serve_oplog_viewer,
 };
 use crate::command_handler::agent::stream::AgentConnection;
 use crate::context::Context;
@@ -45,7 +46,9 @@ use crate::model::agent::action_result::{
     AgentPluginToggleResult, AgentResumeResult, AgentRevertResult, AgentSimulateCrashResult,
 };
 use crate::model::agent::files::{AgentFilesView, FileNodeView};
-use crate::model::agent::oplog::{AgentOplogEntryView, AgentOplogPageView, OplogJsonlWriter};
+use crate::model::agent::oplog::{
+    AgentOplogEntryView, AgentOplogPageView, OplogExportSelection, OplogJsonlWriter,
+};
 use crate::model::agent::oplog_html::{
     OplogViewerDocument, OplogViewerMode, render_oplog_viewer_html,
 };
@@ -1088,7 +1091,10 @@ impl AgentCommandHandler {
     /// The export follows the cursor of each page to the end of the range and writes each page
     /// before it reads the next, so its memory does not grow with the oplog. A search page that
     /// the scan budget of the server ends early still has a cursor, so the budget does not end
-    /// the export. Each entry that a page omits for its size is read in full.
+    /// the export. Each entry that a page omits for its size is read in full, and a failed read
+    /// fails the export. The export writes to a temporary file in the directory of `path`, and
+    /// renames it to `path` only after the last entry, so a failed export leaves no file at
+    /// `path`.
     async fn cmd_oplog_jsonl_export(
         &self,
         agent_id: AgentIdArgs,
@@ -1109,58 +1115,82 @@ impl AgentCommandHandler {
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        let file =
-            File::create(path).with_context(|| format!("Failed to create {}", path.display()))?;
-        let mut writer =
-            OplogJsonlWriter::new(std::io::BufWriter::new(file), self.ctx.masking_config());
+        let directory = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        fs::create_dir_all(directory)?;
+        let file = tempfile::NamedTempFile::new_in(directory)
+            .with_context(|| format!("Failed to create a file in {}", directory.display()))?;
+        let selection = match query {
+            Some(_) => OplogExportSelection::Matches,
+            None => OplogExportSelection::EveryEntry,
+        };
+        let writer = OplogJsonlWriter::new(
+            std::io::BufWriter::new(file),
+            self.ctx.masking_config(),
+            selection,
+        );
 
-        let batch_size = self.ctx.http_batch_size();
-        let mut cursor = Option::<OplogCursor>::None;
-        loop {
-            let page = self
-                .ctx
-                .golem_clients()
-                .await?
-                .worker
-                .get_oplog(
-                    &component.id.0,
-                    &agent_id.0,
-                    from,
-                    to,
-                    batch_size,
-                    cursor.as_ref(),
-                    query.as_deref(),
-                )
-                .await
-                .map_service_error()?;
-            for entry in page.entries {
-                writer.write(
-                    oplog_page_entry_view(&self.ctx, &component.id.0, &agent_id.0, entry, false)
-                        .await?,
-                )?;
-            }
-            match page.next {
-                Some(next) => cursor = Some(next),
-                None => break,
-            }
-        }
-        let written = writer.written();
-        writer
-            .finish()?
+        let (ctx, component_id, agent_name, query) = (
+            &self.ctx,
+            &component.id.0,
+            agent_id.0.as_str(),
+            query.as_deref(),
+        );
+        let batch_size = ctx.http_batch_size();
+        let pages =
+            futures_util::stream::try_unfold(Some(None::<OplogCursor>), move |cursor| async move {
+                let Some(cursor) = cursor else {
+                    return anyhow::Ok(None);
+                };
+                let page = ctx
+                    .golem_clients()
+                    .await?
+                    .worker
+                    .get_oplog(
+                        component_id,
+                        agent_name,
+                        from,
+                        to,
+                        batch_size,
+                        cursor.as_ref(),
+                        query,
+                    )
+                    .await
+                    .map_service_error()?;
+                Ok(Some((page.entries, page.next.map(Some))))
+            });
+        let writer = futures_util::TryStreamExt::try_fold(pages, writer, |writer, entries| {
+            futures_util::TryStreamExt::try_fold(
+                futures_util::stream::iter(entries.into_iter().map(anyhow::Ok)),
+                writer,
+                move |mut writer, entry| async move {
+                    writer.write(
+                        oplog_page_entry_in_full(ctx, component_id, agent_name, entry).await?,
+                    )?;
+                    Ok(writer)
+                },
+            )
+        })
+        .await?;
+
+        let (buffered, count) = writer.finish()?;
+        let file = buffered
             .into_inner()
             .map_err(|error| error.into_error())
-            .and_then(|file| file.sync_all())
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        file.as_file()
+            .sync_all()
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        file.persist(path)
+            .map_err(|error| error.error)
             .with_context(|| format!("Failed to write {}", path.display()))?;
 
         log_action(
             "Exported",
             format!(
-                "{written} oplog entries of agent {} to {}",
+                "{count} oplog entries of agent {} to {}",
                 format_agent_id_match(&agent_id_match),
                 path.display().to_string().log_color_highlight()
             ),

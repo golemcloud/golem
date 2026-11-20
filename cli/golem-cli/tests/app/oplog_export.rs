@@ -272,13 +272,17 @@ async fn start_multi_status_server() -> u16 {
 
 /// Deploys the probe app on a server that keeps oplog entries above 64 KiB out of oplog pages,
 /// fills the probe agents, and points the CLI at a recording proxy in front of the router.
-async fn setup_probe_app(ctx: &mut TestContext) -> RecordingProxy {
+/// Starts a local server with `server_config` added to its configuration, and deploys the probe
+/// app.
+async fn setup_probe_app(ctx: &mut TestContext, server_config: &str) -> RecordingProxy {
     let config_file = ctx.working_dir.join("golem-server.toml");
     std::fs::write(
         &config_file,
-        indoc! { r#"
+        formatdoc! { r#"
             [worker_executor.limits]
             max_inline_oplog_entry_size = 65536
+
+            {server_config}
         "# },
     )
     .unwrap();
@@ -569,7 +573,7 @@ fn served_url(serving_line: &str) -> String {
 #[timeout("40 minutes")]
 async fn oplog_export_hides_customer_data() {
     let mut ctx = TestContext::new();
-    let proxy = setup_probe_app(&mut ctx).await;
+    let proxy = setup_probe_app(&mut ctx, "").await;
 
     // Control: the marker is in the oplog, also in the agent config and in the URL of the failed
     // HTTP call, and the query matches entries.
@@ -951,7 +955,7 @@ async fn oplog_export_hides_customer_data() {
 #[timeout("40 minutes")]
 async fn oplog_export_serves_obfuscated_pages() {
     let mut ctx = TestContext::new();
-    let proxy = setup_probe_app(&mut ctx).await;
+    let proxy = setup_probe_app(&mut ctx, "").await;
     let plain = plain_dump(&ctx, PROBE).await;
     let record_indices = invocation_indices(&plain, "record");
     assert_eq!(record_indices.len(), 2);
@@ -1126,12 +1130,38 @@ async fn oplog_export_serves_obfuscated_pages() {
 #[timeout("40 minutes")]
 async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     let mut ctx = TestContext::new();
-    let _proxy = setup_probe_app(&mut ctx).await;
+    // A scan budget far below the length of the oplogs ends each search page early, and the
+    // archive interval moves the oplog of each idle agent to the archive layers.
+    let _proxy = setup_probe_app(
+        &mut ctx,
+        indoc! { r#"
+            [worker_executor.limits.scan_budget]
+            entries = 4
+
+            [worker_executor.oplog]
+            archive_interval = "2s"
+        "# },
+    )
+    .await;
+    // The agents are idle, so their oplogs move to the archive (archive_interval=2s + scheduler
+    // process_interval<=2s; 8s is a comfortable margin).
+    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
 
     // The long probe has more entries than one page of the HTTP batch size (50).
     let plain = plain_dump(&ctx, LONG_PROBE).await;
     let last = plain.len() as u64;
     assert!(last > 120, "the long probe has only {last} entries");
+
+    // `--format json` reads the oplog page by page and prints one document per entry: with
+    // pages of 2 entries, it prints the same documents.
+    let paged = ctx
+        .cli_with_env(
+            [cmd::AGENT, "oplog", LONG_PROBE, flag::FORMAT, "json"],
+            &[("GOLEM_HTTP_BATCH_SIZE", "2")],
+        )
+        .await;
+    assert!(paged.success_or_dump());
+    assert_eq!(paged.stdout_json::<Value>(), plain);
     let to = last - 3;
     let path = ctx.cwd_path_join("export/oplog.jsonl");
     let outputs = ctx
@@ -1188,13 +1218,16 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     let exported = fs::read_to_string(&query_path)
         .unwrap()
         .lines()
-        .map(|line| {
-            serde_json::from_str::<Value>(line).unwrap()["index"]
-                .as_u64()
-                .unwrap()
-        })
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(exported, started[2..=3].to_vec());
+    assert_eq!(
+        exported,
+        plain
+            .iter()
+            .filter(|document| started[2..=3].contains(&document["index"].as_u64().unwrap()))
+            .cloned()
+            .collect::<Vec<_>>()
+    );
 
     // A file export needs the JSON Lines format, and a range must not end before it starts.
     let text = ctx
@@ -1207,8 +1240,29 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         ])
         .await;
     assert!(!text.success(), "{}", text.stdout_text());
+    let reversed_path = ctx.cwd_path_join("export/reversed.jsonl");
     let reversed = ctx
-        .cli([cmd::AGENT, "oplog", PROBE, "--from", "5", "--to", "4"])
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            PROBE,
+            "--from",
+            "5",
+            "--to",
+            "4",
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            reversed_path.to_str().unwrap(),
+        ])
         .await;
     assert!(!reversed.success(), "{}", reversed.stdout_text());
+    // A failed export leaves no file behind, and no temporary file in the directory.
+    assert!(!reversed_path.exists());
+    let mut files = std::fs::read_dir(ctx.cwd_path_join("export"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    files.sort();
+    assert_eq!(files, vec!["oplog.jsonl", "query.jsonl"]);
 }

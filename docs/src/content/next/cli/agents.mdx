@@ -151,7 +151,7 @@ With the optional `--from` parameter it is possible to only get oplog entries _a
 golem agent oplog --from 100 'CounterAgent("my-counter")'
 ```
 
-With the optional `--to` parameter the read ends at a certain oplog index, included. A `--to` after the end of the oplog ends the read at the end:
+The optional `--to` parameter sets the last oplog index of the read. A `--to` after the end of the oplog ends the read at the end of the oplog:
 
 ```shell copy
 golem agent oplog --from 100 --to 200 'CounterAgent("my-counter")'
@@ -167,7 +167,7 @@ The `--output` parameter exports the oplog to a file as [JSON Lines](https://jso
 golem agent oplog 'CounterAgent("my-counter")' --format jsonl --output oplog.jsonl
 ```
 
-The export reads the oplog page by page and writes each page before it reads the next, so it works for oplogs of any size. Each entry is exported in full, also the entries that oplog pages omit for their size. `--from`, `--to` and `--query` select the exported entries.
+The export reads the oplog one page at a time, and writes each page before it reads the next page. Thus, the export works for an oplog of any size. The export writes each entry in full, and reads in full the entries that oplog pages omit for their size. If a read fails, the export fails and does not write the file. `--from`, `--to` and `--query` select the entries that the export writes.
 
 ### Viewing the oplog in a browser
 
@@ -213,7 +213,7 @@ In the structured formats, the export emits a sequence of documents in place of 
 
 ### Searching for oplog entries
 
-Use `golem agent oplog --query` to return matching entries. With `--from` and `--to`, only the matching entries in the range are returned. The query language supports a subset of Lucene syntax:
+Use `golem agent oplog --query` to return matching entries. With `--from` and `--to`, the search returns only the matching entries in the range. The query language supports a subset of Lucene syntax:
 
 - `search terms` requires both terms. Unquoted terms are case-insensitive substring matches.
 - Uppercase `AND`, `OR`, and `NOT` combine or exclude matches. Each condition applies to the same entry, but can match a different value within it.

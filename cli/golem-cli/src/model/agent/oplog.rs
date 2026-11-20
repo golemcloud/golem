@@ -136,54 +136,83 @@ impl StructuredOutput for AgentOplogPageView {
     const KIND: &'static str = "agent.oplog-page";
 }
 
+/// The entries that an oplog export holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OplogExportSelection {
+    /// Every entry of the range: each entry directly follows the entry before it.
+    EveryEntry,
+    /// The entries of the range that match a query: each entry comes after the entry before it.
+    Matches,
+}
+
+/// Checks that an oplog export can write the entry at `index` after the entry at `previous`.
+/// An entry at or before `previous` is refused, because the read repeated or reordered entries.
+/// When the export holds every entry, an entry after `previous + 1` is refused too, because the
+/// read left out entries. The first entry of an export is always accepted.
+pub fn check_oplog_export_order(
+    selection: OplogExportSelection,
+    previous: Option<u64>,
+    index: u64,
+) -> anyhow::Result<()> {
+    match (selection, previous) {
+        (_, None) => Ok(()),
+        (_, Some(previous)) if index <= previous => anyhow::bail!(
+            "the oplog read returned the entry at index {index} after the entry at index {previous}"
+        ),
+        (OplogExportSelection::EveryEntry, Some(previous)) if index - previous > 1 => {
+            anyhow::bail!(
+                "the oplog read returned the entry at index {index} after the entry at index \
+                 {previous}, without the entries between them"
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Writes an oplog export as JSON Lines: each entry is the `agent.oplog` document that
-/// `--format json` prints for it, on its own line. The entries must come in index order, each
-/// once; an entry at or before the last written index is refused, so that a read that repeats or
-/// reorders entries at a page boundary fails the export instead of writing a wrong file.
+/// `--format json` prints for it, on its own line. The writer refuses an entry that
+/// [`check_oplog_export_order`] refuses, so that a wrong read fails the export and does not
+/// write a wrong file.
 pub struct OplogJsonlWriter<W: std::io::Write> {
     writer: W,
     masking: crate::model::masking::MaskingConfig,
+    selection: OplogExportSelection,
     last_index: Option<u64>,
-    written: u64,
+    count: u64,
 }
 
 impl<W: std::io::Write> OplogJsonlWriter<W> {
-    pub fn new(writer: W, masking: crate::model::masking::MaskingConfig) -> Self {
+    pub fn new(
+        writer: W,
+        masking: crate::model::masking::MaskingConfig,
+        selection: OplogExportSelection,
+    ) -> Self {
         Self {
             writer,
             masking,
+            selection,
             last_index: None,
-            written: 0,
+            count: 0,
         }
     }
 
     pub fn write(&mut self, entry: AgentOplogEntryView) -> anyhow::Result<()> {
-        if let Some(last_index) = self.last_index
-            && entry.index <= last_index
-        {
-            anyhow::bail!(
-                "the oplog read returned the entry at index {} after the entry at index {last_index}",
-                entry.index
-            );
-        }
+        check_oplog_export_order(self.selection, self.last_index, entry.index)?;
         let index = entry.index;
         let document =
             crate::model::cli_output::to_structured_output_value_masked(entry, self.masking)?;
         serde_json::to_writer(&mut self.writer, &document)?;
         self.writer.write_all(b"\n")?;
         self.last_index = Some(index);
-        self.written += 1;
+        self.count += 1;
         Ok(())
     }
 
-    /// The count of the written entries.
-    pub fn written(&self) -> u64 {
-        self.written
-    }
-
-    pub fn finish(mut self) -> anyhow::Result<W> {
+    /// Flushes the written lines, and gives the inner writer and the count of the written
+    /// entries.
+    pub fn finish(mut self) -> anyhow::Result<(W, u64)> {
         self.writer.flush()?;
-        Ok(self.writer)
+        Ok((self.writer, self.count))
     }
 }
 
@@ -1543,28 +1572,57 @@ mod tests {
     }
 
     #[test]
-    fn the_jsonl_writer_writes_one_agent_oplog_document_per_line_and_refuses_repeated_indices() {
+    fn an_oplog_export_refuses_a_repeated_or_earlier_entry_and_a_gap_in_every_entry() {
+        use OplogExportSelection::{EveryEntry, Matches};
+        [
+            ((EveryEntry, None, 1), true),
+            ((EveryEntry, None, 7), true),
+            ((EveryEntry, Some(3), 4), true),
+            ((EveryEntry, Some(3), 3), false),
+            ((EveryEntry, Some(3), 2), false),
+            ((EveryEntry, Some(3), 5), false),
+            ((EveryEntry, Some(u64::MAX - 1), u64::MAX), true),
+            ((Matches, None, 7), true),
+            ((Matches, Some(3), 4), true),
+            ((Matches, Some(3), 9), true),
+            ((Matches, Some(3), 3), false),
+            ((Matches, Some(3), 2), false),
+        ]
+        .into_iter()
+        .for_each(|((selection, previous, index), accepted)| {
+            assert_eq!(
+                check_oplog_export_order(selection, previous, index).is_ok(),
+                accepted,
+                "{selection:?}, entry {index} after {previous:?}"
+            )
+        });
+    }
+
+    #[test]
+    fn the_jsonl_writer_writes_one_agent_oplog_document_per_line_across_pages() {
         let mut writer = OplogJsonlWriter::new(
             Vec::new(),
             crate::model::masking::MaskingConfig::hide_secrets(),
+            OplogExportSelection::EveryEntry,
         );
         // Two pages; the second, last page starts right after the first one.
-        for page in [vec![(1, "a"), (2, "b")], vec![(3, "c")]] {
-            for (index, message) in page {
-                writer.write(log_view(index, message)).unwrap();
-            }
-        }
-        assert_eq!(writer.written(), 3);
-        // A page that starts again at the last entry of the previous page is refused.
+        [vec![(1, "a"), (2, "b")], vec![(3, "c")]]
+            .into_iter()
+            .flatten()
+            .try_for_each(|(index, message)| writer.write(log_view(index, message)))
+            .unwrap();
+        // A page that starts again at an entry already written, or after a gap, is refused and
+        // writes nothing.
         assert!(writer.write(log_view(3, "c")).is_err());
         assert!(writer.write(log_view(2, "b")).is_err());
-        let written = String::from_utf8(writer.finish().unwrap()).unwrap();
+        assert!(writer.write(log_view(5, "e")).is_err());
+        let (written, count) = writer.finish().unwrap();
+        assert_eq!(count, 3);
+        let written = String::from_utf8(written).unwrap();
 
-        let lines = written.lines().collect::<Vec<_>>();
         assert!(written.ends_with('\n'));
-        assert_eq!(lines.len(), 3);
-        let documents = lines
-            .iter()
+        let documents = written
+            .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(

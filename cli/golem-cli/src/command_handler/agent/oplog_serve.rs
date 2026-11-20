@@ -29,8 +29,9 @@ use crate::model::agent::oplog_html::{
 use crate::oplog_export::export::{OplogExportError, OplogExportOptions, OplogExportSession};
 use crate::oplog_export::model::{OplogExportCoverage, ReportEntry};
 use crate::oplog_export::obfuscator::TokenKey;
+use anyhow::Context as _;
 use golem_client::api::WorkerClient;
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OmittedOplogEntry, OplogCursor, PublicOplogPageEntry};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
 use poem::web::{Data, Html, Json, Query};
@@ -72,19 +73,8 @@ pub async fn oplog_page_entry_view(
         return Ok(omitted.into());
     }
 
-    let clients = ctx.golem_clients().await?;
-    match clients
-        .worker
-        .get_oplog_entry(
-            component_id,
-            agent_name,
-            omitted.oplog_index.as_u64(),
-            Some(omitted.component_revision.into()),
-        )
-        .await
-        .map_service_error()
-    {
-        Ok(entry) => Ok(entry.into()),
+    match read_omitted_entry(ctx, component_id, agent_name, &omitted).await {
+        Ok(entry) => Ok(entry),
         Err(error) => {
             log_warn(format!(
                 "Failed to read oplog entry {} ({}, {} bytes), it stays omitted: {error:#}",
@@ -93,6 +83,50 @@ pub async fn oplog_page_entry_view(
             Ok(omitted.into())
         }
     }
+}
+
+/// The output view of an oplog page entry in full. An entry that the page omitted is read in
+/// full, and a failed read is an error.
+pub async fn oplog_page_entry_in_full(
+    ctx: &Context,
+    component_id: &Uuid,
+    agent_name: &str,
+    page_entry: PublicOplogPageEntry,
+) -> anyhow::Result<AgentOplogEntryView> {
+    match page_entry {
+        PublicOplogPageEntry::Included(entry) => Ok(entry.into()),
+        PublicOplogPageEntry::Omitted(omitted) => {
+            read_omitted_entry(ctx, component_id, agent_name, &omitted)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to read oplog entry {} ({}, {} bytes)",
+                        omitted.oplog_index, omitted.entry_type, omitted.size
+                    )
+                })
+        }
+    }
+}
+
+async fn read_omitted_entry(
+    ctx: &Context,
+    component_id: &Uuid,
+    agent_name: &str,
+    omitted: &OmittedOplogEntry,
+) -> anyhow::Result<AgentOplogEntryView> {
+    let entry = ctx
+        .golem_clients()
+        .await?
+        .worker
+        .get_oplog_entry(
+            component_id,
+            agent_name,
+            omitted.oplog_index.as_u64(),
+            Some(omitted.component_revision.into()),
+        )
+        .await
+        .map_service_error()?;
+    Ok(entry.into())
 }
 
 #[derive(Debug, Deserialize)]

@@ -1915,8 +1915,8 @@ pub mod worker {
             #[arg(long, conflicts_with = "cursor")]
             from: Option<u64>,
             /// Index of the last oplog entry to get. If missing, or after the end of the oplog,
-            /// the read goes to the end of the oplog. With --query, only the matching entries up
-            /// to this index are returned.
+            /// the read goes to the end of the oplog. With --query, the read returns only the
+            /// matching entries up to this index.
             #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
             to: Option<u64>,
             #[arg(
@@ -1932,11 +1932,12 @@ pub mod worker {
             /// response. By default the CLI reads each omitted entry in full.
             #[arg(long, conflicts_with_all = ["obfuscate", "output"])]
             omit_payloads: bool,
-            /// Export the entries to FILE as JSON Lines: one `agent.oplog` document per line, in
-            /// index order, as `--format json` prints them. The export reads the oplog page by
-            /// page to the end of the range and writes each page before it reads the next, so it
-            /// works for oplogs of any size. Each entry is exported in full, also the entries that
-            /// oplog pages omit for their size.
+            /// Export the entries to FILE as JSON Lines: one `agent.oplog` document on each line,
+            /// in index order, the same documents that `--format json` prints. The export reads
+            /// the oplog one page at a time to the end of the range, and writes each page before
+            /// it reads the next page. Thus, the export works for an oplog of any size. The export
+            /// writes each entry in full, and reads in full the entries that oplog pages omit for
+            /// their size. If a read fails, the export fails and does not write FILE.
             #[arg(
                 long,
                 value_name = "FILE",
@@ -3475,20 +3476,22 @@ mod test {
     fn oplog_query_combines_with_a_range_and_the_file_export_excludes_the_other_outputs() {
         assert!(parse_oplog(&["--query", "error", "--from", "3", "--to", "9"]).is_ok());
         assert!(parse_oplog(&["--to", "9", "--format", "jsonl", "--output", "f.jsonl"]).is_ok());
-        for conflicting in [
+        [
             vec!["--output", "f.jsonl", "--page"],
             vec!["--output", "f.jsonl", "--html", "f.html"],
             vec!["--output", "f.jsonl", "--serve"],
             vec!["--output", "f.jsonl", "--obfuscate"],
             vec!["--output", "f.jsonl", "--omit-payloads"],
             vec!["--to", "9", "--obfuscate"],
-        ] {
+        ]
+        .into_iter()
+        .for_each(|conflicting| {
             assert_eq!(
                 parse_oplog(&conflicting).unwrap_err().kind(),
                 clap::error::ErrorKind::ArgumentConflict,
                 "{conflicting:?}"
-            );
-        }
+            )
+        });
     }
 
     #[test]
