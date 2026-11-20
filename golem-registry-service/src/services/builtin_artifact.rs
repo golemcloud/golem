@@ -1026,9 +1026,11 @@ mod tests {
     /// and drops the other sibling futures still in flight. Dropping a sibling's `spawn_blocking`
     /// join handle only detaches its task; the task keeps running, parked in `handle.block_on`
     /// on a timer-bearing future, unless `resolve_many` itself also shuts the resolver down
-    /// before returning the error. This test needs two concurrent artifacts, one that fails
-    /// immediately and one that stays connecting, to exercise that interleaving; a single
-    /// failed download does not reach the code path this covers.
+    /// before returning the error. This test needs two concurrent artifacts, one that fails and
+    /// one that stays connecting, to exercise that interleaving; a single failed download does
+    /// not reach the code path this covers. The failing artifact's server deliberately waits
+    /// for the stalling artifact to be accepted before responding with an error, so the two
+    /// downloads are deterministically overlapped rather than racing an arbitrary refused port.
     #[test]
     #[test_r::timeout("10s")]
     async fn resolve_many_drains_a_stalled_sibling_after_another_fails() {
@@ -1057,6 +1059,39 @@ mod tests {
             })
         };
 
+        // Served from its own listener, rather than assuming port 1 refuses connections: the
+        // handler waits until the "stalling" artifact above has actually been accepted before
+        // responding with a failure, so the test deterministically overlaps the two downloads
+        // instead of letting the failure race ahead before the sibling starts connecting.
+        let failing_acceptor = poem::listener::TcpListener::bind("127.0.0.1:0")
+            .into_acceptor()
+            .await
+            .unwrap();
+        let failing_port = failing_acceptor.local_addr()[0]
+            .as_socket_addr()
+            .unwrap()
+            .port();
+        let failing_endpoint = poem::endpoint::make({
+            let accepted = accepted.clone();
+            move |_| {
+                let accepted = accepted.clone();
+                async move {
+                    while accepted.load(Ordering::SeqCst) == 0 {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    poem::Response::builder()
+                        .status(poem::http::StatusCode::INTERNAL_SERVER_ERROR)
+                        .finish()
+                }
+            }
+        });
+        let failing_server = tokio::spawn(async move {
+            poem::Server::new_with_acceptor(failing_acceptor)
+                .run(failing_endpoint)
+                .await
+                .unwrap();
+        });
+
         let cache = tempfile::tempdir().unwrap();
         let shutdown = BuiltinArtifactShutdown::new();
         let resolver = BuiltinArtifactResolver::new(
@@ -1064,11 +1099,9 @@ mod tests {
                 cache_dir: Some(cache.path().to_path_buf()),
                 source_overrides: BTreeMap::from([
                     (
-                        // Nothing listens on port 1, so this fails as soon as the connection is
-                        // refused, well before the "stalling" sibling below finishes connecting.
-                        "fails_immediately".to_string(),
+                        "fails_after_sibling_connects".to_string(),
                         BuiltinArtifactSource {
-                            url: "http://127.0.0.1:1/unreachable.wasm".to_string(),
+                            url: format!("http://127.0.0.1:{failing_port}/unreachable.wasm"),
                             sha256: None,
                         },
                     ),
@@ -1092,7 +1125,7 @@ mod tests {
                 resolver
                     .resolve_many(
                         BuiltinArtifactKind::Tools,
-                        ["fails_immediately", "stalls_connecting"],
+                        ["fails_after_sibling_connects", "stalls_connecting"],
                     )
                     .await
             }
@@ -1104,8 +1137,7 @@ mod tests {
             .expect("the resolve_many task must not panic")
             .expect_err("one artifact failing must fail resolve_many as a whole");
         assert!(
-            error.to_string().contains("fails_immediately")
-                || error.to_string().contains("unreachable"),
+            error.to_string().contains("fails_after_sibling_connects"),
             "the original failure's error must be preserved, got: {error:#}"
         );
 
@@ -1127,6 +1159,7 @@ mod tests {
 
         stop.store(true, Ordering::SeqCst);
         held_connections.join().unwrap();
+        failing_server.abort();
     }
 
     #[test]
