@@ -55,7 +55,7 @@ use golem_common::model::{
 };
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::serialization::deserialize;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_test_framework::dsl::TestDsl;
@@ -185,7 +185,7 @@ async fn record_effect(
 struct PermissionFixture {
     executor: TestWorkerExecutor,
     owner_component: ComponentDto,
-    owner_id: golem_common::model::AgentId,
+    owner_id: golem_common::model::OwnedAgentId,
     environment_id: EnvironmentId,
     account_id: AccountId,
     fingerprint: golem_common::model::AgentFingerprint,
@@ -320,7 +320,7 @@ async fn permission_fixture_with_overrides(
         owner_component.revision,
         Some(deployment),
     );
-    let owner_agent = agent_id!("ToolRuntimeBypassOwner", "permission-owner");
+    let owner_agent = agent_key!("ToolRuntimeBypassOwner", "permission-owner");
     let owner_id = executor
         .start_agent_with(
             &owner_component.id,
@@ -416,7 +416,7 @@ async fn install_card(fixture: &PermissionFixture, card: StoredCard) -> anyhow::
     fixture.cards.register(card.clone());
     fixture
         .executor
-        .queue_card_install(&fixture.owner_id, card)
+        .queue_card_install(&fixture.owner_id.agent_id, card)
         .await
 }
 
@@ -425,7 +425,7 @@ async fn revoke_card(fixture: &PermissionFixture, card_id: CardId) -> anyhow::Re
     fixture.cards.revoke(card_id);
     fixture
         .executor
-        .queue_card_revocation(&fixture.owner_id, card_id)
+        .queue_card_revocation(&fixture.owner_id.agent_id, card_id)
         .await
 }
 
@@ -479,7 +479,7 @@ async fn probe(
         .executor
         .invoke_external_tool_in_environment(
             fixture.environment_id,
-            &fixture.owner_id,
+            &fixture.owner_id.agent_id,
             fixture.fingerprint,
             key.clone(),
             ToolName::try_from(PERMISSION_PROBE).unwrap(),
@@ -970,8 +970,9 @@ async fn revocation_between_underlying_calls(
     fixture
         .executor
         .complete_promise(
+            &fixture.owner_id.environment_id,
             &PromiseId {
-                agent_id: fixture.owner_id.clone(),
+                agent_id: fixture.owner_id.agent_id,
                 fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
@@ -1196,8 +1197,9 @@ async fn crash_during_an_admitted_call_repairs_it_and_denies_later_descendants(
     fixture
         .executor
         .complete_promise(
+            &fixture.owner_id.environment_id,
             &PromiseId {
-                agent_id: fixture.owner_id.clone(),
+                agent_id: fixture.owner_id.agent_id,
                 fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },
@@ -1372,11 +1374,12 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     fixture
         .executor
         .interrupt_loaded_worker(
-            &fixture.owner_id,
+            &fixture.owner_id.agent_id,
             InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
         )
         .await?;
-    let owned = golem_common::model::OwnedAgentId::new(fixture.environment_id, &fixture.owner_id);
+    let owned =
+        golem_common::model::OwnedAgentId::new(fixture.environment_id, &fixture.owner_id.agent_id);
     tokio::time::timeout(Duration::from_secs(30), async {
         while fixture.executor.worker_is_loaded(&owned).await {
             tokio::task::yield_now().await;
@@ -1401,7 +1404,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     let stored_key = fixture
         .executor
         .finalized_invocation_key(
-            &fixture.owner_id,
+            &fixture.owner_id.agent_id,
             &request_key,
             &format!("tool:{PERMISSION_PROBE}/read"),
         )
@@ -1419,7 +1422,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
                 },
             );
             Ok(InvocationStart {
-                agent_id: Some(fixture.owner_id.clone().into()),
+                target: Some(crate::agent::id_target(&fixture.owner_id)),
                 idempotency_key: Some(key.clone().into()),
                 mode: AgentInvocationMode::Schedule as i32,
                 schedule_at: Some(prost_types::Timestamp {
@@ -1542,7 +1545,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
         panic!("the repaired wake must wake the original owner's pending invocation");
     };
     assert_eq!(*target_worker_fingerprint, fixture.fingerprint);
-    assert_eq!(owned_agent_id.agent_id, fixture.owner_id);
+    assert_eq!(owned_agent_id.agent_id, fixture.owner_id.agent_id);
     assert_eq!(idempotency_key, &stored_key);
     assert_eq!(
         id,
@@ -1583,7 +1586,9 @@ async fn invoke_owner_method_with_scope(
     let result = fixture
         .executor
         .invoke_agent_session(InvocationStart {
-            agent_id: Some(fixture.owner_id.clone().into()),
+            target: Some(crate::agent::id_target(&fixture.owner_id)),
+            constructor: None,
+            component_id: Some(fixture.owner_component.id.into()),
             method_name: Some(method.to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             mode: AgentInvocationMode::Await as i32,
@@ -1662,8 +1667,9 @@ async fn scope_revocation_consumed_by_middleware_gives_ambient_and_underlying_th
     fixture
         .executor
         .complete_promise(
+            &fixture.owner_id.environment_id,
             &PromiseId {
-                agent_id: fixture.owner_id.clone(),
+                agent_id: fixture.owner_id.agent_id,
                 fingerprint: fixture.fingerprint,
                 oplog_idx: OplogIndex::from_u64(checkpoint.parse()?),
             },

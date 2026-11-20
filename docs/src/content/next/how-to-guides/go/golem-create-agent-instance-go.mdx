@@ -1,81 +1,110 @@
-# Creating a Go Golem Agent Instance with `golem agent new`
+# Creating a Go Golem Agent Instance with `golem agent create`
 
 ## Overview
 
-`golem agent new` **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations.
+`golem agent create` **creates a new agent instance** without invoking any method on it. The agent is initialized with its constructor parameters and starts in an idle state, ready to receive invocations. The command prints the new agent's agent ID, a UUID that Golem issues.
 
-Unlike `golem agent invoke` — which implicitly creates the agent on first call — `golem agent new` explicitly pre-creates it, which is useful when you need to set environment variables or configuration at creation time.
+- Without `--keyed`, each call creates a **new agent without a key**, with a new agent ID. Such an agent is reachable only by its ID: `CounterAgent[<agent-id>]` or the bare `<agent-id>`.
+- With `--keyed`, it creates the **keyed agent** of the constructor parameters: the agent that the key `CounterAgent("my-counter")` addresses. It fails when that keyed agent already exists.
+
+`golem agent upsert` gets the keyed agent of the constructor parameters and creates it when it does not exist. It takes no environment variables or configuration.
+
+`golem agent invoke` with a key also creates the keyed agent on first call. Use `golem agent create` when you need to set environment variables or configuration at creation time, or when you want an agent without a key.
 
 Both `golem` and `golem-cli` can be used — every command below works with either binary.
 
 ## Steps
 
 1. **Identify the agent** by its type name and constructor parameters (`CounterAgent("my-counter")`).
-2. **Choose any creation-time settings** — `--env`, `--config` — if needed.
-3. **Run `golem agent new`** to pre-create the instance.
-4. **Invoke it later** with `golem agent invoke` using the same agent ID.
+2. **Choose keyed or not** — `--keyed` — and any creation-time settings — `--env`, `--config` — if needed.
+3. **Run `golem agent create`** to pre-create the instance (or `golem agent upsert` for the keyed agent without settings).
+4. **Invoke it later** with `golem agent invoke`: by its key for a keyed agent, or by the printed agent ID (`'CounterAgent[<agent-id>]'`) for an agent without a key.
 
 ## Usage
 
 ```shell
-golem agent new <AGENT_ID> [OPTIONS]
+golem agent create <AGENT_KEY> [--keyed] [OPTIONS]
+golem agent upsert <AGENT_KEY>
 ```
 
-## Agent ID Format
+## Agent Key Format
 
-The agent ID identifies the agent type and its constructor parameters:
+Both commands take a key: the agent type and its constructor parameters:
 
 ```
 AgentTypeName(param1, param2, ...)
 ```
 
-For a Go agent, the constructor parameters are the fields of its `ID` struct in declaration order. `CounterAgent`'s `ID` is `struct{ Name string }`, so its ID is `CounterAgent("my-counter")`. For an agent whose `ID` has no fields (a singleton), use empty parentheses: `AgentTypeName()`.
+For a Go agent, the constructor parameters are the fields of its `ID` struct in declaration order. `CounterAgent`'s `ID` is `struct{ Name string }`, so its key is `CounterAgent("my-counter")`. For an agent whose `ID` has no fields (a singleton), use empty parentheses: `AgentTypeName()`.
 
-The agent ID can optionally be prefixed with environment or application paths:
+The key can optionally be prefixed with environment or application paths:
 
 | Format | Description |
 |--------|-------------|
-| `AgentTypeName(params)` | Standalone agent name |
+| `AgentTypeName(params)` | Key without a prefix |
 | `env/AgentTypeName(params)` | Environment-specific |
 | `app/env/AgentTypeName(params)` | Application and environment-specific |
 | `account/app/env/AgentTypeName(params)` | Account, application, and environment-specific |
 
 ## Examples
 
-### Create an agent with constructor parameters
+### Create an agent without a key
 
 ```shell
-golem agent new 'CounterAgent("my-counter")'
+golem agent create 'CounterAgent("my-counter")'
+# Invoke it by the agent ID that the command prints
+golem agent invoke 'CounterAgent[<agent-id>]' increment
+```
+
+### Create the keyed agent
+
+```shell
+golem agent create --keyed 'CounterAgent("my-counter")'
+# Invoke it by its key
+golem agent invoke 'CounterAgent("my-counter")' increment
+```
+
+### Get or create the keyed agent
+
+```shell
+golem agent upsert 'CounterAgent("my-counter")'
 ```
 
 ### Create a singleton agent (no constructor parameters)
 
 ```shell
-golem agent new 'CounterAgent()'
+golem agent create --keyed 'CounterAgent()'
+```
+
+### Retry a create safely
+
+```shell
+# The same idempotency key returns the agent of the first create
+golem agent create -i create-42 'CounterAgent("my-counter")'
 ```
 
 ### Create an agent with environment variables
 
 ```shell
-golem agent new 'CounterAgent("my-counter")' --env API_KEY=sk-abc123 --env LOG_LEVEL=debug
+golem agent create 'CounterAgent("my-counter")' --env API_KEY=sk-abc123 --env LOG_LEVEL=debug
 ```
 
 ### Create an agent with configuration
 
 ```shell
-golem agent new 'CounterAgent("my-counter")' --config max_retries=5 --config timeout_seconds=30
+golem agent create 'CounterAgent("my-counter")' --config max_retries=5 --config timeout_seconds=30
 ```
 
 ### Create an agent in a specific environment
 
 ```shell
-golem agent new 'staging/CounterAgent("my-counter")'
+golem agent create 'staging/CounterAgent("my-counter")'
 ```
 
 ### Combine environment variables and configuration
 
 ```shell
-golem agent new 'CounterAgent("my-counter")' \
+golem agent create --keyed 'CounterAgent("my-counter")' \
   --env DATABASE_URL=postgres://... \
   --config batch_size=100 \
   --config retry_policy.max_attempts=3
@@ -83,20 +112,24 @@ golem agent new 'CounterAgent("my-counter")' \
 
 ## Available Options
 
+The options of `golem agent create` (`golem agent upsert` takes none):
+
 | Option | Description |
 |--------|-------------|
+| `--keyed` | Create the keyed agent of the constructor parameters; fail when it already exists |
+| `-i, --idempotency-key <KEY>` | Idempotency key of the create; a create retried with the same key returns the agent of the first create |
 | `-e, --env <ENV=VAL>` | Environment variables visible to the agent (can be repeated) |
 | `-c, --config <PATH=VALUE>` | Configuration entries for the agent, using dot-separated paths (can be repeated). Only configuration declared by the agent can be provided. If not provided, the default from the manifest (`agents.*.config`) is used. |
 
-## When to Use `golem agent new` vs `golem agent invoke`
+## When to Use `golem agent create` vs `golem agent invoke`
 
-- Use `golem agent new` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation.
-- Use `golem agent invoke` when you want to call a method — the agent is created automatically on first invocation if it doesn't exist.
-- An agent created with `golem agent new` can be invoked later with `golem agent invoke` using the same agent ID.
+- Use `golem agent create` when you need to **pre-create** an agent with specific environment variables or configuration before any invocation, or when you need an agent without a key.
+- Use `golem agent invoke` with a key when you want to call a method — the keyed agent is created automatically on first invocation if it doesn't exist.
+- A keyed agent can be invoked later by its key. An agent without a key can be invoked only by the agent ID that `golem agent create` prints.
 
 ## Value Syntax
 
-Agent ID parameters use Go syntax, read against the agent's schema:
+Key parameters use Go syntax, read against the agent's schema:
 
 - Strings `"my-counter"`, runes `'x'`, integers `5`, floats `2.5`, booleans `true` / `false`.
 - Each exported field of a Go input struct is one positional parameter, named in lowerCamelCase with each initialism as one word (`AmountCents` → `amountCents`, `UserID` → `userId`, `APIKey` → `apiKey`).
@@ -110,7 +143,8 @@ For example: `golem agent invoke 'ShelfAgent({zone: "a", level: 2}, closed, {"x"
 ## Key Constraints
 
 - The constructor arguments must match the fields of the Go `ID` struct in order.
-- If the component is not deployed yet and the CLI runs from an application directory, `golem agent new` auto-builds and deploys it before creating the agent.
+- If the component is not deployed yet and the CLI runs from an application directory, `golem agent create` and `golem agent upsert` auto-build and deploy it before creating the agent.
+- `golem agent create` without `--keyed` creates a new agent on each call; repeat it with the same idempotency key (`-i`) to retry safely.
 - Only configuration declared by the agent can be provided via `-c`.
 
 ### Related Guides

@@ -27,7 +27,7 @@ use golem_common::model::retry_policy::{
 };
 use golem_common::model::{Predicate, RetryPolicy, UntypedJsonBody};
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -353,7 +353,7 @@ async fn environment_policy_visible_to_agent(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "env-policy-visible");
+    let agent_id = agent_key!("GolemHostApi", "env-policy-visible");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let has = user
@@ -412,7 +412,7 @@ async fn multiple_environment_policies_visible_to_agent(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "multi-env-policies");
+    let agent_id = agent_key!("GolemHostApi", "multi-env-policies");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let count = user
@@ -477,7 +477,7 @@ async fn runtime_overlay_coexists_with_environment_policy(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "rt-overlay-coexists");
+    let agent_id = agent_key!("GolemHostApi", "rt-overlay-coexists");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -537,7 +537,7 @@ async fn runtime_overlay_overrides_environment_policy_same_name(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "rt-override-same-name");
+    let agent_id = agent_key!("GolemHostApi", "rt-override-same-name");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     user.invoke_and_await_agent(
@@ -598,7 +598,7 @@ async fn environment_policy_created_while_agent_running(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "late-policy-creation");
+    let agent_id = agent_key!("GolemHostApi", "late-policy-creation");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let count = user
@@ -648,7 +648,7 @@ async fn environment_policy_deleted_while_agent_running(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "policy-deletion");
+    let agent_id = agent_key!("GolemHostApi", "policy-deletion");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let has = user
@@ -694,7 +694,7 @@ async fn environment_policy_updated_while_agent_running(
         .name("golem-it:host-api-tests")
         .store()
         .await?;
-    let agent_id = agent_id!("GolemHostApi", "policy-update");
+    let agent_id = agent_key!("GolemHostApi", "policy-update");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let has = user

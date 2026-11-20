@@ -11,7 +11,7 @@ Exports.implement(Effect.succeed(Effect.gen(function* () {
     return HttpServerResponse.empty({ status: 404 }) //@
   }
   // that user's agent builds the CSV now and streams it:
-  const analyst = yield* Analyst.client.get({ chat: m[1] }) //@
+  const analyst = yield* Analyst.client.upsert({ chat: m[1] }) //@
   const csv = yield* analyst.exportCsv({ id: m[2] })
   return HttpRouter.withRawHeaders(
     HttpServerResponse.stream(csv, { status: 200 }), [ //@

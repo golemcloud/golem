@@ -44,8 +44,8 @@ impl MethodFailure {
 // error channel explicitly to distinguish it from a declared Result and a trap.
 #[golem_rust::async_trait::async_trait(?Send)]
 impl BaseAgent for MethodFailure {
-    fn get_agent_id(&self) -> String {
-        get_agent_id().agent_id
+    fn get_agent_id(&self) -> golem_rust::AgentId {
+        get_agent_id()
     }
 
     async fn invoke(

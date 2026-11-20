@@ -61,7 +61,7 @@ impl Caller for CallerImpl {
     }
 
     async fn call(&self, name: String) -> u32 {
-        let mut client = CounterAgentClient::get(name);
+        let mut client = CounterAgentClient::upsert(name);
         client.increment().await
     }
 }

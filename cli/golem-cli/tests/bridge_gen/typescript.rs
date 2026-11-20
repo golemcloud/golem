@@ -135,9 +135,18 @@ fn compile_guest_durable_agent() {
     std::fs::write(
         package_dir.join("bigint-fixture.ts"),
         r#"import { GuestAgent } from './guest-agent-guest-client';
-const client = GuestAgent.newPhantom('example', ['label'], undefined, new Map(), { seconds: 1767225600n, nanoseconds: 0 }, 18446744073709551615n);
+const client = GuestAgent.upsert('example', ['label'], undefined, new Map(), { seconds: 1767225600n, nanoseconds: 0 }, 18446744073709551615n);
 const output: Promise<bigint> = client.read();
-void output;
+const id = client.agentId();
+async function created(): Promise<void> {
+  const keyed: GuestAgent = await GuestAgent.create('example', [], undefined, new Map(), { seconds: 0n, nanoseconds: 0 }, 1n, { keyed: true, config: { limits: { maximum: 5n } }, env: { MODE: 'test' } });
+  const fresh: GuestAgent = await GuestAgent.create('example', [], undefined, new Map(), { seconds: 0n, nanoseconds: 0 }, 1n);
+  const found: GuestAgent = await GuestAgent.getById(await keyed.agentId());
+  // @ts-expect-error config values are typed by the config path
+  await GuestAgent.create('example', [], undefined, new Map(), { seconds: 0n, nanoseconds: 0 }, 1n, { config: { limits: { maximum: 'x' } } });
+  void [fresh, found];
+}
+void [output, id, created];
 "#,
     )
     .unwrap();
@@ -216,7 +225,7 @@ fn guest_native_streams_compile() {
 import { guest as base } from '@golemcloud/golem-ts-sdk';
 import { GuestStreamingAgent } from './guest-streaming-agent-guest-client';
 async function exercise() {
-  const client = GuestStreamingAgent.get('native');
+  const client = GuestStreamingAgent.upsert('native');
   const items = base.AgentStream.from([{ label: 'root', children: [] }]);
   const nested = await client.nested(base.AgentStream.from([items]));
   await client.nested(nested); // unread direct forwarding
@@ -307,9 +316,9 @@ fn guest_trailing_optional_parameters_and_sdk_results_compile() {
 import { bridge as base } from '@golemcloud/golem-ts-sdk';
 import { OptionalAgent } from './optional-agent-guest-client';
 async function exercise() {
-  const client = OptionalAgent.get('name');
-  OptionalAgent.get('name', 'nick');
-  OptionalAgent.get('name', undefined, 3);
+  const client = OptionalAgent.upsert('name');
+  OptionalAgent.upsert('name', 'nick');
+  OptionalAgent.upsert('name', undefined, 3);
   const found: base.Result<bigint, string> = await client.lookup(undefined, 1);
   if (found.tag === 'ok') { const value: bigint = found.val; void value; }
   const isOk: boolean = found.isOk();
@@ -399,7 +408,7 @@ fn guest_named_nested_and_unit_results_compile() {
 import { bridge as base } from '@golemcloud/golem-ts-sdk';
 import { OutcomeAgent } from './outcome-agent-guest-client';
 async function exercise() {
-  const client = OutcomeAgent.get('name');
+  const client = OutcomeAgent.upsert('name');
   const named: base.Result<number, string> = await client.named(base.Result.ok(1));
   const nested = await client.nested();
   if (nested !== undefined && nested.tag === 'done') {
@@ -471,7 +480,7 @@ import { bridge as base } from '@golemcloud/golem-ts-sdk';
 import { UuidAgent } from './uuid-agent-guest-client';
 async function exercise() {
   const id: base.Uuid = base.Uuid.parse('dd00721b-3329-4621-a01d-c71f02cd78c6');
-  const client = UuidAgent.get(id);
+  const client = UuidAgent.upsert(id);
   const echoed: base.Uuid = await client.echo(id);
   const nested = await client.nested({ id, maybe: undefined, ids: [id] });
   const nestedId: base.Uuid = nested.id;
@@ -511,7 +520,10 @@ fn guest_agent_generated_names_do_not_collide_with_schema_names() {
         agent(
             "CollisionAgent",
             "typescript",
-            vec![field("phantomId", SchemaType::string())],
+            vec![
+                field("resolved", SchemaType::string()),
+                field("options", SchemaType::string()),
+            ],
             vec![
                 method("resolved", vec![], Some(SchemaType::string())),
                 method("agentId", vec![], Some(SchemaType::string())),
@@ -527,12 +539,9 @@ fn guest_agent_generated_names_do_not_collide_with_schema_names() {
 #[test]
 fn static_and_instance_agent_methods_can_share_names() {
     let methods = vec![
-        method("get", vec![], Some(SchemaType::string())),
-        method("getPhantom", vec![], Some(SchemaType::string())),
-        method("newPhantom", vec![], Some(SchemaType::string())),
-        method("getWithConfig", vec![], Some(SchemaType::string())),
-        method("getPhantomWithConfig", vec![], Some(SchemaType::string())),
-        method("newPhantomWithConfig", vec![], Some(SchemaType::string())),
+        method("upsert", vec![], Some(SchemaType::string())),
+        method("create", vec![], Some(SchemaType::string())),
+        method("getById", vec![], Some(SchemaType::string())),
         method("getConfiguration", vec![], Some(SchemaType::string())),
     ];
 
@@ -563,15 +572,7 @@ fn static_and_instance_agent_methods_can_share_names() {
         let source =
             std::fs::read_to_string(package_dir.join(format!("collision-agent-{suffix}.ts")))
                 .unwrap();
-        for method_name in [
-            "get",
-            "getPhantom",
-            "newPhantom",
-            "getWithConfig",
-            "getPhantomWithConfig",
-            "newPhantomWithConfig",
-            "getConfiguration",
-        ] {
+        for method_name in ["upsert", "create", "getById", "getConfiguration"] {
             assert!(
                 source.contains(&format!("  readonly {method_name}:")),
                 "missing instance method {method_name} in {mode:?}\n{source}"
@@ -817,7 +818,8 @@ fn external_constructor_and_test_helpers_allocate_all_colliding_names() {
             field("ExternalCollisionAgent", SchemaType::string()),
             field("encodePayload", ref_to("payload")),
             field("parameters", SchemaType::string()),
-            field("phantomId", SchemaType::string()),
+            field("options", SchemaType::string()),
+            field("keyed", SchemaType::string()),
             field("agentConfig", SchemaType::string()),
             field("configFooBar", SchemaType::string()),
         ],
@@ -870,12 +872,13 @@ fn ephemeral_agent_is_a_local_metadata_bearing_proxy() {
     let package_dir = generated_package_dir(pkg.target_dir(), "ephemeral-agent");
     let client = std::fs::read_to_string(package_dir.join("ephemeral-agent-client.ts")).unwrap();
 
-    assert!(client.contains("static async newPhantom("));
-    assert!(client.contains("static async newPhantomWithConfig("));
-    assert!(!client.contains("static async getPhantom("));
+    assert!(client.contains("static upsert("));
+    assert!(!client.contains("static async create("));
+    assert!(!client.contains("static async getById("));
+    assert!(!client.contains("agentId("));
     assert!(!client.contains("base.createAgent("));
-    assert!(client.contains("readonly #agentConfig: base.AgentConfigEntry[];"));
-    assert!(client.contains("config: this.#agentConfig,"));
+    assert!(!client.contains("agentConfig"));
+    assert!(client.contains("parameters: this.parameters,"));
     assert!(client.contains("base.createEphemeralRemoteMethod"));
 }
 
@@ -966,16 +969,26 @@ fn guest_durable_generation_uses_sdk_runtime_surface() {
     assert!(!package.contains("@golemcloud/golem-ts-bridge"));
     assert!(!source.contains("configure("));
     assert!(!source.contains("base.createAgent"));
-    assert!(source.contains("static get("));
-    assert!(source.contains("static getPhantom("));
-    assert!(source.contains("static newPhantom("));
-    assert!(source.contains("static getWithConfig("));
-    assert!(source.contains("const phantomId = base.Uuid.generate();"));
+    assert!(source.contains("static upsert("));
+    assert!(source.contains("static async create("));
+    assert!(source.contains("static async getById("));
+    assert!(
+        source.contains(
+            "const resolved = base.upsertRemoteAgent(\"GuestAgent\", constructorPayload);"
+        )
+    );
     assert!(source.contains(
-        "base.resolveRemoteAgent(\"GuestAgent\", constructorPayload, phantomId, agentConfig, \"durable\")"
+        "const resolved = await base.createRemoteAgent(\"GuestAgent\", constructorPayload, { keyed: options?.keyed ?? false, config: agentConfig, env: Object.entries(options?.env ?? {}) });"
     ));
-    assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
-    assert!(source.contains("return this.resolved.agentId"));
+    assert!(source.contains(
+        "return new GuestAgent(await base.getRemoteAgentById(\"GuestAgent\", agentId));"
+    ));
+    assert!(source.contains(
+        "Connects to the keyed agent of the constructor parameters, and creates it when it is missing."
+    ));
+    assert!(source.contains("return this.resolved.agentId();"));
+    assert!(!source.contains("Phantom"));
+    assert!(!source.contains("WithConfig"));
     assert!(source.contains("invokeAndAwait("));
     assert!(source.contains("abortable(signal: AbortSignal"));
     assert!(source.contains("this.resolved.invoke("));
@@ -1319,7 +1332,7 @@ export async function cardKindUsage(
   concrete: sdkBridge.PermissionCard,
   template: sdkBridge.PolymorphicPermissionCard,
 ): Promise<void> {
-  const client = CardAgentClient.get();
+  const client = CardAgentClient.upsert();
   const returned: sdkBridge.PolymorphicPermissionCard = await client.delegate(concrete, template);
   const back: sdkBridge.PermissionCard = await client.concreteBack();
   // @ts-expect-error a concrete card is not a template card
@@ -1398,7 +1411,7 @@ export async function scopeCardUsage(
   scope: sdkBridge.ScopeCard,
   card: sdkBridge.PermissionCard,
 ): Promise<void> {
-  const client = ScopedAgentClient.get().withScopeCard(scope);
+  const client = ScopedAgentClient.upsert().withScopeCard(scope);
   const viaDefault: string = await client.run('x');
   const withoutScope: string = await client.run.withScopeCard(null, 'x');
   const withScope: string = await client.run.withScopeCard(scope, 'x');
@@ -1438,21 +1451,22 @@ fn guest_ephemeral_generation_uses_metadata_runtime_calls() {
     .unwrap();
     generator.generate().unwrap();
     let source = std::fs::read_to_string(target.join("ephemeral-guest-guest-client.ts")).unwrap();
-    assert!(source.contains("static newPhantom("));
-    assert!(!source.contains("static get("));
-    assert!(!source.contains("static getPhantom("));
+    assert!(source.contains("static upsert("));
+    assert!(!source.contains("static async create("));
+    assert!(!source.contains("static async getById("));
+    assert!(!source.contains("agentId("));
     assert!(source.contains("invokeAndAwaitWithMetadata("));
     assert!(source.contains("invokeWithMetadata("));
     assert!(!source.contains("scheduleWithMetadata("));
     assert!(source.contains("scheduleCancelableWithMetadata("));
-    assert!(source.contains("const phantomId = undefined;"));
-    assert!(!source.contains("base.Uuid.generate()"));
     assert!(source.contains(
-        "base.resolveRemoteAgent(\"EphemeralGuest\", constructorPayload, phantomId, agentConfig, \"ephemeral\")"
+        "const resolved = base.upsertRemoteAgent(\"EphemeralGuest\", constructorPayload);"
     ));
-    assert!(source.contains(
-        "Creates a local logical proxy; each invocation receives a fresh final identity."
-    ));
+    assert!(
+        source.contains(
+            "Connects to the agent type; each invocation runs on a new one-shot instance."
+        )
+    );
 }
 
 #[test]
@@ -1497,7 +1511,12 @@ fn external_generation_keeps_rest_runtime_and_name() {
     assert!(source.contains("BigInt("), "{source}");
     assert!(!source.contains("signed: number"));
     assert!(!source.contains("unsigned: number"));
-    assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
+    assert!(source.contains(
+        "Addresses the keyed agent of the constructor parameters. The server creates it on the first invocation when it is missing."
+    ));
+    assert!(source.contains("static async create("));
+    assert!(source.contains("static async getById(agentId: base.AgentId)"));
+    assert!(source.contains("async agentId()"));
 }
 
 #[test]
@@ -1615,17 +1634,27 @@ fn external_streaming_multimodal_constructor_and_method_compile() {
     std::fs::write(
         package.join("runtime-test.mjs"),
         r#"import assert from 'node:assert/strict';
+import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { agentStream } from '@golemcloud/golem-ts-bridge';
 import { MultimodalStreamAgent, configure } from './multimodal-stream-agent-client.js';
 
-const wss = new WebSocketServer({ port: 0 });
-await new Promise((resolve) => wss.once('listening', resolve));
-const port = wss.address().port;
+const server = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/v1/me/token') return res.end(JSON.stringify({ accountId: 'account' }));
+  if (req.url.startsWith('/v1/me/visible-environments?')) return res.end(JSON.stringify({ values: [
+    { account: { id: 'account' }, application: { name: 'app' }, environment: { id: 'env-id', name: 'env' } },
+  ] }));
+  res.statusCode = 404;
+  res.end('{}');
+});
+const wss = new WebSocketServer({ server, path: '/v1/runtime/envs/env-id/invoke-agent-session' });
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+const port = server.address().port;
 let connection = 0;
 const accepted = (start, mappings = []) => ({
   version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
-  agentId: { componentId: '00000000-0000-0000-0000-000000000001', agentId: 'accepted-owner' },
+  agentId: '00000000-0000-0000-0000-000000000001',
   idempotencyKey: '00000000-0000-0000-0000-000000000002', sessionToken: 'session', mappings,
 });
 const finish = (socket) => socket.send(JSON.stringify({
@@ -1688,10 +1717,7 @@ const constructorValue = { kind: 'record', value: { fields: [
     { kind: 'variant', value: { case: 0, payload: { kind: 'string', value: 'constructor' } } },
   ] } },
 ] } };
-const remote = new MultimodalStreamAgent(
-  constructorValue, undefined, { componentId: 'component', agentId: 'agent' },
-  constructorValue, [],
-);
+const remote = new MultimodalStreamAgent(constructorValue, undefined, constructorValue);
 const output = await remote.exchange([{ type: 'text', value: 'request' }]);
 assert.equal(output[0].type, 'bytes');
 assert.equal(typeof output[0].value[Symbol.asyncIterator], 'function');
@@ -1701,6 +1727,7 @@ await assert.rejects(
 );
 for (const client of wss.clients) client.terminate();
 await new Promise((resolve) => wss.close(resolve));
+await new Promise((resolve) => server.close(resolve));
 "#,
     )
     .unwrap();
@@ -1821,32 +1848,29 @@ fn external_streaming_generation_compiles_recursive_streams() {
     assert!(source.contains("AgentStream<number>"));
     assert!(source.contains(": bigint;"));
     assert!(source.contains("amount: base.QuantityValue"));
-    assert!(source.contains("configLimitsMaximum?: bigint"));
+    assert!(source.contains(
+        "options?: { keyed?: boolean; config?: { \"limits\"?: { \"maximum\"?: bigint } }; env?: Record<string, string> }"
+    ));
     assert!(source.contains("base.publicValueCodec"));
-    for method_name in [
-        "getWithConfig",
-        "getPhantomWithConfig",
-        "newPhantomWithConfig",
-    ] {
-        let method_source = source
-            .split_once(&format!("static async {method_name}("))
-            .unwrap()
-            .1
-            .split("\n  static async ")
-            .next()
-            .unwrap();
-        assert_eq!(
-            method_source
-                .matches("const configValue = base.publicValueCodec(")
-                .count(),
-            1,
-            "{method_name} must project each supplied config value exactly once"
-        );
-    }
+    let create_source = source
+        .split_once("static async create(")
+        .unwrap()
+        .1
+        .split("\n  static async ")
+        .next()
+        .unwrap();
+    assert_eq!(
+        create_source
+            .matches("const configValue = base.publicValueCodec(")
+            .count(),
+        1,
+        "create must project each supplied config value exactly once"
+    );
     assert!(source.contains(".validate(") && source.contains("'none'"));
     assert!(source.contains("'provisional'"));
     assert!(source.contains("\"stable\""));
-    assert!(source.contains("config: this.publicConfig"));
+    assert!(source.contains("constructorParameters: this.__getPublicParameters(), config: [],"));
+    assert!(!source.contains("publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
     assert!(source.contains("base.UnstructuredText.toSchemaValue"));
     assert!(source.contains("base.UnstructuredText.fromSchemaValue"));
@@ -2379,7 +2403,7 @@ fn guest_quantity_text_binary_and_bytes_compile() {
         r#"import { RichGuestAgent } from './rich-guest-agent-guest-client';
 import type { bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
 export async function usage(): Promise<void> {
-  const client = RichGuestAgent.get();
+  const client = RichGuestAgent.upsert();
   const amount: sdkBridge.QuantityValue = await client.echo_quantity({ mantissa: 15n, scale: 1, unit: 'g' });
   const text: { text: string; language?: string } = await client.echo_text({ text: 'hallo', language: 'de' });
   const binary: { bytes: Uint8Array; mimeType?: string } = await client.echo_binary({ bytes: new Uint8Array([1]) });
@@ -2436,13 +2460,25 @@ const server = http.createServer((req, res) => {{
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {{
+    if (req.url !== '/v1/runtime/envs/env-id/agent-types/RichExternalAgent/invoke') {{
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/v1/me/token') return res.end(JSON.stringify({{ accountId: 'account' }}));
+    if (req.url.startsWith('/v1/me/visible-environments?')) return res.end(JSON.stringify({{ values: [
+      {{ account: {{ id: 'account' }}, application: {{ name: 'app' }}, environment: {{ id: 'env-id', name: 'env' }} }},
+    ] }}));
+    res.statusCode = 404;
+    res.end('{{}}');
+      return;
+    }}
     const request = JSON.parse(body);
+    assert.deepEqual(request.parameters, {{ kind: 'record', value: {{ fields: [] }} }});
+    assert.equal(request.agentId, undefined);
     const value = override ?? request.methodParameters.value.fields[0];
     override = undefined;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({{
-      agentId: {{ componentId: 'component', agentId: 'agent' }}, idempotencyKey: 'key',
-      result: {{ graph: graphs[request.methodName], value }},
+      agentId: '00000000-0000-0000-0000-000000000001', idempotencyKey: '00000000-0000-0000-0000-000000000002',
+      result: {{ graph: graphs[request.method], value }},
     }}));
   }});
 }});
@@ -2451,9 +2487,7 @@ configure({{
   server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
   application: 'app', environment: 'env',
 }});
-const remote = new RichExternalAgent(
-  {{ kind: 'record', value: {{ fields: [] }} }}, undefined, {{ componentId: 'component', agentId: 'agent' }},
-);
+const remote = RichExternalAgent.upsert();
 
 const amount = {{ mantissa: 15n, scale: 1, unit: 'g' }};
 assert.deepEqual(await remote.echo_quantity(amount), amount);
@@ -2484,6 +2518,98 @@ assert.deepEqual(record.amount, amount);
 assert.deepEqual(record.note, {{ text: 'note' }});
 assert.deepEqual([...record.blob.bytes], [10]);
 server.close();
+"#
+        ),
+    );
+}
+
+#[test]
+fn external_get_by_id_checks_the_agent_and_pins_its_fingerprint() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    generate_and_compile(
+        agent(
+            "ByIdExternalAgent",
+            "typescript",
+            vec![field("name", SchemaType::string())],
+            vec![method(
+                "echo",
+                vec![field("value", SchemaType::string())],
+                Some(SchemaType::string()),
+            )],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let package = generated_package_dir(target, "by-id-external-agent");
+    let source = std::fs::read_to_string(package.join("by-id-external-agent-client.ts")).unwrap();
+    assert!(source.contains("static async getById(agentId: base.AgentId)"));
+    assert!(source.contains("await base.getAgent("), "{source}");
+    let graph = wire_graph(SchemaType::string());
+    run_node_script(
+        &package,
+        "get-by-id.mjs",
+        &format!(
+            r#"import assert from 'node:assert/strict';
+import http from 'node:http';
+import {{ ByIdExternalAgent, configure }} from './by-id-external-agent-client.js';
+
+const KNOWN = '00000000-0000-8000-8000-000000000001';
+const OTHER_TYPE = '00000000-0000-8000-8000-000000000002';
+const UNKNOWN = '00000000-0000-8000-8000-000000000003';
+const FINGERPRINT = '00000000-0000-4000-8000-00000000f001';
+const metadata = (agentId, agentTypeName) => ({{
+  agentId, ownerKind: 'agent', agentTypeName, environmentId: 'env-id', fingerprint: FINGERPRINT,
+}});
+const invocations = [];
+const server = http.createServer((req, res) => {{
+  let body = '';
+  req.on('data', (chunk) => (body += chunk));
+  req.on('end', () => {{
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/v1/me/token') return res.end(JSON.stringify({{ accountId: 'account' }}));
+    if (req.url.startsWith('/v1/me/visible-environments?')) return res.end(JSON.stringify({{ values: [
+      {{ account: {{ id: 'account' }}, application: {{ name: 'app' }}, environment: {{ id: 'env-id', name: 'env' }} }},
+    ] }}));
+    if (req.method === 'GET' && req.url === `/v1/runtime/envs/env-id/agents/${{KNOWN}}`)
+      return res.end(JSON.stringify(metadata(KNOWN, 'ByIdExternalAgent')));
+    if (req.method === 'GET' && req.url === `/v1/runtime/envs/env-id/agents/${{OTHER_TYPE}}`)
+      return res.end(JSON.stringify(metadata(OTHER_TYPE, 'OtherAgent')));
+    if (req.method === 'POST' && req.url === '/v1/runtime/envs/env-id/agent-types/ByIdExternalAgent/invoke') {{
+      const request = JSON.parse(body);
+      invocations.push(request);
+      return res.end(JSON.stringify({{
+        agentId: KNOWN, idempotencyKey: '00000000-0000-0000-0000-000000000002',
+        result: {{ graph: {graph}, value: request.methodParameters.value.fields[0] }},
+      }}));
+    }}
+    res.statusCode = 404;
+    res.end(JSON.stringify({{ code: 'AGENT_NOT_FOUND', error: 'agent not found' }}));
+  }});
+}});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+configure({{
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
+  application: 'app', environment: 'env',
+}});
+try {{
+  for (const agentId of [UNKNOWN, OTHER_TYPE])
+    await assert.rejects(ByIdExternalAgent.getById(agentId), {{
+      name: 'GolemServiceError',
+      operation: 'getAgent',
+      status: 404,
+    }});
+  const found = await ByIdExternalAgent.getById(KNOWN);
+  assert.equal(await found.agentId(), KNOWN);
+  assert.equal(await found.echo('hello'), 'hello');
+  assert.equal(invocations.length, 1);
+  assert.equal(invocations[0].agentId, KNOWN);
+  assert.equal(invocations[0].parameters, undefined);
+  assert.equal(invocations[0].expectedFingerprint, FINGERPRINT);
+}} finally {{
+  server.close();
+}}
 "#
         ),
     );
@@ -2526,14 +2652,24 @@ fn external_streaming_methods_decode_bytes_quantities_text_and_binary() {
         "stream-round-trip.mjs",
         &format!(
             r#"import assert from 'node:assert/strict';
+import http from 'node:http';
 import {{ WebSocketServer }} from 'ws';
 import {{ agentStream }} from '@golemcloud/golem-ts-bridge';
 import {{ RichStreamAgent, configure }} from './rich-stream-agent-client.js';
 
 const graph = {graph};
 let override = undefined;
-const wss = new WebSocketServer({{ port: 0 }});
-await new Promise((resolve) => wss.once('listening', resolve));
+const server = http.createServer((req, res) => {{
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/v1/me/token') return res.end(JSON.stringify({{ accountId: 'account' }}));
+  if (req.url.startsWith('/v1/me/visible-environments?')) return res.end(JSON.stringify({{ values: [
+    {{ account: {{ id: 'account' }}, application: {{ name: 'app' }}, environment: {{ id: 'env-id', name: 'env' }} }},
+  ] }}));
+  res.statusCode = 404;
+  res.end('{{}}');
+}});
+const wss = new WebSocketServer({{ server, path: '/v1/runtime/envs/env-id/invoke-agent-session' }});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const provisionalRef = (value) => {{
   if (value && typeof value === 'object') {{
     if (typeof value.provisionalRef === 'string') return value.provisionalRef;
@@ -2547,7 +2683,7 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {{
   const start = JSON.parse(raw);
   socket.send(JSON.stringify({{
     version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
-    agentId: {{ componentId: '00000000-0000-0000-0000-000000000001', agentId: 'accepted-owner' }},
+    agentId: '00000000-0000-0000-0000-000000000001',
     idempotencyKey: '00000000-0000-0000-0000-000000000002', sessionToken: 'session',
     mappings: [{{
       channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisionalRef(start.methodParameters),
@@ -2562,13 +2698,11 @@ wss.on('connection', (socket) => socket.once('message', (raw) => {{
   socket.send(JSON.stringify({{ version: 1, type: 'invocationFinished', outcome: {{ kind: 'success' }} }}));
 }}));
 configure({{
-  server: {{ type: 'custom', url: `http://127.0.0.1:${{wss.address().port}}`, token: 'test' }},
+  server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
   application: 'app', environment: 'env',
 }});
 const constructorValue = {{ kind: 'record', value: {{ fields: [] }} }};
-const remote = new RichStreamAgent(
-  constructorValue, undefined, {{ componentId: 'component', agentId: 'agent' }}, constructorValue, [],
-);
+const remote = new RichStreamAgent(constructorValue, undefined, constructorValue);
 const amount = {{ mantissa: -25n, scale: 2, unit: 'kg' }};
 const input = {{
   bytes: new Uint8Array([1, 2]), fixed: new Uint8Array([3, 4, 5]), maybe_bytes: new Uint8Array([6]),
@@ -2591,6 +2725,7 @@ await assert.rejects(
 );
 for (const client of wss.clients) client.terminate();
 await new Promise((resolve) => wss.close(resolve));
+await new Promise((resolve) => server.close(resolve));
 "#
         ),
     );
@@ -2688,7 +2823,7 @@ fn guest_datetime_duration_path_and_url_use_sdk_types_and_compile() {
 import { Datetime, bridge as sdkBridge } from '@golemcloud/golem-ts-sdk';
 export async function usage(): Promise<void> {
   const since: Datetime = Datetime.parse('2024-02-29T12:34:56.12+02:00');
-  const client = TimeGuestAgent.get(since);
+  const client = TimeGuestAgent.upsert(since);
   const at: sdkBridge.Datetime = await client.echo_datetime(Datetime.fromDate(new Date()));
   const date: Date = Datetime.toDate(at);
   const text: string = Datetime.toISOString(at);
@@ -2766,14 +2901,24 @@ const server = http.createServer((req, res) => {{
   let body = '';
   req.on('data', (chunk) => (body += chunk));
   req.on('end', () => {{
+    if (req.url !== '/v1/runtime/envs/env-id/agent-types/TimeExternalAgent/invoke') {{
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/v1/me/token') return res.end(JSON.stringify({{ accountId: 'account' }}));
+    if (req.url.startsWith('/v1/me/visible-environments?')) return res.end(JSON.stringify({{ values: [
+      {{ account: {{ id: 'account' }}, application: {{ name: 'app' }}, environment: {{ id: 'env-id', name: 'env' }} }},
+    ] }}));
+    res.statusCode = 404;
+    res.end('{{}}');
+      return;
+    }}
     const request = JSON.parse(body);
     sent = request.methodParameters.value.fields[0];
     const value = override ?? sent;
     override = undefined;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({{
-      agentId: {{ componentId: 'component', agentId: 'agent' }}, idempotencyKey: 'key',
-      result: {{ graph: graphs[request.methodName], value }},
+      agentId: '00000000-0000-0000-0000-000000000001', idempotencyKey: '00000000-0000-0000-0000-000000000002',
+      result: {{ graph: graphs[request.method], value }},
     }}));
   }});
 }});
@@ -2782,9 +2927,7 @@ configure({{
   server: {{ type: 'custom', url: `http://127.0.0.1:${{server.address().port}}`, token: 'test' }},
   application: 'app', environment: 'env',
 }});
-const remote = new TimeExternalAgent(
-  {{ kind: 'record', value: {{ fields: [] }} }}, undefined, {{ componentId: 'component', agentId: 'agent' }},
-);
+const remote = TimeExternalAgent.upsert(Datetime.parse('2024-02-29T12:34:56.12+02:00'));
 
 const at = Datetime.parse('2024-03-01T01:04:56.120+02:30');
 assert.deepEqual(await remote.echo_datetime(at), at);

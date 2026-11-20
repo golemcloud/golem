@@ -29,7 +29,7 @@ use golem_common::model::oplog::{
 use golem_common::schema::{
     Quantity, QuantityUnit, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::path::PathBuf;
@@ -177,7 +177,7 @@ async fn rich_semantic_types_round_trip_preserves_canonical_encoding(
         .store()
         .await?;
 
-    let parsed_agent_id = agent_id!("RichTypesAgent", "rich-types-1");
+    let parsed_agent_id = agent_key!("RichTypesAgent", "rich-types-1");
     let agent_id = user
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;

@@ -12,24 +12,48 @@ Using `golem agent` command you can:
 - Search agents, get metadata, etc.
 - Revert a agent to a previous state
 
+## Addressing agents
+
+Every agent has an **agent ID**, a UUID that Golem issues when it creates the agent. An agent can also have a **key**: the agent type and its constructor parameters, such as `CounterAgent("my-counter")`. Only an agent created with a key (a keyed agent) can be found by its key. The agent commands accept these addresses:
+
+- `CounterAgent("my-counter")` addresses the keyed agent of these constructor parameters.
+- `CounterAgent[<AGENT_ID>]` and a bare `<AGENT_ID>` address an agent by its agent ID. An agent created without a key is reachable only this way.
+
+Each form can be prefixed by the environment name (`<ENVIRONMENT>/`, `<APPLICATION>/<ENVIRONMENT>/` or `<ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/`) if it is not inferrable from the current context.
+
 ## Create a new agent
 
-Even though agents can automatically start on the first invocation, it is possible to explicitly start an agent.
+Even though a keyed agent is automatically created on the first invocation by its key, it is possible to explicitly create an agent.
 This allows specifying environment variables (`--env`) and configuration values (`--config`) for the agent.
 
+Without `--keyed`, each `agent create` creates a new agent without a key, and prints its agent ID:
+
 ```shell copy
-golem agent new 'CounterAgent("my-counter")' --env A=1 --env B=2
+golem agent create 'CounterAgent("my-counter")' --env A=1 --env B=2
+```
+
+With `--keyed`, it creates the keyed agent of the constructor parameters, and fails when that agent already exists:
+
+```shell copy
+golem agent create --keyed 'CounterAgent("my-counter")' --env A=1 --env B=2
+```
+
+Use `--idempotency-key` (`-i`) to retry a create safely: a create retried with the same key returns the agent of the first create.
+
+To get the keyed agent, and create it when it does not exist, use `agent upsert`:
+
+```shell copy
+golem agent upsert 'CounterAgent("my-counter")'
 ```
 
 ## Get agent metadata
 
-### Using the agent ID
-
-You can get the agent metadata using the agent-id (the agent type and it's constructor parameters), optionally prefixed by the environment name (`<ENVIRONMENT>/`, `<APPLICATION>/<ENVIRONMENT>/` or `<ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/`) if it is not inferrable from the current context:
+You can get the agent metadata, including its agent ID, agent type, key and fingerprint, using any agent address:
 
 ```shell copy
 golem agent get 'CounterAgent("my-counter")'
 golem agent get 'staging/CounterAgent("my-counter")'
+golem agent get 'CounterAgent[<AGENT_ID>]'
 ```
 
 ## Search agents
@@ -42,6 +66,8 @@ For instance lets find idle agents with component revision older than 2 of the c
 golem agent list --filter "status = Idle" --filter "revision < 2" --component-name example:counter
 ```
 
+The `key` property compares the key text of a keyed agent, such as `--filter 'key == CounterAgent("c1")'`; an agent without a key never matches it. The `id` property compares the agent ID.
+
 <Callout type="warning">
   Enumerating agents is a slow operation and should only be used for debugging an administrative
   tasks.
@@ -50,6 +76,8 @@ golem agent list --filter "status = Idle" --filter "revision < 2" --component-na
 ## Invoking agent methods
 
 The folowing section shows the basics of invoking agents through the CLI. See the [dedicated invocation with CLI page](/next/invoke/cli) for more details.
+
+An invocation addressed by a key creates the keyed agent when it does not exist. An invocation addressed by an agent ID requires an existing agent. With `--expected-fingerprint <FINGERPRINT>`, the invocation fails and runs nothing unless the agent is the incarnation with this fingerprint (shown by `agent get`).
 
 ### Without waiting for result
 

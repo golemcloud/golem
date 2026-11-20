@@ -20,6 +20,7 @@ import golem.config.Config
 import golem.runtime.annotations.agentImplementation
 
 import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 @agentImplementation()
 final class ConfigAgentImpl(input: String, config: Config[MyAppConfig]) extends ConfigAgent {
@@ -34,13 +35,14 @@ final class ConfigAgentImpl(input: String, config: Config[MyAppConfig]) extends 
 
 @agentImplementation()
 final class ConfigCallerAgentImpl(input: String) extends ConfigCallerAgent {
-  override def callWithOverride(): Future[String] = {
-    val configAgent = ConfigAgentClient.getWithConfig(
-      input,
-      appName = Some("OverriddenApp"),
-      dbHost = Some("overridden-host.example.com"),
-      dbPort = Some(9999)
-    )
-    configAgent.greet()
-  }
+  override def callWithOverride(): Future[String] =
+    ConfigAgentClient
+      .create(
+        input,
+        keyed = true,
+        appName = Some("OverriddenApp"),
+        dbHost = Some("overridden-host.example.com"),
+        dbPort = Some(9999)
+      )
+      .flatMap(_.greet())
 }

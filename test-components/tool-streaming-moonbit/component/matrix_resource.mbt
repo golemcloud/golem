@@ -317,8 +317,8 @@ pub fn MatrixResourceSecret::exchange(
 ) -> SecretExchange {
   {
     provider: "moonbit",
-    principal: matrix_resource_principal(context),
-    ownerAgentId: @api.get_self_metadata().agent_id.agent_id,
+    principal: matrix_resource_principal(principal),
+    ownerAgentId: self_agent_id_text(),
     revealed: secret.reveals_expected(),
     secret,
   }
@@ -331,8 +331,8 @@ pub fn MatrixResourceQuota::exchange(
 ) -> QuotaExchange {
   {
     provider: "moonbit",
-    principal: matrix_resource_principal(context),
-    ownerAgentId: @api.get_self_metadata().agent_id.agent_id,
+    principal: matrix_resource_principal(principal),
+    ownerAgentId: self_agent_id_text(),
     reserved: token.reserve_and_commit_one(),
     token,
   }
@@ -345,8 +345,8 @@ pub fn MatrixResourcePermissions::exchange(
 ) -> PermissionExchange {
   {
     provider: "moonbit",
-    principal: matrix_resource_principal(context),
-    ownerAgentId: @api.get_self_metadata().agent_id.agent_id,
+    principal: matrix_resource_principal(principal),
+    ownerAgentId: self_agent_id_text(),
     card,
   }
 }
@@ -513,7 +513,7 @@ pub async fn MoonBitResourceToolStreamingCaller::matrix_permission_observation(
     abort("matrix permission issuer was not Rust")
   }
   guard issued.principal != "" &&
-    issued.ownerAgentId == @api.get_self_metadata().agent_id.agent_id else {
+    issued.ownerAgentId == self_agent_id_text() else {
     issued.card.drop()
     abort("matrix permission issuer returned invalid identity evidence")
   }

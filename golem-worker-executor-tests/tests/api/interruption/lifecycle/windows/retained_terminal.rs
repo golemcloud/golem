@@ -85,14 +85,14 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("GolemHostApi", "retained-pending-writer");
+    let name = agent_key!("GolemHostApi", "retained-pending-writer");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let promise = executor
         .invoke_and_await_agent(&component, &name, "create_promise", data_value!())
         .await?
         .into_return_value()
         .context("create_promise returned no id")?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = id.clone();
     let active = executor
         .production_active_agent(&owned)
         .await
@@ -100,9 +100,11 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     let worker = active.primary();
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "await_promise")
+        .external_invocation_key(&id.agent_id, &key, "await_promise")
         .await?;
-    let (outcome, release_outcome) = executor.gate_next_invocation_outcome_append(&id).await;
+    let (outcome, release_outcome) = executor
+        .gate_next_invocation_outcome_append(&id.agent_id)
+        .await;
     executor
         .invoke_agent_with_key(
             &component,
@@ -116,10 +118,15 @@ async fn pending_suspend_append_keeps_result_and_cleanup_ownership_through_a_lat
     let requested = InterruptKind::Suspend(Timestamp::now_utc());
     assert!(!worker.terminal_interrupt_pending_for_test());
 
-    let mut held_permit = Box::pin(executor.acquire_account_concurrent_agent_permit(AgentId {
-        component_id: component.id,
-        agent_id: agent_id!("Counter", "pending-writer-permit-holder").to_string(),
-    }));
+    let mut held_permit = Box::pin(
+        executor.acquire_account_concurrent_agent_permit(
+            crate::agent::keyed_agent_id(
+                component.environment_id,
+                &agent_key!("Counter", "pending-writer-permit-holder"),
+            )
+            .agent_id,
+        ),
+    );
     assert!((&mut held_permit).now_or_never().is_none());
     let mut signal = worker.raw_interrupt_for_test();
     let mut receipt = worker
@@ -259,14 +266,14 @@ async fn retained_terminal(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let name = agent_id!("GolemHostApi", "retained-terminal");
+    let name = agent_key!("GolemHostApi", "retained-terminal");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     let promise = executor
         .invoke_and_await_agent(&component, &name, "create_promise", data_value!())
         .await?
         .into_return_value()
         .context("create_promise returned no id")?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = id.clone();
     let active = executor
         .production_active_agent(&owned)
         .await
@@ -274,7 +281,7 @@ async fn retained_terminal(
     let worker = active.primary();
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&id, &key, "await_promise")
+        .external_invocation_key(&id.agent_id, &key, "await_promise")
         .await?;
     executor
         .invoke_agent_with_key(
@@ -325,10 +332,13 @@ async fn retained_terminal(
     // startup waiting; no private pre-fence phase is needed to distinguish their markers.
     let held_permit = tokio::time::timeout(
         Duration::from_secs(10),
-        executor.acquire_account_concurrent_agent_permit(AgentId {
-            component_id: component.id,
-            agent_id: agent_id!("Counter", "retained-terminal-permit-holder").to_string(),
-        }),
+        executor.acquire_account_concurrent_agent_permit(
+            crate::agent::keyed_agent_id(
+                component.environment_id,
+                &agent_key!("Counter", "retained-terminal-permit-holder"),
+            )
+            .agent_id,
+        ),
     )
     .await?;
     let entries = worker
@@ -371,7 +381,7 @@ async fn retained_terminal(
     };
     let mut held_permit = Some(held_permit);
     let mut waiting_handoff = None;
-    let (observe, release) = pause_admission(&admission_pause, &id);
+    let (observe, release) = pause_admission(&admission_pause, &id.agent_id);
     if next != NextStart::Waiting {
         drop(held_permit.take());
         tokio::time::timeout(Duration::from_secs(10), observe).await??;
@@ -430,7 +440,7 @@ async fn retained_terminal(
     {
         // The native loop takes the published request before checking admission again.
         // An older Suspend preserves the later start; Restart acknowledges and retries.
-        let (continued, release_continuation) = pause_admission(&admission_pause, &id);
+        let (continued, release_continuation) = pause_admission(&admission_pause, &id.agent_id);
         release
             .send(())
             .map_err(|_| anyhow!("startup admission gate was lost"))?;
@@ -483,7 +493,7 @@ async fn retained_terminal(
                 agent_id,
                 start_attempt,
                 result,
-            } if agent_id == &id && *start_attempt == attempt => Some(result.clone()),
+            } if agent_id == &id.agent_id && *start_attempt == attempt => Some(result.clone()),
             _ => None,
         }),
     )
@@ -501,10 +511,13 @@ async fn retained_terminal(
     // Require the actual scheduler return, not that notification.
     let returned = tokio::time::timeout(
         Duration::from_secs(10),
-        executor.acquire_account_concurrent_agent_permit(AgentId {
-            component_id: component.id,
-            agent_id: agent_id!("Counter", "retained-terminal-release-probe").to_string(),
-        }),
+        executor.acquire_account_concurrent_agent_permit(
+            crate::agent::keyed_agent_id(
+                component.environment_id,
+                &agent_key!("Counter", "retained-terminal-release-probe"),
+            )
+            .agent_id,
+        ),
     )
     .await?;
     drop(returned);
@@ -552,7 +565,7 @@ fn pause_admission(
             .lock()
             .unwrap()
             .replace(AdmissionPause {
-                agent_id: agent_id.clone(),
+                agent_id: *agent_id,
                 entered,
                 release: wait,
             })

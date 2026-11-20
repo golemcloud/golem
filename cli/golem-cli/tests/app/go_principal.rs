@@ -92,8 +92,24 @@ async fn test_go_principal() {
     // A relay creates the second ledger over RPC: the relay is the immediate caller and the
     // CLI's account stays the original one.
     let created = invoke("RelayAgent(\"r\")", "ask", &["\"created\""]).await;
+    let relay = ctx
+        .cli([
+            flag::YES,
+            flag::FORMAT,
+            "json",
+            cmd::AGENT,
+            cmd::GET,
+            "RelayAgent(\"r\")",
+        ])
+        .await;
+    assert!(relay.success_or_dump());
+    let relay_id = relay
+        .stdout_json::<serde_json::Value>()
+        .into_iter()
+        .find_map(|document| document["metadata"]["agentId"].as_str().map(str::to_string))
+        .expect("agent get prints the agent ID");
     assert!(
-        created.contains(r#"method=agent:RelayAgent("r") agent=account"#),
+        created.contains(&format!("method=agent:{relay_id} agent=account")),
         "{created}"
     );
 
@@ -101,7 +117,7 @@ async fn test_go_principal() {
     // original caller is still the CLI's account.
     let relayed = invoke("RelayAgent(\"r\")", "ask", &["\"direct\""]).await;
     assert!(
-        relayed.contains(r#"method=agent:RelayAgent("r") agent=account"#),
+        relayed.contains(&format!("method=agent:{relay_id} agent=account")),
         "{relayed}"
     );
 }

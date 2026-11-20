@@ -39,10 +39,10 @@ async fn real_rpc_retained_start_reconstruction_probe(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let a = agent_id!("RpcBlockingCounter", "barrier-a");
-    let b = agent_id!("RpcBlockingCounter", "barrier-b");
-    let counter = agent_id!("RpcCounter", "barrier-counter");
-    let caller_id = agent_id!("CancelTester", "barrier-caller");
+    let a = agent_key!("RpcBlockingCounter", "barrier-a");
+    let b = agent_key!("RpcBlockingCounter", "barrier-b");
+    let counter = agent_key!("RpcCounter", "barrier-counter");
+    let caller_id = agent_key!("CancelTester", "barrier-caller");
     let target_a = executor.start_agent(&component.id, a.clone()).await?;
     let target_b = executor.start_agent(&component.id, b.clone()).await?;
     executor.start_agent(&component.id, counter.clone()).await?;
@@ -88,12 +88,14 @@ async fn real_rpc_retained_start_reconstruction_probe(
     })
     .await?;
     eprintln!("Both blocking RPCs dispatched; releasing A");
-    executor.complete_promise(&gate_a, vec![]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &gate_a, vec![])
+        .await?;
     // B remains pending until A's guest delivery and the release of its client are recorded.
     tokio::time::timeout(Duration::from_secs(30), async {
         let mut last_len = 0;
         loop {
-            executor.commit_oplog(&caller).await?;
+            executor.commit_oplog(&caller.agent_id).await?;
             let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
             if oplog.len() != last_len {
                 last_len = oplog.len();
@@ -126,7 +128,9 @@ async fn real_rpc_retained_start_reconstruction_probe(
     })
     .await??;
     eprintln!("A delivered while B is pending; releasing B");
-    executor.complete_promise(&gate_b, vec![]).await?;
+    executor
+        .complete_promise(&executor.context.default_environment_id, &gate_b, vec![])
+        .await?;
     let result = tokio::time::timeout(Duration::from_secs(30), invocation).await???;
     assert_eq!(result.into_typed::<u64>()?, 14);
     let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
@@ -176,11 +180,11 @@ async fn real_rpc_retained_start_reconstruction_probe(
     assert!(delivered_a < end(starts[9]));
     let delivered_b = delivered(starts[9]);
     // A's client is released after its delivery and before B completes. The release is a
-    // hint, not a durable call: it closes the connection span opened by A's `wasm-rpc::new`.
+    // hint, not a durable call: it closes the connection span opened by A's `wasm-rpc::upsert`.
     let new_starts: Vec<_> = oplog
         .iter()
         .filter_map(|e| match &e.entry {
-            PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::new" => {
+            PublicOplogEntry::Start(s) if s.function_name == "golem::rpc::wasm-rpc::upsert" => {
                 Some(e.oplog_index)
             }
             _ => None,
@@ -251,7 +255,7 @@ async fn real_rpc_retained_start_reconstruction_probe(
     ] {
         let key = executor
             .finalized_invocation_key(
-                target,
+                &target.agent_id,
                 &InvocationRequestKey::Internal(key.clone().unwrap()),
                 "inc_after_promise",
             )

@@ -34,7 +34,12 @@ pub fn agent_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> AgentOwnerPat
         application: component.application_name.clone(),
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
-        agent: AgentOwnerLeafPattern::Agent(ctx.agent_id().agent_id.clone()),
+        agent: AgentOwnerLeafPattern::agent(
+            *ctx.agent_id(),
+            ctx.owner_context()
+                .agent()
+                .map(|agent| agent.agent_type.clone()),
+        ),
     }
 }
 
@@ -1882,7 +1887,11 @@ mod tests {
     }
 
     fn agent(name: &str) -> AgentOwnerPattern {
-        AgentOwnerPattern::parse(&format!("a@b.com/app/env/component/{name}")).unwrap()
+        AgentOwnerPattern::parse(&format!(
+            "a@b.com/app/env/component/{}",
+            crate::test_agent_id(name)
+        ))
+        .unwrap()
     }
     fn env(name: &str) -> EnvironmentOwnerPattern {
         EnvironmentOwnerPattern::parse(&format!("a@b.com/app/{name}")).unwrap()

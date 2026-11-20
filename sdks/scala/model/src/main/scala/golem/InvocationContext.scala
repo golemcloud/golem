@@ -221,8 +221,7 @@ object Principal {
   /** A running agent that made a call. */
   final case class Agent(
     pair: PrincipalRef,
-    componentId: UUID,
-    agentId: String,
+    agentId: AgentId,
     agentType: String,
     environmentId: UUID
   ) extends Principal {

@@ -138,9 +138,8 @@ Point the management host and every deployment domain at the load balancer in DN
 
 | Priority | Conditions | Target group |
 | --- | --- | --- |
-| 1 | Host is `golem.example.com`, path is `/v1/agents/*` | Worker service, port 9005 |
-| 2 | Host is `golem.example.com`, path is `/v1/components/*/workers` or `/v1/components/*/workers/*` | Worker service, port 9005 |
-| 3 | Host is `golem.example.com` | Registry service, port 8083 |
+| 1 | Host is `golem.example.com`, path is `/v1/runtime` or `/v1/runtime/*` | Worker service, port 9005 |
+| 2 | Host is `golem.example.com` | Registry service, port 8083 |
 | Default | | Worker service, port 9006 |
 
 Reserve the management host with `GOLEM__DOMAIN_REGISTRATION__RESERVED_DOMAINS='["golem.example.com"]'` on the registry service.

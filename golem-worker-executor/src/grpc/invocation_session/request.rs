@@ -17,9 +17,9 @@ use super::{
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamingInvocationRequest, EnvironmentId, FieldSource,
     HashMap, HashSet, InputStreamAck, IntoTypedSchemaValue, InvocationRequest, InvocationResponse,
     InvocationSessionState, InvocationStart, MAX_DURABLE_STREAM_ITEM_SIZE,
-    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, ParsedAgentKey,
-    PersistedInvocationTarget, PersistedStreamInvocationDescriptor, ProducerRegistrationRequest,
-    ResumeAttach, ResumeAttemptDescriptor, ResumeOperation, SchemaGraph, SchemaType, SchemaValue,
+    MAX_NEW_STREAM_HANDLES_PER_VALUE, Message, NamedFieldType, PersistedInvocationTarget,
+    PersistedStreamInvocationDescriptor, Principal, ProducerRegistrationRequest, ResumeAttach,
+    ResumeAttemptDescriptor, ResumeOperation, SchemaGraph, SchemaType, SchemaValue,
     SchemaValueStream, SessionError, SessionStreamRole, StartAttemptDescriptor,
     StreamCancellationRequest, StreamEndpointSide, StreamInvocationId, StreamItemsPayload,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeCursor,
@@ -31,7 +31,7 @@ use super::{
     encode_recursive_stream_value_with_schema, invocation_request, invocation_response, mpsc,
     schema_fingerprint_v1,
 };
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Caller;
 
 pub(crate) fn decode_invocation_input(
     input: golem_schema::proto::golem::schema::SchemaValue,
@@ -43,8 +43,12 @@ pub(crate) fn decode_invocation_input(
     })
 }
 
+/// `callee` is the agent that the request's target resolved to, and `callee_agent_type` its
+/// agent type, which an agent method invocation requires.
 pub(crate) fn build_durable_streaming_request(
     request: &InvocationStart,
+    callee: AgentId,
+    callee_agent_type: Option<&golem_common::model::agent::AgentTypeName>,
     component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
     component_revision: ComponentRevision,
     callee_fingerprint: golem_common::model::AgentFingerprint,
@@ -53,12 +57,6 @@ pub(crate) fn build_durable_streaming_request(
     acceptance_committed: tokio::sync::oneshot::Sender<()>,
     live_join_buffer_events: usize,
 ) -> Result<DurableStreamingInvocationRequest, WorkerExecutorError> {
-    let callee: AgentId = request
-        .agent_id
-        .clone()
-        .ok_or_else(|| WorkerExecutorError::invalid_request("agent_id not found"))?
-        .try_into()
-        .map_err(WorkerExecutorError::invalid_request)?;
     let environment_id = request
         .environment_id
         .ok_or_else(|| WorkerExecutorError::invalid_request("environment_id not found"))?
@@ -105,10 +103,10 @@ pub(crate) fn build_durable_streaming_request(
         AgentInvocation::AgentMethod {
             method_name, input, ..
         } => {
-            let parsed = ParsedAgentKey::parse(&callee.agent_id, component_metadata)
-                .map_err(WorkerExecutorError::invalid_request)?;
+            let callee_agent_type = callee_agent_type
+                .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
             let agent_type = component_metadata
-                .find_agent_type_by_name_ref(&parsed.agent_type)
+                .find_agent_type_by_name_ref(callee_agent_type)
                 .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
             let method = agent_type
                 .methods
@@ -169,7 +167,7 @@ pub(crate) fn build_durable_streaming_request(
     };
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
-        callee: callee.clone(),
+        callee,
         callee_fingerprint,
         idempotency_key,
     };
@@ -318,7 +316,6 @@ pub(crate) fn build_durable_streaming_request(
             .map_err(WorkerExecutorError::invalid_request)?;
         let origin_callee: AgentId = origin
             .callee
-            .clone()
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -328,7 +325,7 @@ pub(crate) fn build_durable_streaming_request(
         let parent: AgentId = request
             .context
             .as_ref()
-            .and_then(|context| context.parent.clone())
+            .and_then(|context| context.parent)
             .ok_or_else(invalid)?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -431,7 +428,9 @@ pub(crate) fn build_durable_streaming_request(
     let input_schema = Arc::new(graph.clone());
 
     let mut execution = request.clone();
-    execution.agent_id = None;
+    execution.target = None;
+    execution.constructor = None;
+    execution.component_id = None;
     execution.method_name = None;
     execution.input = None;
     execution.external_tool = None;
@@ -555,7 +554,6 @@ pub(super) fn build_resume_attempt(
 ) -> Result<ResumeAttemptDescriptor, WorkerExecutorError> {
     let callee: AgentId = request
         .agent_id
-        .clone()
         .ok_or_else(|| WorkerExecutorError::invalid_request("resume agent_id not found"))?
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
@@ -695,10 +693,15 @@ pub(super) fn effective_session_identity(
             Ok::<_, WorkerExecutorError>(auth_ctx.encode_to_vec())
         })
         .transpose()?;
+    // The auth-context entry is always present, empty without an auth context, so the principal
+    // is always the second entry and an auth context is never read as a principal.
     let mut effective_identity = Vec::new();
-    for identity in [auth_ctx, caller.as_ref().map(Message::encode_to_vec)]
-        .into_iter()
-        .flatten()
+    for identity in [
+        Some(auth_ctx.unwrap_or_default()),
+        caller.as_ref().map(Message::encode_to_vec),
+    ]
+    .into_iter()
+    .flatten()
     {
         effective_identity.extend_from_slice(&(identity.len() as u64).to_be_bytes());
         effective_identity.extend_from_slice(&identity);
@@ -719,7 +722,7 @@ pub(super) fn require_expected_callee_fingerprint(
         )
     })?;
     if uuid::Uuid::from(expected) != actual.0 {
-        return Err(WorkerExecutorError::worker_not_found(agent_id.clone()));
+        return Err(WorkerExecutorError::worker_not_found(*agent_id));
     }
     Ok(())
 }
@@ -926,8 +929,19 @@ pub(super) fn request_agent_id(
     request: &InvocationRequest,
 ) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
     match request.request.as_ref() {
-        Some(invocation_request::Request::Start(start)) => start.agent_id.clone(),
+        Some(invocation_request::Request::Start(start)) => start_agent_id(start),
         _ => None,
+    }
+}
+
+/// The agent ID that a start names. A key target names no ID before it resolves.
+pub(super) fn start_agent_id(
+    start: &InvocationStart,
+) -> Option<golem_api_grpc::proto::golem::worker::AgentId> {
+    use golem_api_grpc::proto::golem::worker::agent_target::Target;
+    match start.target.as_ref()?.target.as_ref()? {
+        Target::Id(agent_id) => Some(*agent_id),
+        Target::Key(_) => None,
     }
 }
 

@@ -311,6 +311,7 @@ impl HistoricalAttachmentRestore {
             let call = call?;
             if call.start_index() != self.descriptor.start || call.is_live() {
                 return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    call.start_index(),
                     "the indexed historical attachment Start",
                     format!("claimed attachment Start {}", call.start_index()),
                 ));

@@ -2,61 +2,36 @@
 // Licensed under the Golem Source License v1.1
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeAgentId, parseAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
-import { ParsedAgentId } from '../src/agentId';
+import { getAgentTypeByAgentId, WasmRpc } from 'golem:agent/host@2.0.0';
+import { AgentId } from '../src/agentId';
+import { DynamicAgentClient } from '../src/dynamicClient';
 import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { z } from 'zod';
 import { hostInvocationMetadata } from './invocationMetadataTestSupport';
-import { getRawSelfAgentId } from '../src/host/hostapi';
+import { getSelfAgentId } from '../src/host/hostapi';
+import { MOCK_REMOTE_AGENT_ID } from './testSetup';
 import {
-  resolveRemoteAgent,
-  resolveRemoteAgentFallibly,
+  createRemoteAgent,
+  getRemoteAgentById,
   RemoteCallError,
+  upsertRemoteAgent,
 } from '../src/bridge/agent';
-import { schemaValueToWit, v } from '../src/internal/schema-model';
+import { schemaValueToWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import { compileSchema } from '../src/schema/adapter';
+import { selectSelfAgent, SELF_AGENT_ID } from './selfAgentTestSupport';
+
+const targetId = AgentId.parse('00000007-0000-8000-8000-000000000004');
 
 describe('identity boundaries', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('retains separate semantic and wire caches while dynamic binding decodes freshly', () => {
-    const original = v.string('original');
-    const wire = schemaValueToWit(v.string('wire'));
-    vi.mocked(parseAgentId).mockReturnValue([
-      'HostType',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: wire },
-      undefined,
-    ]);
-    const identity = ParsedAgentId.create({ typeName: 'LocalType', constructorValue: original });
-    const semantic = identity.parsed();
-    expect(semantic).toEqual(['LocalType', original, undefined]);
-    expect(semantic[1]).toBe(original);
-    expect(parseAgentId).not.toHaveBeenCalled();
-    const cachedWire = identity.parsedWire();
-    expect(cachedWire[1]).toBe(wire);
-    expect(identity.parsedWire()).toBe(cachedWire);
-    expect(identity.parsed()).toBe(semantic);
-    expect(parseAgentId).toHaveBeenCalledTimes(1);
-
-    identity.dynamicClient();
-    identity.dynamicClient();
-    expect(parseAgentId).toHaveBeenCalledTimes(3);
-    expect(WasmRpc.create).toHaveBeenLastCalledWith('HostType', wire, undefined, []);
-    expect(identity.parsed()).toBe(semantic);
-    expect(identity.parsedWire()).toBe(cachedWire);
-  });
-
   it('binds the recorded self identity without creating a connection and rejects a different client type', () => {
     const drop = vi.fn();
-    const invoke = vi.fn(() => hostInvocationMetadata('recorded-phantom-id'));
+    const invoke = vi.fn(() => hostInvocationMetadata());
     const rpc = { [Symbol.dispose]: drop, invoke } as unknown as WasmRpc;
-    const wire = schemaValueToWit(v.record([]));
-    vi.mocked(WasmRpc.bindSelf).mockReturnValue(['recorded-phantom-id', rpc]);
-    vi.mocked(parseAgentId).mockReturnValue([
-      'Counter',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: wire },
-      { highBits: 17n, lowBits: 29n },
-    ]);
+    selectSelfAgent('Counter');
+    vi.mocked(WasmRpc.bindSelf).mockReturnValue([AgentId.parse(SELF_AGENT_ID), rpc]);
     const counter = defineAgent({
       name: 'Counter',
       id: {},
@@ -64,7 +39,6 @@ describe('identity boundaries', () => {
     });
     counter.client.bindSelf().touch.trigger();
     expect(invoke).toHaveBeenCalledWith('touch', schemaValueToWit(v.record([])), undefined);
-    expect(parseAgentId).toHaveBeenCalledWith('recorded-phantom-id');
     expect(drop).not.toHaveBeenCalled();
     const other = defineAgent({ name: 'Other', id: {}, methods: {} });
     expect(() => other.client.bindSelf()).toThrow(RemoteCallError);
@@ -74,42 +48,99 @@ describe('identity boundaries', () => {
     });
     expect(() => counter.client.bindSelf()).toThrow(RemoteCallError);
     expect(drop).toHaveBeenCalledTimes(1);
-    expect(makeAgentId).not.toHaveBeenCalled();
+    expect(WasmRpc.upsert).not.toHaveBeenCalled();
     expect(WasmRpc.create).not.toHaveBeenCalled();
-    expect(WasmRpc).not.toHaveBeenCalled();
+    expect(WasmRpc.getById).not.toHaveBeenCalled();
   });
 
-  it('caches wire decoding on an initially unparsed identity', () => {
-    const wire = schemaValueToWit(v.string('decoded'));
-    vi.mocked(parseAgentId).mockReturnValue([
-      'Type',
-      { graph: { typeNodes: [], defs: [], root: 0 }, value: wire },
-      undefined,
-    ]);
-    const identity = new ParsedAgentId('encoded');
-    expect(identity.parsed()).toEqual(['Type', v.string('decoded'), undefined]);
-    expect(identity.parsed()).toBe(identity.parsed());
-    expect(identity.parsedWire()[1]).toBe(wire);
-    expect(parseAgentId).toHaveBeenCalledTimes(1);
+  it('upserts through the host upsert only', () => {
+    const remote = upsertRemoteAgent('Durable', v.record([v.string('a')]));
+    expect(WasmRpc.upsert).toHaveBeenCalledWith(
+      'Durable',
+      schemaValueToWit(v.record([v.string('a')])),
+    );
+    expect(WasmRpc.create).not.toHaveBeenCalled();
+    expect(WasmRpc.getById).not.toHaveBeenCalled();
+    expect(remote.target).toBe('Durable');
   });
 
-  it('keeps trapping and fallible connections distinct and skips ephemeral ID creation', () => {
-    resolveRemoteAgent('Ephemeral', v.record([]), undefined, [], 'ephemeral');
-    resolveRemoteAgentFallibly('Ephemeral', v.record([]), undefined, [], 'ephemeral');
-    expect(makeAgentId).not.toHaveBeenCalled();
-    expect(WasmRpc).toHaveBeenCalledTimes(1);
-    expect(WasmRpc.create).toHaveBeenCalledTimes(1);
-    const cause = { tag: 'denied' as const, val: 'no access' };
-    vi.mocked(WasmRpc.create).mockImplementationOnce(() => {
-      throw cause;
+  it('maps keyed, config and env of a create to the host create options', async () => {
+    const configGraph = compileSchema(z.string()).graph;
+    const remote = await createRemoteAgent('Durable', v.record([]), {
+      keyed: true,
+      config: [{ path: ['model'], value: { graph: configGraph, value: v.string('m') } }],
+      env: [['REGION', 'eu']],
     });
-    try {
-      resolveRemoteAgentFallibly('Durable', v.record([]));
-      expect.fail('expected connection failure');
-    } catch (error) {
-      expect(error).toBeInstanceOf(RemoteCallError);
-      expect((error as RemoteCallError).cause).toEqual({ tag: 'denied', details: 'no access' });
-    }
+    expect(WasmRpc.create).toHaveBeenCalledWith('Durable', schemaValueToWit(v.record([])), {
+      keyed: true,
+      agentConfig: [
+        {
+          path: ['model'],
+          value: typedSchemaValueToWit({ graph: configGraph, value: v.string('m') }),
+        },
+      ],
+      env: [['REGION', 'eu']],
+    });
+    expect(remote.target).toBe(`Durable[${AgentId.from(MOCK_REMOTE_AGENT_ID)}]`);
+    await createRemoteAgent('Durable', v.record([]));
+    expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toEqual({
+      keyed: false,
+      agentConfig: [],
+      env: [],
+    });
+  });
+
+  it('reports a conflict of a keyed create as a typed RemoteCallError', async () => {
+    vi.mocked(WasmRpc.create).mockRejectedValueOnce({ tag: 'conflict', val: 'key is current' });
+    const error = await createRemoteAgent('Durable', v.record([]), { keyed: true }).catch(
+      (error: unknown) => error,
+    );
+    expect(error).toBeInstanceOf(RemoteCallError);
+    expect((error as RemoteCallError).cause).toEqual({
+      tag: 'conflict',
+      details: 'key is current',
+    });
+    expect((error as RemoteCallError).message).toContain('conflict: key is current');
+  });
+
+  it('gets by ID through the host get-by-id and never creates', async () => {
+    await getRemoteAgentById('Durable', targetId);
+    expect(WasmRpc.getById).toHaveBeenCalledWith('Durable', targetId);
+    expect(WasmRpc.upsert).not.toHaveBeenCalled();
+    expect(WasmRpc.create).not.toHaveBeenCalled();
+
+    vi.mocked(WasmRpc.getById).mockImplementationOnce(() => {
+      throw { tag: 'not-found', val: 'no agent' };
+    });
+    const missing = getRemoteAgentById('Durable', targetId);
+    await expect(missing).rejects.toBeInstanceOf(RemoteCallError);
+    await expect(missing).rejects.toMatchObject({
+      cause: { tag: 'not-found', details: 'no agent' },
+    });
+  });
+
+  it('reads the agent ID of a handle from the host agent-id method', async () => {
+    const remote = upsertRemoteAgent('Durable', v.record([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
+    const agentId = await remote.agentId();
+    expect(rpc.agentId).toHaveBeenCalledTimes(1);
+    expect(agentId).toBeInstanceOf(AgentId);
+    expect(agentId.equals(MOCK_REMOTE_AGENT_ID)).toBe(true);
+  });
+
+  it('connects a dynamic client by ID to the agent type that the ID tag names', async () => {
+    vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce({
+      agentType: { typeName: 'Dynamic', mode: 'durable' },
+    } as never);
+    const client = await DynamicAgentClient.getById(targetId);
+    expect(client.agentId).toBe(targetId);
+    expect(WasmRpc.getById).toHaveBeenCalledWith('Dynamic', targetId);
+
+    vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce(undefined);
+    await expect(DynamicAgentClient.getById(targetId)).rejects.toMatchObject({
+      name: 'RemoteCallError',
+      cause: { tag: 'not-found' },
+    });
   });
 });
 
@@ -118,7 +149,7 @@ describe('self agent ID', () => {
     const previous = (globalThis as { currentAgentId?: string }).currentAgentId;
     (globalThis as { currentAgentId?: string }).currentAgentId = undefined;
     try {
-      expect(() => getRawSelfAgentId()).toThrow(
+      expect(() => getSelfAgentId()).toThrow(
         new Error(
           "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID",
         ),

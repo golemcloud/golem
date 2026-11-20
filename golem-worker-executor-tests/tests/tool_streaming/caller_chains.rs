@@ -18,14 +18,13 @@
 
 use super::*;
 use async_trait::async_trait;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::caller::Principal;
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError};
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::callers;
 use std::sync::Mutex;
 use test_r::{test, timeout};
@@ -201,19 +200,33 @@ impl ChainHarness {
         Ok(self)
     }
 
-    fn agent(&self, name: &str) -> AgentId {
-        AgentId {
-            component_id: self.caller_component.id,
-            agent_id: agent_id!("ToolStreamingCaller", name).to_string(),
-        }
+    /// The agent `ToolStreamingCaller(name)` of the caller component.
+    fn agent(&self, name: &str) -> OwnedAgentId {
+        self.executor
+            .keyed_agent_id(
+                self.context.default_environment_id,
+                &agent_key!("ToolStreamingCaller", name),
+            )
+            .expect("a valid agent key")
     }
 
-    /// The agent as the executor records it when it makes a call.
-    async fn agent_principal(&self, agent: &AgentId) -> anyhow::Result<Principal> {
+    /// The agent `CallerReport(name)` of the provider component.
+    fn report_agent(&self, name: &str) -> OwnedAgentId {
+        self.executor
+            .keyed_agent_id(
+                self.context.default_environment_id,
+                &agent_key!("CallerReport", name),
+            )
+            .expect("a valid agent key")
+    }
+
+    /// The agent `ToolStreamingCaller(..)` as the executor records it when it makes a call.
+    async fn agent_principal(&self, agent: &OwnedAgentId) -> anyhow::Result<Principal> {
         let fingerprint: AgentFingerprint =
             self.executor.get_worker_metadata(agent).await?.fingerprint;
         Ok(callers::agent_in(
-            agent.clone(),
+            agent.agent_id,
+            golem_common::model::agent::AgentTypeName("ToolStreamingCaller".to_string()),
             fingerprint,
             self.context.default_environment_id,
         )
@@ -231,7 +244,7 @@ impl ChainHarness {
             .executor
             .invoke_and_await_agent_as_caller(
                 &self.caller_component,
-                &agent_id!("ToolStreamingCaller", name),
+                &agent_key!("ToolStreamingCaller", name),
                 caller.clone(),
                 "collect",
                 data_value!(mode, Vec::<u8>::new(), 1u32),
@@ -292,8 +305,8 @@ impl Rpc for HoldReportAnswerRpc {
 
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -307,7 +320,7 @@ impl Rpc for HoldReportAnswerRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -322,8 +335,7 @@ impl Rpc for HoldReportAnswerRpc {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method_name: &str,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
@@ -338,7 +350,6 @@ impl Rpc for HoldReportAnswerRpc {
         self.inner
             .create_demand(
                 target,
-                environment_id,
                 method_name,
                 self_created_by,
                 self_agent_id,
@@ -355,8 +366,7 @@ impl Rpc for HoldReportAnswerRpc {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -380,7 +390,6 @@ impl Rpc for HoldReportAnswerRpc {
             .inner
             .invoke_and_await(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -405,8 +414,7 @@ impl Rpc for HoldReportAnswerRpc {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -423,7 +431,6 @@ impl Rpc for HoldReportAnswerRpc {
         self.inner
             .invoke(
                 target,
-                environment_id,
                 idempotency_key,
                 freshness_disposition,
                 expected_callee_fingerprint,
@@ -479,18 +486,15 @@ async fn a_chain_keeps_the_original_caller(
     // agent that the tool called recorded its own caller.
     let tool_starts = harness
         .executor
-        .recorded_callers(&a)
+        .recorded_callers(&a.agent_id)
         .await
         .into_iter()
         .filter(|(name, _)| name == "entity streaming")
         .map(|(_, caller)| caller)
         .collect::<Vec<_>>();
     assert_eq!(tool_starts, [tool_caller.clone(), tool_caller]);
-    let b = AgentId {
-        component_id: harness.provider_component.id,
-        agent_id: agent_id!("CallerReport", "chain-b").to_string(),
-    };
-    let recorded = harness.executor.recorded_callers(&b).await;
+    let b = harness.report_agent("chain-b");
+    let recorded = harness.executor.recorded_callers(&b.agent_id).await;
     assert!(
         recorded.iter().any(|(name, _)| name == "report"),
         "{recorded:?}"
@@ -521,7 +525,7 @@ async fn a_command_of_an_agents_shell_is_a_call_of_the_agent(
         .executor
         .invoke_and_await_agent_as_caller(
             &harness.caller_component,
-            &agent_id!("ToolStreamingCaller", "shell-a"),
+            &agent_key!("ToolStreamingCaller", "shell-a"),
             user.clone(),
             "run_bash",
             data_value!("streaming run caller"),
@@ -579,7 +583,7 @@ async fn a_command_of_a_shell_started_on_an_agent_is_a_call_of_the_agent(
         .executor
         .start_agent(
             &harness.caller_component.id,
-            agent_id!("ToolStreamingCaller", "ssh-a"),
+            agent_key!("ToolStreamingCaller", "ssh-a"),
         )
         .await?;
     let fingerprint = harness.executor.get_worker_metadata(&a).await?.fingerprint;
@@ -610,7 +614,7 @@ async fn a_command_of_a_shell_started_on_an_agent_is_a_call_of_the_agent(
     let output = harness
         .executor
         .invoke_external_tool(
-            &a,
+            &a.agent_id,
             fingerprint,
             IdempotencyKey::fresh(),
             ToolName::try_from("bash").unwrap(),
@@ -663,7 +667,7 @@ async fn a_tool_cancels_the_call_that_it_scheduled(
 ) -> anyhow::Result<()> {
     let harness = ChainHarness::start(last_unique_id, deps, streaming, caller, bash).await?;
     let user = callers::account(AccountId::new());
-    let b = agent_id!("CallerReport", "scheduled-b");
+    let b = agent_key!("CallerReport", "scheduled-b");
     let count = || async {
         harness
             .executor
@@ -741,10 +745,7 @@ async fn a_restart_inside_the_tool_chain_keeps_every_recorded_caller(
     .await?;
     let user = callers::account(AccountId::new());
     let a = harness.agent("chain-a");
-    let b = AgentId {
-        component_id: harness.provider_component.id,
-        agent_id: agent_id!("CallerReport", "chain-b").to_string(),
-    };
+    let b = harness.report_agent("chain-b");
     let key = IdempotencyKey::fresh();
     let mode = "call-agent-bump:chain-b";
     let invoke = |executor: TestWorkerExecutor, component: ComponentDto| {
@@ -754,9 +755,8 @@ async fn a_restart_inside_the_tool_chain_keeps_every_recorded_caller(
             executor
                 .invoke_and_await_agent_impl(
                     &component,
-                    &agent_id!("ToolStreamingCaller", "chain-a"),
+                    &agent_key!("ToolStreamingCaller", "chain-a"),
                     Some(&key),
-                    None,
                     Some(user),
                     "collect",
                     data_value!(mode, Vec::<u8>::new(), 1u32),
@@ -782,8 +782,8 @@ async fn a_restart_inside_the_tool_chain_keeps_every_recorded_caller(
             .map(|(_, caller)| caller)
             .collect::<Vec<_>>()
     };
-    let tool_starts_before = tool_starts(harness.executor.recorded_callers(&a).await);
-    let b_before = harness.executor.recorded_callers(&b).await;
+    let tool_starts_before = tool_starts(harness.executor.recorded_callers(&a.agent_id).await);
+    let b_before = harness.executor.recorded_callers(&b.agent_id).await;
     assert!(!tool_starts_before.is_empty());
     assert!(
         tool_starts_before
@@ -825,9 +825,9 @@ async fn a_restart_inside_the_tool_chain_keeps_every_recorded_caller(
     }
 
     // The records did not change.
-    let tool_starts_after = tool_starts(harness.executor.recorded_callers(&a).await);
+    let tool_starts_after = tool_starts(harness.executor.recorded_callers(&a.agent_id).await);
     assert_eq!(tool_starts_after, tool_starts_before);
-    let b_after = harness.executor.recorded_callers(&b).await;
+    let b_after = harness.executor.recorded_callers(&b.agent_id).await;
     assert_eq!(b_after, b_before);
     for (name, recorded) in &b_after {
         assert_eq!(*recorded, agent_caller, "{name}");
@@ -838,7 +838,7 @@ async fn a_restart_inside_the_tool_chain_keeps_every_recorded_caller(
         .executor
         .invoke_and_await_agent(
             &harness.provider_component,
-            &agent_id!("CallerReport", "chain-b"),
+            &agent_key!("CallerReport", "chain-b"),
             "count",
             data_value!(),
         )

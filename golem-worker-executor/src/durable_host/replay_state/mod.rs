@@ -20,13 +20,12 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, HostResponse,
-    HostResponseGolemApiFork, LogLevel, OplogEntry, OplogIndex, OplogScopeProjection,
+    AtomicOplogIndex, DurableFunctionType, DurableInvocationId, EntityAttribution, LogLevel,
+    OplogEntry, OplogIndex, OplogScopeProjection, ReplayDivergence, ReplayHostCall, ReplayStep,
+    StartIdentityField,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, ForkResult, OwnedAgentId, Timestamp,
-};
+use golem_common::model::{AgentInvocationPayload, AgentInvocationResult, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -50,9 +49,6 @@ pub enum ReplayEvent {
     ReplayFinished,
     UpdateReplayed {
         new_revision: ComponentRevision,
-    },
-    ForkReplayed {
-        new_phantom_id: Uuid,
     },
     InvocationWalletPinned {
         oplog_index: OplogIndex,
@@ -859,12 +855,6 @@ struct CursorState {
     skip_hints_after_delivery: bool,
     /// Entries prefetched from the oplog, beginning at the next speculative cursor position.
     replay_buffer: VecDeque<(OplogIndex, OplogEntry)>,
-    /// `Start` entries for `GolemApiFork` whose matching `End` has not yet been replayed. When the
-    /// matching `End` is read, the response is decoded and a `ForkReplayed` event is emitted. The
-    /// sequential adapter only ever has at most one in flight at a time (it writes the matched
-    /// `End` immediately after the `Start`), but we use a set so that future concurrent recorders cannot
-    /// trip us up.
-    pending_fork_starts: HashSet<OplogIndex>,
     /// Retained Starts and claimed replay obligations, keyed by their Start index. All lifecycle
     /// mutations share the cursor lock: retention, ahead consumption, registration and terminal
     /// routing cannot race. Explicit unregistration outside a transaction re-acquires this lock.

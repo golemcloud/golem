@@ -174,7 +174,6 @@ message RawCreateParameters {
   uint64 initial_total_linear_memory_size = 8;
   repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
   repeated bytes local_agent_config = 10;
-  optional golem.common.UUID original_phantom_id = 11;
   optional golem.common.UUID instance_id = 12;
   golem.component.AgentMode agent_mode = 13;
   OwnerKind owner_kind = 14;
@@ -182,12 +181,14 @@ message RawCreateParameters {
   optional string agent_type_name = 16;
   optional string canonical_key = 17;
   RawCreateRequest create_request = 18;
+  optional string constructor_parameters = 19;
+  bool never_live = 20;
 }
 
 enum RawCreateRequestKind {
   RAW_CREATE_REQUEST_KIND_GET_OR_CREATE = 0;
   RAW_CREATE_REQUEST_KIND_EXCLUSIVE = 1;
-  RAW_CREATE_REQUEST_KIND_PHANTOM = 2;
+  RAW_CREATE_REQUEST_KIND_UNKEYED = 2;
   RAW_CREATE_REQUEST_KIND_FORK = 3;
 }
 
@@ -364,6 +365,8 @@ message RawFailedUpdateParameters {
   optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
   optional uint64 update_attempt_index = 4;
   optional RawSnapshotFault snapshot_fault = 5;
+  UpdateFailureClass failure_class = 6;
+  optional ReplayDivergence divergence = 7;
 }
 
 // Whether a failed update is about the record that the update selected.

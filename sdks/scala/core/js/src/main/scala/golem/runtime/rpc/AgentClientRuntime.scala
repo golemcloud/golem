@@ -16,7 +16,6 @@
 
 package golem.runtime.rpc
 
-import golem.config.ConfigOverride
 import golem.host.PermissionsApi.ScopeCard
 import golem.host.js.schema.JsSchemaValueTree
 import golem.host.SchemaWireInterop
@@ -24,34 +23,61 @@ import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
 import golem.runtime.{WireAgentClientType, WireClientMethod}
 import golem.runtime.rpc.host.WasmRpcApi
 import golem.schema.wire.{ConcreteCodec, WitSchemaValueTree}
-import golem.FutureInterop
-import java.util.UUID
-import golem.Datetime
+import golem.{AgentId, Datetime, FutureInterop}
 
 import scala.concurrent.Future
 import scala.scalajs.js
 import scala.util.control.NonFatal
 
 object AgentClientRuntime {
-  private var remoteResolverOverride: Option[(String, JsSchemaValueTree) => Either[String, RemoteAgentClient]] =
+  private var remoteResolverOverride: Option[(String, JsSchemaValueTree) => Either[AgentRpcError, RemoteAgentClient]] =
     None
 
-  def resolve[Trait, Constructor](
-    agentType: AgentType[Trait, Constructor],
+  /**
+   * A client of the keyed agent of the constructor parameters. A durable target
+   * is created when it is missing. Every invocation of an ephemeral target runs
+   * on a new one-shot instance.
+   */
+  def upsertWire[Trait, Constructor](
+    agentType: WireAgentClientType[Trait, Constructor],
     constructorArgs: Constructor
-  ): Either[String, ResolvedAgent[Trait]] =
-    resolveWithPhantom(agentType, constructorArgs, phantom = None)
+  ): Either[AgentRpcError, WireResolvedAgent[Trait]] =
+    encodeWireSync(agentType.ctorCodec, agentType.ctorContainsStream, constructorArgs).left
+      .map(AgentRpcError.InvalidInput(_))
+      .flatMap(upsertRemote(agentType.metadata.name, _))
+      .map(remote => WireResolvedAgent(agentType, remote))
 
-  def resolveWire[Trait, Constructor](
+  /**
+   * Creates a durable agent and returns a client of it. Fails with
+   * [[AgentRpcException]].
+   */
+  def createWire[Trait, Constructor](
     agentType: WireAgentClientType[Trait, Constructor],
     constructorArgs: Constructor,
-    phantom: Option[UUID] = None,
-    configOverrides: List[ConfigOverride] = Nil
-  ): Either[String, WireResolvedAgent[Trait]] =
-    encodeWireSync(agentType.ctorCodec, agentType.ctorContainsStream, constructorArgs).flatMap { payload =>
-      resolveRemote(agentType.metadata.name, payload, phantom, configOverrides)
-        .map(remote => WireResolvedAgent(agentType, remote))
+    options: CreateOptions
+  ): Future[WireResolvedAgent[Trait]] =
+    encodeWireSync(agentType.ctorCodec, agentType.ctorContainsStream, constructorArgs) match {
+      case Left(error)    => Future.failed(AgentRpcException(AgentRpcError.InvalidInput(error)))
+      case Right(payload) =>
+        AgentIdentity
+          .create(agentType.metadata.name, payload, options)
+          .map(remote => WireResolvedAgent(agentType, remote))(
+            scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+          )
     }
+
+  /**
+   * A client of the existing agent with the given ID. Fails with
+   * [[AgentRpcException]] carrying [[AgentRpcError.NotFound]] for an unknown ID
+   * or an agent of another type.
+   */
+  def getByIdWire[Trait](
+    agentType: WireAgentClientType[Trait, ?],
+    agentId: AgentId
+  ): Future[WireResolvedAgent[Trait]] =
+    AgentIdentity
+      .getById(agentType.metadata.name, agentId)
+      .map(remote => WireResolvedAgent(agentType, remote))(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
 
   /**
    * Bind the current durable incarnation without creating it or waiting for
@@ -180,30 +206,39 @@ object AgentClientRuntime {
         )
     }
 
-  def resolveWithPhantom[Trait, Constructor](
+  /** Like [[upsertWire]], for a reflective agent type. */
+  def upsert[Trait, Constructor](
     agentType: AgentType[Trait, Constructor],
-    constructorArgs: Constructor,
-    phantom: Option[UUID]
-  ): Either[String, ResolvedAgent[Trait]] =
-    resolveWithPhantomAndConfig(agentType, constructorArgs, phantom, configOverrides = Nil)
+    constructorArgs: Constructor
+  ): Either[AgentRpcError, ResolvedAgent[Trait]] =
+    encodeInput[Constructor](agentType.constructor.inputCodec, constructorArgs).left
+      .map(AgentRpcError.InvalidInput(_))
+      .flatMap(upsertRemote(agentType.typeName, _))
+      .map(remote => ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote))
 
-  def resolveWithConfig[Trait, Constructor](
+  /** Like [[createWire]], for a reflective agent type. */
+  def create[Trait, Constructor](
     agentType: AgentType[Trait, Constructor],
     constructorArgs: Constructor,
-    configOverrides: List[ConfigOverride]
-  ): Either[String, ResolvedAgent[Trait]] =
-    resolveWithPhantomAndConfig(agentType, constructorArgs, phantom = None, configOverrides)
+    options: CreateOptions
+  ): Future[ResolvedAgent[Trait]] =
+    encodeInput[Constructor](agentType.constructor.inputCodec, constructorArgs) match {
+      case Left(error)    => Future.failed(AgentRpcException(AgentRpcError.InvalidInput(error)))
+      case Right(payload) =>
+        AgentIdentity
+          .create(agentType.typeName, payload, options)
+          .map(remote => ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote))(
+            scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+          )
+    }
 
-  def resolveWithPhantomAndConfig[Trait, Constructor](
-    agentType: AgentType[Trait, Constructor],
-    constructorArgs: Constructor,
-    phantom: Option[UUID],
-    configOverrides: List[ConfigOverride]
-  ): Either[String, ResolvedAgent[Trait]] =
-    for {
-      payload <- encodeInput[Constructor](agentType.constructor.inputCodec, constructorArgs)
-      remote  <- resolveRemote(agentType.typeName, payload, phantom, configOverrides)
-    } yield ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote)
+  /** Like [[getByIdWire]], for a reflective agent type. */
+  def getById[Trait](agentType: AgentType[Trait, ?], agentId: AgentId): Future[ResolvedAgent[Trait]] =
+    AgentIdentity
+      .getById(agentType.typeName, agentId)
+      .map(remote => ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote))(
+        scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+      )
 
   private def encodeInput[In](
     inputCodec: golem.runtime.InputRecordCodec[In],
@@ -260,15 +295,13 @@ object AgentClientRuntime {
         .toRight(WasmRpcApi.RpcError("protocol-error", Some("completed invocation has no metadata")).toString)
     )
 
-  private def resolveRemote(
+  private def upsertRemote(
     agentTypeName: String,
-    payload: JsSchemaValueTree,
-    phantom: Option[UUID],
-    configOverrides: List[ConfigOverride]
-  ): Either[String, RemoteAgentClient] =
+    payload: JsSchemaValueTree
+  ): Either[AgentRpcError, RemoteAgentClient] =
     remoteResolverOverride match {
       case Some(custom) => custom(agentTypeName, payload)
-      case None         => RemoteAgentClient.resolve(agentTypeName, payload, phantom, configOverrides)
+      case None         => AgentIdentity.upsert(agentTypeName, payload)
     }
 
   /**
@@ -281,7 +314,9 @@ object AgentClientRuntime {
     client: RemoteAgentClient,
     scopeCard: Option[ScopeCard] = None
   ) {
-    def agentId: String = client.agentId
+
+    /** The ID of the target agent; see [[RemoteAgentClient.agentId]]. */
+    def agentId(): Future[AgentId] = client.agentId()
 
     /**
      * A view of this agent whose awaited invocations borrow `card` as the scope
@@ -451,7 +486,9 @@ object AgentClientRuntime {
     client: RemoteAgentClient,
     scopeCard: Option[ScopeCard] = None
   ) {
-    def agentId: String = client.agentId
+
+    /** The ID of the target agent; see [[RemoteAgentClient.agentId]]. */
+    def agentId(): Future[AgentId] = client.agentId()
 
     /**
      * A view of this agent whose awaited invocations borrow `card` as the scope
@@ -570,7 +607,7 @@ object AgentClientRuntime {
       encodeWireSync(codec, containsStream, value)
 
     def withRemoteResolver[T](
-      resolver: (String, JsSchemaValueTree) => Either[String, RemoteAgentClient]
+      resolver: (String, JsSchemaValueTree) => Either[AgentRpcError, RemoteAgentClient]
     )(thunk: => T): T = {
       val previous = remoteResolverOverride
       remoteResolverOverride = Some(resolver)

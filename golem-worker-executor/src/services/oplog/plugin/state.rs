@@ -137,7 +137,7 @@ impl ForwardingOplogState {
             if let Entry::Vacant(e) = self.plugin_state.entry(*grant_id) {
                 let live = if let Some(cp) = status.oplog_processor_checkpoints.get(grant_id) {
                     LivePluginState {
-                        target_agent_id: cp.target_agent_id.clone(),
+                        target_agent_id: cp.target_agent_id,
                         confirmed_up_to: cp.confirmed_up_to,
                         sending_up_to: cp.sending_up_to,
                         send_in_progress: false,
@@ -260,7 +260,7 @@ impl ForwardingOplogState {
         );
 
         let target_agent_id = if let Some(id) = &live.target_agent_id {
-            id.clone()
+            *id
         } else {
             let Some(result) = self
                 .while_forwarding(
@@ -294,7 +294,7 @@ impl ForwardingOplogState {
                         return;
                     }
                     if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                        s.target_agent_id = Some(id.clone());
+                        s.target_agent_id = Some(id);
                     }
                     id
                 }
@@ -346,6 +346,7 @@ impl ForwardingOplogState {
         // be copied into every delivery checkpoint.
         let delivery_status = AgentStatusRecord {
             status: status.status,
+            never_live: status.never_live,
             component_revision: status.component_revision,
             current_retry_state: status
                 .current_retry_state
@@ -357,10 +358,11 @@ impl ForwardingOplogState {
             ..Default::default()
         };
         let metadata = AgentMetadata {
-            agent_id: self.initial_worker_metadata.agent_id.clone(),
+            agent_id: self.initial_worker_metadata.agent_id,
             component_id: self.initial_worker_metadata.component_id,
             agent_type_name: self.initial_worker_metadata.agent_type_name.clone(),
             canonical_key: self.initial_worker_metadata.canonical_key.clone(),
+            constructor_parameters: self.initial_worker_metadata.constructor_parameters.clone(),
             owner_kind: self.initial_worker_metadata.owner_kind,
             env: self.initial_worker_metadata.env.clone(),
             environment_id: self.initial_worker_metadata.environment_id,
@@ -368,9 +370,8 @@ impl ForwardingOplogState {
             created_by_email: self.initial_worker_metadata.created_by_email.clone(),
             config: self.initial_worker_metadata.config.clone(),
             created_at: self.initial_worker_metadata.created_at,
-            parent: self.initial_worker_metadata.parent.clone(),
+            parent: self.initial_worker_metadata.parent,
             last_known_status: delivery_status,
-            original_phantom_id: self.initial_worker_metadata.original_phantom_id,
             fingerprint: self.initial_worker_metadata.fingerprint,
             agent_mode: self.initial_worker_metadata.agent_mode,
             create_request: self.initial_worker_metadata.create_request.clone(),
@@ -462,6 +463,7 @@ impl ForwardingOplogState {
                 // Compute the idempotency key here so only lightweight data
                 // needs to be moved into the task.
                 let idempotency_key = oplog_processor_idempotency_key(
+                    self.initial_worker_metadata.environment_id,
                     &self.initial_worker_metadata.agent_id,
                     &plugin.environment_plugin_grant_id,
                     batch_start,
@@ -471,7 +473,7 @@ impl ForwardingOplogState {
                 let oplog_plugins = self.oplog_plugins.clone();
                 let environment_id = self.initial_worker_metadata.environment_id;
                 let caller_account_id = self.initial_worker_metadata.created_by;
-                let target_clone = target_agent_id.clone();
+                let target_clone = target_agent_id;
                 let forwarding_retired = self.forwarding_retired.clone();
                 // The task polls on after this flush returned, so it links back to
                 // the flush rather than running inside its span. See `TraceOrigin`.
@@ -636,7 +638,7 @@ impl ForwardingOplogState {
             timestamp: golem_common::model::Timestamp::now_utc(),
             plugin_grant_id: grant_id,
             source_component_revision,
-            target_agent_id: target_agent_id.clone(),
+            target_agent_id: *target_agent_id,
             confirmed_up_to,
             sending_up_to,
             last_batch_start,
@@ -758,7 +760,7 @@ impl ForwardingOplogState {
                     && !state.send_in_progress
                     && state.sending_up_to <= state.confirmed_up_to
             })
-            .map(|(grant_id, state)| (*grant_id, state.target_agent_id.clone().unwrap()))
+            .map(|(grant_id, state)| (*grant_id, state.target_agent_id.unwrap()))
             .collect();
 
         if candidates.is_empty() {
@@ -822,6 +824,7 @@ impl ForwardingOplogState {
             }
 
             let last_key = oplog_processor_idempotency_key(
+                self.initial_worker_metadata.environment_id,
                 &self.initial_worker_metadata.agent_id,
                 &grant_id,
                 last_batch_start,
@@ -934,7 +937,7 @@ impl ForwardingOplogState {
                 return;
             }
             if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                s.target_agent_id = Some(new_target.clone());
+                s.target_agent_id = Some(new_target);
             }
             tracing::info!(
                 source_worker = %self.initial_worker_metadata.agent_id,

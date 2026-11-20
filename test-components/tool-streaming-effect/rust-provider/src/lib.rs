@@ -2031,17 +2031,17 @@ impl Streaming for StreamingImpl {
             .await;
         }
         if let Some(name) = mode.strip_prefix("call-agent:") {
-            let report = CallerReportClient::get(name.to_string()).report().await;
+            let report = CallerReportClient::upsert(name.to_string()).report().await;
             return write_text(stdout, report).await;
         }
         if let Some(name) = mode.strip_prefix("schedule-bump:") {
-            CallerReportClient::get(name.to_string())
+            CallerReportClient::upsert(name.to_string())
                 .schedule_bump(two_seconds_from_now())
                 .expect("schedule bump");
             return write_text(stdout, "scheduled".to_string()).await;
         }
         if let Some(name) = mode.strip_prefix("schedule-and-cancel-bump:") {
-            let token = CallerReportClient::get(name.to_string())
+            let token = CallerReportClient::upsert(name.to_string())
                 .schedule_cancelable_bump(two_seconds_from_now())
                 .expect("schedule cancelable bump");
             token.cancel();

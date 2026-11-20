@@ -26,6 +26,7 @@ mod app;
 mod bridge_gen;
 #[cfg(unix)]
 mod git_remote;
+mod package;
 
 // Tag for the it-cli `bridge_gen` and `bridge_gen_rust` CI shards (see the it-cli matrix in
 // ci.yaml); `bridge_gen::rust` is additionally tagged `bridge_gen_rust` in bridge_gen/mod.rs.

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::EphemeralRpcTarget;
 use super::{
     RpcTargetActivation, WasmRpcEntry, WasmRpcEntryPayload, WasmRpcTargetActivation,
     classified_host_error, classify_rpc_error, install_embedded_span, restore_embedded_span,
@@ -31,11 +32,13 @@ use crate::services::rpc::ReplayedDemand;
 use crate::services::rpc::Rpc;
 use crate::services::rpc::RpcDemand;
 use crate::services::rpc::RpcError as InternalRpcError;
+use crate::worker::target::{ResolvedTarget, unkeyed_target};
 use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use futures::FutureExt;
 use futures::future::Either;
+use golem_common::base_model::agent::AgentMode;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
@@ -45,13 +48,12 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::OwnedInvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
-use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::caller::Caller;
 use golem_common::model::card::owner::AgentOwnerLeafPattern;
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::invocation_context::InvocationContextSpan;
@@ -64,7 +66,6 @@ use golem_common::model::oplog::HostResponseGolemRpcCreate;
 use golem_common::model::oplog::HostResponseGolemRpcPrepareInvocation;
 use golem_common::model::oplog::SpanKind;
 use golem_common::model::oplog::SpanStarted;
-use golem_common::model::oplog::host_functions::GolemRpcWasmRpcNew;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcPrepareInvocation;
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::schema::agent::AgentTypeSchema;
@@ -77,7 +78,7 @@ use wasmtime::component::Resource;
 pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: OwnedAgentId,
-    logical_agent_id: ParsedAgentKey,
+    ephemeral: EphemeralRpcTarget,
     env: Vec<(String, String)>,
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
@@ -86,13 +87,15 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_owner: AgentOwnerPattern,
     creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
+    let remote_component_id = ephemeral.component_id;
     Ok(ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             remote_agent_id,
-            ephemeral_logical_agent_id: Some(logical_agent_id),
+            ephemeral: Some(ephemeral),
             span_id: span.span_id().clone(),
             target_activation: WasmRpcTargetActivation::DeferredEphemeral { env, config },
             remote_agent_type,
+            remote_component_id,
             remote_method_streams,
             remote_owner,
             creation_index,
@@ -100,28 +103,44 @@ pub(super) fn construct_ephemeral_wasm_rpc_resource<Ctx: WorkerCtx>(
     })?)
 }
 
+/// The agent that one invocation of a client dispatches to: the client's agent, or for a client
+/// of an ephemeral agent type, the one-shot instance of the invocation.
 pub(super) fn invocation_target_agent_id(
     logical_remote_agent_id: &OwnedAgentId,
-    ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
+    ephemeral: Option<&EphemeralRpcTarget>,
     idempotency_key: &IdempotencyKey,
     method_name: &str,
 ) -> anyhow::Result<OwnedAgentId> {
-    let Some(logical_agent_id) = ephemeral_logical_agent_id else {
-        return Ok(logical_remote_agent_id.clone());
-    };
+    Ok(match ephemeral {
+        None => logical_remote_agent_id.clone(),
+        Some(ephemeral) => OwnedAgentId::new(
+            logical_remote_agent_id.environment_id,
+            &AgentId::ephemeral_invocation(
+                logical_remote_agent_id.environment_id,
+                ephemeral.type_id,
+                &InvocationRequestKey::Internal(idempotency_key.clone()).owner_key(method_name),
+            ),
+        ),
+    })
+}
 
-    let invocation_agent_id = logical_agent_id
-        .with_ephemeral_invocation_phantom(
-            &InvocationRequestKey::Internal(idempotency_key.clone()).owner_key(method_name),
-        )
-        .map_err(|err| anyhow::anyhow!(err))?;
-    let invocation_agent_id =
-        AgentId::from_agent_id(logical_remote_agent_id.component_id(), &invocation_agent_id)
-            .map_err(|err| anyhow::anyhow!(err))?;
-    Ok(OwnedAgentId::new(
-        logical_remote_agent_id.environment_id,
-        &invocation_agent_id,
-    ))
+/// The target that a call to `remote_agent_id`, from [`invocation_target_agent_id`], carries.
+/// A client of an ephemeral agent type creates the invocation's one-shot instance; any other
+/// client reaches only the agent it is bound to.
+pub(super) fn dispatch_target(
+    remote_agent_id: &OwnedAgentId,
+    ephemeral: Option<&EphemeralRpcTarget>,
+) -> ResolvedTarget {
+    match ephemeral {
+        None => ResolvedTarget::existing(remote_agent_id.clone()),
+        Some(ephemeral) => unkeyed_target(
+            remote_agent_id.environment_id,
+            remote_agent_id.agent_id,
+            ephemeral.component_id,
+            ephemeral.constructor.clone(),
+            AgentMode::Ephemeral,
+        ),
+    }
 }
 
 /// The idempotency key inputs and the logical target of one durable RPC. Once the call's `Start`
@@ -131,7 +150,7 @@ pub(super) fn invocation_target_agent_id(
 pub(super) struct RpcCallTarget {
     key_position: IdempotencyKeyPosition,
     logical_remote_agent_id: OwnedAgentId,
-    ephemeral_logical_agent_id: Option<ParsedAgentKey>,
+    ephemeral: Option<EphemeralRpcTarget>,
     method_name: String,
 }
 
@@ -139,13 +158,13 @@ impl RpcCallTarget {
     pub(super) fn new(
         key_position: IdempotencyKeyPosition,
         logical_remote_agent_id: &OwnedAgentId,
-        ephemeral_logical_agent_id: Option<&ParsedAgentKey>,
+        ephemeral: Option<&EphemeralRpcTarget>,
         method_name: &str,
     ) -> Self {
         Self {
             key_position,
             logical_remote_agent_id: logical_remote_agent_id.clone(),
-            ephemeral_logical_agent_id: ephemeral_logical_agent_id.cloned(),
+            ephemeral: ephemeral.cloned(),
             method_name: method_name.to_string(),
         }
     }
@@ -157,7 +176,7 @@ impl RpcCallTarget {
         let idempotency_key = self.key_position.derive(start_index);
         let remote_agent_id = invocation_target_agent_id(
             &self.logical_remote_agent_id,
-            self.ephemeral_logical_agent_id.as_ref(),
+            self.ephemeral.as_ref(),
             &idempotency_key,
             &self.method_name,
         )
@@ -176,7 +195,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
     freshness: InvocationFreshnessDisposition,
 ) -> anyhow::Result<Result<(OwnedInvocationId, AgentFingerprint), InternalRpcError>> {
     let request_key = InvocationRequestKey::Internal(child_key.clone());
-    let (fingerprint, creation_data) = {
+    let (fingerprint, creation_data, ephemeral) = {
         let payload = ctx
             .table()
             .get(resource)?
@@ -189,6 +208,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
                 payload.target_activation.target_creation_data(),
                 payload.span_id.clone(),
             ),
+            payload.ephemeral.clone(),
         )
     };
     let fingerprint = if let Some(fingerprint) = fingerprint {
@@ -237,8 +257,7 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
             let interrupt = ctx.create_interrupt_signal().map(Error::from);
             let caller = ctx.outgoing_caller();
             let demand = rpc.create_demand(
-                AgentTarget::Current(remote_agent_id.agent_id()),
-                remote_agent_id.environment_id,
+                dispatch_target(remote_agent_id, ephemeral.as_ref()),
                 method_name,
                 ctx.created_by(),
                 ctx.agent_id(),
@@ -282,102 +301,104 @@ pub(super) async fn prepare_rpc_invocation_identity<Ctx: WorkerCtx>(
     )))
 }
 
-pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
+pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    mut handle: DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
-    remote_agent_id: AgentId,
+    mut handle: DurableCallSession<F, NotCancellable>,
+    binding: Box<ResolvedTarget>,
     env: &[(String, String)],
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
+    remote_component_id: ComponentId,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
     remote_owner: AgentOwnerPattern,
-    pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
-) -> anyhow::Result<Result<Resource<WasmRpcEntry>, RpcError>> {
+) -> anyhow::Result<Result<Resource<WasmRpcEntry>, RpcError>>
+where
+    F: golem_common::model::oplog::payload::HostPayloadPair<Resp = HostResponseGolemRpcCreate>,
+{
     let target_environment_id = ctx.owned_agent_id.environment_id;
-    let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
-    let target_activation = if pinned_ephemeral_identity {
-        WasmRpcTargetActivation::DeferredEphemeral {
-            env: env.to_vec(),
-            config,
-        }
-    } else {
-        let rpc = ctx.rpc();
-        let created_by = ctx.created_by();
-        let agent_id = ctx.agent_id().clone();
-        let caller = ctx.outgoing_caller();
-        let stack = ctx.clone_as_inherited_stack(span.span_id());
-        let key = handle
-            .idempotency_key_position(ctx)
-            .derive(handle.start_index());
-        let auth_ctx = handle.agent_auth_ctx().clone();
-        let result = {
-            let creation = async {
-                let mut owner = remote_owner.clone();
-                let AgentOwnerPattern::Agent { agent, .. } = &mut owner else {
-                    return Err(WorkerExecutorError::runtime(
-                        "invalid RPC resource owner pattern",
-                    ));
-                };
-                *agent = AgentOwnerLeafPattern::Agent(remote_agent_id.agent_id.agent_id.clone());
-                auth_ctx
-                    .authorize_permission(&agent_target(
-                        owner,
-                        AgentVerb::Invoke,
-                        AgentResourcePattern::Any,
-                    ))
-                    .map_err(|error| WorkerExecutorError::permission_denied(error.to_string()))?;
-                rpc.create_and_initialize(
-                    AgentTarget::Current(remote_agent_id.agent_id()),
-                    target_environment_id,
-                    created_by,
-                    &agent_id,
-                    env,
-                    stack,
-                    &caller,
-                    config.clone(),
-                    &auth_ctx,
-                    key,
-                )
-                .await
+    let remote_agent_id = binding.owned_agent_id.clone();
+    let rpc = ctx.rpc();
+    let created_by = ctx.created_by();
+    let agent_id = *ctx.agent_id();
+    let caller = ctx.outgoing_caller();
+    let stack = ctx.clone_as_inherited_stack(span.span_id());
+    let key = handle
+        .idempotency_key_position(ctx)
+        .derive(handle.start_index());
+    let auth_ctx = handle.agent_auth_ctx().clone();
+    let result = {
+        let creation = async {
+            let mut owner = remote_owner.clone();
+            let AgentOwnerPattern::Agent { agent, .. } = &mut owner else {
+                return Err(WorkerExecutorError::runtime(
+                    "invalid RPC resource owner pattern",
+                ));
             };
-            let interrupt = ctx.create_interrupt_signal().map(Error::from);
-            tokio::pin!(creation);
-            match futures::future::select(creation, interrupt).await {
-                Either::Left((result, _)) => result,
-                Either::Right((error, _)) => return Err(handle.trap(error)),
-            }
+            *agent = AgentOwnerLeafPattern::agent(
+                remote_agent_id.agent_id,
+                Some(remote_agent_type.type_name.clone()),
+            );
+            auth_ctx
+                .authorize_permission(&agent_target(
+                    owner,
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Any,
+                ))
+                .map_err(|error| WorkerExecutorError::permission_denied(error.to_string()))?;
+            rpc.create_and_initialize(
+                *binding,
+                false,
+                created_by,
+                &agent_id,
+                env,
+                stack,
+                &caller,
+                config.clone(),
+                &auth_ctx,
+                key,
+            )
+            .await
         };
-        let demand = match result {
-            Ok(demand) => demand,
-            Err(
-                error @ (WorkerExecutorError::AgentCreationFailed { .. }
-                | WorkerExecutorError::PermissionDenied { .. }),
-            ) => {
-                let error = InternalRpcError::from(error);
-                let finished = super::rpc_span_finished::<()>(span.span_id(), &Err(error.clone()));
-                handle
-                    .complete_with_span(
-                        ctx,
-                        HostResponseGolemRpcCreate {
-                            result: Err(error.clone().into()),
-                            target_environment_id,
-                        },
-                        finished,
-                    )
-                    .await?;
-                finish_span_in_memory(ctx, span.span_id())?;
-                return Ok(Err(error.into()));
-            }
-            Err(error) => return Err(handle.trap(error)),
-        };
-        WasmRpcTargetActivation::Activated {
-            target_fingerprint: demand.fingerprint(),
-            demand,
-            env: env.to_vec(),
-            config,
+        let interrupt = ctx.create_interrupt_signal().map(Error::from);
+        tokio::pin!(creation);
+        match futures::future::select(creation, interrupt).await {
+            Either::Left((result, _)) => result,
+            Either::Right((error, _)) => return Err(handle.trap(error)),
         }
+    };
+    let demand = match result {
+        Ok(demand) => demand,
+        Err(
+            error @ (WorkerExecutorError::AgentCreationFailed { .. }
+            | WorkerExecutorError::PermissionDenied { .. }
+            | WorkerExecutorError::AgentNotFound { .. }
+            | WorkerExecutorError::AgentKeyCollision { .. }
+            | WorkerExecutorError::InvalidRequest { .. }),
+        ) => {
+            let error = InternalRpcError::from(error);
+            let finished = super::rpc_span_finished::<()>(span.span_id(), &Err(error.clone()));
+            handle
+                .complete_with_span(
+                    ctx,
+                    HostResponseGolemRpcCreate {
+                        result: Err(error.clone().into()),
+                        target_environment_id,
+                    },
+                    finished,
+                )
+                .await?;
+            finish_span_in_memory(ctx, span.span_id())?;
+            return Ok(Err(error.into()));
+        }
+        Err(error) => return Err(handle.trap(error)),
+    };
+    let target_activation = WasmRpcTargetActivation::Activated {
+        target_fingerprint: demand.fingerprint(),
+        demand,
+        env: env.to_vec(),
+        config,
     };
     let fingerprint = target_activation
         .target_fingerprint()
@@ -395,10 +416,11 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             remote_agent_id,
-            ephemeral_logical_agent_id: None,
+            ephemeral: None,
             span_id: span.span_id().clone(),
             target_activation,
             remote_agent_type,
+            remote_component_id,
             remote_method_streams,
             remote_owner,
             creation_index,
@@ -416,28 +438,25 @@ pub(super) async fn reconstruct_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: Vec<AgentConfigEntryDto>,
     span: Arc<InvocationContextSpan>,
     remote_agent_type: Arc<AgentTypeSchema>,
+    remote_component_id: ComponentId,
     remote_method_streams: Arc<BTreeMap<String, bool>>,
     remote_owner: AgentOwnerPattern,
-    pinned_ephemeral_identity: bool,
     creation_index: Option<OplogIndex>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let remote_agent_id = OwnedAgentId::new(target_environment_id, &remote_agent_id);
-    let target_activation = if pinned_ephemeral_identity {
-        WasmRpcTargetActivation::DeferredEphemeral { env, config }
-    } else {
-        WasmRpcTargetActivation::ReplayPending {
-            target_fingerprint,
-            env,
-            config,
-        }
+    let target_activation = WasmRpcTargetActivation::ReplayPending {
+        target_fingerprint,
+        env,
+        config,
     };
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload {
             remote_agent_id,
-            ephemeral_logical_agent_id: None,
+            ephemeral: None,
             span_id: span.span_id().clone(),
             target_activation,
             remote_agent_type,
+            remote_component_id,
             remote_method_streams,
             remote_owner,
             creation_index,
@@ -471,8 +490,7 @@ pub(super) async fn activate_rpc_target(
     }
     let demand = rpc
         .create_demand(
-            AgentTarget::Current(remote_agent_id.agent_id()),
-            remote_agent_id.environment_id,
+            ResolvedTarget::existing(remote_agent_id.clone()),
             method_name,
             created_by,
             agent_id,
@@ -525,7 +543,7 @@ pub(super) async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     let rpc = ctx.rpc();
     let demand = {
         let created_by = ctx.created_by();
-        let agent_id = ctx.agent_id().clone();
+        let agent_id = *ctx.agent_id();
         let caller = ctx.outgoing_caller();
         let interrupt_signal = ctx.create_interrupt_signal().map(Error::from);
         let activation = activate_rpc_target(
@@ -613,26 +631,25 @@ pub(super) fn rpc_connection_function_type(with_agent_authority: bool) -> Durabl
     }
 }
 
-pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx>(
+pub(super) async fn start_rpc_connection_call<Ctx: WorkerCtx, F>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     request: HostRequestGolemRpcCreate,
     with_agent_authority: bool,
 ) -> anyhow::Result<(
-    DurableCallSession<GolemRpcWasmRpcNew, NotCancellable>,
+    DurableCallSession<F, NotCancellable>,
     Arc<InvocationContextSpan>,
-)> {
-    let expected = request.remote_agent_id.clone();
-    let (mut handle, span, recorded) = start_rpc_binding_call::<_, GolemRpcWasmRpcNew>(
-        ctx,
-        request,
-        &expected,
-        with_agent_authority,
-    )
-    .await?;
+)>
+where
+    F: golem_common::model::oplog::payload::HostPayloadPair<Req = HostRequestGolemRpcCreate>,
+{
+    let expected = request.remote_agent_id;
+    let (mut handle, span, recorded) =
+        start_rpc_binding_call::<_, F>(ctx, request, &expected, with_agent_authority).await?;
     if recorded.remote_agent_id != expected {
         return Err(handle.trap(WorkerExecutorError::unexpected_oplog_entry(
-            format!("RPC connection to {expected}"),
+            handle.start_index(),
             format!("RPC connection to {}", recorded.remote_agent_id),
+            format!("RPC connection to {expected}"),
         )));
     }
     Ok((handle, span))
@@ -715,6 +732,7 @@ where
             };
             let started = handle.recorded_span_started(ctx).await?.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    handle.start_index(),
                     "RPC connection Start carrying span_started",
                     format!(
                         "RPC connection Start at {} without span metadata",
@@ -735,14 +753,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         remote_agent_id: &OwnedAgentId,
         method_name: &str,
     ) -> anyhow::Result<golem_common::model::card::PermissionTarget> {
-        let remote_owner = self
-            .table()
-            .get(rpc_resource)?
-            .payload
-            .downcast_ref::<WasmRpcEntryPayload>()
-            .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?
-            .remote_owner
-            .clone();
+        let (remote_owner, remote_agent_type) = {
+            let payload = self
+                .table()
+                .get(rpc_resource)?
+                .payload
+                .downcast_ref::<WasmRpcEntryPayload>()
+                .ok_or_else(|| anyhow::anyhow!("invalid RPC resource payload"))?;
+            (
+                payload.remote_owner.clone(),
+                payload.remote_agent_type.type_name.clone(),
+            )
+        };
         let AgentOwnerPattern::Agent {
             account,
             application,
@@ -758,7 +780,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             application,
             environment,
             component,
-            agent: AgentOwnerLeafPattern::Agent(remote_agent_id.agent_id.agent_id.clone()),
+            agent: AgentOwnerLeafPattern::agent(remote_agent_id.agent_id, Some(remote_agent_type)),
         };
         agent_method_target(owner, AgentVerb::Invoke, method_name)
             .map_err(|err| anyhow::anyhow!(err))

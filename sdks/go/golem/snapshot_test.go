@@ -24,6 +24,7 @@ import (
 	loadExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_load_snapshot"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
 // snapCustomState — A state that controls its own serialization — the only way to capture
@@ -153,17 +154,17 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 	}
 }
 
-// TestLoadWithoutReadableAgentIDNamesTheCardGrant — a snapshot load on an
-// instance that cannot read GOLEM_AGENT_ID fails with an error that names the
+// TestLoadWithoutReadableAgentTypeNamesTheCardGrant — a snapshot load on an
+// instance that cannot read GOLEM_AGENT_TYPE fails with an error that names the
 // card grant the agent needs.
-func TestLoadWithoutReadableAgentIDNamesTheCardGrant(t *testing.T) {
-	prevID, prevActive := selfAgentID, active
-	selfAgentID = func() string { return "" }
+func TestLoadWithoutReadableAgentTypeNamesTheCardGrant(t *testing.T) {
+	prevEnv, prevActive := selfEnv, active
+	selfEnv = func(string) string { return "" }
 	active = nil
-	t.Cleanup(func() { selfAgentID, active = prevID, prevActive })
+	t.Cleanup(func() { selfEnv, active = prevEnv, prevActive })
 
-	res := loadExports.Load(host.Snapshot{MimeType: "application/json"})
-	want := "GOLEM_AGENT_ID is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_ID"
+	res := loadExports.Load(host.Snapshot{MimeType: "application/json"}, params())
+	want := "GOLEM_AGENT_TYPE is not readable: the agent's permission card must allow env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE"
 	if !res.IsErr() || res.Err() != want {
 		t.Fatalf("load = %+v, want the error %q", res, want)
 	}
@@ -180,9 +181,9 @@ type rState struct {
 // the OnRestore hook; the constructor, whose effects are already in the
 // history the snapshot replaces, does not run.
 func TestRestoreSkipsTheConstructor(t *testing.T) {
-	prev := selfAgentID
-	selfAgentID = func() string { return `R("ada")` }
-	t.Cleanup(func() { selfAgentID = prev })
+	prev := selfEnv
+	selfEnv = func(string) string { return "00000007-0000-8000-8000-000000000004" }
+	t.Cleanup(func() { selfEnv = prev })
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
 		constructed := 0
@@ -191,7 +192,7 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 			return &rState{Count: 100}
 		}), false)
 		impl.OnRestore(func(ic *InitContext[restoreID, rState, NoConfig], s *rState) error {
-			s.greeting = "hello " + ic.ID().Name + " from " + ic.AgentID()
+			s.greeting = "hello " + ic.ID().Name + " from " + ic.AgentID().String()
 			return nil
 		})
 		impl.Handle(def.Method[Unit, int64]("count"), func(ctx *Context[rState], _ Unit) int64 { return ctx.State.Count })
@@ -215,8 +216,64 @@ func TestRestoreSkipsTheConstructor(t *testing.T) {
 		if constructed != 0 {
 			t.Errorf("the constructor ran %d times on restore", constructed)
 		}
-		if s.Count != 7 || s.greeting != `hello ada from R("ada")` {
+		if s.Count != 7 || s.greeting != "hello ada from 00000007-0000-8000-8000-000000000004" {
 			t.Errorf("restored state = %+v", *s)
+		}
+	})
+}
+
+// TestLoadSnapshotRestoresWithTheHostsConstructorParameters — the load-snapshot
+// export decodes the constructor parameters the host passes, as initialize
+// does, and the restore hook reads them through InitContext.ID; the snapshot
+// itself does not carry them.
+func TestLoadSnapshotRestoresWithTheHostsConstructorParameters(t *testing.T) {
+	prevEnv, prevDefs, prevActive := selfEnv, defs, active
+	t.Cleanup(func() { selfEnv, defs, active = prevEnv, prevDefs, prevActive })
+	selfEnv = func(name string) string {
+		switch name {
+		case agentTypeEnvVar:
+			return "R"
+		case agentIDEnvVar:
+			return "00000007-0000-8000-8000-000000000004"
+		}
+		return ""
+	}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[restoreID, NoConfig](d, Spec{Name: "R"})
+		constructed := 0
+		impl := implementInto[restoreID, rState, NoConfig](d, def, simpleNewState[restoreID, rState](func(restoreID) *rState {
+			constructed++
+			return &rState{}
+		}), false)
+		impl.OnRestore(func(ic *InitContext[restoreID, rState, NoConfig], s *rState) error {
+			s.greeting = "hello " + ic.ID().Name
+			return nil
+		})
+		impl.Handle(def.Method[Unit, int64]("count"), func(ctx *Context[rState], _ Unit) int64 { return ctx.State.Count })
+		noDefErrs(t, d)
+		defs, active = d, nil
+
+		snap, err := saveState(&rState{Count: 7, greeting: "hello ada"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := loadExports.Load(snap, params(types.MakeSchemaValueNodeStringValue("grace")))
+		if res.IsErr() {
+			t.Fatalf("load: %s", res.Err())
+		}
+		if constructed != 0 {
+			t.Errorf("the constructor ran %d times on load", constructed)
+		}
+		s := active.state.(*rState)
+		if s.Count != 7 || s.greeting != "hello grace" {
+			t.Errorf("restored state = %+v", *s)
+		}
+		active = nil
+		if res := loadExports.Load(snap, params(types.MakeSchemaValueNodeS32Value(3))); res.IsOk() {
+			t.Error("load accepted constructor parameters that do not match the agent's constructor")
+		}
+		if active != nil {
+			t.Error("a failed load left an active instance")
 		}
 	})
 }

@@ -170,7 +170,10 @@ test "a call that returned a stream reads the caller at its end, for the produce
 
 ///|
 test "a result holds a stream only when it has a stream node" {
-  let plain : @types.SchemaValueTree = { value_nodes: [StringValue("x")], root: 0 }
+  let plain : @types.SchemaValueTree = {
+    value_nodes: [StringValue("x")],
+    root: 0,
+  }
   assert_false(holds_stream(plain))
 }
 

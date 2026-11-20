@@ -46,7 +46,9 @@ impl DroppedDurableInput {
         let replay = ctx.state.replay_state.clone();
         let operation = ctx.entity_tool_operation();
         let boundary = self.disposal_boundary()?;
-        let rejected = ctx.rejects_live_continuation_at_replay_tail();
+        let rejected = ctx
+            .rejects_live_continuation_at_replay_tail()
+            .then(|| replay.replay_target().next());
         let transition = ctx.live_continuation_at_replay_tail_factory(
             true,
             "durable stream guest-drop cancellation".to_string(),
@@ -186,7 +188,7 @@ impl DroppedDurableInput {
         &self,
         operation: Option<&crate::durable_host::tool::operation::OwnerToolOperation>,
         boundary: &SerializableToolAdmissionRefusal,
-        rejected: bool,
+        rejected: Option<OplogIndex>,
     ) -> Result<bool, WorkerExecutorError> {
         let recorded_refusal = operation.is_some_and(|operation| {
             operation
@@ -206,10 +208,11 @@ impl DroppedDurableInput {
         if let Some(operation) = operation {
             operation.reject_missing_replay_admission(boundary).await?;
         }
-        if rejected {
+        if let Some(rejected_at) = rejected {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "durable stream guest-drop cancellation",
+                rejected_at,
                 "no recorded cancellation during completed entity replay",
+                "durable stream guest-drop cancellation",
             ));
         }
         Ok(false)

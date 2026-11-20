@@ -82,7 +82,7 @@ final class MatrixArtifactToolImpl extends MatrixArtifactTool {
             request.dimensions.width.value * request.dimensions.height.value * multiplier + request.labels.length,
           labelSummary = request.labels.reverse.mkString("|"),
           principal = s"${context.caller.original.toString}|${context.caller.immediate.toString}",
-          ownerAgentId = HostApi.getSelfMetadata().agentId.agentId
+          ownerAgentId = HostApi.getSelfMetadata().agentId.toString
         )
       )
 }

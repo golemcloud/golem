@@ -460,14 +460,14 @@ async fn run_resource_contract(
                 caller_component.revision,
                 Some(deployment),
             );
-            let agent_id = agent_id!(
+            let agent_id = agent_key!(
                 caller.agent_type,
                 format!("resource-acceptance-{}-{provider_index}", caller.language)
             );
             let worker_id = executor
                 .start_agent(&caller_component.id, agent_id.clone())
                 .await?;
-            let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+            let owned_agent_id = worker_id.clone();
             if owned_agent_id.environment_id != context.default_environment_id {
                 failures.push(format!(
                     "{path}.environment: invocation escaped its environment"
@@ -497,10 +497,11 @@ async fn run_resource_contract(
                         &observation,
                         &path,
                         provider.language,
-                        &agent_id.to_string(),
+                        &worker_id.agent_id.to_string(),
                         &callers::principal_text(
                             &callers::agent_in(
-                                worker_id.clone(),
+                                worker_id.agent_id,
+                                agent_id.agent_type.clone(),
                                 executor.get_worker_metadata(&worker_id).await?.fingerprint,
                                 context.default_environment_id,
                             )
@@ -693,7 +694,7 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             )),
         );
 
-        let agent_id = agent_id!(agent_type, format!("byte-acceptance-{language}"));
+        let agent_id = agent_key!(agent_type, format!("byte-acceptance-{language}"));
         let worker_id = executor
             .start_agent(&caller_component.id, agent_id.clone())
             .await?;
@@ -816,13 +817,7 @@ async fn byte_streams_have_exact_tuples_terminals_and_cleanup(
             (_, Err(error)) => failures.push(format!("{language}.invoke: {error:#}")),
             (other, Ok(_)) => failures.push(format!("unexpected byte language {other}")),
         }
-        if let Err(error) = assert_cleanup(
-            &executor,
-            &OwnedAgentId::new(context.default_environment_id, &worker_id),
-            language,
-        )
-        .await
-        {
+        if let Err(error) = assert_cleanup(&executor, &worker_id.clone(), language).await {
             failures.push(error);
         }
     }
@@ -981,14 +976,14 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             metadata.tools,
         )),
     );
-    let agent = agent_id!(
+    let agent = agent_key!(
         "RustResourceToolStreamingCaller",
         "entity-install-before-primary-pin"
     );
     let worker = executor
         .start_agent(&caller_component.id, agent.clone())
         .await?;
-    let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+    let owner = worker.clone();
     let id = CardId(uuid::Uuid::from_u128(1));
     let card = StoredCard::Concrete(Card {
         card_id: id,
@@ -1007,7 +1002,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             card.clone(),
             CardManagedByRuntimeDerived {
                 environment_id: context.default_environment_id,
-                agent_id: worker.clone(),
+                agent_id: worker.agent_id,
                 invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                 oplog_index: OplogIndex::INITIAL,
             },
@@ -1015,7 +1010,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         .await?;
     let first = IdempotencyKey::fresh();
     let second = IdempotencyKey::fresh();
-    let mut body = executor.gate_next_entity_body_start(&worker);
+    let mut body = executor.gate_next_entity_body_start(&worker.agent_id);
     let invocation = executor.invoke_and_await_agent_with_key(
         &caller_component,
         &agent,
@@ -1029,8 +1024,8 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             tokio::time::timeout(Duration::from_secs(20), derivations.recv())
                 .await?
                 .unwrap();
-        executor.commit_oplog(&worker).await?;
-        let entries = executor.stored_oplog(&worker).await;
+        executor.commit_oplog(&worker.agent_id).await?;
+        let entries = executor.stored_oplog(&worker.agent_id).await;
         let derive_starts = |entries: &[OplogEntry]| {
             entries.iter().enumerate().filter_map(|(offset, entry)| {
                 matches!(entry, OplogEntry::Start { function_name, parent_start_index: Some(_), .. }
@@ -1041,7 +1036,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         let first_starts = derive_starts(&entries);
         assert_eq!(first_starts.len(), 1);
         let first_start = first_starts[0];
-        assert_eq!(first_derive.agent_id, worker);
+        assert_eq!(first_derive.agent_id, worker.agent_id);
         let issuer = issuers(&executor, &owner, &entries).await?;
         assert_eq!(issuer.len(), 2);
         assert!(
@@ -1053,16 +1048,18 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         );
         assert!(!issuer[0].1.authority_wallet.contains(&card));
         assert!(!issuer[1].1.authority_wallet.contains(&card));
-        executor.queue_card_install(&worker, card.clone()).await?;
+        executor
+            .queue_card_install(&worker.agent_id, card.clone())
+            .await?;
         body.release();
         let (second_card, second_derive) =
             tokio::time::timeout(Duration::from_secs(20), derivations.recv())
                 .await?
                 .unwrap();
         assert_ne!(first_card, second_card);
-        assert_eq!(second_derive.agent_id, worker);
-        executor.commit_oplog(&worker).await?;
-        let starts = derive_starts(&executor.stored_oplog(&worker).await);
+        assert_eq!(second_derive.agent_id, worker.agent_id);
+        executor.commit_oplog(&worker.agent_id).await?;
+        let starts = derive_starts(&executor.stored_oplog(&worker.agent_id).await);
         assert_eq!(starts.len(), 2);
         assert_eq!(starts[0], first_start);
         let second_start = starts[1];
@@ -1071,12 +1068,12 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         // derivation ends, and replay then cannot end that derivation while the restart below
         // holds this body at its audit lookup. The other body waits in the card service, so only
         // this body can complete first.
-        let mut second_completion =
-            executor.gate_next_live_entity_body_completion(&worker, "matrix-permission-issuer");
+        let mut second_completion = executor
+            .gate_next_live_entity_body_completion(&worker.agent_id, "matrix-permission-issuer");
         cards.release[1].add_permits(1);
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
-                let entries = executor.stored_oplog(&worker).await;
+                let entries = executor.stored_oplog(&worker.agent_id).await;
                 if entries.iter().any(|entry| {
                     matches!(entry, OplogEntry::CardDerived { card, wallet_generation: 1, .. } if card.card_id() == second_card)
                 }) {
@@ -1092,7 +1089,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         tokio::time::timeout(Duration::from_secs(20), second_completion.entered()).await?;
         cards.release[0].add_permits(1);
         tokio::time::timeout(Duration::from_secs(20), async {
-            while !executor.stored_oplog(&worker).await.iter().any(|entry| {
+            while !executor.stored_oplog(&worker.agent_id).await.iter().any(|entry| {
                 matches!(entry, OplogEntry::CardDerived { card, .. } if card.card_id() == first_card)
             }) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1118,8 +1115,8 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             .into_typed::<ResourceObservation>()?
             .permission_same_identity
     );
-    executor.commit_oplog(&worker).await?;
-    let recorded = executor.stored_oplog(&worker).await;
+    executor.commit_oplog(&worker.agent_id).await?;
+    let recorded = executor.stored_oplog(&worker.agent_id).await;
     let issuer = issuers(&executor, &owner, &recorded).await?;
     assert_eq!(issuer.len(), 3);
     assert!(!issuer[0].1.authority_wallet.contains(&card));
@@ -1144,12 +1141,16 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     };
     let p1 = primary(
         &executor
-            .external_invocation_key(&worker, &first, "matrix_parallel_permission_issuance")
+            .external_invocation_key(
+                &worker.agent_id,
+                &first,
+                "matrix_parallel_permission_issuance",
+            )
             .await?,
     );
     let p2 = primary(
         &executor
-            .external_invocation_key(&worker, &second, "matrix_permission_observation")
+            .external_invocation_key(&worker.agent_id, &second, "matrix_permission_observation")
             .await?,
     );
     assert!(!p1.1.pinned_card_ids.contains(&id));
@@ -1224,8 +1225,8 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
     executor.shutdown_and_wait_for_invocation_loops().await?;
 
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let first_claim = executor.gate_entity_reconstruction_claim_at(&worker, first_parent);
-    let second_body = executor.gate_next_entity_body_start(&worker);
+    let first_claim = executor.gate_entity_reconstruction_claim_at(&worker.agent_id, first_parent);
+    let second_body = executor.gate_next_entity_body_start(&worker.agent_id);
     let invocation = executor.invoke_and_await_agent(
         &caller_component,
         &agent,
@@ -1244,9 +1245,9 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         let execution = active.execution();
         let (horizon, _, _) = execution.test_pending_card_derivation(second_card).await?;
         let (first_lookup, release_first) =
-            executor.gate_next_runtime_card_audit_lookup(&worker, derived);
+            executor.gate_next_runtime_card_audit_lookup(&worker.agent_id, derived);
         let (second_lookup, release_second) =
-            executor.gate_next_runtime_card_audit_lookup(&worker, second_derived);
+            executor.gate_next_runtime_card_audit_lookup(&worker.agent_id, second_derived);
         second_body.release();
         tokio::time::timeout(Duration::from_secs(20), second_lookup).await??;
         let (observed_horizon, cursor, pending) =
@@ -1272,8 +1273,8 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
             .into_typed::<ResourceObservation>()?
             .permission_same_identity
     );
-    executor.commit_oplog(&worker).await?;
-    let recovered = executor.stored_oplog(&worker).await;
+    executor.commit_oplog(&worker.agent_id).await?;
+    let recovered = executor.stored_oplog(&worker.agent_id).await;
     assert_eq!(&recovered[..recorded.len()], &recorded);
     let last_pin = recovered
         .iter()
@@ -1383,12 +1384,12 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                     metadata.tools,
                 )),
             );
-            let agent = agent_id!(
+            let agent = agent_key!(
                 "WalletRecoveryProbe",
                 format!("mutation-{snapshot}-{revoke}")
             );
             let worker = executor.start_agent(&component.id, agent.clone()).await?;
-            let owner = OwnedAgentId::new(context.default_environment_id, &worker);
+            let owner = worker.clone();
             let id = CardId::new();
             let schema_id = golem_schema::model::CardId { uuid: id.0 };
             let card = StoredCard::Concrete(Card {
@@ -1410,27 +1411,35 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                     card.clone(),
                     CardManagedByRuntimeDerived {
                         environment_id: context.default_environment_id,
-                        agent_id: worker.clone(),
+                        agent_id: worker.agent_id,
                         invocation_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                         oplog_index: OplogIndex::INITIAL,
                     },
                 )
                 .await?;
+            // A card is installed only on an agent that exists.
             let target = if revoke {
-                String::new()
+                None
             } else {
-                agent_id!("WalletRecoveryProbe", "target").to_string()
+                let target = executor
+                    .start_agent(&component.id, agent_key!("WalletRecoveryProbe", "target"))
+                    .await?;
+                Some(golem_schema::model::AgentId {
+                    uuid: target.agent_id.as_uuid(),
+                })
             };
-            let mut body = executor.gate_next_entity_body_start(&worker);
+            let mut body = executor.gate_next_entity_body_start(&worker.agent_id);
             let invocation = executor.invoke_and_await_agent(
                 &component,
                 &agent,
                 "change",
-                data_value!(schema_id, component.id, target),
+                data_value!(schema_id, target),
             );
             let install = async {
                 tokio::time::timeout(Duration::from_secs(20), body.entered()).await?;
-                executor.queue_card_install(&worker, card.clone()).await?;
+                executor
+                    .queue_card_install(&worker.agent_id, card.clone())
+                    .await?;
                 body.release();
                 anyhow::Ok(())
             };
@@ -1439,8 +1448,8 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 result.into_typed::<(bool, u64, bool, bool)>()?,
                 (false, 2, true, true)
             );
-            executor.commit_oplog(&worker).await?;
-            let entries = executor.stored_oplog(&worker).await;
+            executor.commit_oplog(&worker.agent_id).await?;
+            let entries = executor.stored_oplog(&worker.agent_id).await;
             let (entity_start, payload) = entries
                 .iter()
                 .enumerate()
@@ -1524,7 +1533,7 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 let selected =
                     crate::hot_update::wait_for_snapshot_after(&executor, &worker, entity_start)
                         .await?;
-                let records = executor.stored_oplog(&worker).await;
+                let records = executor.stored_oplog(&worker.agent_id).await;
                 let OplogEntry::Snapshot {
                     active_cards,
                     wallet_generation,
@@ -1551,8 +1560,8 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 );
                 None
             };
-            executor.commit_oplog(&worker).await?;
-            let recorded = executor.stored_oplog(&worker).await;
+            executor.commit_oplog(&worker.agent_id).await?;
+            let recorded = executor.stored_oplog(&worker.agent_id).await;
             if !snapshot {
                 assert!(
                     !recorded
@@ -1603,8 +1612,8 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 .await?;
                 assert_eq!(loaded, selected);
             }
-            executor.commit_oplog(&worker).await?;
-            let recovered = executor.stored_oplog(&worker).await;
+            executor.commit_oplog(&worker.agent_id).await?;
+            let recovered = executor.stored_oplog(&worker.agent_id).await;
             assert_eq!(&recovered[..recorded.len()], &recorded);
             assert_eq!(deliveries.lock().unwrap().len(), sends);
             assert_eq!(cards.revoke_calls.load(Ordering::SeqCst), revokes);

@@ -1624,6 +1624,7 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
         ),
         created_at: chrono::Utc::now(),
         wasm_hash: diff::Hash::empty(),
+        package_metadata: None,
         object_store_key: String::new(),
     }
 }

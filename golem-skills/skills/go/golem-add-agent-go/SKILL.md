@@ -32,7 +32,7 @@ package counter
 import "github.com/golemcloud/golem/sdks/go/golem"
 
 // ID holds the constructor parameters, and is the type-level identity used by
-// cross-agent calls. Without a phantom UUID, the same ID names the same durable agent.
+// cross-agent calls. As a key, the same ID names the same keyed agent.
 type ID struct{ Name string }
 
 // AddIn is a method's parameter list: one WIT parameter per exported field.
@@ -205,7 +205,7 @@ Returning `golem.Err(...)` completes the invocation successfully — the caller 
 
 - Method parameters/results are passed by value; wrap the parameter list in a struct (one field per WIT parameter).
 - A `golem.Principal` field in a method's input struct (or the `ID`) is filled by the host with the invocation's principal and is not a parameter callers pass; `ctx.Principal()` is the principal the agent was initialized with (see `golem-add-http-auth-go`).
-- `ID` must be a struct; its fields plus an optional phantom UUID define identity. Durable agents are created implicitly on first invocation. An empty `ID` (`type ID struct{}`) is a **singleton** only for non-phantom durable addressing. `NewPhantom` adds a fresh UUID without changing the mode; ephemeral targets require phantom addressing. Use a new `NewPhantom` target for each independent ephemeral call; do not reuse a completed ephemeral target (see `golem-multi-instance-agent-go`).
+- `ID` must be a struct; its fields are the constructor parameters and the agent's key. `Upsert(id)` addresses the keyed agent of the key, which is created implicitly on first use. An empty `ID` (`type ID struct{}`) is a **singleton** among keyed agents. `Create(id)` makes a new agent with a new agent ID and no key, reachable only by that ID (`GetByID`); it does not change the mode. Ephemeral targets are addressed with `Upsert` only, and each invocation runs on a new instance (see `golem-multi-instance-agent-go`).
 - An agent admits invocations **sequentially**, but goroutines within one invocation can interleave at yield points (for example, while waiting for RPC, HTTP, streams or promises). This is cooperative concurrency, not a promise of CPU-thread parallelism. Synchronize shared mutable state when goroutines can interleave; sequential invocation admission does not remove that need.
 - Method descriptors must be **package-level vars** in the definition package (the same value is used by the schema, the binding, and callers).
 - State lives only in the impl package (unexported) — callers never see it.

@@ -14,44 +14,6 @@
 
 use super::*;
 
-async fn try_resolve_agent_id(
-    component_service: Arc<dyn ComponentService>,
-    agent_id: &AgentId,
-) -> Option<ParsedAgentKey> {
-    if let Ok(component) = component_service
-        .get_metadata(agent_id.component_id, None)
-        .await
-    {
-        ParsedAgentKey::parse(&agent_id.agent_id, &component.metadata).ok()
-    } else {
-        None
-    }
-}
-
-pub(super) async fn enrich_golem_rpc_invoke(
-    components: Arc<dyn ComponentService>,
-    mut payload: HostRequestGolemRpcInvoke,
-) -> HostRequestGolemRpcInvoke {
-    let agent_id = try_resolve_agent_id(components, &payload.remote_agent_id).await;
-    payload.remote_agent_type = agent_id
-        .as_ref()
-        .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
-    payload
-}
-
-pub(super) async fn enrich_golem_rpc_scheduled_invocation(
-    components: Arc<dyn ComponentService>,
-    mut payload: HostRequestGolemRpcScheduledInvocation,
-) -> HostRequestGolemRpcScheduledInvocation {
-    let agent_id = try_resolve_agent_id(components, &payload.remote_agent_id).await;
-    payload.remote_agent_type = agent_id
-        .as_ref()
-        .map(|agent_id| agent_id.agent_type.clone());
-    payload.remote_agent_parameters = agent_id.map(|agent_id| agent_id.parameters);
-    payload
-}
-
 /// A schema-native empty value (`()`), used as the best-effort fallback when
 /// the driving schema cannot be resolved from the component metadata. Mirrors
 /// the previous `DataValue::Tuple(empty)` fallback in the legacy renderer.

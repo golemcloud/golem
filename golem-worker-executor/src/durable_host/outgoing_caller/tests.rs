@@ -14,19 +14,14 @@
 
 use super::{CallingCode, outgoing_caller};
 use crate::test_callers::{TEST_ISSUER, agent_principal, sample_caller, user_principal};
-use golem_common::model::AgentId;
 use golem_common::model::caller::{Caller, Principal, ToolPrincipal};
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::ToolName;
 use test_r::test;
 use uuid::Uuid;
 
 fn agent(name: &str) -> Principal {
-    agent_principal(AgentId {
-        component_id: ComponentId(Uuid::from_u128(0xa0)),
-        agent_id: format!("Worker(\"{name}\")"),
-    })
+    agent_principal(crate::test_agent_id(name))
 }
 
 fn tool(name: &str) -> ToolPrincipal {

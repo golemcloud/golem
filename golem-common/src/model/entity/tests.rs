@@ -36,13 +36,7 @@ fn tool_definition() -> Tool {
 }
 
 fn owner() -> OwnedAgentId {
-    OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "Example(\"owner\")".to_string(),
-        },
-    )
+    OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1))
 }
 
 fn activation() -> EntityActivation {
@@ -544,7 +538,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
         .unwrap(),
         OplogIndex::from_u64(84),
         middleware_activation.clone(),
-        owner_principal(&owner),
+        crate::base_model::caller::test_support::sample_caller().immediate,
         InvocationExecutionMode::ReplayingIncomplete,
         InvocationId(uuid::Uuid::from_u128(0x0123456789abcdef_fedcba9876543214)),
         true,
@@ -919,19 +913,16 @@ fn invocation_scope_rejects_parent_that_does_not_precede_invocation_start() {
 }
 
 #[test]
-fn missing_owner_component_id_is_rejected_by_protobuf() {
+fn missing_owner_agent_uuid_is_rejected_by_protobuf() {
     let protobuf = golem_api_grpc::proto::golem::worker::OwnedAgentEntityId {
         environment_id: Some(EnvironmentId::new().into()),
-        owner_agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId {
-            component_id: None,
-            name: "Example(\"owner\")".to_string(),
-        }),
+        owner_agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId { value: None }),
         entity: Some(AgentEntity::Tool(ToolName::try_from("search").unwrap()).into()),
     };
 
     let result = OwnedAgentEntityId::try_from(protobuf);
 
-    assert_eq!(result.unwrap_err(), "Missing AgentId.component_id");
+    assert_eq!(result.unwrap_err(), "Missing value in AgentId");
 }
 
 #[test]

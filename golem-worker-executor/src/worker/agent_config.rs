@@ -377,6 +377,7 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_id = ParsedAgentKey::new(
@@ -385,7 +386,6 @@ mod tests {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         );
         let mut agent_secrets = HashMap::new();
         agent_secrets.insert(
@@ -457,6 +457,7 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_id = ParsedAgentKey::new(
@@ -465,7 +466,6 @@ mod tests {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         );
         let mut agent_secrets = HashMap::new();
         agent_secrets.insert(
@@ -553,6 +553,7 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
             wasm_hash: Hash::empty(),
+            package_metadata: None,
             object_store_key: String::new(),
         };
         let agent_id = ParsedAgentKey::new(
@@ -561,7 +562,6 @@ mod tests {
                 SchemaGraph::anonymous(SchemaType::record(Vec::new())),
                 SchemaValue::Record { fields: vec![] },
             ),
-            None,
         );
         let mut agent_secrets = HashMap::new();
         agent_secrets.insert(

@@ -1,14 +1,17 @@
 /**
- * Typed IDs of agent invocations. The text form of an invocation ID is `<agent-id>.<uuid>`.
+ * Typed IDs of agent invocations. The text form of an invocation ID is `<agent-id>.<uuid>`,
+ * where `<agent-id>` is the UUID text of the agent ID.
  *
  * @since 1.6.0
  */
 import { Effect } from "effect"
+import type { AgentId } from "./AgentId.js"
 import type { Uuid } from "./Ids.js"
+import { typedAgentId } from "./internal/agentId.js"
 import { makeInvocationId } from "./internal/invocationId.js"
 
 /**
- * The ID of one invocation of an agent: the agent ID text and the UUID of the invocation. The
+ * The ID of one invocation of an agent: the agent ID and the UUID of the invocation. The
  * `toString` of an ID that the SDK produces returns the `<agent-id>.<uuid>` text form, the same
  * text as {@link format}.
  *
@@ -16,7 +19,7 @@ import { makeInvocationId } from "./internal/invocationId.js"
  * @category models
  */
 export interface InvocationId {
-  readonly agentId: string
+  readonly agentId: AgentId
   readonly uuid: Uuid
 }
 
@@ -35,7 +38,6 @@ export class InvocationIdParseError {
 }
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const suffixLength = 37
 
 /**
  * Format an invocation ID as `<agent-id>.<uuid>`.
@@ -43,13 +45,11 @@ const suffixLength = 37
  * @since 1.6.0
  * @category conversions
  */
-export const format = (id: InvocationId): string => `${id.agentId}.${id.uuid}`
+export const format = (id: InvocationId): string => `${id.agentId.uuid}.${id.uuid}`
 
 /**
- * Parse the `<agent-id>.<uuid>` text form. The last 37 characters are the `.` and the UUID, so a
- * `.` in the agent ID is permitted. The UUID must be in the hyphenated form; upper-case hex is
- * accepted and normalized to lower case. The parse fails for a missing `.`, an invalid UUID, or
- * an empty agent ID.
+ * Parse the `<agent-id>.<uuid>` text form. Both parts must be UUIDs in the hyphenated form;
+ * upper-case hex is accepted and normalized to lower case.
  *
  * @since 1.6.0
  * @category conversions
@@ -57,11 +57,12 @@ export const format = (id: InvocationId): string => `${id.agentId}.${id.uuid}`
 export const parse = (text: string): Effect.Effect<InvocationId, InvocationIdParseError> =>
   Effect.suspend(() => {
     const fail = (reason: string) => Effect.fail(new InvocationIdParseError(text, reason))
-    if (text.length < suffixLength || text[text.length - suffixLength] !== ".")
-      return fail("expected `<agent-id>.<uuid>`")
-    const uuid = text.slice(text.length - suffixLength + 1)
+    const parts = text.split(".")
+    if (parts.length !== 2) return fail("expected `<agent-id>.<uuid>`")
+    const [agentId, uuid] = parts as [string, string]
+    if (!uuidPattern.test(agentId)) return fail(`invalid agent ID '${agentId}'`)
     if (!uuidPattern.test(uuid)) return fail(`invalid UUID '${uuid}'`)
-    const agentId = text.slice(0, text.length - suffixLength)
-    if (agentId.length === 0) return fail("empty agent ID")
-    return Effect.succeed(makeInvocationId(agentId, uuid.toLowerCase() as Uuid))
+    return Effect.succeed(
+      makeInvocationId(typedAgentId(agentId.toLowerCase() as Uuid), uuid.toLowerCase() as Uuid),
+    )
   })

@@ -598,7 +598,7 @@ impl Artifact for MatrixArtifactImpl {
                 .collect::<Vec<_>>()
                 .join("|"),
             principal: matrix_principal(context.caller()),
-            owner_agent_id: metadata.agent_id.agent_id,
+            owner_agent_id: metadata.agent_id.uuid.to_string(),
         })
     }
 }
@@ -711,7 +711,8 @@ impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
         let owner_agent_id = golem_rust::get_self_metadata()
             .expect("matrix permission issuer owner metadata")
             .agent_id
-            .agent_id;
+            .uuid
+            .to_string();
         PermissionIssue {
             card,
             issuer: "rust".to_string(),
@@ -766,7 +767,8 @@ fn matrix_resource_evidence(caller: &golem_rust::agentic::Caller) -> (String, St
     let owner_agent_id = golem_rust::get_self_metadata()
         .expect("matrix resource owner metadata")
         .agent_id
-        .agent_id;
+        .uuid
+        .to_string();
     (
         "rust".to_string(),
         matrix_principal(caller),
@@ -2186,11 +2188,11 @@ impl Streaming for StreamingImpl {
             .await;
         }
         if let Some(name) = mode.strip_prefix("call-agent:") {
-            let report = CallerReportClient::get(name.to_string()).report().await;
+            let report = CallerReportClient::upsert(name.to_string()).report().await;
             return write_text(stdout, report).await;
         }
         if let Some(name) = mode.strip_prefix("call-agent-bump:") {
-            let report = CallerReportClient::get(name.to_string())
+            let report = CallerReportClient::upsert(name.to_string())
                 .report_and_bump()
                 .await;
             return write_text(
@@ -2200,13 +2202,13 @@ impl Streaming for StreamingImpl {
             .await;
         }
         if let Some(name) = mode.strip_prefix("schedule-bump:") {
-            CallerReportClient::get(name.to_string())
+            CallerReportClient::upsert(name.to_string())
                 .schedule_bump(two_seconds_from_now())
                 .expect("schedule bump");
             return write_text(stdout, "scheduled".to_string()).await;
         }
         if let Some(name) = mode.strip_prefix("schedule-and-cancel-bump:") {
-            let token = CallerReportClient::get(name.to_string())
+            let token = CallerReportClient::upsert(name.to_string())
                 .schedule_cancelable_bump(two_seconds_from_now())
                 .expect("schedule cancelable bump");
             token.cancel();

@@ -142,9 +142,22 @@ struct RateLimitParameters {
 }
 
 fn principal_key(principal: &Principal) -> String {
-    match principal.principal_ref() {
-        Some(principal_ref) => principal_ref.to_string(),
-        None => "anonymous".to_string(),
+    match principal {
+        Principal::Oidc(principal) => format!(
+            "oidc:{}:{}:{}",
+            principal.issuer.len(),
+            principal.issuer,
+            principal.sub
+        ),
+        Principal::Agent(principal) => {
+            let uuid = &principal.agent_id.uuid;
+            format!("agent:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
+        }
+        Principal::GolemUser(principal) => {
+            let uuid = &principal.account_id.uuid;
+            format!("golem-user:{:016x}{:016x}", uuid.high_bits, uuid.low_bits)
+        }
+        Principal::Anonymous => "anonymous".to_string(),
     }
 }
 
@@ -176,7 +189,7 @@ async fn persistent_rate_limit(
         ));
     }
 
-    let mut backend = RateLimitBackendClient::get(
+    let mut backend = RateLimitBackendClient::upsert(
         parameters.policy,
         parameters.limit,
         parameters.window_milliseconds,

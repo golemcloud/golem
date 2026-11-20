@@ -21,11 +21,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentMode, AgentTarget, InvocationFreshnessDisposition,
+    AgentConfigEntryDto, AgentMode, AgentTypeName, InvocationFreshnessDisposition,
 };
 use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentDto;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
@@ -36,13 +35,14 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_common::serialization::deserialize;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError};
 use golem_worker_executor::storage::scheduler::{
     ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
 };
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, callers, start_with_overrides,
@@ -243,8 +243,8 @@ pub(crate) struct HoldFirstSchedule {
 impl Rpc for HoldFirstSchedule {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -258,7 +258,7 @@ impl Rpc for HoldFirstSchedule {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -297,7 +297,7 @@ impl Rpc for HoldFirstSchedule {
         let first = {
             let mut schedules = self.schedules.lock().unwrap();
             schedules.push((
-                owned_agent_id.agent_id.clone(),
+                owned_agent_id.agent_id,
                 invocation.idempotency_key().cloned(),
             ));
             schedules.len() == 1
@@ -327,8 +327,7 @@ impl Rpc for HoldFirstSchedule {
 
     async fn create_demand(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -346,7 +345,6 @@ impl Rpc for HoldFirstSchedule {
         self.inner
             .create_demand(
                 target,
-                environment_id,
                 method,
                 created_by,
                 caller,
@@ -363,8 +361,7 @@ impl Rpc for HoldFirstSchedule {
 
     async fn invoke_and_await(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -382,7 +379,6 @@ impl Rpc for HoldFirstSchedule {
         self.inner
             .invoke_and_await(
                 target,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -402,8 +398,7 @@ impl Rpc for HoldFirstSchedule {
 
     async fn invoke(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -420,7 +415,6 @@ impl Rpc for HoldFirstSchedule {
         self.inner
             .invoke(
                 target,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -448,7 +442,7 @@ async fn schedule(
     executor
         .invoke_and_await_agent(
             component,
-            &agent_id!("ScheduledInvocationClient", CLIENT),
+            &agent_key!("ScheduledInvocationClient", CLIENT),
             "schedule_ephemeral_at",
             data_value!(
                 target_name.to_string(),
@@ -470,7 +464,7 @@ async fn effects(
     executor
         .invoke_and_await_agent(
             component,
-            &agent_id!("ScheduledInvocationClient", CLIENT),
+            &agent_key!("ScheduledInvocationClient", CLIENT),
             "read_effects",
             data_value!(target_name.to_string()),
         )
@@ -499,10 +493,11 @@ async fn wait_for_effects(
 async fn ephemeral_target(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
-) -> anyhow::Result<AgentId> {
+) -> anyhow::Result<OwnedAgentId> {
     let (_, agents) = executor
         .get_workers_metadata(
-            &component.id,
+            &component.environment_id,
+            &AgentTypeName("ScheduledEphemeralTarget".to_string()),
             Some(AgentFilter::new_mode(
                 FilterComparator::Equal,
                 AgentMode::Ephemeral,
@@ -514,7 +509,7 @@ async fn ephemeral_target(
         .await?;
     let targets = agents
         .into_iter()
-        .map(|agent| agent.agent_id)
+        .map(|agent| OwnedAgentId::new(agent.environment_id, &agent.agent_id))
         .collect::<Vec<_>>();
     assert_eq!(
         targets.len(),
@@ -584,7 +579,7 @@ async fn wait_for_acknowledged_duplicate(
 /// A file read on a target that cannot start now must be answered, not parked until a start.
 async fn assert_inspection_is_answered(
     executor: &TestWorkerExecutor,
-    target: &AgentId,
+    target: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let read = tokio::time::timeout(
         Duration::from_secs(3),
@@ -703,7 +698,7 @@ async fn cancelled_scheduled_ephemeral_target_case(
         executor
             .invoke_and_await_agent(
                 &component,
-                &agent_id!("ScheduledInvocationClient", CLIENT),
+                &agent_key!("ScheduledInvocationClient", CLIENT),
                 "cancel_scheduled",
                 data_value!(),
             )
@@ -759,7 +754,7 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
     let owner = executor
         .start_agent(
             &component.id,
-            agent_id!("ScheduledInvocationClient", CLIENT),
+            agent_key!("ScheduledInvocationClient", CLIENT),
         )
         .await?;
     let name = "cancellation-behind-start";
@@ -773,18 +768,24 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
         &key,
     );
     let mut restart = executor
-        .gate_after_next_append(&target, |entry| matches!(entry, OplogEntry::Restart { .. }))
+        .gate_after_next_append(&target.agent_id, |entry| {
+            matches!(entry, OplogEntry::Restart { .. })
+        })
         .await;
 
     tokio::time::timeout(Duration::from_secs(30), restart.entered()).await?;
     let worker = executor
-        .active_agent(&OwnedAgentId::new(component.environment_id, &target))
+        .active_agent(&OwnedAgentId::new(
+            component.environment_id,
+            &target.agent_id,
+        ))
         .await
         .expect("the starting target must be active")
         .primary();
     // The client that scheduled the call, as the target recorded it.
     let canceller = callers::agent_in(
-        owner.clone(),
+        owner.agent_id,
+        golem_common::model::agent::AgentTypeName("ScheduledInvocationClient".to_string()),
         executor.get_worker_metadata(&owner).await?.fingerprint,
         component.environment_id,
     )
@@ -867,7 +868,7 @@ async fn lost_schedule_response_case(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let client = agent_id!("ScheduledInvocationClient", CLIENT);
+    let client = agent_key!("ScheduledInvocationClient", CLIENT);
     executor.start_agent(&component.id, client.clone()).await?;
     let name = "lost-schedule-response";
     let due = Utc::now() + chrono::Duration::seconds(15);
@@ -935,7 +936,7 @@ async fn lost_schedule_response_case(
         "only the first live dispatch may create a fresh target"
     );
     let target = ephemeral_target(&executor, &component).await?;
-    assert_eq!(target, schedules[0].0);
+    assert_eq!(target.agent_id, schedules[0].0);
     assert!(Utc::now() < due, "the repair must precede the deadline");
     assert_eq!(
         effects(&executor, &component, name).await?,
@@ -981,7 +982,9 @@ async fn scheduled_ephemeral_target_lost_after_it_began_never_runs(
     let due = Utc::now() + chrono::Duration::seconds(4);
     schedule(&executor, &component, name, 0, due).await?;
     let target = ephemeral_target(&executor, &component).await?;
-    let mut started = executor.gate_next_invocation_started_append(&target).await;
+    let mut started = executor
+        .gate_next_invocation_started_append(&target.agent_id)
+        .await;
     tokio::time::timeout(Duration::from_secs(30), started.entered()).await?;
     started.abort();
     drop(executor);

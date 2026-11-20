@@ -846,7 +846,6 @@ impl Drop for OwnerInvocationPermit {
 mod tests {
     use super::*;
     use golem_common::model::AgentId;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::entity::{AgentEntity, OwnedAgentEntityId};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::tool::ToolName;
@@ -855,10 +854,7 @@ mod tests {
     fn lane() -> OwnerLane {
         OwnerLane::new(OwnedAgentId::new(
             EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".to_string(),
-            },
+            &AgentId::from_parts(7, 1),
         ))
     }
 

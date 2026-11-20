@@ -20,8 +20,9 @@ use super::{
     WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, WorkerUpdateMode, common_model,
     extract_caller, extract_owned_agent_id, from_proto_invocation_context, golem,
 };
+use crate::services::{HasAgentTypesService, HasComponentService};
 use crate::worker::CreateIntent;
-use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, ScheduleId};
+use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ScheduleId};
 use golem_common::model::caller::{Caller, Principal};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
@@ -29,19 +30,61 @@ use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
+    /// Creates the keyed agent of `constructor`, or, with `unkeyed_id`, an agent without a key at
+    /// that pre-allocated ID. Returns the fingerprint and the ID of the agent.
     pub(super) async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
         wait_until_initialized: bool,
-    ) -> Result<AgentFingerprint, WorkerExecutorError> {
-        let owned_agent_id =
-            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
-        let owned_agent_id = self
-            .canonicalize_agent_target(
-                owned_agent_id.environment_id,
-                &AgentTarget::Current(owned_agent_id.agent_id),
-            )
-            .await?;
+    ) -> Result<(AgentFingerprint, AgentId), WorkerExecutorError> {
+        let environment_id: EnvironmentId = request
+            .environment_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let component_id = request
+            .component_id
+            .ok_or(WorkerExecutorError::invalid_request(
+                "component_id not found",
+            ))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let constructor = ParsedAgentKey::try_from(request.constructor.clone().ok_or(
+            WorkerExecutorError::invalid_request("constructor not found"),
+        )?)
+        .map_err(WorkerExecutorError::invalid_request)?;
+        let target = match request.unkeyed_id {
+            Some(agent_id) => {
+                let agent_id: AgentId = agent_id
+                    .try_into()
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                crate::worker::target::resolve_unkeyed(
+                    self.component_service().as_ref(),
+                    self.agent_types().as_ref(),
+                    environment_id,
+                    component_id,
+                    agent_id,
+                    constructor,
+                )
+                .await?
+            }
+            None => {
+                crate::worker::target::resolve_key(
+                    self.component_service().as_ref(),
+                    self.agent_types().as_ref(),
+                    environment_id,
+                    component_id,
+                    constructor,
+                )
+                .await?
+            }
+        };
+        let owned_agent_id = target.owned_agent_id;
+        let owner = target
+            .new_owner
+            .expect("a resolved constructor creates an owner");
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
@@ -60,6 +103,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &owned_agent_id,
                 &key.into(),
                 freshness_disposition,
+                Some(&owner),
             )
             .await?;
         } else if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
@@ -102,6 +146,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             caller,
             freshness_disposition,
             CreateIntent::Create {
+                owner,
                 exclusive: !request.ignore_already_existing,
                 idempotency_key: request.idempotency_key.clone().map(Into::into),
             },
@@ -109,13 +154,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await?;
 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        let agent_id = owned_agent_id.agent_id;
 
         if !wait_until_initialized {
-            return Ok(fingerprint);
+            return Ok((fingerprint, agent_id));
         }
 
         worker.await_initialization().await?;
-        Ok(fingerprint)
+        Ok((fingerprint, agent_id))
     }
 
     pub(super) async fn complete_promise_internal(
@@ -130,7 +176,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .ok_or(WorkerExecutorError::invalid_request("promise_id not found"))?;
 
         let owned_agent_id = extract_owned_agent_id(
-            &(&request, promise_id.clone()),
+            &(&request, *promise_id),
             |(_, r)| &r.agent_id,
             |(r, _)| &r.environment_id,
         )?;
@@ -139,12 +185,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let data = request.data;
 
-        let promise_id: common_model::PromiseId = promise_id
-            .clone()
+        let promise_id: common_model::PromiseId = (*promise_id)
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let completed = self.promise_service().complete(promise_id, data).await?;
+        let completed = self
+            .promise_service()
+            .complete(owned_agent_id.environment_id, promise_id, data)
+            .await?;
 
         let success = golem::workerexecutor::v1::CompletePromiseSuccess { completed };
 
@@ -162,7 +210,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let caller = extract_caller(&request.caller)?;
 
-        Worker::<Ctx>::delete(self, &owned_agent_id, caller).await
+        let expected_fingerprint = AgentFingerprint(
+            request
+                .expected_fingerprint
+                .ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("expected_fingerprint not found")
+                })?
+                .into(),
+        );
+        Worker::<Ctx>::delete(self, &owned_agent_id, expected_fingerprint, caller).await
     }
 
     pub(super) async fn fork_worker_internal(
@@ -192,7 +248,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let target_agent_id_proto = request
             .target_agent_id
-            .clone()
             .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
         let target_agent_id: AgentId = target_agent_id_proto
@@ -203,7 +258,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let source_agent_id_proto = request
             .source_agent_id
-            .clone()
             .ok_or(WorkerExecutorError::invalid_request("agent_id not found"))?;
 
         let source_agent_id: AgentId = source_agent_id_proto
@@ -226,6 +280,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     extract_caller(&request.caller)?,
                     &InvocationContextStack::fresh(),
                 ),
+                request
+                    .expected_fingerprint
+                    .map(|fingerprint| AgentFingerprint(fingerprint.into())),
             )
             .await?;
 
@@ -263,7 +320,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        Worker::<Ctx>::revert(self, &owned_agent_id, target, resolved_revert, caller).await
+        Worker::<Ctx>::revert(
+            self,
+            &owned_agent_id,
+            target,
+            resolved_revert,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn resolve_revert_last_invocations_internal(
@@ -358,6 +425,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
+        let expected_fingerprint = request
+            .expected_fingerprint
+            .map(|fingerprint| AgentFingerprint(fingerprint.into()));
+        if expected_fingerprint.is_some_and(|expected| expected != metadata.fingerprint) {
+            return Err(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ));
+        }
         let status = &metadata.last_known_status;
         if status
             .pending_invocations
@@ -366,6 +441,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             let worker = self
                 .get_existing_for_management(&owned_agent_id, caller, "cancel")
+                .await?;
+            worker
+                .ensure_management_fingerprint(expected_fingerprint)
                 .await?;
             Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
                 .await?;
@@ -437,7 +515,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let caller = extract_caller(&request.caller)?;
 
-        Worker::<Ctx>::interrupt(self, &owned_agent_id, request.recover_immediately, caller).await
+        Worker::<Ctx>::interrupt(
+            self,
+            &owned_agent_id,
+            request.recover_immediately,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn resume_worker_internal(
@@ -454,7 +541,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let force_resume = request.force.unwrap_or(false);
 
-        Worker::<Ctx>::resume(self, &owned_agent_id, force_resume, caller).await
+        Worker::<Ctx>::resume(
+            self,
+            &owned_agent_id,
+            force_resume,
+            caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+        )
+        .await
     }
 
     pub(super) async fn update_worker_internal(
@@ -487,6 +583,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             target_revision,
             request.disable_wakeup,
             caller,
+            request
+                .expected_fingerprint
+                .map(|fingerprint| AgentFingerprint(fingerprint.into())),
         )
         .await
     }

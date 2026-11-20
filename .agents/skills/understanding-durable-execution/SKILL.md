@@ -32,7 +32,11 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    to other owners; see "Entry ownership". Operator-reverted entries are excluded). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
-   not tolerated.
+   not tolerated. The error is `UnexpectedOplogEntry` with a `ReplayDivergence`: the oplog index
+   of the first divergence, the expected and the actual step, and the identity fields of a host
+   call that differ. Every producer names the entry it compared. `FailedUpdate` keeps the
+   divergence and a required `failure_class`, which `start_outcome` sets from the problem and the
+   `FailureProvenance` of the failure (see `worker/start_outcome/mod.rs::failure_class`).
 
 2. **The resident runtime is disposable.** The Wasmtime `Store`, the worker task, the executor
    process, sockets, channels and subscriptions can vanish while work is pending. Suspension,
@@ -1410,6 +1414,8 @@ existing-only acquisition, reciprocal cold topologies, and reconciler graph shut
 
 Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, the full caller record, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
 
+Constructor validation is independent of keyed addressing. `ParsedAgentKey::canonical_constructor` validates typed parameters against the implementing schema without a length limit; only constructing an `AgentKey` enforces the 512-byte canonical key limit. Unkeyed and ephemeral targets serialize and decode the constructor directly, including remote dispatch. An ephemeral RPC proxy has a domain-separated logical identity derived from its constructor; that identity never addresses an instance. Each invocation still derives its actual target from its invocation owner key.
+
 After admission, executor create and REST create await `Worker::await_initialization`, not
 `WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
 `InvocationId`. A recorded success returns the original fingerprint without starting a Store. A terminal constructor
@@ -1449,9 +1455,21 @@ carries no caller or context. Tests:
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
 
+`CreateParameters.never_live` is the never-live mark of a sandbox agent. Agent creation writes
+`false`, and nothing sets it yet. The status fold copies it into `AgentStatusRecord.never_live`
+and never changes it. `AgentStatusRecord::reported_status()` gives `Sandboxed` for a marked agent
+and the folded `status` otherwise; the folded `status` never holds `Sandboxed`, and control code
+decides by it, never by the reported status. Every outward view reads the reported status: the
+filter's `status` leaf, gRPC and REST metadata (with the folded status in `underlying_status`), the
+guest's metadata and enumeration (`AgentMetadataForGuests`), the running-agent fast path and the
+status metrics. Tests: `the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status`
+in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart` in
+`tests/observability.rs`.
+
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
 reads, cancel and connect never create an absent agent.
+Management mutations carry the fingerprint of the metadata authorized by the worker service through every routing retry, even when the caller omitted `expectedFingerprint`. Delete compares it under the instance mutex before claiming deletion. Interrupt, resume, update, revert, plugin changes and public cancellation check the acquired worker under the same mutex, then operate only on that pinned worker. Fork carries the authorized source fingerprint into the source-oplog lifecycle guard. A retry cannot capture the fingerprint of a replacement at the same ID. Scheduled token cancellation and promise completion retain their separate incarnation-bound authority.
 `ActiveAgents::get_existing_with_fingerprint` is the one exact-incarnation guard: with an expected
 `AgentFingerprint` it answers `AgentNotFound` for an absent agent and for another incarnation,
 whether the worker was resident or loaded cold. A caller that joined another caller's load loads
@@ -2600,6 +2618,8 @@ the parent's token at the future's terminal observer. Tests: `tests/http.rs` can
 offline-replay controls, and `tests/tool_streaming/mod.rs` Git partial-download recovery.
 
 ## Durable RPC exactly-once
+
+`wasm-rpc.get-by-id` binds the existing agent's recorded component revision and schema together with its fingerprint. Live binding authorizes against that recorded owner; method validation and stream classification must not use the type's current implementer. The durable result records the schema, type ID, environment and fingerprint. Completed replay reconstructs that binding without current-deployment resolution. A missing or wrong-type ID returns not-found without creation.
 
 Concrete durable client creation calls `Rpc::create_and_initialize` and waits for the child's
 recorded constructor outcome. Explicit creation requires `Invoke` on `Any` for the concrete child;
@@ -3921,7 +3941,11 @@ incarnation; it cannot recreate a deleted processor through agent admission. Pro
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
 They retain component-level config, environment defaults, files and permissions, and have no
 attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
-otherwise they use `default_snapshotting`. Before sending a batch, the source commits its target,
+otherwise they use `default_snapshotting`. Snapshot lowering branches on the resolved owner:
+a processor passes an empty constructor record to load-snapshot, while an agent passes its
+recorded constructor parameters. A component agent missing those parameters fails owner
+resolution; an ephemeral external-tool owner cannot load a snapshot and has snapshotting disabled.
+Before sending a batch, the source commits its target,
 range and serialized delivery snapshot in `OplogProcessorCheckpoint`. The snapshot pins the
 installed plugin and source metadata, including the guest-visible status, revision, environment
 and configuration. Its status contains only the guest-visible status, revision and latest retry

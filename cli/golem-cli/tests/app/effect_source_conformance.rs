@@ -71,8 +71,8 @@ async fn effect_stream_outcome_is_catchable_through_rpc() {
               init: () => Effect.succeed({}),
               methods: () => ({
                 run: () => Effect.gen(function* () {
-                  const producer = yield* Producer.client.get({ name: "failed" });
-                  const independent = yield* Producer.client.get({ name: "sibling" });
+                  const producer = yield* Producer.client.upsert({ name: "failed" });
+                  const independent = yield* Producer.client.upsert({ name: "sibling" });
                   const sibling = yield* independent.produce({ fail: false });
                   const failed = yield* producer.produce({ fail: true });
                   const prefix: number[] = [];

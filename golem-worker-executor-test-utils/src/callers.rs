@@ -58,47 +58,35 @@ pub fn user(issuer: &str, subject: &str) -> Caller {
     user_with_claims(issuer, subject, "{}")
 }
 
-/// An agent as a principal. Its type is the one in its name, and its fingerprint and environment
-/// are nil.
-pub fn agent_principal(agent_id: AgentId) -> Principal {
-    let agent_type = agent_id
-        .agent_id
-        .split('(')
-        .next()
-        .unwrap_or_default()
-        .to_string();
+/// An agent as a principal. Its fingerprint and environment are nil.
+pub fn agent_principal(agent_id: AgentId, agent_type: AgentTypeName) -> Principal {
     Principal::Agent(AgentPrincipal::of_agent(
         GOLEM_ISSUER.to_string(),
         agent_id,
         AgentFingerprint(uuid::Uuid::nil()),
-        AgentTypeName(agent_type),
+        agent_type,
         EnvironmentId(uuid::Uuid::nil()),
     ))
 }
 
 /// An agent, in both roles.
-pub fn agent(agent_id: AgentId) -> Caller {
-    Caller::entry(agent_principal(agent_id))
+pub fn agent(agent_id: AgentId, agent_type: AgentTypeName) -> Caller {
+    Caller::entry(agent_principal(agent_id, agent_type))
 }
 
 /// An agent with its real incarnation and environment, in both roles: what the executor records
 /// when the agent itself is the caller.
 pub fn agent_in(
     agent_id: AgentId,
+    agent_type: AgentTypeName,
     fingerprint: AgentFingerprint,
     environment_id: EnvironmentId,
 ) -> Caller {
-    let agent_type = agent_id
-        .agent_id
-        .split('(')
-        .next()
-        .unwrap_or_default()
-        .to_string();
     Caller::entry(Principal::Agent(AgentPrincipal::of_agent(
         GOLEM_ISSUER.to_string(),
         agent_id,
         fingerprint,
-        AgentTypeName(agent_type),
+        agent_type,
         environment_id,
     )))
 }

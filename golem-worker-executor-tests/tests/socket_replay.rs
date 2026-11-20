@@ -27,9 +27,9 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::{AgentId, OplogIndex};
+use golem_common::model::{OplogIndex, OwnedAgentId};
 use golem_common::schema::{FromSchema, TypedSchemaValue};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor_test_utils::{
@@ -221,7 +221,7 @@ struct Session<'a> {
     executor: Option<TestWorkerExecutor>,
     component: ComponentDto,
     agent_id: ParsedAgentKey,
-    worker_id: AgentId,
+    worker_id: OwnedAgentId,
 }
 
 fn sockets() -> TestExecutorOverrides {
@@ -252,7 +252,7 @@ impl<'a> Session<'a> {
             .component_dep(&context.default_environment_id, component)
             .store()
             .await?;
-        let agent_id = agent_id!(AGENT_TYPE, name);
+        let agent_id = agent_key!(AGENT_TYPE, name);
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
@@ -738,7 +738,10 @@ async fn p3_tcp_receive_in_flight_at_a_crash_completes_with_connection_broken(
     // The waiting read has its own chunk Start once the guest asked for more bytes.
     tokio::time::timeout(WAIT, async {
         loop {
-            session.executor().commit_oplog(&session.worker_id).await?;
+            session
+                .executor()
+                .commit_oplog(&session.worker_id.agent_id)
+                .await?;
             if session
                 .starts("sockets::types::tcp-socket::receive-chunk")
                 .await?

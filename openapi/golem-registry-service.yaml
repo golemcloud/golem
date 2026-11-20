@@ -12622,18 +12622,6 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
-    AgentId:
-      type: object
-      title: AgentId
-      required:
-      - componentId
-      - agentId
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        agentId:
-          type: string
     AgentMethodSchema:
       type: object
       required:
@@ -13857,7 +13845,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid
@@ -14162,6 +14151,8 @@ components:
       properties:
         componentName:
           type: string
+        packageMetadata:
+          $ref: '#/components/schemas/ComponentPackageMetadata'
         configSchema:
           default:
             schema:
@@ -14281,6 +14272,8 @@ components:
         wasmHash:
           type: string
           format: hash
+        packageMetadata:
+          $ref: '#/components/schemas/ComponentPackageMetadata'
     ComponentMetadataDto:
       type: object
       title: ComponentMetadataDto
@@ -14345,6 +14338,21 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ToolMiddlewareDeploymentMetadata'
+    ComponentPackageMetadata:
+      type: object
+      title: ComponentPackageMetadata
+      description: Package origin supplied by the client. Only the Wasm layer digest is verified by Golem.
+      required:
+      - source
+      - packageDigest
+      - layerDigest
+      properties:
+        source:
+          type: string
+        packageDigest:
+          type: string
+        layerDigest:
+          type: string
     ComponentProvisionConfig:
       type: object
       title: ComponentProvisionConfig
@@ -14425,6 +14433,11 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        packageMetadata:
+          description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
+          allOf:
+          - $ref: '#/components/schemas/ComponentPackageMetadata'
+          - description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
         configSchema:
           $ref: '#/components/schemas/ComponentConfigSchema'
         componentProvisionConfig:

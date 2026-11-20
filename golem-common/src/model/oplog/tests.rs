@@ -53,7 +53,7 @@ use crate::model::oplog::{
     PublicSnapshotData, PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind,
     PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
+    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription, UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -838,12 +838,8 @@ fn create_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Create(CreateParams {
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         timestamp: Timestamp::now_utc().rounded(),
-        agent_id: AgentId {
-            component_id: ComponentId(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
-            agent_id: "test1".to_string(),
-        },
+        agent_id: AgentId::from_parts(7, 1),
+        agent_type_name: Some(crate::model::agent::AgentTypeName("Counter".to_string())),
         agent_mode: crate::base_model::agent::AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![("x".to_string(), "y".to_string())]
@@ -855,12 +851,7 @@ fn create_serialization_poem_serde_equivalence() {
             value: 1i32.into_typed_schema_value().unwrap(),
         }],
         environment_id: EnvironmentId::new(),
-        parent: Some(AgentId {
-            component_id: ComponentId(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
-            agent_id: "test2".to_string(),
-        }),
+        parent: Some(AgentId::from_parts(7, 2)),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
@@ -870,8 +861,8 @@ fn create_serialization_poem_serde_equivalence() {
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
         }]),
-        original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        never_live: true,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -907,6 +898,7 @@ fn create_serialization_poem_serde_equivalence() {
         assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
     }
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto.clone()).unwrap(), entry);
     let projected = super::OplogEnrichmentEntry::try_from(proto).unwrap();
     assert_eq!(
         projected,
@@ -925,6 +917,7 @@ fn create_serialization_poem_serde_equivalence() {
     assert_eq!(timestamp, supplied.timestamp);
     assert_eq!(parameters.agent_id, supplied.agent_id);
     assert_eq!(parameters.instance_id, supplied.instance_id);
+    assert!(parameters.never_live);
     assert_eq!(parameters.component_revision, supplied.component_revision);
     assert_eq!(
         parameters.local_agent_config[0].path,
@@ -956,11 +949,11 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             )]))
             .build(),
     );
-    let creator = sample_caller();
+    let creator = crate::base_model::caller::test_support::sample_caller();
     let mut requests = [
         CreateRequestKind::GetOrCreate,
         CreateRequestKind::Exclusive,
-        CreateRequestKind::Phantom,
+        CreateRequestKind::Unkeyed,
         CreateRequestKind::Fork,
     ]
     .into_iter()
@@ -986,7 +979,14 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
     );
 
     for agent_type_name in [None, Some(AgentTypeName("StoredType".to_string()))] {
-        for canonical_key in [None, Some("StructuralType(\"parameter\")".to_string())] {
+        for (canonical_key, constructor_parameters) in [
+            (None, None),
+            (None, Some("\"parameter\"".to_string())),
+            (
+                Some("StructuralType(\"parameter\")".to_string()),
+                Some("\"parameter\"".to_string()),
+            ),
+        ] {
             let component_id = ComponentId::new();
             let entry = OplogEntry::Create {
                 timestamp: Timestamp::now_utc().rounded(),
@@ -994,10 +994,8 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     component_id,
                     agent_type_name: agent_type_name.clone(),
                     canonical_key,
-                    agent_id: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "DifferentType(42)".to_string(),
-                    },
+                    constructor_parameters,
+                    agent_id: AgentId::from_parts(7, 4),
                     owner_kind: OwnerKind::ComponentAgent,
                     agent_mode: AgentMode::Durable,
                     component_revision: ComponentRevision::new(7).unwrap(),
@@ -1009,9 +1007,9 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     initial_total_linear_memory_size: 29,
                     initial_active_plugins: Default::default(),
                     local_agent_config: vec![],
-                    original_phantom_id: None,
                     instance_id: Uuid::new_v4(),
                     create_request: requests.next().unwrap(),
+                    never_live: agent_type_name.is_some(),
                 }),
             };
             let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -1022,6 +1020,12 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             let mut proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
                 entry.clone().try_into().unwrap();
             assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+            let OplogEnrichmentEntry::CreateProjection { parameters, .. } =
+                OplogEnrichmentEntry::from(entry.clone())
+            else {
+                unreachable!()
+            };
+            assert_eq!(parameters.never_live, agent_type_name.is_some());
             for owner_kind in [
                 OwnerKind::ComponentAgent,
                 OwnerKind::EphemeralExternalTool,
@@ -1465,10 +1469,7 @@ fn matcher_matches_secret_revealed_response_payload() {
         },
         result: Ok(()),
         audit: SecretRevealAudit {
-            calling_agent: AgentId {
-                component_id: ComponentId(Uuid::nil()),
-                agent_id: "agent-1".to_string(),
-            },
+            calling_agent: AgentId::from_parts(7, 5),
             config_key: Some(vec!["db".to_string(), "password".to_string()]),
             timestamp: SerializableDateTime {
                 seconds: 1_700_000_001,
@@ -1945,6 +1946,11 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
             source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: OplogIndex::from_u64(3),
         }),
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: crate::model::oplog::protobuf::tests::replay_divergence_tests::divergences()
+            .into_iter()
+            .next()
+            .map(Box::new),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1961,10 +1967,36 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         details: None,
         update_attempt_index: None,
         snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Other,
+        divergence: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn failed_update_redacts_the_capabilities_in_the_divergence_requests() {
+    use crate::base_model::oplog::replay_divergence_test_values::{
+        assert_requests_redacted, divergence_with_nested_capabilities,
+    };
+
+    let mut entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision::new(1).unwrap(),
+        details: None,
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: Some(Box::new(divergence_with_nested_capabilities())),
+    });
+
+    entry.redact_host_managed_values_for_external();
+
+    let PublicOplogEntry::FailedUpdate(params) = entry else {
+        unreachable!()
+    };
+    assert_requests_redacted(params.divergence.as_ref().unwrap());
 }
 
 #[test]
@@ -3004,10 +3036,8 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
         account_id: Uuid::new_v4(),
     });
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "phase-five-target".to_string(),
-        },
+        environment_id: crate::model::environment::EnvironmentId(Uuid::from_u128(1)),
+        agent_id: AgentId::from_parts(7, 6),
     });
     let application_holder = CardHolder::Application(ApplicationCardHolder {
         application_id: Uuid::new_v4(),
@@ -3114,10 +3144,8 @@ fn phase_five_public_card_oplog_entries_protobuf_roundtrip() {
     let installed_card_id = CardId::new();
     let transfer_id = Uuid::new_v4();
     let target_holder = CardHolder::Agent(AgentCardHolder {
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "phase-five-public-target".to_string(),
-        },
+        environment_id: crate::model::environment::EnvironmentId(Uuid::from_u128(1)),
+        agent_id: AgentId::from_parts(7, 7),
     });
     let timestamp = Timestamp::now_utc().rounded();
     let entries = vec![

@@ -9,10 +9,7 @@ const mkEntry = (tag: string): Oplog.PublicOplogEntry =>
   ({ tag }) as unknown as Oplog.PublicOplogEntry
 const mkRawEntry = (tag: string): Oplog.OplogEntry => ({ tag }) as unknown as Oplog.OplogEntry
 
-const sampleAgent: Oplog.AgentId = {
-  componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-  agentId: 'Counter("x")',
-}
+const sampleAgent: Oplog.AgentId = { uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } }
 const sampleEnvironment: Oplog.EnvironmentId = { uuid: { highBits: 0n, lowBits: 1n } }
 
 beforeEach(() => {

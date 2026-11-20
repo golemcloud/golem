@@ -99,12 +99,12 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", "monthly-quiet-stdin"),
+            agent_key!("ToolStreamingCaller", "monthly-quiet-stdin"),
         )
         .await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -121,9 +121,9 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         Some(&key),
     );
     let stored_key = executor
-        .finalized_invocation_key(&id, &request_key, "tool:streaming/run")
+        .finalized_invocation_key(&id.agent_id, &request_key, "tool:streaming/run")
         .await?;
-    let mut result_wait = crate::invocation_waits::result_wait(&id, &stored_key);
+    let mut result_wait = crate::invocation_waits::result_wait(&id.agent_id, &stored_key);
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -140,7 +140,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(id.clone().into()),
+                target: Some(crate::agent::id_target(&id)),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
                 caller: Some(callers::account(context.account_id).into()),
@@ -365,7 +365,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
             .await?
             == stopped_prefix
     );
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = id.clone();
     let service = worker.oplog_service();
     let tip = service.get_last_index(&owned, AgentMode::Durable).await?;
     let committed = service

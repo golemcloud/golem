@@ -7,10 +7,10 @@ export const Planner = defineAgent({
   methods: ({ topic }) => ({
     plan: () => Effect.gen(function* () {
       // wait for a typed result from a Rust ResearchAgent:
-      const research = yield* ResearchAgent.get(topic) //@
+      const research = yield* ResearchAgent.upsert(topic) //@
       const facts = yield* research.gather() //@
       // send now, without waiting for a result:
-      const slack = yield* SlackAgent.get("ops")
+      const slack = yield* SlackAgent.upsert("ops")
       yield* slack.post.trigger(facts.summary) //@
       // discover agents, their methods, and available tools:
       const agents = (yield* Reflection.getAllAgentTypes).map((a) => //@

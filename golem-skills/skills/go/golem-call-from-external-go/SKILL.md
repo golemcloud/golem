@@ -72,8 +72,8 @@ func run(ctx context.Context) error {
         return err
     }
 
-    // The id struct holds the constructor arguments that identify an instance.
-    c, err := counter.GetCounterAgent(counter.CounterAgentID{Name: "my-counter"})
+    // The id struct holds the constructor arguments: the key of the keyed agent.
+    c, err := counter.UpsertCounterAgent(counter.CounterAgentID{Name: "my-counter"})
     if err != nil {
         return err
     }
@@ -95,17 +95,25 @@ func run(ctx context.Context) error {
 
 Every method has three forms — `M(ctx, …)`, `TriggerM(ctx, …)` and `ScheduleM(ctx, when, …)` — and every call returns an `error`: an argument the callee's schema does not accept (checked before anything is sent), a transport failure, an error status (`*bridge.Error`, carrying the status and body) and a result that does not decode are all reported, never panicked.
 
-`GetCounterAgent` (and `NewPhantom<Agent>`) takes options:
+The client has three constructors:
+
+- `UpsertCounterAgent(id, opts...)` addresses the keyed agent of the constructor arguments; the server creates it on the first call when it is missing. It does not contact the server itself.
+- `CreateCounterAgent(ctx, id, opts...)` creates an agent and returns once its constructor has finished. Without `bridge.Keyed()` the new agent has a new agent ID and no key; with it, it creates the keyed agent and fails with an error that matches `bridge.ErrConflict` when that agent exists.
+- `GetCounterAgentByID(ctx, agentID, opts...)` addresses an existing agent by its `bridge.AgentID` (a UUID). It never creates the agent: an unknown ID, or the ID of an agent of another type, is an error that matches `bridge.ErrNotFound`.
+
+`c.AgentID(ctx)` returns the agent ID of the client's agent; for a client of `Upsert<Agent>` it asks the server the first time, which creates the agent when it is missing. Save it to reach an agent without a key again later with `Get<Agent>ByID`.
+
+The constructors take options; `Upsert<Agent>` and `Get<Agent>ByID` accept only `bridge.WithConfiguration`:
 
 | Option | Effect |
 |--------|--------|
 | `bridge.WithConfiguration(cfg)` | Use this server/app/env instead of the one set with `bridge.Configure` |
-| `bridge.WithPhantomID(id)` | Address the phantom instance with this id |
-| `bridge.WithNewPhantomID()` | Address a fresh phantom instance, under a random id |
-| `With<Agent>Config(<Agent>Config{…})` | Override agent configuration, typed: generated when the agent declares local configuration, one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`); only set fields are sent |
-| `bridge.WithConfig(bridge.ConfigEntry{Path: []string{"retries"}, Value: 3})` | Override agent configuration by path; values are plain JSON |
+| `bridge.Keyed()` | `Create<Agent>` only: create the keyed agent of the constructor arguments |
+| `bridge.WithEnv(name, value)` | `Create<Agent>` only: add an environment variable to the new agent |
+| `With<Agent>Config(<Agent>Config{…})` | `Create<Agent>` only: override agent configuration, typed: generated when the agent declares local configuration, one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`); only set fields are sent |
+| `bridge.WithConfig(bridge.ConfigEntry{Path: []string{"retries"}, Value: 3})` | `Create<Agent>` only: override agent configuration by path; values are plain JSON |
 
-An **ephemeral** agent has no durable instance to get: its client is constructed with `NewPhantom<Agent>(id, opts...)`, every call runs in a fresh instance, and an awaited call returns `bridge.InvocationResult[T]` (`Value`, plus the `AgentID` and `IdempotencyKey` of the instance that ran) — or a `bridge.Receipt` for a method without a result.
+An **ephemeral** agent is addressed with `Upsert<Agent>(id, opts...)` only: it has no `Create<Agent>`, `Get<Agent>ByID` or `AgentID`. Every call runs in a new one-shot instance, and an awaited call returns `bridge.InvocationResult[T]` (`Value`, plus the `AgentID` and `IdempotencyKey` of the instance that ran) — or a `bridge.Receipt` for a method without a result.
 
 ### Generated types
 
@@ -145,21 +153,21 @@ _, err = c.Upload(ctx, upload)
 
 ## Approach 2: the CLI
 
-`golem agent invoke` calls a method on a deployed agent and blocks for the result. The agent is created automatically on first invocation. Both `golem` and `golem-cli` work for every command.
+`golem agent invoke` calls a method on a deployed agent and blocks for the result. An agent addressed by its key is created automatically on first invocation. Both `golem` and `golem-cli` work for every command.
 
 ```shell
-golem agent invoke <AGENT_ID> <FUNCTION_NAME> [ARGUMENTS...]
+golem agent invoke <AGENT_ADDRESS> <FUNCTION_NAME> [ARGUMENTS...]
 ```
 
-### Agent ID format
+### Agent address format
 
-The agent ID is the agent type name plus its constructor parameters, in declaration order (for a Go agent, the fields of its `ID` struct):
+A key is the agent type name plus its constructor parameters, in declaration order (for a Go agent, the fields of its `ID` struct):
 
 ```
 AgentTypeName(param1, param2, ...)
 ```
 
-`CounterAgent` takes one `name`, so its ID is `CounterAgent("my-counter")`. A singleton (`type ID struct{}`) uses empty parentheses: `CounterAgent()`. IDs may be prefixed with `env/`, `app/env/`, or `account/app/env/`.
+`CounterAgent` takes one `name`, so its key is `CounterAgent("my-counter")`. A singleton (`type ID struct{}`) uses empty parentheses: `CounterAgent()`. An agent can also be addressed by its agent ID, a UUID: `CounterAgent[<agent-id>]` or the bare `<agent-id>`; an agent created without a key is reachable only this way. Addresses may be prefixed with `env/`, `app/env/`, or `account/app/env/`.
 
 ### Examples
 
@@ -175,6 +183,9 @@ golem agent invoke 'CounterAgent("my-counter")' value
 
 # In a specific environment
 golem agent invoke 'staging/CounterAgent("my-counter")' value
+
+# By agent ID
+golem agent invoke 'CounterAgent[<agent-id>]' value
 
 # With an explicit idempotency key
 golem agent invoke -i my-unique-key 'CounterAgent("my-counter")' increment
@@ -225,34 +236,31 @@ Invoke methods (or complete promises) directly against the Golem server over HTT
 
 ```shell
 # Invoke CounterAgent("my-counter").add(5) and await the result
-curl -X POST "$GOLEM_URL/v1/agents/invoke-agent" \
+curl -X POST "$GOLEM_URL/v1/runtime/envs/$ENVIRONMENT_ID/agent-types/CounterAgent/invoke" \
   -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
-    "appName": "my-app",
-    "envName": "local",
-    "agentTypeName": "CounterAgent",
     "parameters": {"kind": "record", "value": {"fields": [{"kind": "string", "value": "my-counter"}]}},
-    "methodName": "add",
+    "method": "add",
     "methodParameters": {"kind": "record", "value": {"fields": [{"kind": "s64", "value": "5"}]}},
     "mode": "await"
   }'
 
 # Complete a promise an agent is awaiting (see golem-wait-for-external-input-go)
 curl -X POST \
-  "$GOLEM_URL/v1/components/$COMPONENT_ID/workers/$AGENT_ID/complete" \
+  "$GOLEM_URL/v1/runtime/envs/$ENVIRONMENT_ID/agents/$AGENT_ID/complete" \
   -H "Authorization: Bearer $GOLEM_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"oplogIdx": <oplog_index>, "fingerprint": "<fingerprint>", "data": [<bytes>]}'
 ```
 
-`"mode": "schedule"` triggers the invocation without awaiting it. For promise completion, `$AGENT_ID` is the same `AgentTypeName(params)` string the CLI uses; a promise's `PromiseID` (`AgentID.ComponentID`, `AgentID.AgentID`, `Fingerprint`, `OplogIndex`) supplies the component, the agent, the fingerprint of the agent incarnation that created the promise (as the UUID string) and the oplog index. All three body fields are required. The generated external Go client (Approach 1) builds these requests for you.
+The invoke body names the agent by exactly one of `parameters` (the key: the keyed agent is created when it is missing) or `agentId` (the agent ID, a UUID). `"mode": "schedule"` triggers the invocation without awaiting it. For promise completion, `$AGENT_ID` is the agent ID; a promise's `PromiseID` (`AgentID`, `Fingerprint`, `OplogIndex`) supplies the agent ID, the fingerprint of the agent incarnation that created the promise (as the UUID string) and the oplog index. All three body fields are required. The generated external Go client (Approach 1) builds these requests for you.
 
 ## Key Constraints
 
 - `golem agent invoke` **blocks** until the agent returns; use `-t/--trigger` for fire-and-forget.
 - Every invocation carries an idempotency key (auto-generated if not supplied), giving at-most-once execution even if the client retries.
-- Constructor arguments in the agent ID must match the Go `ID` struct fields in order.
+- Constructor arguments in the key must match the Go `ID` struct fields in order.
 - A generated Go client is its own module (`golem.local/bridge/<client-dir>`); the consuming `go.mod` needs the `require` and a `replace` pointing at the generated directory.
 - A stream-bearing method has no `Trigger`/`Schedule` form: a trigger could not hand back a stream.
 - HTTP-endpoint access requires both a `Spec.HTTP` mount and an `httpApi` deployment declaration.

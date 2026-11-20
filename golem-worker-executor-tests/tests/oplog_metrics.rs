@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL, STORAGE_TYPE_OPLOG,
@@ -46,7 +46,7 @@ async fn worker_invocation_increments_oplog_bytes_written_metric(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let agent_id = agent_id!("BlobStore", "oplog-metrics-test-1");
+    let agent_id = agent_key!("BlobStore", "oplog-metrics-test-1");
     let container_name = format!("{}-oplog-metrics-container", component.id);
 
     let account_id = context.account_id.to_string();

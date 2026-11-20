@@ -737,6 +737,14 @@ pub fn failed_agent_notice(agent: &str) -> String {
     )
 }
 
+/// What to say when a session cannot start because the agent is a never-live sandbox.
+pub fn sandboxed_agent_notice(agent: &str) -> String {
+    format!(
+        "{} is a never-live sandbox. It only replays its history and runs no commands.",
+        shown(agent)
+    )
+}
+
 /// The first lines of an interactive session.
 pub fn banner(agent: &str, tool: &str) -> String {
     let (agent, tool) = (shown(agent), shown(tool));
@@ -832,7 +840,8 @@ mod tests {
         classify_cancel, classify_invoke_error, classify_live_error, decode_live_result,
         decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
         help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
-        run_argv, run_can_be_stopped, runs_nothing, strip_cursor_reports, tools_listing,
+        run_argv, run_can_be_stopped, runs_nothing, sandboxed_agent_notice, strip_cursor_reports,
+        tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
     use golem_client::invocation_session::SessionTransportError;
@@ -1760,6 +1769,14 @@ mod tests {
         assert_eq!(
             failed_agent_notice("A(\"a\")"),
             "A(\"a\") has failed and runs no commands until it is recovered or made again."
+        );
+    }
+
+    #[test]
+    fn a_sandboxed_agent_is_named_as_the_reason() {
+        assert_eq!(
+            sandboxed_agent_notice("A(\"a\")"),
+            "A(\"a\") is a never-live sandbox. It only replays its history and runs no commands."
         );
     }
 

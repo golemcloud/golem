@@ -1,12 +1,9 @@
 use super::*;
-use golem_common::model::agent::{
-    AgentConfigEntryDto, AgentTarget, InvocationFreshnessDisposition,
-};
-use golem_common::model::caller::Caller;
+use golem_common::model::agent::{AgentConfigEntryDto, InvocationFreshnessDisposition};
 use golem_common::model::card::ScopeCard;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
+use golem_worker_executor::worker::target::ResolvedTarget;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicBool;
 use test_r::test;
@@ -48,8 +45,8 @@ impl DispatchThenHangRpc {
 impl Rpc for DispatchThenHangRpc {
     async fn create_and_initialize(
         &self,
-        target: AgentTarget,
-        environment_id: EnvironmentId,
+        target: ResolvedTarget,
+        exclusive: bool,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -63,7 +60,7 @@ impl Rpc for DispatchThenHangRpc {
         self.inner
             .create_and_initialize(
                 target,
-                environment_id,
+                exclusive,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -114,8 +111,7 @@ impl Rpc for DispatchThenHangRpc {
 
     async fn create_demand(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         method: &str,
         created_by: AccountId,
         caller: &AgentId,
@@ -130,7 +126,6 @@ impl Rpc for DispatchThenHangRpc {
         self.inner
             .create_demand(
                 agent,
-                environment_id,
                 method,
                 created_by,
                 caller,
@@ -147,8 +142,7 @@ impl Rpc for DispatchThenHangRpc {
 
     async fn invoke_and_await(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -168,7 +162,6 @@ impl Rpc for DispatchThenHangRpc {
             .inner
             .invoke_and_await(
                 agent,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -192,8 +185,7 @@ impl Rpc for DispatchThenHangRpc {
 
     async fn invoke(
         &self,
-        agent: AgentTarget,
-        environment_id: EnvironmentId,
+        agent: ResolvedTarget,
         key: Option<IdempotencyKey>,
         freshness: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
@@ -212,7 +204,6 @@ impl Rpc for DispatchThenHangRpc {
             .inner
             .invoke(
                 agent,
-                environment_id,
                 key,
                 freshness,
                 expected_callee_fingerprint,
@@ -305,8 +296,8 @@ async fn repair_after_stdout_hint_executes_target_once(
         .store()
         .await?;
     let target_name = format!("hint-before-{mode}-target");
-    let caller_id = agent_id!("CancelTester", format!("hint-before-{mode}-caller"));
-    let target_id = agent_id!("RpcCounter", target_name.clone());
+    let caller_id = agent_key!("CancelTester", format!("hint-before-{mode}-caller"));
+    let target_id = agent_key!("RpcCounter", target_name.clone());
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
@@ -317,7 +308,7 @@ async fn repair_after_stdout_hint_executes_target_once(
     // A durable target is dispatched without committing the caller's `Start` first; the gate
     // commits the hint and the `Start` so that recovery finds the call incomplete.
     let mut gate = executor
-        .gate_next_rpc_commit(&caller, RpcCheckpoint::Start)
+        .gate_next_rpc_commit(&caller.agent_id, RpcCheckpoint::Start)
         .await;
     let invocation = {
         let executor = executor.clone();
@@ -342,7 +333,7 @@ async fn repair_after_stdout_hint_executes_target_once(
     // while the gate is re-armed, so the next gated `Start` is the increment.
     tokio::time::timeout(Duration::from_secs(30), gate.committed()).await?;
     let mut increment_gate = executor
-        .gate_next_rpc_commit(&caller, RpcCheckpoint::Start)
+        .gate_next_rpc_commit(&caller.agent_id, RpcCheckpoint::Start)
         .await;
     drop(gate);
     tokio::time::timeout(Duration::from_secs(30), increment_gate.committed()).await?;
@@ -417,13 +408,13 @@ async fn repair_after_stdout_hint_executes_target_once(
         .collect();
     let attempts = attempts.lock().unwrap().clone();
     let caller_key = executor
-        .external_invocation_key(&caller, &key, "inc_after_stdout")
+        .external_invocation_key(&caller.agent_id, &key, "inc_after_stdout")
         .await?;
     let target_live_key = match &live_key {
         Some(live_key) => Some(
             executor
                 .finalized_invocation_key(
-                    &target,
+                    &target.agent_id,
                     &InvocationRequestKey::Internal(live_key.clone()),
                     "inc_by",
                 )

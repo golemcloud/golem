@@ -536,6 +536,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             error: cached_error.clone(),
                             retry_from: OplogIndex::INITIAL,
                             semantic_trap_retry_override: None,
+                            provenance: crate::model::FailureProvenance::Host,
                         },
                         stderr: cached_stderr.clone(),
                     }),

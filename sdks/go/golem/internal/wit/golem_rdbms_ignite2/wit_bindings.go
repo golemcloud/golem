@@ -450,14 +450,14 @@ func (self *DbResultStream) GetColumns() witTypes.Result[[]DbColumn, Error] {
 		result0 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))), index*(8+2*4))
-			result := wasm_lift_1_t787(unsafe.Add(unsafe.Pointer(base), 0))
+			result := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(base), 0))
 
 			result0 = append(result0, result)
 		}
 
 		result2 = witTypes.Ok[[]DbColumn, Error](result0)
 	case 1:
-		result1 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[[]DbColumn, Error](result1)
 	default:
@@ -489,7 +489,7 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 			result0 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))))), index*(2*4))
-				result := wasm_lift_1_t789(unsafe.Add(unsafe.Pointer(base), 0))
+				result := wasm_lift_1_t798(unsafe.Add(unsafe.Pointer(base), 0))
 
 				result0 = append(result0, result)
 			}
@@ -501,7 +501,7 @@ func (self *DbResultStream) GetNext() witTypes.Result[witTypes.Option[[]DbRow], 
 
 		result2 = witTypes.Ok[witTypes.Option[[]DbRow], Error](option)
 	case 1:
-		result1 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[witTypes.Option[[]DbRow], Error](result1)
 	default:
@@ -527,7 +527,7 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*24)
-		wasm_lower_1_t786(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t795(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -535,11 +535,11 @@ func (self *DbTransaction) Query(statement string, params []DbValue) witTypes.Re
 	var result2 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result0 := wasm_lift_1_t792(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t801(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Ok[DbResult, Error](result0)
 	case 1:
-		result1 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[DbResult, Error](result1)
 	default:
@@ -565,7 +565,7 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*24)
-		wasm_lower_1_t786(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t795(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -576,7 +576,7 @@ func (self *DbTransaction) QueryStream(statement string, params []DbValue) witTy
 
 		result1 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result0 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[*DbResultStream, Error](result0)
 	default:
@@ -602,7 +602,7 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*24)
-		wasm_lower_1_t786(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t795(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -613,7 +613,7 @@ func (self *DbTransaction) Execute(statement string, params []DbValue) witTypes.
 
 		result1 = witTypes.Ok[int64, Error](*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))
 	case 1:
-		result0 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[int64, Error](result0)
 	default:
@@ -639,7 +639,7 @@ func (self *DbTransaction) Commit() witTypes.Result[witTypes.Unit, Error] {
 
 		result0 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
@@ -665,7 +665,7 @@ func (self *DbTransaction) Rollback() witTypes.Result[witTypes.Unit, Error] {
 
 		result0 = witTypes.Ok[witTypes.Unit, Error](witTypes.Unit{})
 	case 1:
-		result := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[witTypes.Unit, Error](result)
 	default:
@@ -693,7 +693,7 @@ func DbConnectionOpen(address string) witTypes.Result[*DbConnection, Error] {
 
 		result0 = witTypes.Ok[*DbConnection, Error](DbConnectionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[*DbConnection, Error](result)
 	default:
@@ -719,7 +719,7 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*24)
-		wasm_lower_1_t786(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t795(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -727,11 +727,11 @@ func (self *DbConnection) Query(statement string, params []DbValue) witTypes.Res
 	var result2 witTypes.Result[DbResult, Error]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result0 := wasm_lift_1_t792(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t801(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Ok[DbResult, Error](result0)
 	case 1:
-		result1 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result1 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result2 = witTypes.Err[DbResult, Error](result1)
 	default:
@@ -757,7 +757,7 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*24)
-		wasm_lower_1_t786(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t795(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -768,7 +768,7 @@ func (self *DbConnection) QueryStream(statement string, params []DbValue) witTyp
 
 		result1 = witTypes.Ok[*DbResultStream, Error](DbResultStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result0 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[*DbResultStream, Error](result0)
 	default:
@@ -794,7 +794,7 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 	result := witRuntime.Allocate(pinner, uintptr(length*24), 8)
 	for index, element := range slice {
 		base := unsafe.Add(result, index*24)
-		wasm_lower_1_t786(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
+		wasm_lower_1_t795(pinner, element, unsafe.Add(unsafe.Pointer(base), 0))
 
 	}
 
@@ -805,7 +805,7 @@ func (self *DbConnection) Execute(statement string, params []DbValue) witTypes.R
 
 		result1 = witTypes.Ok[int64, Error](*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), 8)))
 	case 1:
-		result0 := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 8))
+		result0 := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 8))
 
 		result1 = witTypes.Err[int64, Error](result0)
 	default:
@@ -831,7 +831,7 @@ func (self *DbConnection) BeginTransaction() witTypes.Result[*DbTransaction, Err
 
 		result0 = witTypes.Ok[*DbTransaction, Error](DbTransactionFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4))))))
 	case 1:
-		result := wasm_lift_1_t782(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t791(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result0 = witTypes.Err[*DbTransaction, Error](result)
 	default:
@@ -843,14 +843,14 @@ func (self *DbConnection) BeginTransaction() witTypes.Result[*DbTransaction, Err
 }
 
 //go:noinline
-func wasm_lift_1_t787(src unsafe.Pointer) DbColumn {
+func wasm_lift_1_t796(src unsafe.Pointer) DbColumn {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (8 + 1*4))))
 
 	return DbColumn{Ordinal: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), 0))), Name: value0}
 }
 
 //go:noinline
-func wasm_lift_1_t782(src unsafe.Pointer) Error {
+func wasm_lift_1_t791(src unsafe.Pointer) Error {
 	var variant Error
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -891,11 +891,11 @@ func wasm_lift_1_t782(src unsafe.Pointer) Error {
 }
 
 //go:noinline
-func wasm_lift_1_t789(src unsafe.Pointer) DbRow {
+func wasm_lift_1_t798(src unsafe.Pointer) DbRow {
 	result0 := make([]DbValue, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*24)
-		result := wasm_lift_1_t786(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t795(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -904,7 +904,7 @@ func wasm_lift_1_t789(src unsafe.Pointer) DbRow {
 }
 
 //go:noinline
-func wasm_lower_1_t786(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer) {
+func wasm_lower_1_t795(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case DbValueDbNull:
@@ -1010,11 +1010,11 @@ func wasm_lower_1_t786(pinner *runtime.Pinner, value DbValue, dst unsafe.Pointer
 }
 
 //go:noinline
-func wasm_lift_1_t792(src unsafe.Pointer) DbResult {
+func wasm_lift_1_t801(src unsafe.Pointer) DbResult {
 	result0 := make([]DbColumn, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(8+2*4))
-		result := wasm_lift_1_t787(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t796(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -1022,7 +1022,7 @@ func wasm_lift_1_t792(src unsafe.Pointer) DbResult {
 	result2 := make([]DbRow, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(2*4))
-		result1 := wasm_lift_1_t789(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t798(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -1031,7 +1031,7 @@ func wasm_lift_1_t792(src unsafe.Pointer) DbResult {
 }
 
 //go:noinline
-func wasm_lift_1_t786(src unsafe.Pointer) DbValue {
+func wasm_lift_1_t795(src unsafe.Pointer) DbValue {
 	var variant DbValue
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

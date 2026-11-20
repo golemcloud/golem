@@ -9,7 +9,7 @@ has a `.trigger(input)` form for this purpose.
 Obtain the typed remote handle and yield the trigger Effect:
 
 ```typescript
-const counter = yield* Counter.client.get({ name: "my-counter" });
+const counter = yield* Counter.client.upsert({ name: "my-counter" });
 
 // A method declared with input: {} still requires an empty named-input record.
 yield* counter.increment.trigger({});
@@ -18,11 +18,11 @@ yield* counter.increment.trigger({});
 Pass the same named-input record used by an awaited call when the method has parameters:
 
 ```typescript
-const processor = yield* DataProcessor.client.get({ name: "pipeline-1" });
+const processor = yield* DataProcessor.client.upsert({ name: "pipeline-1" });
 yield* processor.processBatch.trigger({ batch: batchData });
 ```
 
-Both `client.get(...)` and `.trigger(...)` return lazy `Effect` values. Inside `Effect.gen`, use
+Both `client.upsert(...)` and `.trigger(...)` return lazy `Effect` values. Inside `Effect.gen`, use
 `yield*` as shown. Calling `processor.processBatch.trigger(...)` and discarding the returned Effect
 does not execute the RPC. Do not add an extra `.await()`, use Promise-based Golem SDK examples, or
 invent a separate client helper.
@@ -50,7 +50,7 @@ retry policy for retryable failures, or use explicit guest recovery for applicat
 ```typescript
 runTest: () =>
   Effect.gen(function* () {
-    const callback = yield* Callback.client.get({ name });
+    const callback = yield* Callback.client.upsert({ name });
     yield* callback.run.trigger({});
     return yield* incrementLocalState;
   }).pipe(Effect.scoped, Effect.orDie),
@@ -67,11 +67,11 @@ both can wait forever. Trigger the callback so B does not wait for A to become a
 
 ```typescript
 // Agent A may await work performed by B.
-const worker = yield* AgentB.client.get({ name: "b1" });
+const worker = yield* AgentB.client.upsert({ name: "b1" });
 const result = yield* worker.doWork({ data });
 
 // While handling that work, B submits the callback but does not await its result.
-const caller = yield* AgentA.client.get({ name: "a1" });
+const caller = yield* AgentA.client.upsert({ name: "a1" });
 yield* caller.onWorkDone.trigger({ result });
 ```
 
@@ -85,7 +85,7 @@ per target without awaiting remote completion:
 
 ```typescript
 for (const region of ["us-east", "us-west", "eu-central"]) {
-  const processor = yield* RegionProcessor.client.get({ region });
+  const processor = yield* RegionProcessor.client.upsert({ region });
   yield* processor.runReport.trigger({ reportId });
 }
 ```
@@ -104,10 +104,10 @@ keep the spec and implementation separate:
 - the hosting component's `src/main.ts` imports `Counter.impl.js` for registration;
 - RPC callers import only `Counter.js`, avoiding implementation side effects.
 
-Use emitted `.js` suffixes for local imports in generated Effect projects. To bind an encoded
-identity, use `AgentIdentity.parse` followed by `identity.client(Target)` or
-`Client.bind(identity, Target)`. Binding validates a full definition's type name and constructor
-schema and rejects existing-identity binding for ephemeral definitions. Handle binding errors too.
+Use emitted `.js` suffixes for local imports in generated Effect projects. To bind an agent ID in
+text form, use `AgentId.parse` followed by `Client.bind(id, Target)` or `Target.client.getById(id)`.
+Binding rejects an ID of another agent type and binding an ID to an ephemeral definition. Handle
+parse and binding errors too.
 For a separately deployed component, declare `dependencies.agents` in `golem.yaml`, run
 `golem build`, and import its generated Effect guest client; see
 [`golem-call-another-agent-effect`](/next/how-to-guides/effect/golem-call-another-agent-effect).

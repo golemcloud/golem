@@ -406,7 +406,7 @@ pub(super) fn calculate_export_fork_admissions(
                 *count = count.saturating_add(1);
             }
             admissions.reservations.insert(
-                record.target.clone(),
+                record.target,
                 golem_common::model::ExportForkReservation {
                     oplog_index: *oplog_idx,
                     request_hash: record.request_hash.clone(),
@@ -449,6 +449,8 @@ impl UpdateFields {
                     details,
                     snapshot_assisted_details,
                     snapshot_fault,
+                    failure_class,
+                    divergence,
                     ..
                 },
                 step,
@@ -473,6 +475,8 @@ impl UpdateFields {
                     pending_update,
                     snapshot_assisted_details: snapshot_assisted_details.clone(),
                     snapshot_fault: *snapshot_fault,
+                    failure_class: *failure_class,
+                    divergence: divergence.clone(),
                 });
             }
             (
@@ -908,7 +912,7 @@ pub(super) fn calculate_oplog_processor_checkpoints(
                 result.insert(
                     *plugin_grant_id,
                     OplogProcessorCheckpointState {
-                        target_agent_id: Some(target_agent_id.clone()),
+                        target_agent_id: Some(*target_agent_id),
                         confirmed_up_to: *confirmed_up_to,
                         sending_up_to: *sending_up_to,
                         last_batch_start: *last_batch_start,

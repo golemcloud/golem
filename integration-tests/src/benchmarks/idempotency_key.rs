@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::{cleanup_user_state, delete_workers};
+use crate::benchmarks::{cleanup_user_state, delete_workers, lookup_keyed_agent};
 use async_trait::async_trait;
+use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, IdempotencyKey};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
 };
@@ -107,7 +107,7 @@ impl Benchmark for IdempotencyKeyLookup {
         Ok(IterationContext {
             user,
             component,
-            agent_id: agent_id!("RustBenchmarkAgent", "idempotency-key-lookup"),
+            agent_id: agent_key!("RustBenchmarkAgent", "idempotency-key-lookup"),
             env_id: env.id,
         })
     }
@@ -159,7 +159,9 @@ impl Benchmark for IdempotencyKeyLookup {
         context: Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        if let Ok(agent_id) = AgentId::from_agent_id(context.component.id, &context.agent_id) {
+        if let Ok(agent_id) =
+            lookup_keyed_agent(&context.user, &context.component, &context.agent_id).await
+        {
             delete_workers(&context.user, &[agent_id], &recorder).await;
         }
         cleanup_user_state(&context.user, &context.env_id, &recorder).await;

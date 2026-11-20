@@ -142,7 +142,6 @@ fn remote_agent_error_survives_wit_roundtrip() {
 fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
     use super::remote::scheduled_invocation_start;
     use golem_common::model::caller::{Caller, Principal, ToolPrincipal};
-    use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::tool::ToolName;
@@ -152,27 +151,15 @@ fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
     use golem_service_base::model::auth::AuthCtx;
 
     let environment_id = EnvironmentId(uuid::Uuid::from_u128(0xe0));
-    let scheduler = AgentId {
-        component_id: ComponentId(uuid::Uuid::from_u128(0xc0)),
-        agent_id: "Scheduler(\"s\")".to_string(),
-    };
-    let target = OwnedAgentId::new(
-        environment_id,
-        &AgentId {
-            component_id: ComponentId(uuid::Uuid::from_u128(0xc1)),
-            agent_id: "Counter(\"c\")".to_string(),
-        },
-    );
+    let scheduler = AgentId::from_parts(7, 0xc0);
+    let target = OwnedAgentId::new(environment_id, &AgentId::from_parts(8, 0xc1));
     let tool = Principal::Tool(ToolPrincipal {
         issuer: crate::test_callers::TEST_ISSUER.to_string(),
         environment_id,
         tool_name: ToolName::try_from("report").unwrap(),
     });
     for (case, immediate) in [
-        (
-            "the agent",
-            crate::test_callers::agent_principal(scheduler.clone()),
-        ),
+        ("the agent", crate::test_callers::agent_principal(scheduler)),
         ("a tool that the agent hosts", tool),
     ] {
         let (start, _) = scheduled_invocation_start(
@@ -200,7 +187,7 @@ fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
         .unwrap();
         assert_eq!(
             start.context.unwrap().parent,
-            Some(scheduler.clone().into()),
+            Some(scheduler.into()),
             "{case}"
         );
     }

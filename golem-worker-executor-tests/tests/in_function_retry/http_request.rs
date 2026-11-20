@@ -14,8 +14,8 @@
 
 use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
-use golem_common::model::{AgentStatus, IdempotencyKey, OwnedAgentId};
-use golem_common::{agent_id, data_value};
+use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
@@ -57,7 +57,7 @@ async fn http_status_retry_policy_exposes_latest_response_when_exhausted(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -102,7 +102,7 @@ async fn a_retry_policy_scope_applies_to_a_future_spawned_inside_it_and_ends_wit
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -161,7 +161,7 @@ async fn a_retry_policy_scope_reopened_by_replay_keeps_retrying_after_a_restart(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -233,14 +233,14 @@ async fn p3_status_retry_header_wait_observes_interrupt(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
-    let agent_id = agent_id!("HttpClient4");
+    let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
-    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let owned = worker_id.clone();
     let key = IdempotencyKey::fresh();
     let stored_key = executor
-        .external_invocation_key(&worker_id, &key, "post_with_status_retry_policy")
+        .external_invocation_key(&worker_id.agent_id, &key, "post_with_status_retry_policy")
         .await?;
     let invocation = executor.invoke_and_await_agent_with_key(
         &component,
@@ -282,7 +282,7 @@ async fn p3_status_retry_header_wait_observes_interrupt(
         .expect("the retry decision must belong to the HTTP send")
         .clone();
     let retry_state = executor
-        .attached_agent_status(&worker_id)
+        .attached_agent_status(&worker_id.agent_id)
         .await?
         .current_retry_state;
     tokio::time::timeout(Duration::from_secs(2), executor.interrupt(&worker_id)).await??;
@@ -313,7 +313,7 @@ async fn p3_status_retry_header_wait_observes_interrupt(
     }
     assert_eq!(
         executor
-            .attached_agent_status(&worker_id)
+            .attached_agent_status(&worker_id.agent_id)
             .await?
             .current_retry_state,
         retry_state
