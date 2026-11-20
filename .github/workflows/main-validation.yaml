@@ -16,6 +16,11 @@ on:
         description: 'Acceptance only: exercise the three overlapping subflows'
         type: boolean
         default: true
+      build-jobs:
+        description: 'Acceptance only: Cargo jobs for the preparation producers'
+        type: choice
+        options: ['32', '20']
+        default: '32'
 
 # Only one cycle runs. Replaced pending wake-ups lose no exact-source requests:
 # those requests remain open issues until their cycle finishes.
@@ -120,7 +125,7 @@ jobs:
     outputs:
       workload_exit_code: ${{ steps.workload.outputs.exit_code }}
     env:
-      CARGO_BUILD_JOBS: 20
+      MAIN_VALIDATION_BUILD_JOBS: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance && inputs.build-jobs || '32' }}
       WASI_SDK_PATH: /opt/wasi-sdk
       MAIN_VALIDATION_PARALLEL: ${{ !(github.event_name == 'workflow_dispatch' && inputs.acceptance) || inputs.parallel }}
     steps:
