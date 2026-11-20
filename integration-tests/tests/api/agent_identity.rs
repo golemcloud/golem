@@ -845,16 +845,19 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
         .get_last_deployment_revision(&component.environment_id)?
         .get();
     let first_type = registry
-        .get_deployment_agent_type(&environment, first_revision, "Counter")
+        .get_deployment_agent_type(&environment, first_revision, "SnapshotCounter")
         .await?
         .type_id;
-    assert_eq!(type_id(&user, &component, "Counter").await?, first_type);
+    assert_eq!(
+        type_id(&user, &component, "SnapshotCounter").await?,
+        first_type
+    );
 
-    let before_key = agent_key!("Counter", "before-redeploy");
+    let before_key = agent_key!("SnapshotCounter", "before-redeploy");
     let before = client
         .upsert_agent(
             &environment,
-            "Counter",
+            "SnapshotCounter",
             &AgentKeyRequest {
                 parameters: parameters(&before_key)?,
             },
@@ -864,7 +867,7 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
     client
         .invoke_agent(
             &environment,
-            "Counter",
+            "SnapshotCounter",
             None,
             &invocation(None, Some(&before_key), "increment", None)?,
         )
@@ -877,16 +880,16 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
         .get();
     assert!(second_revision > first_revision);
     let second_type = registry
-        .get_deployment_agent_type(&environment, second_revision, "Counter")
+        .get_deployment_agent_type(&environment, second_revision, "SnapshotCounter")
         .await?
         .type_id;
     assert_eq!(second_type, first_type);
 
-    let after_key = agent_key!("Counter", "after-redeploy");
+    let after_key = agent_key!("SnapshotCounter", "after-redeploy");
     let after = client
         .upsert_agent(
             &environment,
-            "Counter",
+            "SnapshotCounter",
             &AgentKeyRequest {
                 parameters: parameters(&after_key)?,
             },
@@ -896,7 +899,7 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
     let version = client
         .invoke_agent(
             &environment,
-            "Counter",
+            "SnapshotCounter",
             None,
             &invocation(Some(after.agent_id), None, "component_version", None)?,
         )
@@ -906,7 +909,7 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
     let again = client
         .upsert_agent(
             &environment,
-            "Counter",
+            "SnapshotCounter",
             &AgentKeyRequest {
                 parameters: parameters(&before_key)?,
             },
@@ -916,9 +919,9 @@ async fn the_type_tag_of_agent_ids_is_the_registry_type_id_across_redeploys(
     let count = client
         .invoke_agent(
             &environment,
-            "Counter",
+            "SnapshotCounter",
             None,
-            &invocation(Some(before.agent_id), None, "count", None)?,
+            &invocation(Some(before.agent_id), None, "get", None)?,
         )
         .await?;
     assert_eq!(returned(&count), Some(SchemaValue::U32(1)));
