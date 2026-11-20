@@ -2250,6 +2250,125 @@ fn compile_mcp_rejects_cross_tool_normalized_name_collision_and_auth_conflict() 
 }
 
 #[test]
+fn compile_mcp_names_the_alias_in_a_cross_tool_name_collision() {
+    let environment = test_environment();
+    let mut aliased = executable_test_tool("foo", "run");
+    aliased.commands.nodes[1].aliases = vec!["bar-baz".to_string()];
+    let first = native_tool_component("first", "foo", aliased);
+    let second = native_tool_component("second", "foo-bar", executable_test_tool("foo-bar", "baz"));
+    let tool_options = |component: &Component| McpDeploymentToolOptions {
+        owner_component: component.component_name.clone(),
+        security_scheme: None,
+        include: None,
+        exclude: None,
+    };
+    let deployment = mcp_deployment(
+        environment.id,
+        "alias-collision.example.com",
+        BTreeMap::new(),
+        BTreeMap::from([
+            (ToolName::try_from("foo").unwrap(), tool_options(&first)),
+            (
+                ToolName::try_from("foo-bar").unwrap(),
+                tool_options(&second),
+            ),
+        ]),
+    );
+    let context = DeploymentContext {
+        environment,
+        components: BTreeMap::from([
+            (first.component_name.clone(), first),
+            (second.component_name.clone(), second),
+        ]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+        registered_agent_types: HashMap::new(),
+    };
+    let mut errors = Vec::new();
+    let tools = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+    context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::new(),
+        &tools,
+        &[],
+        &mut errors,
+    );
+
+    assert_eq!(
+        errors,
+        vec![DeployValidationError::McpDeploymentToolNameCollision {
+            mcp_deployment_domain: Domain("alias-collision.example.com".to_string()),
+            name: "foo_bar_baz".to_string(),
+            first: "tool command `foo bar-baz`".to_string(),
+            second: "tool command `foo-bar baz`".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn compile_mcp_names_the_owning_tool_of_a_root_alias_in_a_cross_tool_name_collision() {
+    let environment = test_environment();
+    let mut aliased = executable_test_tool("grep", "run");
+    aliased.commands.nodes[0].aliases = vec!["search".to_string()];
+    let first = native_tool_component("first", "grep", aliased);
+    let second = native_tool_component("second", "search", executable_test_tool("search", "run"));
+    let tool_options = |component: &Component| McpDeploymentToolOptions {
+        owner_component: component.component_name.clone(),
+        security_scheme: None,
+        include: None,
+        exclude: None,
+    };
+    let deployment = mcp_deployment(
+        environment.id,
+        "root-alias-collision.example.com",
+        BTreeMap::new(),
+        BTreeMap::from([
+            (ToolName::try_from("grep").unwrap(), tool_options(&first)),
+            (ToolName::try_from("search").unwrap(), tool_options(&second)),
+        ]),
+    );
+    let context = DeploymentContext {
+        environment,
+        components: BTreeMap::from([
+            (first.component_name.clone(), first),
+            (second.component_name.clone(), second),
+        ]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+        registered_agent_types: HashMap::new(),
+    };
+    let mut errors = Vec::new();
+    let tools = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+    context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::new(),
+        &tools,
+        &[],
+        &mut errors,
+    );
+
+    assert_eq!(
+        errors,
+        vec![DeployValidationError::McpDeploymentToolNameCollision {
+            mcp_deployment_domain: Domain("root-alias-collision.example.com".to_string()),
+            name: "search_run".to_string(),
+            first: "tool command `search run` of tool `grep`".to_string(),
+            second: "tool command `search run`".to_string(),
+        }]
+    );
+}
+
+#[test]
 fn compile_tools_registers_unbound_tool_without_agent_bindings() {
     let tool_name = ToolName::try_from("grep").unwrap();
     let component_bindings = BTreeMap::from([(

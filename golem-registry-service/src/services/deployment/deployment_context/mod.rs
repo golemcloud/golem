@@ -1193,7 +1193,7 @@ impl DeploymentContext {
                             (
                                 format!("{}-{}", agent.agent_type.type_name.0, method.name),
                                 format!(
-                                    "agent method {}.{}",
+                                    "agent method `{}.{}`",
                                     agent.agent_type.type_name.0, method.name
                                 ),
                             )
@@ -1202,13 +1202,7 @@ impl DeploymentContext {
                 })
                 .collect::<HashMap<_, _>>();
             for export in &native_tools {
-                let command = format!(
-                    "tool command `{}`",
-                    std::iter::once(export.tool_name.as_str())
-                        .chain(export.command_path.iter().map(String::as_str))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                );
+                let command = export.command_label();
                 if let Some(first) = names.insert(export.mcp_name.clone(), command.clone()) {
                     errors.push(DeployValidationError::McpDeploymentToolNameCollision {
                         mcp_deployment_domain: domain.clone(),

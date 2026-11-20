@@ -240,10 +240,37 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
 }
 
 #[test]
+fn an_alias_path_that_collides_with_another_command_is_named_by_its_alias_path() {
+    let mut root = node("root", None);
+    root.subcommands = vec![CommandIndex(1), CommandIndex(2)];
+    let mut parent = node("x", None);
+    parent.aliases.push("a".to_string());
+    parent.subcommands.push(CommandIndex(3));
+    let definition = Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        http_mount: None,
+        commands: CommandTree {
+            nodes: vec![
+                root,
+                node("a-b", Some(body())),
+                parent,
+                node("b", Some(body())),
+            ],
+        },
+        schema: SchemaGraph::empty(),
+    };
+    assert_eq!(
+        compile(&definition).unwrap_err(),
+        "tool command `root a-b` and tool command `root a b` both project to the MCP tool name `root_a_b`"
+    );
+}
+
+#[test]
 fn names_project_to_snake_case() {
-    for name in ["searchItems", "search-items", "search_items", "SearchItems"] {
-        assert_eq!(snake_case(name), "search_items", "{name}");
-    }
+    ["searchItems", "search-items", "search_items", "SearchItems"]
+        .into_iter()
+        .for_each(|name| assert_eq!(snake_case(name), "search_items", "{name}"));
     assert_eq!(snake_case("HTTPServer"), "http_server");
     assert_eq!(snake_case("parseURL"), "parse_url");
     assert_eq!(snake_case("item2Go"), "item2_go");
@@ -288,13 +315,15 @@ fn arguments_project_to_snake_case_in_the_schema_and_the_call() {
 
 #[test]
 fn each_reserved_argument_is_rejected_with_the_command_and_the_argument() {
-    for argument in [
+    [
         "_stdin",
         "idempotency-key",
         "idempotencyKey",
         "_agent",
         "_agent_id",
-    ] {
+    ]
+    .into_iter()
+    .for_each(|argument| {
         let mut command = body();
         command.options = vec![option(
             argument,
@@ -311,13 +340,14 @@ fn each_reserved_argument_is_rejected_with_the_command_and_the_argument() {
             },
             ..tool(node("root", None))
         };
-        let error = check_reserved_arguments(&definition, 1, "root search").unwrap_err();
+        let error =
+            check_reserved_arguments(&definition, 1, "tool command `root search`").unwrap_err();
         assert!(error.contains("`root search`"), "{argument}: {error}");
         assert!(
             error.contains(&format!("`{argument}`")),
             "{argument}: {error}"
         );
-    }
+    });
     let mut command = body();
     command.options = vec![option(
         "idempotency-keys",
@@ -413,6 +443,64 @@ fn mcp_name_replaces_the_tool_name_and_its_aliases_in_every_command() {
             .iter()
             .all(|export| export.tool_name.as_str() == "root")
     );
+}
+
+#[test]
+fn an_mcp_name_without_a_letter_or_digit_is_rejected() {
+    let definition = tool(node("root", Some(body())));
+    ["", "-", "_", "--"].into_iter().for_each(|name_override| {
+        let error = compile_native_tool_exports(
+            ComponentId::new(),
+            "test:owner".try_into().unwrap(),
+            "root".try_into().unwrap(),
+            &definition,
+            None,
+            None,
+            Some(name_override),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains(&format!("`{name_override}`")),
+            "{name_override:?}: {error}"
+        );
+    });
+}
+
+#[test]
+fn the_constraint_text_uses_the_projected_argument_names() {
+    let mut command = body();
+    command.options = vec![
+        option(
+            "dry-run",
+            OptionShape::OptionalScalar(SchemaType::string()),
+            false,
+        ),
+        option(
+            "force-all",
+            OptionShape::OptionalScalar(SchemaType::string()),
+            false,
+        ),
+    ];
+    command.constraints = vec![
+        Constraint::AllOrNone(vec![
+            Ref::Present("dry-run".to_string()),
+            Ref::Present("force-all".to_string()),
+        ]),
+        Constraint::Implies(ImpliesC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![Ref::Present("dry-run".to_string())],
+            rhs_quant: Quantifier::Any,
+            rhs: vec![Ref::Present("force-all".to_string())],
+        }),
+    ];
+    let export = compile(&tool(node("root", Some(command))))
+        .unwrap()
+        .remove(0);
+    let description = export.description;
+    assert!(description.contains("\"dry_run\""), "{description}");
+    assert!(description.contains("\"force_all\""), "{description}");
+    assert!(!description.contains("dry-run"), "{description}");
+    assert!(!description.contains("force-all"), "{description}");
 }
 
 #[test]

@@ -125,9 +125,9 @@ renderer from their SDK schemas.
 The check is the reflection conformance corpus `test-data/reflection-conformance/v1.json`: P3's
 vectors join it (GOL-1359 writes interim vectors, GOL-1599 replaces them), and every SDK's existing
 corpus run then checks Golem AI's projection against the same expectations as MCP. The host
-projection is `golem-service-base/src/mcp/native_tool/`. GOL-1598 brought its names, reserved
-arguments and error envelope to the contract; it still rejects non-stdin input streams, because tool
-invocations do not yet accept typed input streams.
+projection is `golem-service-base/src/mcp/native_tool/`. Its names, reserved arguments and error
+envelope follow the contract. It rejects non-stdin input streams, because tool invocations do not
+yet accept typed input streams.
 
 ## Provider limits
 

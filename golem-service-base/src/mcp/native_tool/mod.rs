@@ -17,7 +17,9 @@ use golem_common::base_model::component::{ComponentId, ComponentName};
 use golem_common::base_model::tool::ToolName;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
 use golem_common::schema::tool::validation::validate_tool;
-use golem_common::schema::tool::{FlagShape, OptionShape, Tool};
+use golem_common::schema::tool::{
+    Constraint, FlagShape, ForbidsC, ImpliesC, OptionShape, Ref, RefGroup, Tool, ValueIsRef,
+};
 use golem_common::schema::{
     FALLBACK_OUTPUT_FIELD_NAME, NamedFieldType, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, find_host_managed_type,
@@ -34,7 +36,7 @@ use std::collections::HashMap;
 const STDIN_FIELD: &str = "_stdin";
 const MAX_STDIN: usize = 16 * 1024 * 1024;
 
-/// The argument names that the function-tool projection keeps for itself. No argument of an
+/// The function-tool projection keeps these argument names for itself. No argument of an
 /// exported command can project to one of these names.
 pub const RESERVED_ARGUMENTS: [&str; 4] = [STDIN_FIELD, "idempotency_key", "_agent", "_agent_id"];
 
@@ -46,7 +48,7 @@ pub fn snake_case(name: &str) -> String {
     chars
         .iter()
         .enumerate()
-        .fold(String::with_capacity(name.len() + 4), |mut out, (i, &c)| {
+        .fold(String::with_capacity(name.len()), |mut out, (i, &c)| {
             if c == '-' {
                 out.push('_');
             } else if c.is_uppercase() {
@@ -66,7 +68,8 @@ pub fn snake_case(name: &str) -> String {
         })
 }
 
-/// The projected tool name of a command: `<tool>_<command path>`, with each part in snake_case.
+/// Returns the projected tool name of a command. The name is `<tool>_<command path>`, and each
+/// part is in snake_case.
 pub fn projected_tool_name(tool: &str, command_path: &[String]) -> String {
     std::iter::once(tool)
         .chain(command_path.iter().map(String::as_str))
@@ -75,12 +78,28 @@ pub fn projected_tool_name(tool: &str, command_path: &[String]) -> String {
         .join("_")
 }
 
+/// Returns the label of a command for a message. The label quotes the root name and the command
+/// path as declared, for example ``tool command `search run` ``. When the root name is not the
+/// tool name, the label also names the tool, for example
+/// ``tool command `search run` of tool `grep` ``.
+pub fn command_label(tool: &str, root_name: &str, command_path: &[String]) -> String {
+    let path = std::iter::once(root_name)
+        .chain(command_path.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if root_name == tool {
+        format!("tool command `{path}`")
+    } else {
+        format!("tool command `{path}` of tool `{tool}`")
+    }
+}
+
 /// Checks that no argument of the command at `command_index` projects to a name in
-/// [`RESERVED_ARGUMENTS`]. The error names the command and the argument.
+/// [`RESERVED_ARGUMENTS`]. The error names the command by `label` and names the argument.
 pub fn check_reserved_arguments(
     definition: &Tool,
     command_index: usize,
-    command: &str,
+    label: &str,
 ) -> Result<(), String> {
     definition
         .canonical_input_fields(command_index)
@@ -89,7 +108,7 @@ pub fn check_reserved_arguments(
         .find(|(_, projected)| RESERVED_ARGUMENTS.contains(&projected.as_str()))
         .map_or(Ok(()), |(field, projected)| {
             Err(format!(
-                "argument `{}` of command `{command}` projects to the reserved MCP argument `{projected}`",
+                "argument `{}` of {label} projects to the reserved MCP argument `{projected}`",
                 field.name
             ))
         })
@@ -104,11 +123,27 @@ pub struct CompiledMcpToolExport {
     pub owner_component_name: ComponentName,
     pub tool_name: ToolName,
     pub command_path: Vec<String>,
+    /// The root name, as declared, that projects to the first part of `mcp_name`: the tool name,
+    /// a root alias or the `mcp.name` of the export.
+    pub mcp_root_name: String,
+    /// The command path, as declared, that projects to the rest of `mcp_name`: `command_path` or
+    /// one of its alias paths.
+    pub mcp_command_path: Vec<String>,
     pub definition: Tool,
     pub input_schema: SchemaGraph,
 }
 
 impl CompiledMcpToolExport {
+    /// Returns the label of the command for a message. The label uses the root name and the
+    /// command path that project to `mcp_name`.
+    pub fn command_label(&self) -> String {
+        command_label(
+            self.tool_name.as_str(),
+            &self.mcp_root_name,
+            &self.mcp_command_path,
+        )
+    }
+
     pub fn command(&self) -> Result<(usize, &golem_common::schema::tool::CommandBody), String> {
         let index = self
             .definition
@@ -326,11 +361,66 @@ impl CompiledMcpToolExport {
     }
 }
 
+/// Returns the constraints of the command at `command_index` with each argument name in its
+/// projected form. A name that refers to an alias of an argument projects to the argument name.
+fn projected_constraints(
+    definition: &Tool,
+    command_index: usize,
+    constraints: &[Constraint],
+) -> Vec<Constraint> {
+    let fields = definition.canonical_input_fields(command_index);
+    let project = |name: &String| {
+        fields
+            .iter()
+            .find(|field| field.name == *name || field.aliases.contains(name))
+            .map_or_else(|| snake_case(name), |field| snake_case(&field.name))
+    };
+    let refs = |declared: &[Ref]| {
+        declared
+            .iter()
+            .map(|reference| match reference {
+                Ref::Present(name) => Ref::Present(project(name)),
+                Ref::ValueIs(value_is) => Ref::ValueIs(ValueIsRef {
+                    name: project(&value_is.name),
+                    value: value_is.value.clone(),
+                }),
+            })
+            .collect::<Vec<_>>()
+    };
+    constraints
+        .iter()
+        .map(|constraint| match constraint {
+            Constraint::RequiresAll(r) => Constraint::RequiresAll(refs(r)),
+            Constraint::AllOrNone(r) => Constraint::AllOrNone(refs(r)),
+            Constraint::RequiresAny(r) => Constraint::RequiresAny(refs(r)),
+            Constraint::MutexGroups(groups) => Constraint::MutexGroups(
+                groups
+                    .iter()
+                    .map(|group| RefGroup {
+                        refs: refs(&group.refs),
+                    })
+                    .collect(),
+            ),
+            Constraint::Implies(implies) => Constraint::Implies(ImpliesC {
+                lhs: refs(&implies.lhs),
+                rhs: refs(&implies.rhs),
+                ..implies.clone()
+            }),
+            Constraint::Forbids(forbids) => Constraint::Forbids(ForbidsC {
+                lhs: refs(&forbids.lhs),
+                rhs: refs(&forbids.rhs),
+                ..forbids.clone()
+            }),
+        })
+        .collect()
+}
+
 /// Projects the commands of `definition` that `include` and `exclude` select to MCP tools.
 ///
 /// `name_override` is the `mcp.name` of the export. When it is present, it replaces the tool
-/// name and its root aliases in each projected tool name. The reserved-argument check runs only
-/// on the selected commands.
+/// name and its root aliases in each projected tool name. A `name_override` that projects to a
+/// name without a letter or digit is an error. The reserved-argument check runs at most once on
+/// each selected command, and on no other command.
 pub fn compile_native_tool_exports(
     owner_component_id: ComponentId,
     owner_component_name: ComponentName,
@@ -342,6 +432,13 @@ pub fn compile_native_tool_exports(
 ) -> Result<Vec<CompiledMcpToolExport>, String> {
     if include.is_some() && exclude.is_some() {
         return Err("include and exclude are mutually exclusive".to_string());
+    }
+    if let Some(name_override) = name_override
+        && !snake_case(name_override).chars().any(char::is_alphanumeric)
+    {
+        return Err(format!(
+            "the MCP name `{name_override}` has no letter or digit"
+        ));
     }
     validate_tool(definition).map_err(|e| {
         e.into_iter()
@@ -375,27 +472,26 @@ pub fn compile_native_tool_exports(
             continue;
         }
         let canonical_included = includes.iter().any(|p| pattern_matches(p, &canonical));
-        for alias_path in exposed {
-            if filter_includes
-                && !canonical_included
-                && !includes.iter().any(|p| pattern_matches(p, &alias_path))
-            {
-                continue;
-            }
-            if excludes.iter().any(|p| pattern_matches(p, &alias_path)) {
-                continue;
-            }
-            let input_schema = definition
-                .canonical_input_record_schema(index)
-                .map_err(|e| e.to_string())?;
+        let selected: Box<[Vec<String>]> = exposed
+            .into_iter()
+            .filter(|alias_path| {
+                (!filter_includes
+                    || canonical_included
+                    || includes.iter().any(|p| pattern_matches(p, alias_path)))
+                    && !excludes.iter().any(|p| pattern_matches(p, alias_path))
+            })
+            .collect();
+        if !selected.is_empty() {
             check_reserved_arguments(
                 definition,
                 index,
-                &std::iter::once(tool_name.as_str())
-                    .chain(canonical.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                &command_label(tool_name.as_str(), tool_name.as_str(), &canonical),
             )?;
+        }
+        for alias_path in selected {
+            let input_schema = definition
+                .canonical_input_record_schema(index)
+                .map_err(|e| e.to_string())?;
             reject_capabilities(&input_schema, &input_schema.root, "input")?;
             let body = definition.commands.nodes[index].body.as_ref().unwrap();
             if let Some(r) = &body.result {
@@ -422,7 +518,12 @@ pub fn compile_native_tool_exports(
             if !body.constraints.is_empty() {
                 description.push_str(&format!(
                     " Constraints: {}.",
-                    serde_json::to_string(&body.constraints).map_err(|error| error.to_string())?
+                    serde_json::to_string(&projected_constraints(
+                        definition,
+                        index,
+                        &body.constraints
+                    ))
+                    .map_err(|error| error.to_string())?
                 ));
             }
             if body.stdin.is_some() || body.stdout.is_some() {
@@ -432,13 +533,10 @@ pub fn compile_native_tool_exports(
             }
             for &root_name in &root_names {
                 let name = projected_tool_name(root_name, &alias_path);
-                let command = std::iter::once(root_name)
-                    .chain(alias_path.iter().map(String::as_str))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let command = command_label(tool_name.as_str(), root_name, &alias_path);
                 if let Some(other) = names.insert(name.clone(), command.clone()) {
                     return Err(format!(
-                        "commands `{other}` and `{command}` both project to the MCP tool name `{name}`"
+                        "{other} and {command} both project to the MCP tool name `{name}`"
                     ));
                 }
                 result.push(CompiledMcpToolExport {
@@ -456,6 +554,8 @@ pub fn compile_native_tool_exports(
                     owner_component_name: owner_component_name.clone(),
                     tool_name: tool_name.clone(),
                     command_path: canonical.clone(),
+                    mcp_root_name: root_name.to_string(),
+                    mcp_command_path: alias_path.clone(),
                     definition: definition.clone(),
                     input_schema: input_schema.clone(),
                 });

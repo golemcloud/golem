@@ -100,7 +100,7 @@ pub enum DeployValidationError {
         error: String,
     },
     #[error(
-        "MCP deployment {mcp_deployment_domain}: {first} and {second} both project to the MCP tool name {name}"
+        "MCP deployment {mcp_deployment_domain}: {first} and {second} both project to the MCP tool name `{name}`"
     )]
     McpDeploymentToolNameCollision {
         mcp_deployment_domain: Domain,
