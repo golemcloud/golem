@@ -564,6 +564,11 @@ impl WorkerService for DefaultWorkerService {
             let namespace =
                 Self::invocation_result_index_namespace(&owned_agent_id.agent_id, fingerprint);
             let status_generation = status.invocation_results.revert_generation();
+            // The index covers the retained oplog: the entries before its start are gone.
+            let retained_start = self
+                .oplog_service
+                .first_retained_index(owned_agent_id, agent_mode)
+                .await?;
             'reload: loop {
                 let observed_metadata = self
                     .key_value_storage
@@ -667,8 +672,8 @@ impl WorkerService for DefaultWorkerService {
                 };
 
                 while metadata.covered_through < status.oplog_idx {
-                    let remaining =
-                        status.oplog_idx.as_u64() - metadata.covered_through.as_u64();
+                    let start = metadata.covered_through.next().max(retained_start);
+                    let remaining = (status.oplog_idx.as_u64() + 1).saturating_sub(start.as_u64());
                     let count = remaining
                         .min(
                             self.config
@@ -678,17 +683,11 @@ impl WorkerService for DefaultWorkerService {
                         .max(1);
                     let entries = self
                         .oplog_service
-                        .read_exact(
-                            owned_agent_id,
-                            agent_mode,
-                            metadata.covered_through.next(),
-                            count,
-                        )
+                        .read_exact(owned_agent_id, agent_mode, start, count)
                         .await?;
                     if entries.is_empty() {
                         return Err(WorkerExecutorError::runtime(format!(
-                            "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {} was empty",
-                            metadata.covered_through.next()
+                            "failed to advance invocation result index for {owned_agent_id}: oplog range starting at {start} was empty"
                         )));
                     }
 

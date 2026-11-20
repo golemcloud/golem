@@ -124,6 +124,9 @@ impl RedisKeyValueStorage {
                 "agent:rejected_periodic_snapshots:{}",
                 agent_id.to_redis_key()
             )),
+            KeyValueStorageNamespace::AgentOplogRetention { agent_id } => {
+                Some(format!("agent:oplog_retention:{}", agent_id.to_redis_key()))
+            }
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise {
                 agent_id,

@@ -9001,7 +9001,7 @@ fn assert_oplog_failed(
     needles: &[&str],
 ) {
     assert!(
-        matches!(error, WorkerExecutorError::OplogFailed { agent_id, details }
+        matches!(error, WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
             if agent_id == &owned_agent_id.agent_id
                 && needles.iter().all(|needle| details.contains(needle))),
         "{error:?}"

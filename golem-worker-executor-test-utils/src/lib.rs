@@ -2944,6 +2944,31 @@ pub async fn take_agent_oplog_over_at_epoch(
     Ok(())
 }
 
+/// Moves the retained start of the agent's oplog forward to `index`, in the persistent key-value
+/// storage that executors started with either storage config read it from. Call it while no
+/// executor runs; the next executor opens the oplog with the new start.
+pub async fn force_oplog_retained_start(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    index: OplogIndex,
+) -> anyhow::Result<()> {
+    let storage =
+        golem_worker_executor::storage::keyvalue::sqlite::SqliteKeyValueStorage::configured(
+            &sqlite_storage_config(deps, context),
+        )
+        .await
+        .map_err(|err| anyhow!(err))?;
+    golem_worker_executor::services::oplog::retention::advance_oplog_retention(
+        &storage,
+        &owned_agent_id.agent_id,
+        AgentMode::Durable,
+        index,
+    )
+    .await?;
+    Ok(())
+}
+
 /// The indexed storage of executors started with the SQLite storage config (`start`,
 /// `start_with_overrides`, `start_customized`, `start_with_oplog_config`).
 async fn sqlite_indexed_storage(

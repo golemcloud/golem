@@ -486,6 +486,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let observed_oplog_index = oplog_service
             .get_last_index(owned_agent_id, agent_mode)
             .await?;
+        let first_retained = oplog_service
+            .first_retained_index(owned_agent_id, agent_mode)
+            .await?;
         let mut current = observed_oplog_index;
         let mut found = 0;
 
@@ -509,7 +512,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
 
-            if current == OplogIndex::INITIAL {
+            if current <= first_retained {
                 return Err(WorkerExecutorError::invalid_request(format!(
                     "Could not find {number_of_invocations} invocations to revert"
                 )));
@@ -1268,9 +1271,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             start: region_start,
             end: region_end,
         };
+        let first = self.oplog.first_retained_index();
         let entries = self
             .oplog
-            .read_exact(OplogIndex::INITIAL, region_end.as_u64())
+            .read_exact(first, region_end.as_u64() + 1 - first.as_u64())
             .await?;
 
         {

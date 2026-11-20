@@ -4961,7 +4961,7 @@ async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
         let error = WorkerExecutorError::from(OplogError::from(refusal));
         assert!(matches!(
             error,
-            WorkerExecutorError::OplogFailed { agent_id, details }
+            WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
                 if agent_id == test_case.owned_agent_id.agent_id
                     && details.contains("empty status baseline")
         ));
@@ -5985,6 +5985,14 @@ impl OplogService for TestCase {
         Ok(())
     }
 
+    async fn first_retained_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        Ok(OplogIndex::INITIAL)
+    }
+
     async fn delete(
         &self,
         _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
@@ -6288,7 +6296,14 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
             (WorkerExecutorError::RecoveryRequired { details, .. }, "unavailable") => {
                 assert!(details.contains("injected payload outage"), "{details}");
             }
-            (WorkerExecutorError::OplogFailed { agent_id, details }, "corrupt" | "missing") => {
+            (
+                WorkerExecutorError::OplogFailed {
+                    agent_id,
+                    failure:
+                        golem_service_base::error::worker_executor::OplogFailure::Unreadable { details },
+                },
+                "corrupt" | "missing",
+            ) => {
                 assert_eq!(agent_id, &test_case.owned_agent_id.agent_id);
                 assert!(details.contains("stream session payload"), "{details}");
                 assert!(details.contains("oplog index 2"), "{details}");

@@ -275,6 +275,10 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::PermissionDenied(err) => {
                     format!("Permission Denied: {}", err.details)
                 }
+                worker_execution_error::Error::OplogExpired(err) => format!(
+                    "Oplog Expired: Worker ID = {:?}, Retained Start = {}",
+                    err.agent_id, err.retained_start
+                ),
                 worker_execution_error::Error::StaleCursor(err) => format!(
                     "Stale Oplog Cursor: Worker ID = {:?}, Next Index = {}, Reason = {:?}",
                     err.agent_id, err.next_oplog_index, err.reason

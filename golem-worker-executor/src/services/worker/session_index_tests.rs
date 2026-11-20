@@ -4976,7 +4976,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
     assert!(
         matches!(
             WorkerExecutorError::from(unreadable.clone()),
-            WorkerExecutorError::OplogFailed { details, .. }
+            WorkerExecutorError::OplogFailed { failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details }, .. }
                 if details.contains("archive layer 1") && details.contains("ending at 3")
         ),
         "{error}"
@@ -5015,7 +5015,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
         .expect("the producer load over an undecodable chunk must fail")
         .into_worker_executor_error(WorkerExecutorError::runtime);
     assert!(
-        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, details }
+        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
             if agent_id == &id.agent_id && details.contains("archive layer 1")),
         "{producer:?}"
     );
@@ -5128,7 +5128,7 @@ async fn a_cached_status_write_over_an_undecodable_chunk_keeps_the_oplog_failure
             .await
             .expect_err("the catch-up over an undecodable chunk must fail");
         assert!(
-            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, failure: golem_service_base::error::worker_executor::OplogFailure::Unreadable { details } }
                 if agent_id == &id.agent_id && details.contains("archive layer 1")),
             "stream history {has_durable_stream_history}: {error:?}"
         );

@@ -23,7 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::filesystem::FileReadError;
 use golem_service_base::clients::registry::RegistryServiceError;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{OplogFailure, WorkerExecutorError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
@@ -155,6 +155,13 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                     code: api::error_code::STALE_CURSOR.to_string(),
                 })
             }
+            WorkerServiceError::GolemError(WorkerExecutorError::OplogFailed {
+                failure: OplogFailure::Expired { .. },
+                ..
+            }) => Self::BadRequest(ErrorsBody {
+                errors: vec![error.to_safe_string()],
+                code: api::error_code::OPLOG_EXPIRED.to_string(),
+            }),
             WorkerServiceError::BadFileType(_) => Self::BadRequest(ErrorsBody {
                 errors: vec![error.to_safe_string()],
                 code: api::error_code::BAD_FILE_TYPE.to_string(),

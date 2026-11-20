@@ -375,9 +375,18 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 )
             })
             .collect::<HashMap<_, _>>();
+        let first = self
+            .oplog_service
+            .first_retained_index(&consumer, agent_mode)
+            .await?;
         for (index, entry) in self
             .oplog_service
-            .read_exact(&consumer, agent_mode, OplogIndex::INITIAL, current.as_u64())
+            .read_exact(
+                &consumer,
+                agent_mode,
+                first,
+                (current.as_u64() + 1).saturating_sub(first.as_u64()),
+            )
             .await?
         {
             if lineage.deleted_regions().is_in_deleted_region(index) {

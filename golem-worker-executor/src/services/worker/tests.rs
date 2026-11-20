@@ -180,6 +180,14 @@ impl OplogService for IndexTestOplogService {
         Ok(())
     }
 
+    async fn first_retained_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        Ok(OplogIndex::INITIAL)
+    }
+
     async fn delete(
         &self,
         _lifecycle: &mut OplogLifecycleGuard,
@@ -2292,6 +2300,14 @@ impl OplogService for FakeOplogService {
         _expected_epoch: golem_common::model::ShardEpoch,
     ) -> Result<(), crate::services::oplog::OplogError> {
         Ok(())
+    }
+
+    async fn first_retained_index(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        Ok(OplogIndex::INITIAL)
     }
 
     async fn delete(

@@ -114,7 +114,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Forks retain invocation keys from their source. Find the initialization by its
         // payload, not by interpreting a caller-controlled idempotency-key prefix.
         let status = self.try_get_last_known_status().await?;
-        let mut first = OplogIndex::INITIAL;
+        let mut first = self.oplog.first_retained_index();
         while first <= status.oplog_idx {
             let count = (status.oplog_idx.as_u64() - first.as_u64() + 1).min(256);
             let entries = self.oplog.read_exact(first, count).await?;
@@ -813,7 +813,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         crate::metrics::workers::record_invocation_result_resolution("oplog_fallback");
         let mut requests = InvocationRequests::default();
         let mut result = None;
-        let mut first = OplogIndex::INITIAL;
+        let mut first = self.oplog.first_retained_index();
         let chunk_size = self
             .deps
             .config()

@@ -263,17 +263,26 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
     let agent_mode = identity.agent_mode;
-    let current_component_revision = if entry.initialized {
-        entry.current_component_revision
+    // A new search starts at the retained start of the oplog.
+    let (start, current_component_revision) = if entry.initialized {
+        (entry.next_oplog_index, entry.current_component_revision)
     } else {
-        find_component_revision_at(
+        let start = ctx
+            .state
+            .oplog_service()
+            .first_retained_index(&entry.owned_agent_id, agent_mode)
+            .await
+            .map_err(|error| error.to_string())?
+            .max(entry.next_oplog_index);
+        let revision = find_component_revision_at(
             ctx.state.oplog_service(),
             &entry.owned_agent_id,
             agent_mode,
-            entry.next_oplog_index,
+            start,
         )
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())?;
+        (start, revision)
     };
     let agent_type = &identity.create_parameters().agent_type_name;
     search_public_oplog(
@@ -285,7 +294,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         identity.create_parameters().owner_kind,
         agent_type.as_ref(),
         current_component_revision,
-        entry.next_oplog_index,
+        start,
         entry.last_oplog_index,
         entry.page_size,
         &entry.query,

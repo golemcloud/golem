@@ -973,24 +973,27 @@ pub(crate) async fn sleep_unless_interrupted(
 /// matches the given `retry_point`. This is used to initialize `base_retry_count`
 /// when spawning background retry tasks, so that the retry budget accounts for
 /// errors already recorded before the task was spawned.
+///
+/// Such an error comes after its retry point, so the count reads from the retry point, or from
+/// the retained start of the oplog when the retry point is below it.
 pub async fn count_oplog_errors_for(
     oplog: &Arc<dyn crate::services::oplog::Oplog>,
     retry_point: OplogIndex,
 ) -> Result<u32, crate::services::oplog::UnreadableOplog> {
-    let len = oplog.length().await?;
-    if len == 0 {
+    let first = retry_point.max(oplog.first_retained_index());
+    let last = oplog.current_oplog_index().await;
+    if last < first {
         return Ok(0);
     }
-    let entries = oplog.read_exact(OplogIndex::INITIAL, len).await?;
-    let mut count: u32 = 0;
-    for entry in entries.values() {
-        if let OplogEntry::Error { retry_from, .. } = entry
-            && *retry_from == retry_point
-        {
-            count += 1;
-        }
-    }
-    Ok(count)
+    let entries = oplog
+        .read_exact(first, last.as_u64() - first.as_u64() + 1)
+        .await?;
+    Ok(entries
+        .values()
+        .filter(|entry| {
+            matches!(entry, OplogEntry::Error { retry_from, .. } if *retry_from == retry_point)
+        })
+        .count() as u32)
 }
 
 /// Implementation of [`InFunctionRetryHost`] for spawned background tasks (async RPC, HTTP).
