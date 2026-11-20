@@ -483,8 +483,8 @@ declare_structs! {
     }
 }
 
-/// An item of an oplog page: a full oplog entry, or an entry that the page leaves out because it
-/// is too large.
+/// An item of an oplog page: a full oplog entry, or an entry that the page leaves out
+/// because it is too large.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
