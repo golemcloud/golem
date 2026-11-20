@@ -1,6 +1,6 @@
 import { Command, FileSystem } from "@effect/platform"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
-import { Console, Data, Effect, Schema, Stream } from "effect"
+import { Console, Data, Effect, Exit, Schema, Stream } from "effect"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { decodeBytes, encodeBytes, type Outcome, ValidationError } from "./model.ts"
@@ -91,14 +91,8 @@ export function main<E>(
   program: Effect.Effect<boolean, E, NodeContext.NodeContext>
 ) {
   NodeRuntime.runMain(
-    program.pipe(
-      Effect.tap((ok) =>
-        Effect.sync(() => {
-          if (!ok) process.exitCode = 1
-        })
-      ),
-      Effect.provide(NodeContext.layer)
-    )
+    program.pipe(Effect.provide(NodeContext.layer)),
+    { teardown: (exit, onExit) => onExit(Exit.isSuccess(exit) && exit.value === true ? 0 : 1) }
   )
 }
 export const absolute = (path: string) => resolve(path)

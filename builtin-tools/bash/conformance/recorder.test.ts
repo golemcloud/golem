@@ -3,24 +3,29 @@ import { expect, test } from "bun:test"
 import { Effect, Inspectable, Schema, Sink, Stream } from "effect"
 import { join } from "node:path"
 import { program } from "./conformance.ts"
-import { Golden } from "./model.ts"
+import { Golden, hash } from "./model.ts"
 import { here } from "./platform.ts"
 
-async function recordInMemory(name: string, answers: readonly [string, string] = ["ok\n", "ok\n"]) {
+async function recordInMemory(
+  name: string,
+  answers: readonly [string, string] = ["ok\n", "ok\n"],
+  existing?: string
+) {
   const writes = new Map<string, string>()
+  const goldenPath = join(here, "goldens", "adversarial.json")
   let oracleCalls = 0
   const fs = FileSystem.makeNoop({
     readDirectory: () => Effect.succeed(["adversarial.json"]),
     readFile: () => Effect.succeed(Buffer.from("test Dockerfile")),
-    readFileString: () =>
+    readFileString: (path) =>
       Effect.succeed(
-        JSON.stringify({
+        path === goldenPath ? existing ?? "" : JSON.stringify({
           description: "reproducer",
           tier: "pr",
-          cases: [{ name, script: "echo ok", tags: [], options: {} }]
+          cases: [name, "untouched"].map((name) => ({ name, script: "echo ok", tags: [], options: {} }))
         })
       ),
-    exists: () => Effect.succeed(false),
+    exists: (path) => Effect.succeed(path === goldenPath && existing !== undefined),
     writeFileString: (path, data) =>
       Effect.sync(() => {
         writes.set(path, data)
@@ -63,6 +68,7 @@ async function recordInMemory(name: string, answers: readonly [string, string] =
   )
   return {
     ok,
+    text: writes.get(goldenPath),
     golden: Schema.decodeUnknownSync(Schema.parseJson(Golden))(
       writes.get(join(here, "goldens", "adversarial.json"))!
     )
@@ -86,4 +92,22 @@ test("record rejects inconsistent oracle answers without writing a case", async 
   ])
   expect(ok).toBe(false)
   expect(golden.cases.has("unstable")).toBe(false)
+})
+
+test("re-recording an unchanged case preserves the golden bytes including unselected entries", async () => {
+  const entry = { script: hash("echo ok"), status: 0, stderr: { text: "" }, stdout: { text: "ok\n" } }
+  const original = JSON.stringify(
+    {
+      cases: {
+        selected: entry,
+        untouched: { script: hash("echo ok"), status: 19, stderr: { base64: "/wA=" }, stdout: { text: "untouched\n" } }
+      },
+      oracle: { dockerfile: hash("test Dockerfile"), profile: "d2542338f5646f8f" }
+    },
+    null,
+    1
+  ) + "\n"
+  const result = await recordInMemory("selected", ["ok\n", "ok\n"], original)
+  expect(result.ok).toBe(true)
+  expect(result.text).toBe(original)
 })

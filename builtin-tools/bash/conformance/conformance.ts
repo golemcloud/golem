@@ -126,7 +126,7 @@ export const loadCases = Effect.fn("conformance.loadCases")(function*(directory 
   return cases
 })
 
-// Keep the oracle environment fingerprint independent of object insertion order.
+// Match Python's json.dumps(sort_keys=True) bytes used by the recorded profile fingerprint.
 type ProfileValue = string | { readonly [key: string]: ProfileValue }
 function profileJson(value: ProfileValue): string {
   if (typeof value === "object") {
@@ -150,6 +150,7 @@ export const oracleFingerprint = Effect.gen(function*() {
         env: golemEnv,
         oracle_env: oracleEnv,
         user: oracleUser,
+        // Change the setup version when filesystem setup changes oracle answers.
         setup: "writable-root-v2"
       })
     )
@@ -223,7 +224,13 @@ export const runOurs = (c: Case, compiled: string, wasmtime: string) =>
         )
       return {
         ...result,
-        status: yield* attempt(() => wasmStatus(result.status, status))
+        status: yield* attempt(() => wasmStatus(result.status, status)).pipe(
+          Effect.mapError((error) =>
+            new ValidationError({
+              message: `${error.message}; stderr=${JSON.stringify(result.stderr)}`
+            })
+          )
+        )
       }
     })
   )
@@ -235,32 +242,31 @@ const buildOracle = (image: string) =>
   )
 const oracle = Effect.fn("conformance.oracle")(function*(image: string) {
   const name = `golem-conformance-${randomUUID().slice(0, 12)}`
-  yield* Effect.acquireRelease(
-    runChecked(
-      [
-        "docker",
-        "run",
-        "-d",
-        "--rm",
-        "--name",
-        name,
-        "--user",
-        oracleUser,
-        "--network",
-        "none",
-        "--workdir",
-        "/",
-        "--entrypoint",
-        "sleep",
-        image,
-        "infinity"
-      ],
-      120
-    ),
-    () =>
-      runChecked(["docker", "rm", "-f", name], 60).pipe(
-        Effect.catchAll((error) => Console.error(`oracle cleanup ${name}: ${error}`))
-      )
+  yield* Effect.addFinalizer(() =>
+    runChecked(["docker", "rm", "-f", name], 60).pipe(
+      Effect.catchAll((error) => Console.error(`oracle cleanup ${name}: ${error}`))
+    )
+  )
+  yield* runChecked(
+    [
+      "docker",
+      "run",
+      "-d",
+      "--rm",
+      "--name",
+      name,
+      "--user",
+      oracleUser,
+      "--network",
+      "none",
+      "--workdir",
+      "/",
+      "--entrypoint",
+      "sleep",
+      image,
+      "infinity"
+    ],
+    120
   )
   const root = (script: string) => runChecked(["docker", "exec", "-u", "0", name, "sh", "-c", script])
   const initial = yield* root("chmod 1777 / && ls -A /")
@@ -583,6 +589,7 @@ export const program = Effect.fn("conformance.program")(function*(argv: string[]
   const runs = yield* Effect.forEach(Array.from({ length: args.runs }), () => runOracle(cases, args))
   let failures = 0
   let recorded = 0
+  const names = new Set(all.map((c) => c.name))
   for (const [corpus, old] of new Map(cases.map((c) => [c.corpus, c.golden]))) {
     const entries = new Map<string, Outcome & { script: string }>(
       old.oracle?.dockerfile === fingerprint.dockerfile &&
@@ -613,14 +620,14 @@ export const program = Effect.fn("conformance.program")(function*(argv: string[]
       entries.set(c.name, { ...first, script: hash(c.script) })
       recorded++
     }
-    const names = new Set(all.map((c) => c.name))
     const data = {
-      oracle: fingerprint,
       cases: Object.fromEntries(
         [...entries]
           .filter(([n]) => names.has(n))
           .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      )
+          .map(([name, { script, status, stderr, stdout }]) => [name, { script, status, stderr, stdout }])
+      ),
+      oracle: fingerprint
     }
     yield* writeJson(join(here, "goldens", `${corpus}.json`), data)
   }
