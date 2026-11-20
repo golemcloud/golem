@@ -7,10 +7,10 @@ import "golem/component/agent_files.proto";
 import "golem/component/plugin.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
+import "golem/component/owner_config.proto";
 import "golem/common/empty.proto";
 import "golem/schema/agent.proto";
 import "golem/tool/tool.proto";
-import "golem/worker/agent_config.proto";
 
 message KnownExports {
   optional string agent_guest_interface = 1;
@@ -38,7 +38,7 @@ message ComponentMetadata {
 
 message ComponentProvisionConfig {
   map<string, string> env = 1;
-  repeated golem.worker.TypedAgentConfigEntry config = 2;
+  OwnerConfig config = 2;
   repeated PluginInstallation plugins = 3;
   repeated InitialAgentFile files = 4;
   bytes initial_permissions = 5;

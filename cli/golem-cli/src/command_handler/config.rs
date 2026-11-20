@@ -47,29 +47,60 @@ impl ConfigCommandHandler {
     }
 
     pub async fn handle_command(&self, command: ConfigSubcommand) -> anyhow::Result<()> {
-        let (component_name, agent_type_name, path) = match &command {
+        match command {
             ConfigSubcommand::List {
                 component,
                 agent_type,
-            } => (component.clone(), agent_type.clone(), None),
-            ConfigSubcommand::Get { field, component } => match component {
-                Some(component) => (
-                    Some(component.clone()),
-                    None,
-                    Some(field.split('.').map(str::to_owned).collect::<Vec<_>>()),
-                ),
-                None => {
-                    let Some((owner, path)) = field.split_once('.') else {
-                        bail!("Use an exact agent-type.field path, or --component NAME FIELD");
-                    };
-                    (
-                        None,
-                        Some(AgentTypeName(owner.into())),
-                        Some(path.split('.').map(str::to_owned).collect::<Vec<_>>()),
-                    )
-                }
-            },
+            } => self.cmd_list(component, agent_type).await,
+            ConfigSubcommand::Get { field, component } => self.cmd_get(field, component).await,
+        }
+    }
+
+    async fn cmd_list(
+        &self,
+        component: Option<ComponentName>,
+        agent_type: Option<AgentTypeName>,
+    ) -> anyhow::Result<()> {
+        let fields = self.prepare_fields(component, agent_type, false).await?;
+        self.ctx
+            .log_handler()
+            .log_output(ConfigListView { fields })?;
+        Ok(())
+    }
+
+    async fn cmd_get(&self, field: String, component: Option<ComponentName>) -> anyhow::Result<()> {
+        let (agent_type, path) = if component.is_some() {
+            (None, crate::args::parse_agent_config_path(&field)?)
+        } else {
+            let Some((owner, path)) = field.split_once('.') else {
+                bail!("Use an exact agent-type.field path, or --component NAME FIELD");
+            };
+            (
+                Some(AgentTypeName(owner.into())),
+                crate::args::parse_agent_config_path(path)?,
+            )
         };
+        let component_only = agent_type.is_none();
+        let fields = self
+            .prepare_fields(component, agent_type, component_only)
+            .await?;
+        let mut matches = fields.into_iter().filter(|field| field.path == path);
+        let Some(field) = matches.next() else {
+            bail!("No static config declaration at '{}'", path.join("."));
+        };
+        if matches.next().is_some() {
+            bail!("Config path is ambiguous; select its component explicitly");
+        }
+        self.ctx.log_handler().log_output(ConfigGetView { field })?;
+        Ok(())
+    }
+
+    async fn prepare_fields(
+        &self,
+        component_name: Option<ComponentName>,
+        agent_type_name: Option<AgentTypeName>,
+        component_only: bool,
+    ) -> anyhow::Result<Vec<StaticConfigFieldView>> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
         let components = app_ctx
@@ -102,28 +133,14 @@ impl ConfigCommandHandler {
                 &agent_types,
                 |owner| match agent_type_name.as_ref() {
                     Some(selected) => owner == Some(selected),
-                    None => path.is_none() || owner.is_none(),
+                    None => !component_only || owner.is_none(),
                 },
             )?);
         }
         if !owner_found {
             bail!("Agent type '{}' is not declared", agent_type_name.unwrap());
         }
-        if let Some(path) = path {
-            let mut matches = fields.into_iter().filter(|field| field.path == path);
-            let Some(field) = matches.next() else {
-                bail!("No static config declaration at '{}'", path.join("."));
-            };
-            if matches.next().is_some() {
-                bail!("Config path is ambiguous; select its component explicitly");
-            }
-            self.ctx.log_handler().log_output(ConfigGetView { field })?;
-        } else {
-            self.ctx
-                .log_handler()
-                .log_output(ConfigListView { fields })?;
-        }
-        Ok(())
+        Ok(fields)
     }
 }
 

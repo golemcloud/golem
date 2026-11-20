@@ -87,7 +87,42 @@ Use source tracing when you need to see which manifest layer supplied a componen
 golem component manifest-trace
 ```
 
-The current command prints the property trace for every component.
+The command prints the property trace for every component. By default it reads
+only the manifest. Config appears as ordered `properties.configInputs` with its
+source file, path and layer. These are inputs, not schema-validated effective
+values: a catalog selector or a union case can replace inherited config.
+
+After building the components, add `--resolved` to include schema-validated static
+config values and their provenance, including code defaults:
+
+```shell copy
+golem component manifest-trace --resolved
+```
+
+Both modes show the same manifest inputs and traces for other properties.
+`resolvedConfig` is `null` in the default mode and an array in resolved mode,
+including an empty array if there are no static declarations. Resolved mode uses
+local built component metadata and evaluates manifest environment substitutions,
+just like `golem config list` and staging. It does not build components, contact
+the deployed application, or inspect agent creation overrides. Missing or invalid
+build output is an error; the command does not fall back to manifest-only mode.
+
+Config payloads are masked by default. `--show-secrets` reveals them; use it only
+in a trusted terminal and do not share credential-bearing output.
+
+Static config is captured in each prepared component or agent revision. A new
+declarative preparation resolves the current code defaults below the manifest
+layers; it does not reuse the previous revision's captures as overrides. Existing
+revisions keep their values. Agent creation overrides remain separately recorded.
+An API PATCH that omits config preserves the stored captures instead of preparing
+new values.
+
+Stored owner config has one path-addressed `entries` collection. Each delivered
+entry contains a `captured` source with a native schema and value. The optional
+`sourceMeta` sibling holds audit hints only: it does not affect execution,
+authorization, replay or the deployment diff. Platform settings such as files,
+environment variables, permissions and plugins retain their typed sibling fields.
+This static path does not materialize managed bindings or File/Tool descriptors.
 
 ## Start the local server
 

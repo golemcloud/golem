@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::layer::Layer;
-use crate::model::cascade::property::Property;
+use golem_common::cascade::layer::Layer;
+use golem_common::cascade::property::Property;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_derive::Deserialize;
@@ -170,8 +170,8 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
 #[cfg(test)]
 mod test {
     use super::{MapMergeMode, MapProperty};
-    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::test_support::TestLayer;
+    use golem_common::cascade::property::Property;
     use indexmap::IndexMap;
     use test_r::test;
 

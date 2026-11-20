@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::cascade::layer::Layer;
-use crate::model::cascade::property::Property;
+use golem_common::cascade::layer::Layer;
+use golem_common::cascade::property::Property;
 use serde::Serialize;
 use serde_derive::Deserialize;
 
@@ -147,8 +147,8 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
 #[cfg(test)]
 mod test {
     use super::{VecMergeMode, VecProperty};
-    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::test_support::TestLayer;
+    use golem_common::cascade::property::Property;
     use test_r::test;
 
     #[test]
