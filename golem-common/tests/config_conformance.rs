@@ -235,6 +235,15 @@ async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()>
     .await
 }
 
+#[test]
+async fn effect_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
+    check_reference_metadata(
+        "../test-components/golem_it_permissions_effect.wasm",
+        "EffectStaticDefaultsAgent",
+    )
+    .await
+}
+
 async fn check_reference_metadata(component: &str, agent_type: &str) -> anyhow::Result<()> {
     let corpus: Corpus =
         serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;

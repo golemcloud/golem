@@ -129,5 +129,6 @@ export default defineConfig({
   },
   resolve: {
     alias: golemAliases,
+    dedupe: ["effect"],
   },
 })

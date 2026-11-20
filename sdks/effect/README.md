@@ -280,12 +280,14 @@ RPC overrides.
 
 ```ts
 import { Effect, Redacted, Schema } from "effect"
-import { defineAgent, defineConfig, method } from "@golemcloud/effect-golem"
+import { Config, defineAgent, defineConfig, method } from "@golemcloud/effect-golem"
 
 class ServiceConfig extends defineConfig("Service.Config", {
-  endpoint: Schema.String,
+  endpoint: Config.static(Schema.String, { defaultValue: "https://example.test" }),
   apiKey: Schema.Redacted(Schema.String),
-  tuning: Schema.Struct({ retries: Schema.Number }),
+  tuning: Config.static(Schema.Struct({ retries: Schema.Number }), {
+    defaultValue: { retries: 2 },
+  }),
 }) {}
 
 const Service = defineAgent({
@@ -321,7 +323,42 @@ yield *
   )
 ```
 
-Config is never stored in snapshots. Restoration reads current host values.
+`Config.static(schema, { defaultValue })` declares one whole static value. Its record fields do not
+become config path segments. The SDK exports the default as canonical schema JSON in the agent
+metadata. The host fills missing settings below deployment and creation values. Invalid supplied
+values and broken catalog selectors fail; reads never fall back to the code default. Omit the
+options to declare no default. An explicit null default is distinct from no default. Defaults must
+be schema-valid data, with no capabilities, schema factories, decoding defaults or transformations.
+The SDK projects config fields and union discriminator fields to lowerCamelCase in metadata,
+defaults and creation values. Native service properties and method schemas retain their names.
+Colliding names and reserved `$` fields are rejected. Recursive records and optional tuple
+positions retain their shape. Catalog paths are exact and are not recased by the SDK.
+
+`defineConfig` returns an explicit Context service and a `.layer`. Setting an agent's `config`
+provides that service during initialization, invocation and snapshot hooks. User Layers can depend
+on it normally; `.layer` can also construct the service within the current agent owner context.
+Static reads obtain the host capture for the current owner revision, without an SDK value cache.
+Values saved by application code remain application state. Retaining a service or a memoized Layer and
+using it for another owner fails instead of returning the previous owner's values. Constructing
+static access outside an agent owner context also fails when read.
+
+Config is never stored in SDK snapshots. Restoration obtains the host's recorded owner capture,
+not a new SDK-local evaluation of defaults.
+
+The focused real guest in `integration-test/components/static-config/src/main.ts` declares
+the common config corpus's reference schema. Its `read` method returns canonical JSON (the choice
+is a string, not Rust's enum wrapper). Build the SDK template first, then from `integration-test`:
+
+```sh
+npm ci
+golem --local --yes --app-manifest-path static-config.golem.yaml build
+```
+
+The manifest supplies deployment settings. Creation overrides can supply
+`{ settings: { label: "creation", count: 59 } }` through the typed client's `overrides` option.
+With those overrides, `read` returns
+`{"settings":{"label":"creation","count":59},"choice":"selected:value","slots":[null,7,"retained"],"omitted":null}`.
+Building this component alone does not verify deployment, host resolution or executor reconstruction.
 
 ## Snapshots and restoration
 
