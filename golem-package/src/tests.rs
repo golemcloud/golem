@@ -148,14 +148,14 @@ struct MemoryEffects {
 
 #[async_trait::async_trait]
 impl PackageEffects for MemoryEffects {
-    fn authorize_file(&self, _: &str, _: &FilePin) -> anyhow::Result<()> {
+    fn authorize(&self, _: &str, _: &FilePin) -> anyhow::Result<()> {
         ensure!(!self.deny_source, "Source denied");
         Ok(())
     }
     async fn cached(&mut self, digest: &str, _: u64) -> anyhow::Result<Option<Vec<u8>>> {
         Ok(self.cache.get(digest).cloned())
     }
-    async fn fetch_file(&mut self, _: &FilePin, _: u64) -> anyhow::Result<Vec<u8>> {
+    async fn fetch(&mut self, _: &FilePin, _: u64) -> anyhow::Result<Vec<u8>> {
         self.source.take().context("Source is unavailable")
     }
     async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
@@ -228,6 +228,38 @@ async fn expansion_verifies_cache_and_materializes_ordinary_declarations() {
             .contains("Source denied")
     );
     assert!(effects.files.is_empty());
+}
+
+#[test]
+async fn expansion_refuses_a_replacement_at_the_locked_url() {
+    let (spec, mut blobs) = sample();
+    let (digest, _) = pack(&spec, &blobs).unwrap();
+    let mut replacement = spec;
+    replacement.components.values_mut().next().unwrap().wasm =
+        add_blob(&mut blobs, WASM, vec![9]).digest;
+    let (replacement_digest, bytes) = pack(&replacement, &blobs).unwrap();
+    assert_ne!(digest, replacement_digest);
+    let pins = Pins::from([(
+        "example".into(),
+        FilePin {
+            source: "https://example.com/package.tar".into(),
+            version: "1.2.3".into(),
+            digest,
+        },
+    )]);
+    let mut effects = MemoryEffects {
+        source: Some(bytes),
+        ..Default::default()
+    };
+    let error = expand(&pins, &pins, Path::new("unpack"), &mut effects)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Package digest mismatch") && error.contains(&replacement_digest),
+        "{error}"
+    );
+    assert!(effects.cache.is_empty() && effects.files.is_empty());
 }
 
 #[test]

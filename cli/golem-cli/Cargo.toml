@@ -59,6 +59,7 @@ crossbeam-channel = { workspace = true }
 crossterm = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
+docker_credential = { workspace = true }
 dotenvy = { workspace = true }
 fd-lock = { workspace = true }
 fs_extra = { workspace = true }
@@ -67,6 +68,7 @@ fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
 hmac = { workspace = true }
 http = { workspace = true }
+http-auth = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -77,6 +79,7 @@ itertools = { workspace = true }
 jsonschema = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
+oci-spec = { workspace = true }
 phf = { workspace = true }
 poem = { workspace = true }
 portable-pty = { workspace = true }
@@ -160,6 +163,7 @@ golem-common = { workspace = true, features = ["proptest"] }
 golem-model-mock = { workspace = true }
 golem-native-tool = { workspace = true }
 log = { workspace = true }
+oci-client = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
@@ -167,6 +171,7 @@ reqwest = { workspace = true }
 rmcp = { workspace = true, features = ["client", "transport-child-process"] }
 sqlx = { workspace = true }
 syn = { workspace = true, features = ["full", "parsing"] }
+testcontainers = { workspace = true }
 test-r = { workspace = true }
 tokio-rustls = { workspace = true }
 wat = { workspace = true }

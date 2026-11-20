@@ -38,7 +38,7 @@ test_r::enable!();
 const ARTIFACT: &str = "application/vnd.golem.package.v1";
 const CONFIG: &str = "application/vnd.golem.package.config.v1+json";
 const INDEX: &str = "application/vnd.oci.image.index.v1+json";
-const MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
+pub const MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
 pub const WASM: &str = "application/wasm";
 pub const INITIAL_FILES: &str = "application/vnd.golem.package.initial-files.v1.tar";
 pub const FILE: &str = "application/vnd.golem.package.file.v1";
@@ -737,7 +737,65 @@ pub fn write_tar(entries: &BTreeMap<String, impl AsRef<[u8]>>) -> anyhow::Result
     Ok(archive.into_inner()?)
 }
 
-fn archive_entries(input: impl Read) -> anyhow::Result<BTreeMap<String, Vec<u8>>> {
+type ArchiveEntries = BTreeMap<String, Vec<u8>>;
+
+/// Rebuilds the archive envelope without serializing the registry's manifest again.
+/// The caller passes the completed archive to `read` for package validation.
+pub fn registry_archive(
+    manifest: &[u8],
+) -> anyhow::Result<(ArchiveEntries, BTreeMap<String, u64>)> {
+    let root = describe(MANIFEST, manifest);
+    let manifest_path = blob_path(&root.digest)?;
+    let parsed: OciManifest = parse(manifest, &manifest_path)?;
+    ensure!(
+        parsed.schema_version == 2
+            && parsed.media_type == MANIFEST
+            && parsed.artifact_type == ARTIFACT
+            && parsed.config.media_type == CONFIG,
+        "Invalid Golem package manifest"
+    );
+    let entries = BTreeMap::from([
+        (manifest_path, manifest.to_vec()),
+        (
+            "oci-layout".into(),
+            br#"{"imageLayoutVersion":"1.0.0"}"#.to_vec(),
+        ),
+        (
+            "index.json".into(),
+            canonical_json(&OciIndex {
+                schema_version: 2,
+                media_type: INDEX.into(),
+                manifests: vec![root],
+            })?,
+        ),
+    ]);
+    let mut blobs = BTreeMap::new();
+    for descriptor in std::iter::once(parsed.config).chain(parsed.layers) {
+        let path = blob_path(&descriptor.digest)?;
+        ensure!(!entries.contains_key(&path), "Invalid package blob {path}");
+        if let Some(size) = blobs.insert(path, descriptor.size) {
+            ensure!(size == descriptor.size, "Conflicting package blob sizes");
+        }
+    }
+    ensure!(
+        entries.len() + blobs.len() <= MAX_ENTRIES,
+        "Too many package blobs"
+    );
+    let mut remaining = MAX_PACKAGE_BYTES - 1024; // Two end-of-archive blocks.
+    for size in entries
+        .values()
+        .map(|bytes| bytes.len() as u64)
+        .chain(blobs.values().copied())
+    {
+        ensure!(size <= remaining, "Package size limit exceeded");
+        remaining = remaining
+            .checked_sub(512 + size.div_ceil(512) * 512)
+            .context("Package size limit exceeded")?;
+    }
+    Ok((entries, blobs))
+}
+
+fn archive_entries(input: impl Read) -> anyhow::Result<ArchiveEntries> {
     archive_entries_with_limit(input, MAX_ENTRIES)
 }
 
