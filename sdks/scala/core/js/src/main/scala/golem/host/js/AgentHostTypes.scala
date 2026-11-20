@@ -58,6 +58,9 @@ object JsRpcError {
 
   def remoteAgentError(error: JsSchemaAgentError): JsRpcError =
     JsShape.tagged[JsRpcError]("remote-agent-error", error)
+
+  def conflict(message: String): JsRpcError =
+    JsShape.tagged[JsRpcError]("conflict", message.asInstanceOf[js.Any])
 }
 
 // --- Datetime (wasi:clocks/system-clock@0.3.0) ---
@@ -103,6 +106,8 @@ object JsEnvironmentId {
 @js.native
 sealed trait JsAgentMetadata extends js.Object {
   def agentId: JsAgentId                          = js.native
+  def agentTypeName: js.UndefOr[String]           = js.native
+  def fingerprint: JsUuid                         = js.native
   def args: js.Array[String]                      = js.native
   def env: js.Array[js.Tuple2[String, String]]    = js.native
   def config: js.Array[js.Tuple2[String, String]] = js.native
@@ -112,16 +117,11 @@ sealed trait JsAgentMetadata extends js.Object {
   def environmentId: JsEnvironmentId              = js.native
 }
 
-@js.native
-private[golem] sealed trait JsAgentMetadataRuntime extends JsAgentMetadata {
-  def agentType: js.UndefOr[String]          = js.native
-  def agentName: js.UndefOr[String]          = js.native
-  def componentId: js.UndefOr[JsComponentId] = js.native
-}
-
 object JsAgentMetadata {
   def apply(
     agentId: JsAgentId,
+    agentTypeName: js.UndefOr[String],
+    fingerprint: JsUuid,
     args: js.Array[String],
     env: js.Array[js.Tuple2[String, String]],
     config: js.Array[js.Tuple2[String, String]],
@@ -133,6 +133,8 @@ object JsAgentMetadata {
     js.Dynamic
       .literal(
         "agentId"           -> agentId,
+        "agentTypeName"     -> agentTypeName,
+        "fingerprint"       -> fingerprint,
         "args"              -> args,
         "env"               -> env,
         "config"            -> config,
@@ -148,12 +150,12 @@ object JsAgentMetadata {
 
 @js.native
 sealed trait JsForkDetails extends js.Object {
-  def forkedPhantomId: JsUuid = js.native
+  def forkedAgentId: JsAgentId = js.native
 }
 
 object JsForkDetails {
-  def apply(forkedPhantomId: JsUuid): JsForkDetails =
-    js.Dynamic.literal("forkedPhantomId" -> forkedPhantomId).asInstanceOf[JsForkDetails]
+  def apply(forkedAgentId: JsAgentId): JsForkDetails =
+    js.Dynamic.literal("forkedAgentId" -> forkedAgentId).asInstanceOf[JsForkDetails]
 }
 
 @js.native
@@ -209,14 +211,14 @@ object JsRevertAgentTarget {
 // ---------------------------------------------------------------------------
 
 @js.native
-sealed trait JsAgentNameFilter extends js.Object {
+sealed trait JsAgentKeyFilter extends js.Object {
   def comparator: JsStringFilterComparator = js.native
   def value: String                        = js.native
 }
 
-object JsAgentNameFilter {
-  def apply(comparator: JsStringFilterComparator, value: String): JsAgentNameFilter =
-    js.Dynamic.literal("comparator" -> comparator, "value" -> value).asInstanceOf[JsAgentNameFilter]
+object JsAgentKeyFilter {
+  def apply(comparator: JsStringFilterComparator, value: String): JsAgentKeyFilter =
+    js.Dynamic.literal("comparator" -> comparator, "value" -> value).asInstanceOf[JsAgentKeyFilter]
 }
 
 @js.native
@@ -286,8 +288,8 @@ sealed trait JsAgentPropertyFilter extends js.Object {
 }
 
 object JsAgentPropertyFilter {
-  def name(filter: JsAgentNameFilter): JsAgentPropertyFilter =
-    JsShape.tagged[JsAgentPropertyFilter]("name", filter)
+  def key(filter: JsAgentKeyFilter): JsAgentPropertyFilter =
+    JsShape.tagged[JsAgentPropertyFilter]("key", filter)
 
   def status(filter: JsAgentStatusFilter): JsAgentPropertyFilter =
     JsShape.tagged[JsAgentPropertyFilter]("status", filter)

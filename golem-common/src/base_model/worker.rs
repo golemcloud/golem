@@ -17,7 +17,9 @@ use crate::base_model::component::{AgentFilePermissions, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::json::NormalizedJsonValue;
-use crate::base_model::oplog::{AgentResourceId, OplogErrorKind};
+use crate::base_model::oplog::{
+    AgentResourceId, OplogErrorKind, ReplayDivergence, UpdateFailureClass,
+};
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{
     AgentFingerprint, AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp,
@@ -78,13 +80,6 @@ declare_structs! {
         pub value: crate::schema::TypedSchemaValue
     }
 
-    pub struct AgentCreationRequest {
-        pub name: String,
-        pub env: HashMap<String, String>,
-        #[cfg_attr(feature = "full", oai(default))]
-        pub config: Vec<AgentConfigEntryDto>
-    }
-
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
@@ -108,6 +103,11 @@ declare_structs! {
         pub pending_update_index: Option<OplogIndex>,
         pub mode: AgentUpdateMode,
         pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
+        /// Why the update failed.
+        pub failure_class: UpdateFailureClass,
+        /// The first divergence from the recorded history, when the replay of the target
+        /// diverged at a recorded entry.
+        pub divergence: Option<Box<ReplayDivergence>>,
     }
 
     pub struct SnapshotAssistedUpdateMetadata {
@@ -128,11 +128,20 @@ declare_structs! {
     pub struct AgentMetadataDto {
         pub agent_id: AgentId,
         pub owner_kind: crate::base_model::agent::OwnerKind,
+        /// The name of the agent's type. Owners without an agent type have none.
+        pub agent_type_name: Option<crate::base_model::agent::AgentTypeName>,
+        /// The canonical key text of a keyed agent. An agent without a key has none.
+        pub canonical_key: Option<String>,
+        /// The canonical constructor parameter text of a component agent, without its type
+        /// name. Agents without a key have it too.
+        pub constructor_parameters: Option<String>,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
         pub config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
+        /// The folded status underneath `status`. Present only when `status` is `Sandboxed`.
+        pub underlying_status: Option<AgentStatus>,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
         pub pending_invocation_count: u64,

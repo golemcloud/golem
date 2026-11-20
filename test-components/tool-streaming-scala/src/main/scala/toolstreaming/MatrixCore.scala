@@ -1,6 +1,6 @@
 package toolstreaming
 
-import golem.{HostApi, Principal, UInt}
+import golem.{HostApi, InvocationContext, UInt}
 import golem.runtime.annotations.*
 import zio.blocks.schema.Schema
 
@@ -47,7 +47,7 @@ trait MatrixArtifactTool {
   def inspect(
     request: MatrixRequest,
     multiplier: Long,
-    principal: Principal
+    context: InvocationContext
   ): Either[MatrixError, MatrixResult]
 }
 
@@ -60,7 +60,7 @@ final class MatrixArtifactToolImpl extends MatrixArtifactTool {
   override def inspect(
     request: MatrixRequest,
     multiplier: Long,
-    principal: Principal
+    context: InvocationContext
   ): Either[MatrixError, MatrixResult] =
     if (request.source == "reject.me")
       Left(
@@ -84,10 +84,10 @@ final class MatrixArtifactToolImpl extends MatrixArtifactTool {
           principal = principal match {
             case Principal.Anonymous                             => "anonymous"
             case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
-            case Principal.Agent(_, _)                           => "agent"
+            case Principal.Agent(_)                              => "agent"
             case Principal.GolemUser(_)                          => "golem-user"
           },
-          ownerAgentId = HostApi.getSelfMetadata().agentId.agentId
+          ownerAgentId = HostApi.getSelfMetadata().agentId.toString
         )
       )
 }

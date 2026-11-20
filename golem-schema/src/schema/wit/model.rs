@@ -150,8 +150,7 @@ impl From<wire::CardId> for CardId {
 impl From<&AgentId> for wire::AgentId {
     fn from(value: &AgentId) -> Self {
         Self {
-            component_id: (&value.component_id).into(),
-            agent_id: value.agent_id.clone(),
+            uuid: uuid_to_wire(&value.uuid),
         }
     }
 }
@@ -164,7 +163,7 @@ impl From<AgentId> for wire::AgentId {
 
 impl From<&wire::AgentId> for AgentId {
     fn from(value: &wire::AgentId) -> Self {
-        Self::new((&value.component_id).into(), value.agent_id.clone())
+        Self::new(uuid_from_wire(&value.uuid))
     }
 }
 

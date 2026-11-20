@@ -24,14 +24,14 @@ use test_r::{test, timeout};
 const API: [&str; 2] = ["p2", "p3"];
 
 /// A TCP peer that counts the connections it accepts.
-struct CountingPeer {
-    address: std::net::SocketAddr,
+pub(super) struct CountingPeer {
+    pub(super) address: std::net::SocketAddr,
     accepted: Arc<AtomicUsize>,
     _task: tokio_util::task::AbortOnDropHandle<()>,
 }
 
 impl CountingPeer {
-    async fn start(address: &str) -> anyhow::Result<Self> {
+    pub(super) async fn start(address: &str) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(address).await?;
         let address = listener.local_addr()?;
         let accepted = Arc::new(AtomicUsize::new(0));
@@ -49,7 +49,7 @@ impl CountingPeer {
         })
     }
 
-    fn accepted(&self) -> usize {
+    pub(super) fn accepted(&self) -> usize {
         self.accepted.load(Ordering::SeqCst)
     }
 }
@@ -65,7 +65,7 @@ fn network_permission(resource: &str) -> PolymorphicPermissionPattern {
         .expect("valid test network permission")
 }
 
-async fn networking_component(
+pub(super) async fn networking_component(
     executor: &TestWorkerExecutor,
     context: &TestContext,
     host_api_tests: &PrecompiledComponent,
@@ -90,7 +90,7 @@ async fn networking_component(
         .await
 }
 
-async fn socket_operation(
+pub(super) async fn socket_operation(
     executor: &TestWorkerExecutor,
     component: &ComponentDto,
     agent: &golem_common::model::agent::ParsedAgentKey,
@@ -109,7 +109,7 @@ async fn socket_operation(
         .into_typed::<Result<String, String>>()
 }
 
-fn assert_denied(result: &Result<String, String>, what: &str) {
+pub(super) fn assert_denied(result: &Result<String, String>, what: &str) {
     assert!(
         result
             .as_ref()
@@ -140,7 +140,7 @@ async fn agent_sockets_never_listen_and_bind_only_port_zero_or_loopback(
     let authority = Arc::new(ScopeCardAuthority::default());
     let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
     let component = networking_component(&executor, &context, host_api_tests, &[]).await?;
-    let agent = agent_id!("Networking", "socket-policy-binds");
+    let agent = agent_key!("Networking", "socket-policy-binds");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -199,7 +199,7 @@ async fn wildcard_network_grants_do_not_reach_internal_socket_destinations(
     let peer = CountingPeer::start("127.0.0.1:0").await?;
     let component =
         networking_component(&executor, &context, host_api_tests, &["*".to_string()]).await?;
-    let agent = agent_id!("Networking", "socket-policy-wildcard");
+    let agent = agent_key!("Networking", "socket-policy-wildcard");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -270,7 +270,7 @@ async fn named_network_grants_reach_internal_socket_destinations_except_refused_
         format!("[::1]:{grpc_port}"),
     ];
     let component = networking_component(&executor, &context, host_api_tests, &grants).await?;
-    let agent = agent_id!("Networking", "socket-policy-named");
+    let agent = agent_key!("Networking", "socket-policy-named");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -421,7 +421,7 @@ async fn exact_hostname_grants_reach_the_addresses_of_recorded_lookups(
             &["localhost".to_string()],
         )
         .await?;
-        let agent = agent_id!("Networking", format!("socket-policy-links-{lookup_api}"));
+        let agent = agent_key!("Networking", format!("socket-policy-links-{lookup_api}"));
         configure_scope_card_root(&authority, &component, &agent)?;
         let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -500,7 +500,7 @@ async fn wildcard_grants_do_not_reach_internal_addresses_through_links(
     let peer = CountingPeer::start("127.0.0.1:0").await?;
     let component =
         networking_component(&executor, &context, host_api_tests, &["*".to_string()]).await?;
-    let agent = agent_id!("Networking", "socket-policy-wildcard-links");
+    let agent = agent_key!("Networking", "socket-policy-wildcard-links");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -565,7 +565,7 @@ async fn hostname_links_are_rebuilt_after_snapshot_recovery(
         })
         .store()
         .await?;
-    let agent = agent_id!("SocketSession", "socket-policy-snapshot-links");
+    let agent = agent_key!("SocketSession", "socket-policy-snapshot-links");
     configure_scope_card_root(&authority, &component, &agent)?;
     let worker = executor.start_agent(&component.id, agent.clone()).await?;
 
@@ -595,8 +595,8 @@ async fn hostname_links_are_rebuilt_after_snapshot_recovery(
         .await?;
     crate::hot_update::wait_for_snapshot_after(&executor, &worker, before_close).await?;
 
-    // The recovery loads the snapshot, so it does not replay the lookup: only the rebuild from
-    // the history before the snapshot gives the connect its link.
+    // The recovery loads the snapshot, so it does not replay the lookup: only the links that
+    // the status record folded from the oplog give the connect its link.
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
     let mut events = executor.capture_output(&worker).await?;

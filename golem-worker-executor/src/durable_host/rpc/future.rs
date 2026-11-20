@@ -27,8 +27,11 @@ use crate::durable_host::concurrent::finish_span_in_memory;
 use crate::durable_host::concurrent::try_agent_auth_ctx_at_serialized_access;
 use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::durability::InternalRetryResult;
+use crate::durable_host::durability::retry_backoff_waits_durably;
 use crate::durable_host::durable_session::strip_streams;
 use crate::durable_host::durable_stream::SessionError;
+use crate::durable_host::rpc::execution::classify_rpc_error;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
 use crate::preview2::golem::agent::host::FutureInvokeResult;
 use crate::preview2::golem::agent::host::HostFutureInvokeResult;
@@ -38,7 +41,6 @@ use crate::services::rpc::RpcError as InternalRpcError;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::AgentFingerprint;
-use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
@@ -52,11 +54,52 @@ use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
 use std::any::Any;
+use std::sync::Arc;
 use wasmtime::component::Accessor;
 use wasmtime::component::HasSelf;
 use wasmtime::component::Resource;
 use wasmtime::component::ResourceTableError;
+
+/// Whether `get` sends the call again after it waited out a retry backoff.
+///
+/// The background task retries a transient failure inline only up to
+/// `max_in_function_retry_delay`. When the call can wait durably, a longer backoff is waited out
+/// here, through the runtime timer of the call: the `Error` entry records when it retries, and the
+/// suspension coordinator can suspend the agent meanwhile. The new attempt uses the same key.
+/// Otherwise the failure stays the recorded result, as before.
+async fn retry_after_backoff<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    handle: &mut FutureInvokeCallHandle,
+    mut properties: golem_common::model::RetryProperties,
+    result: &Result<SchemaValue, InternalRpcError>,
+) -> anyhow::Result<bool>
+where
+    U: 'static,
+    Ctx: WorkerCtx,
+{
+    let Err(error) = result else {
+        return Ok(false);
+    };
+    if classify_rpc_error(error) != HostFailureKind::Transient
+        || !retry_backoff_waits_durably(accessor, accessor.getter())
+    {
+        return Ok(false);
+    }
+    // The same properties the background task resolved its policy with.
+    accessor.with(|mut access| access.get().state.enrich_retry_properties(&mut properties));
+    let decision = handle
+        .try_trigger_retry_or_loop_context(
+            accessor,
+            accessor.getter(),
+            result,
+            classify_rpc_error,
+            properties,
+        )
+        .await?;
+    Ok(decision == InternalRetryResult::RetryInternally)
+}
 
 fn internal_rpc_child_key(request_key: &InvocationRequestKey) -> anyhow::Result<IdempotencyKey> {
     match request_key {
@@ -175,11 +218,17 @@ async fn cancel_in_flight_get<T: Send + 'static, Ctx: WorkerCtx>(
             .await
             .map_err(SessionError::into_trap)?;
     }
-    let worker_proxy = accessor.with(|mut access| access.get().worker_proxy());
+    let (worker_proxy, remote_agent_id) = accessor.with(|mut access| {
+        let ctx = access.get();
+        (
+            ctx.worker_proxy(),
+            OwnedAgentId::new(ctx.owned_agent_id.environment_id, &request.remote_agent_id),
+        )
+    });
     match try_agent_auth_ctx_at_serialized_access(accessor, accessor.getter()).await {
         Ok(Some(auth_ctx)) => {
             if let Err(err) = worker_proxy
-                .cancel_invocation(&request.remote_agent_id, invocation_id.id(), &auth_ctx)
+                .cancel_invocation(&remote_agent_id, invocation_id.id(), &auth_ctx)
                 .await
             {
                 tracing::info!(err=%err, "Best-effort cancel_invocation failed");
@@ -246,7 +295,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 result: anyhow::Result<Result<Option<core_wire::SchemaValueTree>, RpcError>>,
             },
             /// The single durable call is still open; drive it to its `End`. `request`,
-            /// `remote_agent_id`, and `env` are carried so a replay that finds an incomplete `Start`
+            /// `remote_target`, and `env` are carried so a replay that finds an incomplete `Start`
             /// (crash-after-`Start`) can re-dispatch the read-only RPC and complete it.
             /// `cancel_token` is shared with the state left in the table: a concurrent
             /// `future-invoke-result::cancel` (which finds `handle: None` there) triggers it, and
@@ -257,13 +306,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 streaming: Option<DurableStreamingTaskParams>,
                 request: HostRequestGolemRpcInvoke,
                 invocation_id: OwnedInvocationId,
-                remote_agent_id: OwnedAgentId,
+                remote_target: crate::worker::target::ResolvedTarget,
                 env: Vec<(String, String)>,
                 config: Vec<AgentConfigEntryDto>,
                 deferred_activation: Option<RpcTargetActivation>,
                 expected_callee_fingerprint: Option<AgentFingerprint>,
+                retry_properties: golem_common::model::retry_policy::RetryProperties,
                 span_id: SpanId,
                 cancel_token: tokio_util::sync::CancellationToken,
+                retry_auth_ctx: Option<AuthCtx>,
             },
         }
 
@@ -310,13 +361,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                     streaming,
                     request,
                     invocation_id,
-                    remote_agent_id,
+                    remote_target,
                     env,
                     config,
                     deferred_activation,
                     expected_callee_fingerprint,
+                    retry_properties,
                     span_id,
                     cancel_token,
+                    retry_auth_ctx,
                 } => {
                     let handle = handle
                         .take()
@@ -327,13 +380,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         streaming: streaming.clone(),
                         request: request.clone(),
                         invocation_id: invocation_id.clone(),
-                        remote_agent_id: remote_agent_id.clone(),
+                        remote_target: remote_target.clone(),
                         env: env.clone(),
                         config: config.clone(),
                         deferred_activation: deferred_activation.clone(),
                         expected_callee_fingerprint: *expected_callee_fingerprint,
+                        retry_properties: retry_properties.clone(),
                         span_id: span_id.clone(),
                         cancel_token: cancel_token.clone(),
+                        retry_auth_ctx: retry_auth_ctx.clone(),
                     }
                 }
             })
@@ -347,13 +402,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 streaming,
                 request,
                 invocation_id,
-                remote_agent_id,
+                remote_target,
                 env,
                 config,
                 deferred_activation,
                 expected_callee_fingerprint,
+                retry_properties,
                 span_id,
                 cancel_token,
+                retry_auth_ctx,
             } => {
                 handle.close_span_on_cancellation(span_id.clone());
                 // The response crosses more guest-facing work after the durable `End` (span
@@ -363,89 +420,140 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 // records the `CompletionDiscarded` marker. The span closure is embedded in the
                 // same terminal as the response, so replay restores both from one durable fact.
                 let (response, delivery) = if handle.is_live() {
-                    let task =
+                    let mut task =
                         task.expect("a live future-invoke-result must own its background task");
-                    let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
-                        let ctx = access.get();
-                        let wait = accessor.runtime_activity().and_then(|activity| {
-                            ctx.runtime_suspension.as_ref().and_then(|runtime| {
-                                runtime.rpc_wait(
-                                    activity,
-                                    ctx.state.config.suspend.rpc_suspend_after,
-                                    ctx.state.config.suspend.rpc_resume_after,
-                                )
-                            })
+                    loop {
+                        let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
+                            let ctx = access.get();
+                            let wait = accessor.runtime_activity().and_then(|activity| {
+                                ctx.runtime_suspension.as_ref().and_then(|runtime| {
+                                    runtime.rpc_wait(
+                                        activity,
+                                        ctx.state.config.suspend.rpc_suspend_after,
+                                        ctx.state.config.suspend.rpc_resume_after,
+                                    )
+                                })
+                            });
+                            (wait, ctx.create_interrupt_signal())
                         });
-                        (wait, ctx.create_interrupt_signal())
-                    });
-                    let task_result = {
-                        let mut guard = task.lock().await;
-                        tokio::select! {
-                            biased;
-                            _ = cancel_token.cancelled() => None,
-                            result = async {
-                                let ready = &mut *guard;
-                                match rpc_wait {
-                                    Some(wait) => wait.wait_result(ready, interrupt_signal).await,
-                                    None => tokio::select! {
-                                        biased;
-                                        kind = interrupt_signal => Err(kind),
-                                        result = ready => Ok(result),
-                                    },
-                                }
-                            } => match result {
-                                Ok(result) => Some(result),
-                                Err(interrupt_kind) => {
-                                    drop(guard);
-                                    drop(task);
-                                    return Err(handle.trap(interrupt_kind));
-                                }
-                            },
-                        }
-                    };
-                    let task_result = match task_result {
-                        Some(result) => result,
-                        None => {
-                            // A concurrent `future-invoke-result::cancel` fired while this `get`
-                            // owned the handle. Drop the background task (aborting the in-flight
-                            // RPC), then cancel the durable call: best-effort remote cancellation
-                            // plus a `Cancelled` terminal carrying the partial "Invocation
-                            // cancelled" response, so replay delivers the same result here.
-                            drop(task);
-                            return cancel_in_flight_get(
-                                accessor,
-                                handle,
-                                &request,
-                                &invocation_id,
-                                streaming.as_ref(),
-                                &span_id,
-                                this_rep,
-                            )
-                            .await;
-                        }
-                    };
-                    match task_result {
-                        Ok(rpc_result) => {
-                            let rpc_result =
-                                admit_rpc_result_secret_holds(accessor, rpc_result).await?;
-                            let finish_span = rpc_span_finished(&span_id, &rpc_result);
-                            handle
-                                .complete_access_deferred_with_span(
+                        let task_result = {
+                            let mut guard = task.lock().await;
+                            tokio::select! {
+                                biased;
+                                _ = cancel_token.cancelled() => None,
+                                result = async {
+                                    let ready = &mut *guard;
+                                    match rpc_wait {
+                                        Some(wait) => wait.wait_result(ready, interrupt_signal).await,
+                                        None => tokio::select! {
+                                            biased;
+                                            kind = interrupt_signal => Err(kind),
+                                            result = ready => Ok(result),
+                                        },
+                                    }
+                                } => match result {
+                                    Ok(result) => Some(result),
+                                    Err(interrupt_kind) => {
+                                        drop(guard);
+                                        drop(task);
+                                        return Err(handle.trap(interrupt_kind));
+                                    }
+                                },
+                            }
+                        };
+                        let task_result = match task_result {
+                            Some(result) => result,
+                            None => {
+                                // A concurrent `future-invoke-result::cancel` fired while this `get`
+                                // owned the handle. Drop the background task (aborting the in-flight
+                                // RPC), then cancel the durable call: best-effort remote cancellation
+                                // plus a `Cancelled` terminal carrying the partial "Invocation
+                                // cancelled" response, so replay delivers the same result here.
+                                drop(task);
+                                return cancel_in_flight_get(
                                     accessor,
-                                    accessor.getter(),
-                                    HostResponseGolemRpcInvokeAndAwait {
-                                        result: rpc_result.map(strip_streams).map_err(Into::into),
-                                    },
-                                    finish_span,
+                                    handle,
+                                    &request,
+                                    &invocation_id,
+                                    streaming.as_ref(),
+                                    &span_id,
+                                    this_rep,
                                 )
-                                .await
-                                .map_err(anyhow::Error::from)?
-                        }
-                        Err(err) => {
-                            // The background RPC failed hard after its in-task retries. This is a
-                            // trap, not a durable result: abandon the call, leaving its `Start`
-                            // incomplete for durable-scope recovery, instead of recording an `End`.
-                            return Err(handle.trap(err));
+                                .await;
+                            }
+                        };
+                        match task_result {
+                            Ok(rpc_result) => {
+                                let retry = streaming.is_none()
+                                    && tokio::select! {
+                                        biased;
+                                        _ = cancel_token.cancelled() => {
+                                            return cancel_in_flight_get(
+                                                accessor,
+                                                handle,
+                                                &request,
+                                                &invocation_id,
+                                                streaming.as_ref(),
+                                                &span_id,
+                                                this_rep,
+                                            )
+                                            .await;
+                                        }
+                                        retry = retry_after_backoff(accessor, &mut handle, retry_properties.clone(), &rpc_result) => retry?,
+                                    };
+                                if retry {
+                                    let auth_ctx = retry_auth_ctx.clone().expect(
+                                        "a live future-invoke-result keeps its agent authority",
+                                    );
+                                    let retry_point = handle.trap_context().retry_from;
+                                    task = Arc::new(tokio::sync::Mutex::new(accessor.with(
+                                        |mut access| {
+                                            Ok::<_, anyhow::Error>(spawn_invoke_and_await_task(
+                                                access.get(),
+                                                &remote_target,
+                                                internal_rpc_child_key(&request.request_key)?,
+                                                request.method_name.clone(),
+                                                request.input.clone(),
+                                                env.clone(),
+                                                config.clone(),
+                                                deferred_activation.clone(),
+                                                expected_callee_fingerprint,
+                                                retry_properties.clone(),
+                                                &span_id,
+                                                retry_point,
+                                                handle.start_index(),
+                                                InvocationFreshnessDisposition::MayExist,
+                                                request.scope_card.clone(),
+                                                auth_ctx,
+                                            ))
+                                        },
+                                    )?));
+                                    continue;
+                                }
+                                let rpc_result =
+                                    admit_rpc_result_secret_holds(accessor, rpc_result).await?;
+                                let finish_span = rpc_span_finished(&span_id, &rpc_result);
+                                let completed = handle
+                                    .complete_access_deferred_with_span(
+                                        accessor,
+                                        accessor.getter(),
+                                        HostResponseGolemRpcInvokeAndAwait {
+                                            result: rpc_result
+                                                .map(strip_streams)
+                                                .map_err(Into::into),
+                                        },
+                                        finish_span,
+                                    )
+                                    .await
+                                    .map_err(anyhow::Error::from)?;
+                                break completed;
+                            }
+                            Err(err) => {
+                                // The background RPC failed hard after its in-task retries. This is a
+                                // trap, not a durable result: abandon the call, leaving its `Start`
+                                // incomplete for durable-scope recovery, instead of recording an `End`.
+                                return Err(handle.trap(err));
+                            }
                         }
                     }
                 } else {
@@ -462,14 +570,14 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // terminal was never written. A read-only `WriteRemote` call is safe to
                             // re-execute, so re-dispatch the RPC now and complete the existing `Start`
                             // (mirrors the synchronous path's `Incomplete` -> re-run).
-                            let retry_point = live.start_index();
+                            let retry_point = live.trap_context().retry_from;
                             let auth_ctx = live.take_agent_auth_ctx();
                             let mut task = accessor.with(|mut access| {
                                 let ctx = access.get();
                                 Ok::<_, anyhow::Error>(match streaming.clone() {
                                     Some(params) => spawn_streaming_invoke_and_await_task(
                                         ctx,
-                                        remote_agent_id.clone(),
+                                        remote_target.clone(),
                                         internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         params,
@@ -478,11 +586,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         deferred_activation.clone(),
                                         &span_id,
                                         request.scope_card.clone(),
-                                        auth_ctx,
+                                        auth_ctx.clone(),
                                     ),
                                     None => spawn_invoke_and_await_task(
                                         ctx,
-                                        &remote_agent_id,
+                                        &remote_target,
                                         internal_rpc_child_key(&request.request_key)?,
                                         request.method_name.clone(),
                                         request.input.clone(),
@@ -490,84 +598,130 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                         config.clone(),
                                         deferred_activation.clone(),
                                         expected_callee_fingerprint,
+                                        retry_properties.clone(),
                                         &span_id,
                                         retry_point,
+                                        live.start_index(),
                                         InvocationFreshnessDisposition::MayExist,
                                         request.scope_card.clone(),
-                                        auth_ctx,
+                                        auth_ctx.clone(),
                                     ),
                                 })
                             })?;
-                            let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
-                                let ctx = access.get();
-                                let wait = accessor.runtime_activity().and_then(|activity| {
-                                    ctx.runtime_suspension.as_ref().and_then(|runtime| {
-                                        runtime.rpc_wait(
-                                            activity,
-                                            ctx.state.config.suspend.rpc_suspend_after,
-                                            ctx.state.config.suspend.rpc_resume_after,
-                                        )
-                                    })
+                            loop {
+                                let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
+                                    let ctx = access.get();
+                                    let wait = accessor.runtime_activity().and_then(|activity| {
+                                        ctx.runtime_suspension.as_ref().and_then(|runtime| {
+                                            runtime.rpc_wait(
+                                                activity,
+                                                ctx.state.config.suspend.rpc_suspend_after,
+                                                ctx.state.config.suspend.rpc_resume_after,
+                                            )
+                                        })
+                                    });
+                                    (wait, ctx.create_interrupt_signal())
                                 });
-                                (wait, ctx.create_interrupt_signal())
-                            });
-                            let task_result = {
-                                tokio::select! {
-                                biased;
-                                _ = cancel_token.cancelled() => None,
-                                result = async {
-                                    match rpc_wait {
-                                        Some(wait) => wait.wait_result(&mut task, interrupt_signal).await,
-                                        None => tokio::select! {
-                                            biased;
-                                            kind = interrupt_signal => Err(kind),
-                                            result = &mut task => Ok(result),
-                                        },
+                                let task_result = {
+                                    tokio::select! {
+                                    biased;
+                                    _ = cancel_token.cancelled() => None,
+                                    result = async {
+                                        match rpc_wait {
+                                            Some(wait) => wait.wait_result(&mut task, interrupt_signal).await,
+                                            None => tokio::select! {
+                                                biased;
+                                                kind = interrupt_signal => Err(kind),
+                                                result = &mut task => Ok(result),
+                                            },
+                                        }
+                                    } => match result {
+                                        Ok(result) => Some(result),
+                                        Err(interrupt_kind) => {
+                                            drop(task);
+                                            return Err(live.trap(interrupt_kind));
+                                        }
+                                    },
                                     }
-                                } => match result {
-                                    Ok(result) => Some(result),
-                                    Err(interrupt_kind) => {
+                                };
+                                match task_result {
+                                    None => {
+                                        // Cancelled while re-executing the recovered call: same
+                                        // handling as the live-path cancellation race above.
                                         drop(task);
-                                        return Err(live.trap(interrupt_kind));
+                                        return cancel_in_flight_get(
+                                            accessor,
+                                            live,
+                                            &request,
+                                            &invocation_id,
+                                            streaming.as_ref(),
+                                            &span_id,
+                                            this_rep,
+                                        )
+                                        .await;
                                     }
-                                },
-                                }
-                            };
-                            match task_result {
-                                None => {
-                                    // Cancelled while re-executing the recovered call: same
-                                    // handling as the live-path cancellation race above.
-                                    drop(task);
-                                    return cancel_in_flight_get(
-                                        accessor,
-                                        live,
-                                        &request,
-                                        &invocation_id,
-                                        streaming.as_ref(),
-                                        &span_id,
-                                        this_rep,
-                                    )
-                                    .await;
-                                }
-                                Some(Ok(rpc_result)) => {
-                                    let rpc_result =
-                                        admit_rpc_result_secret_holds(accessor, rpc_result).await?;
-                                    let finish_span = rpc_span_finished(&span_id, &rpc_result);
-                                    live.complete_access_deferred_with_span(
-                                        accessor,
-                                        accessor.getter(),
-                                        HostResponseGolemRpcInvokeAndAwait {
-                                            result: rpc_result
-                                                .map(strip_streams)
-                                                .map_err(Into::into),
-                                        },
-                                        finish_span,
-                                    )
-                                    .await
-                                    .map_err(anyhow::Error::from)?
-                                }
-                                Some(Err(err)) => {
-                                    return Err(live.trap(err));
+                                    Some(Ok(rpc_result)) => {
+                                        let retry = streaming.is_none()
+                                            && tokio::select! {
+                                                biased;
+                                                _ = cancel_token.cancelled() => {
+                                                    return cancel_in_flight_get(
+                                                        accessor,
+                                                        live,
+                                                        &request,
+                                                        &invocation_id,
+                                                        streaming.as_ref(),
+                                                        &span_id,
+                                                        this_rep,
+                                                    )
+                                                    .await;
+                                                }
+                                                retry = retry_after_backoff(accessor, &mut live, retry_properties.clone(), &rpc_result) => retry?,
+                                            };
+                                        if retry {
+                                            task = accessor.with(|mut access| {
+                                                Ok::<_, anyhow::Error>(spawn_invoke_and_await_task(
+                                                    access.get(),
+                                                    &remote_target,
+                                                    internal_rpc_child_key(&request.request_key)?,
+                                                    request.method_name.clone(),
+                                                    request.input.clone(),
+                                                    env.clone(),
+                                                    config.clone(),
+                                                    deferred_activation.clone(),
+                                                    expected_callee_fingerprint,
+                                                    retry_properties.clone(),
+                                                    &span_id,
+                                                    retry_point,
+                                                    live.start_index(),
+                                                    InvocationFreshnessDisposition::MayExist,
+                                                    request.scope_card.clone(),
+                                                    auth_ctx.clone(),
+                                                ))
+                                            })?;
+                                            continue;
+                                        }
+                                        let rpc_result =
+                                            admit_rpc_result_secret_holds(accessor, rpc_result)
+                                                .await?;
+                                        let finish_span = rpc_span_finished(&span_id, &rpc_result);
+                                        break live
+                                            .complete_access_deferred_with_span(
+                                                accessor,
+                                                accessor.getter(),
+                                                HostResponseGolemRpcInvokeAndAwait {
+                                                    result: rpc_result
+                                                        .map(strip_streams)
+                                                        .map_err(Into::into),
+                                                },
+                                                finish_span,
+                                            )
+                                            .await
+                                            .map_err(anyhow::Error::from)?;
+                                    }
+                                    Some(Err(err)) => {
+                                        return Err(live.trap(err));
+                                    }
                                 }
                             }
                         }
@@ -791,7 +945,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             Cancel {
                 handle: FutureInvokeCallHandle,
                 streaming: Option<DurableStreamingTaskParams>,
-                remote_agent_id: AgentId,
+                remote_agent_id: OwnedAgentId,
                 idempotency_key: golem_common::model::InvocationId,
                 span_id: SpanId,
             },
@@ -810,14 +964,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 FutureInvokeResultState::Active {
                     handle,
                     streaming,
-                    request,
                     invocation_id,
+                    remote_target,
                     span_id,
                     cancel_token,
                     ..
                 } => match handle.take() {
                     Some(handle) => {
-                        let remote_agent_id = request.remote_agent_id.clone();
+                        let remote_agent_id = remote_target.owned_agent_id.clone();
                         let idempotency_key = invocation_id.id();
                         let span_id = span_id.clone();
                         let streaming = streaming.clone();

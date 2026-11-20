@@ -32,10 +32,6 @@ import (
 func (d *Engine) compileRecord(c *Codec) {
 	c.record = true
 	fields := d.StructFields(c.Typ)
-	if slices.ContainsFunc(fields, func(f Field) bool { return f.AutoInjected }) {
-		MarkInvalid(c, "%s", MisplacedPrincipal)
-		return
-	}
 	// The record would carry none of the struct's state: it would travel as
 	// record {} and arrive as a zero value.
 	if len(fields) == 0 && c.Typ.NumField() > 0 {
@@ -533,6 +529,15 @@ var namedTypeCodecs = map[reflect.Type]func(*Codec){
 			},
 			func(dst reflect.Value, n types.SchemaValueNode) {
 				dst.Set(reflect.ValueOf(UUIDFromWit(n.UuidValue())))
+			})
+	},
+	reflect.TypeFor[values.AgentID](): func(c *Codec) {
+		scalar(c, types.MakeSchemaTypeBodyUuidType(), types.SchemaValueNodeUuidValue,
+			func(b *ValBuilder, v reflect.Value) int32 {
+				return b.Push(types.MakeSchemaValueNodeUuidValue(UUIDToWit(v.Interface().(values.AgentID).UUID())))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) {
+				dst.Set(reflect.ValueOf(values.AgentIDFromUUID(UUIDFromWit(n.UuidValue()))))
 			})
 	},
 }

@@ -126,7 +126,7 @@ object WireMetadataParitySpec extends ZIOSpecDefault {
     val invoked  = implType.methods
       .find(_.name == method)
       .get
-      .invoke(new ParityAgentImpl, in.encodeValue(Vector(value)), golem.Principal.Anonymous)
+      .invoke(new ParityAgentImpl, in.encodeValue(Vector(value)), golem.InvocationContext.anonymous)
     codec.decode(Await.result(invoked, 5.seconds).get)
   }
 

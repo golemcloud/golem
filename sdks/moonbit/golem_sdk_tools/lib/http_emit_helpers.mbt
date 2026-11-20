@@ -8,8 +8,8 @@
 // NOTE (parameter order): the new schema model preserves the user-supplied
 // declaration order for method parameters (matching the Rust/TS SDKs). The Golem
 // runtime's `build_http_agent_method_parameters` classifies path/query/header vs
-// body but keeps declaration order, and auto-injected `Principal` params keep
-// their declared slot (excluded from the wire record out-of-band). So generated
+// body but keeps declaration order, and `InvocationContext` params keep
+// their declared slot (excluded from the wire record: the SDK injects them). So generated
 // dispatch decodes parameters positionally in declaration order — there is no
 // HTTP-specific reordering.
 
@@ -43,6 +43,11 @@ fn path_segments_str(segments : Array[PathSegmentInfo]) -> String {
 ///|
 /// Renders an `@common.HttpMethod` constructor expression.
 fn http_method_str(http_method : String) -> String {
+  "@common.HttpMethod::Method(\{neutral_http_method_str(http_method)})"
+}
+
+///|
+fn neutral_http_method_str(http_method : String) -> String {
   let lower = string_to_lower(http_method)
   let variant = if lower == "get" {
     Some("Get")
@@ -66,9 +71,9 @@ fn http_method_str(http_method : String) -> String {
     None
   }
   match variant {
-    Some(v) => "@common.HttpMethod::Method(@coreHttp.HttpMethod::\{v})"
+    Some(v) => "@coreHttp.HttpMethod::\{v}"
     None =>
-      "@common.HttpMethod::Method(@coreHttp.HttpMethod::Custom(\"\{escape_string_lit(http_method)}\"))"
+      "@coreHttp.HttpMethod::Custom(\"\{escape_string_lit(http_method)}\")"
   }
 }
 

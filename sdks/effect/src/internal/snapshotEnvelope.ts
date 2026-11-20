@@ -1,5 +1,4 @@
 import { Schema } from "effect"
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import * as CoreTypes from "golem:core/types@2.0.0"
 import type { SnapshotPart } from "../Snapshot.js"
@@ -33,6 +32,8 @@ const BINARY_MIME = "application/octet-stream"
 const MULTIPART_MIME_PREFIX = "multipart/mixed"
 const SQLITE_PART_MIME = "application/x-sqlite3"
 const STATE_PART_NAME = "state"
+/** The binary snapshot version that 2.0 writes. Version 2 is the 1.6 form. */
+const BINARY_VERSION = 3
 const DB_PART_PREFIX = "db:"
 const USER_PART_PREFIX = "part:"
 
@@ -56,26 +57,24 @@ export const normalizeSnapshotContentType = (contentType: string): string => {
 // ---------------------------------------------------------------------------
 
 /**
- * Each OIDC string-typed sub-claim is encoded as `T | null` on the
- * wire (we explicitly emit `null` for absent fields), and tolerated
- * as missing on decode (so payloads produced by other SDKs that
- * simply omit absent claims still parse).
+ * Each OIDC string-typed sub-claim is encoded as `T | null` on the wire, and tolerated as missing
+ * on decode.
  */
 const NullishString = Schema.optional(Schema.NullOr(Schema.String))
 const NullishBoolean = Schema.optional(Schema.NullOr(Schema.Boolean))
 
 /**
- * Schema for the JSON-safe `Principal` shape (UUIDs as strings).
- * Mirrors the runtime {@link AgentCommon.Principal} ADT but with all
- * `bigint` UUID payloads stringified so the value survives
- * `JSON.stringify` / `JSON.parse`.
+ * The 1.6 principal of a snapshot, in its JSON-safe shape (UUIDs as strings).
+ *
+ * A 2.0 agent still reads snapshots that 1.6 wrote. The principal in such a snapshot is checked
+ * against this schema, so a malformed one still fails the load as it did before, and is then
+ * dropped: the caller of an invocation comes from the host, never from saved state.
  */
-export const SerializedPrincipal = Schema.Union([
+const LegacySerializedPrincipal = Schema.Union([
   Schema.Struct({ tag: Schema.Literal("anonymous") }),
   Schema.Struct({
     tag: Schema.Literal("agent"),
     val: Schema.Struct({
-      componentId: Schema.String,
       agentId: Schema.String,
     }),
   }),
@@ -100,29 +99,31 @@ export const SerializedPrincipal = Schema.Union([
   }),
 ])
 
-/** Type alias for the JSON-safe principal value. */
-export type SerializedPrincipal = typeof SerializedPrincipal.Type
-
 /**
- * Schema for the full envelope: `{ version: 1, principal, state }`.
- * The `state` slot is intentionally `Schema.Unknown` — the user's own
- * Schema has already encoded it to a JSON value at the moment we
- * build the envelope, and re-validation happens against the user's
- * Schema after decode.
+ * Schema for the full envelope. The 2.0 form is `{ version: 2, state }`; the 1.6 form is
+ * `{ version: 1, principal, state }`. The `state` slot is intentionally `Schema.Unknown`: the
+ * user's own Schema has already encoded it to a JSON value at the moment we build the envelope,
+ * and re-validation happens against the user's Schema after decode.
  */
-const Envelope = Schema.Struct({
-  version: Schema.Literal(1),
-  principal: SerializedPrincipal,
-  state: Schema.Unknown,
-  fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-})
+const Envelope = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(2),
+    state: Schema.Unknown,
+    fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    principal: LegacySerializedPrincipal,
+    state: Schema.Unknown,
+    fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  }),
+])
 
 const EnvelopeFromString = Schema.fromJsonString(Envelope)
-const PrincipalFromString = Schema.fromJsonString(SerializedPrincipal)
+const PrincipalFromString = Schema.fromJsonString(LegacySerializedPrincipal)
 
 const encodeEnvelope = Schema.encodeUnknownSync(EnvelopeFromString)
 const decodeEnvelopeFromString = Schema.decodeUnknownSync(EnvelopeFromString)
-const encodePrincipal = Schema.encodeUnknownSync(PrincipalFromString)
 const decodePrincipalFromString = Schema.decodeUnknownSync(PrincipalFromString)
 
 const encoder = new TextEncoder()
@@ -137,89 +138,21 @@ const decodeUtf8 = (bytes: Uint8Array, ctx: string): string => {
 }
 
 // ---------------------------------------------------------------------------
-// Principal: runtime ↔ wire conversion
+// The 1.6 principal: checked, then dropped
 // ---------------------------------------------------------------------------
 
-/**
- * Convert a runtime `Principal` (with bigint UUIDs) into a JSON-safe
- * envelope shape (with stringified UUIDs).
- */
-export const serializePrincipal = (p: AgentCommon.Principal): SerializedPrincipal => {
-  switch (p.tag) {
+/** Check that the UUID strings of a 1.6 principal parse, as the 1.6 reader did. */
+const checkLegacyPrincipal = (principal: typeof LegacySerializedPrincipal.Type): void => {
+  switch (principal.tag) {
     case "anonymous":
-      return { tag: "anonymous" }
-    case "agent":
-      return {
-        tag: "agent",
-        val: {
-          componentId: CoreTypes.uuidToString(p.val.agentId.componentId.uuid),
-          agentId: p.val.agentId.agentId,
-        },
-      }
-    case "golem-user":
-      return {
-        tag: "golem-user",
-        val: { accountId: CoreTypes.uuidToString(p.val.accountId.uuid) },
-      }
     case "oidc":
-      return {
-        tag: "oidc",
-        val: {
-          sub: p.val.sub,
-          issuer: p.val.issuer,
-          email: p.val.email ?? null,
-          name: p.val.name ?? null,
-          emailVerified: p.val.emailVerified ?? null,
-          givenName: p.val.givenName ?? null,
-          familyName: p.val.familyName ?? null,
-          picture: p.val.picture ?? null,
-          preferredUsername: p.val.preferredUsername ?? null,
-          claims: p.val.claims,
-        },
-      }
-  }
-}
-
-/**
- * Inverse of {@link serializePrincipal}: take the JSON-safe envelope
- * shape and rebuild the runtime `Principal` (parsing UUID strings back
- * into `{ highBits, lowBits }`).
- */
-export const deserializePrincipal = (p: SerializedPrincipal): AgentCommon.Principal => {
-  switch (p.tag) {
-    case "anonymous":
-      return { tag: "anonymous" }
+      return
     case "agent":
-      return {
-        tag: "agent",
-        val: {
-          agentId: {
-            componentId: { uuid: CoreTypes.parseUuid(p.val.componentId) },
-            agentId: p.val.agentId,
-          },
-        },
-      }
+      CoreTypes.parseUuid(principal.val.agentId)
+      return
     case "golem-user":
-      return {
-        tag: "golem-user",
-        val: { accountId: { uuid: CoreTypes.parseUuid(p.val.accountId) } },
-      }
-    case "oidc":
-      return {
-        tag: "oidc",
-        val: {
-          sub: p.val.sub,
-          issuer: p.val.issuer,
-          email: p.val.email ?? undefined,
-          name: p.val.name ?? undefined,
-          emailVerified: p.val.emailVerified ?? undefined,
-          givenName: p.val.givenName ?? undefined,
-          familyName: p.val.familyName ?? undefined,
-          picture: p.val.picture ?? undefined,
-          preferredUsername: p.val.preferredUsername ?? undefined,
-          claims: p.val.claims,
-        },
-      }
+      CoreTypes.parseUuid(principal.val.accountId)
+      return
   }
 }
 
@@ -228,18 +161,12 @@ export const deserializePrincipal = (p: SerializedPrincipal): AgentCommon.Princi
 // ---------------------------------------------------------------------------
 
 /**
- * Encode an `application/json` envelope. `state` is an arbitrary JSON
+ * Encode an `application/json` envelope `{ version: 2, state }`. `state` is an arbitrary JSON
  * value (already produced by the user's Schema-driven encode step).
- * Accepts a runtime `Principal` (with bigint UUIDs) and serializes it
- * via {@link serializePrincipal} before writing.
  */
-export const encodeJsonEnvelope = (
-  principal: AgentCommon.Principal,
-  state: unknown,
-): ApiHost.Snapshot => {
+export const encodeJsonEnvelope = (state: unknown): ApiHost.Snapshot => {
   const json = encodeEnvelope({
-    version: 1,
-    principal: serializePrincipal(principal),
+    version: 2,
     state,
   })
   return {
@@ -249,36 +176,24 @@ export const encodeJsonEnvelope = (
 }
 
 /**
- * Encode an `application/octet-stream` envelope (binary v2). The user's
- * raw `payload` bytes are appended verbatim after the principal header.
- * Accepts a runtime `Principal` (with bigint UUIDs) and serializes it
- * via {@link serializePrincipal} before writing.
+ * Encode an `application/octet-stream` envelope (binary v3): the version byte `0x03`, then the
+ * user's raw `payload` bytes verbatim.
  */
-export const encodeBinaryEnvelope = (
-  principal: AgentCommon.Principal,
-  userPayload: Uint8Array,
-): ApiHost.Snapshot => {
-  const principalJson = encodePrincipal(serializePrincipal(principal))
-  const principalBytes = encoder.encode(principalJson)
-  const total = 1 + 4 + principalBytes.length + userPayload.length
-  const out = new Uint8Array(total)
-  const view = new DataView(out.buffer)
-  view.setUint8(0, 2)
-  view.setUint32(1, principalBytes.length, false) // big-endian
-  out.set(principalBytes, 5)
-  out.set(userPayload, 5 + principalBytes.length)
+export const encodeBinaryEnvelope = (userPayload: Uint8Array): ApiHost.Snapshot => {
+  const out = new Uint8Array(1 + userPayload.length)
+  out[0] = BINARY_VERSION
+  out.set(userPayload, 1)
   return { payload: out, mimeType: BINARY_MIME }
 }
 
 /**
  * Encode a SQLite-aware `multipart/mixed` envelope. The `state` part
- * carries `{ version: 1, principal, state, fileDatabases? }` as JSON; each entry in
+ * carries `{ version: 2, state, fileDatabases? }` as JSON; each entry in
  * `databases` becomes a `db:<name>` part with `application/x-sqlite3`
  * content-type. File-backed database contents belong to filesystem snapshots;
  * only their logical names and locations belong in `fileDatabases`.
  */
 export const encodeMultipartJsonEnvelope = (
-  principal: AgentCommon.Principal,
   state: unknown,
   databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>,
   userParts: ReadonlyMap<string, SnapshotPart> = new Map(),
@@ -291,8 +206,7 @@ export const encodeMultipartJsonEnvelope = (
       "multipart state must be JSON; use null for binary-only snapshots",
     )
   const stateJson = encodeEnvelope({
-    version: 1,
-    principal: serializePrincipal(principal),
+    version: 2,
     state,
     ...(fileDatabases === undefined ? {} : { fileDatabases }),
   })
@@ -324,13 +238,11 @@ export const encodeMultipartJsonEnvelope = (
 // ---------------------------------------------------------------------------
 
 /**
- * Decoded JSON envelope. The `principal` is the recovered runtime
- * principal (UUIDs back to bigints); `state` is whatever JSON shape the
- * user's `Schema.encodeUnknown` produced when the snapshot was saved.
+ * Decoded JSON envelope. `state` is whatever JSON shape the user's
+ * `Schema.encodeUnknown` produced when the snapshot was saved.
  */
 export interface DecodedJsonEnvelope {
   readonly kind: "json"
-  readonly principal: AgentCommon.Principal
   readonly state: unknown
 }
 
@@ -340,7 +252,6 @@ export interface DecodedJsonEnvelope {
  */
 export interface DecodedBinaryEnvelope {
   readonly kind: "binary"
-  readonly principal: AgentCommon.Principal
   readonly userPayload: Uint8Array
 }
 
@@ -348,13 +259,12 @@ export interface DecodedBinaryEnvelope {
  * Decoded multipart envelope produced by the SQLite-aware
  * {@link encodeMultipartJsonEnvelope} (or by the official
  * `golem-ts-sdk`). The `state` is the user-state JSON value (the
- * outer `{version, principal, state}` envelope has already been
+ * outer `{version, state}` envelope has already been
  * stripped); each `databases` entry carries an in-memory/temp SQLite image.
  * File-backed databases carry locations only, never contents.
  */
 export interface DecodedMultipartEnvelope {
   readonly kind: "multipart"
-  readonly principal: AgentCommon.Principal
   readonly state: unknown
   readonly databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>
   readonly fileDatabases: Readonly<Record<string, string>> | undefined
@@ -363,15 +273,8 @@ export interface DecodedMultipartEnvelope {
 
 export type DecodedEnvelope = DecodedJsonEnvelope | DecodedBinaryEnvelope | DecodedMultipartEnvelope
 
-/**
- * Decode a {@link ApiHost.Snapshot}. `fallbackPrincipal` is used when
- * the snapshot is the legacy binary v1 format which carries no
- * principal in its payload.
- */
-export const decodeEnvelope = (
-  snapshot: ApiHost.Snapshot,
-  fallbackPrincipal: AgentCommon.Principal,
-): DecodedEnvelope => {
+/** Decode a {@link ApiHost.Snapshot}. */
+export const decodeEnvelope = (snapshot: ApiHost.Snapshot): DecodedEnvelope => {
   const mime = snapshot.mimeType
   if (mime.split(";", 1)[0]?.trim().toLowerCase() === MULTIPART_MIME_PREFIX) {
     return decodeMultipartEnvelope(snapshot.payload, mime)
@@ -380,7 +283,7 @@ export const decodeEnvelope = (
     return decodeJsonEnvelope(snapshot.payload)
   }
   if (mime === BINARY_MIME) {
-    return decodeBinaryEnvelope(snapshot.payload, fallbackPrincipal)
+    return decodeBinaryEnvelope(snapshot.payload)
   }
   throw new UnsupportedSnapshotFormatError(mime)
 }
@@ -406,13 +309,21 @@ const parseEnvelopeJson = (text: string, ctx: string, strict = false) => {
           const keys = objects[objects.length - 1]!
           if (keys.has(key)) throw new Error(`duplicate JSON key '${key}'`)
           keys.add(key)
-          if (objects.length === 1 && key === "version" && tokens[i + 2] !== "1") {
-            throw new Error("multipart envelope version must be integer 1")
+          if (
+            objects.length === 1 &&
+            key === "version" &&
+            tokens[i + 2] !== "1" &&
+            tokens[i + 2] !== "2"
+          ) {
+            throw new Error("multipart envelope version must be integer 1 or 2")
           }
         }
       }
     }
-    return decodeEnvelopeFromString(text)
+    const envelope = decodeEnvelopeFromString(text)
+    // A 1.6 envelope: its principal was validated by the schema; check its UUIDs and drop it.
+    if (envelope.version === 1) checkLegacyPrincipal(envelope.principal)
+    return envelope
   } catch (err) {
     throw new SnapshotEnvelopeError(`${ctx}: ${String((err as Error).message ?? err)}`)
   }
@@ -423,7 +334,6 @@ const decodeJsonEnvelope = (payload: Uint8Array): DecodedJsonEnvelope => {
   const env = parseEnvelopeJson(text, "json envelope")
   return {
     kind: "json",
-    principal: deserializePrincipal(env.principal),
     state: env.state,
   }
 }
@@ -462,8 +372,6 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
     throw new SnapshotEnvelopeError("multipart envelope state is not canonical UTF-8")
   }
   const env = parseEnvelopeJson(stateText, "multipart envelope: 'state' part", true)
-  const principal = deserializePrincipal(env.principal)
-
   const databases: Array<{ name: string; bytes: Uint8Array }> = []
   const userParts = new Map<string, SnapshotPart>()
   for (const part of parts) {
@@ -505,7 +413,6 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
   }
   return {
     kind: "multipart",
-    principal,
     state: env.state,
     databases,
     fileDatabases: env.fileDatabases,
@@ -513,15 +420,16 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
   }
 }
 
-const decodeBinaryEnvelope = (
-  payload: Uint8Array,
-  _fallbackPrincipal: AgentCommon.Principal,
-): DecodedBinaryEnvelope => {
+const decodeBinaryEnvelope = (payload: Uint8Array): DecodedBinaryEnvelope => {
   if (payload.length < 1) {
     throw new SnapshotEnvelopeError(`binary envelope: payload is empty`)
   }
   const version = payload[0]!
+  if (version === BINARY_VERSION) {
+    return { kind: "binary", userPayload: payload.slice(1) }
+  }
   if (version === 2) {
+    // A 1.6 envelope: its principal is checked and dropped.
     if (payload.length < 5) {
       throw new SnapshotEnvelopeError(`binary envelope (v2): truncated header`)
     }
@@ -534,19 +442,14 @@ const decodeBinaryEnvelope = (
     }
     const principalBytes = payload.slice(5, 5 + principalLen)
     const principalText = decodeUtf8(principalBytes, "binary envelope (v2): principal segment")
-    let serialized: SerializedPrincipal
     try {
-      serialized = decodePrincipalFromString(principalText)
+      checkLegacyPrincipal(decodePrincipalFromString(principalText))
     } catch (err) {
       throw new SnapshotEnvelopeError(
         `binary envelope (v2): principal segment is not a valid principal: ${String((err as Error).message ?? err)}`,
       )
     }
-    return {
-      kind: "binary",
-      principal: deserializePrincipal(serialized),
-      userPayload: payload.slice(5 + principalLen),
-    }
+    return { kind: "binary", userPayload: payload.slice(5 + principalLen) }
   }
   throw new SnapshotEnvelopeError(`binary envelope: unsupported version byte ${version}`)
 }

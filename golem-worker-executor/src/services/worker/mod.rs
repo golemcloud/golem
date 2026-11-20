@@ -127,6 +127,7 @@ struct SplitStatusParts {
     received_card_transfers: ReceivedCardTransferIndex,
     source_card_transfers: SourceCardTransferIndex,
     entity_replay_progress: golem_common::model::EntityReplayProgress,
+    resolved_names: golem_common::model::agent::ResolvedNameIndex,
     failed_updates: Vec<FailedUpdateRecord>,
     successful_updates: Vec<SuccessfulUpdateRecord>,
     skipped_regions: DeletedRegions,
@@ -532,12 +533,12 @@ impl AgentLifecycleGates {
             .and_then(Weak::upgrade)
             .unwrap_or_else(|| {
                 let gate = Arc::new(RwLock::new(()));
-                gates.insert(agent_id.clone(), Arc::downgrade(&gate));
+                gates.insert(*agent_id, Arc::downgrade(&gate));
                 gate
             });
 
         AgentLifecycleGate {
-            agent_id: agent_id.clone(),
+            agent_id: *agent_id,
             gate,
             registry: self.clone(),
         }
@@ -615,18 +616,20 @@ impl DefaultWorkerService {
     }
 
     fn invocation_result_index_namespace(
-        agent_id: &AgentId,
+        owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentInvocationResultIndex {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
             fingerprint,
         }
     }
 
-    fn rejected_periodic_snapshots_namespace(agent_id: &AgentId) -> KeyValueStorageNamespace {
+    fn rejected_periodic_snapshots_namespace(
+        owned_agent_id: &OwnedAgentId,
+    ) -> KeyValueStorageNamespace {
         KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
-            agent_id: agent_id.clone(),
+            owned_agent_id: owned_agent_id.clone(),
         }
     }
 

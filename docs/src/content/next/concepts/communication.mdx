@@ -7,7 +7,7 @@ Agents work together by calling each other's methods through typed clients. An a
 
 ## Calling another agent
 
-Every agent type has a generated client. A caller gets a client for a specific agent from its constructor arguments and calls its methods. If the target agent does not exist yet, Golem creates it.
+Every agent type has a generated client. A caller gets a client for the keyed agent of some constructor arguments with `upsert`, and calls its methods. If the target agent does not exist yet, Golem creates it. A client can also create a new agent without a key, or connect to an existing agent by its agent ID; see [Agent to Agent communication](/next/develop/rpc).
 
 A call can be made in three ways:
 
@@ -21,7 +21,7 @@ A call can be made in three ways:
   <Tabs.Tab>
 ```typescript
 // Excerpt: inside a method of ReportAgent
-const reviewer = ReviewerAgent.client.get({ team: "finance" });
+const reviewer = ReviewerAgent.client.upsert({ team: "finance" });
 
 // Await the result
 const review = await reviewer.review({ draft: this.draftText });
@@ -38,7 +38,7 @@ token.cancel();
   <Tabs.Tab>
 ```typescript
 // Excerpt: inside a method of ReportAgent, within Effect.gen
-const reviewer = yield* ReviewerAgent.client.get({ team: "finance" });
+const reviewer = yield* ReviewerAgent.client.upsert({ team: "finance" });
 
 // Await the result
 const review = yield* reviewer.review({ draft: draftText });
@@ -55,7 +55,7 @@ yield* scheduled.cancel();
   <Tabs.Tab>
 ```rust
 // Excerpt: inside a method of ReportAgent
-let reviewer = ReviewerAgentClient::get("finance".to_string());
+let reviewer = ReviewerAgentClient::upsert("finance".to_string());
 
 // Await the result
 let review = reviewer.review(self.draft_text.clone()).await;
@@ -75,7 +75,7 @@ token.cancel();
   <Tabs.Tab>
 ```scala
 // Excerpt: inside a method of ReportAgentImpl
-val reviewer = ReviewerAgentClient.get("finance")
+val reviewer = ReviewerAgentClient.upsert("finance")
 
 // Await the result
 val review: Future[String] = reviewer.review(draftText)
@@ -92,7 +92,7 @@ reviewer.review
   <Tabs.Tab>
 ```moonbit
 // Excerpt: inside an async method of ReportAgent
-let reviewer = ReviewerAgentClient::get("finance")
+let reviewer = ReviewerAgentClient::upsert("finance")
 defer reviewer.drop()
 
 // Await the result
@@ -111,7 +111,7 @@ token.cancel()
   <Tabs.Tab>
 ```go
 // Excerpt: inside a handler of ReportAgent
-r := reviewer.Agent.Get(reviewer.ID{Team: "finance"})
+r := reviewer.Agent.Upsert(reviewer.ID{Team: "finance"})
 in := reviewer.ReviewIn{Draft: ctx.State.draftText}
 
 // Await the result

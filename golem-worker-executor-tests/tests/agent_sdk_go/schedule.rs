@@ -17,7 +17,7 @@
 //! one that has not started yet.
 
 use crate::Tracing;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -52,8 +52,8 @@ async fn go_scheduled_invocation_runs(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let scheduler_id = agent_id!("SchedulerAgent", "go-sched-1");
-    let counter_id = agent_id!("CounterAgent", "go-sched-target-1");
+    let scheduler_id = agent_key!("SchedulerAgent", "go-sched-1");
+    let counter_id = agent_key!("CounterAgent", "go-sched-target-1");
     executor
         .start_agent_with(
             &component.id,
@@ -109,8 +109,8 @@ async fn go_scheduled_invocation_can_be_cancelled(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let scheduler_id = agent_id!("SchedulerAgent", "go-sched-2");
-    let counter_id = agent_id!("CounterAgent", "go-sched-target-2");
+    let scheduler_id = agent_key!("SchedulerAgent", "go-sched-2");
+    let counter_id = agent_key!("CounterAgent", "go-sched-target-2");
     executor
         .start_agent_with(
             &component.id,

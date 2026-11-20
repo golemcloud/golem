@@ -8,6 +8,7 @@ use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 use crate::api::interruption::support::{FUEL_BUDGET, Resource, check_accounting};
@@ -105,14 +106,14 @@ async fn pending_response_body(
         .store()
         .await?;
     let seed_id = executor
-        .start_agent(&component.id, agent_id!("HttpClient2"))
+        .start_agent(&component.id, agent_key!("HttpClient2"))
         .await?;
     let seed = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &seed_id))
+        .production_active_agent(&seed_id.clone())
         .await
         .unwrap()
         .primary();
-    wait_for_invocation_pair(&executor, &seed_id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &seed_id.agent_id, OplogIndex::INITIAL).await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while !seed.stop_if_idle().await {
             tokio::task::yield_now().await;
@@ -126,25 +127,21 @@ async fn pending_response_body(
     }
     let durable = mode == AgentMode::Durable;
     let name = if durable {
-        agent_id!("HttpClient4")
+        agent_key!("HttpClient4")
     } else {
-        agent_id!("EphemeralHttpClient4")
+        agent_key!("EphemeralHttpClient4")
     };
     let key = IdempotencyKey::fresh();
-    let physical = if durable {
-        name.clone()
-    } else {
-        name.clone()
-            .with_ephemeral_invocation_phantom(&ephemeral_owner_key(
-                &executor,
-                &key,
-                "get_for_quota_wait",
-            ))
-            .unwrap()
-    };
-    let id = AgentId::from_agent_id(component.id, &physical).unwrap();
+    let id = invocation_agent_id(
+        &executor,
+        component.environment_id,
+        &name,
+        durable,
+        &key,
+        "get_for_quota_wait",
+    );
     let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let worker = Worker::get_or_create_suspended(
+    let worker = Worker::get_or_create_suspended_with_freshness(
         seed.all(),
         &owned,
         None,
@@ -152,7 +149,16 @@ async fn pending_response_body(
         None,
         None,
         &InvocationContextStack::fresh(),
-        Principal::anonymous(),
+        callers::anonymous(),
+        golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
+        invocation_create_intent(
+            &executor,
+            component.id,
+            &name,
+            durable,
+            &key,
+            "get_for_quota_wait",
+        ),
     )
     .await?;
     let stored_key = executor
@@ -185,7 +191,7 @@ async fn pending_response_body(
         let original = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 executor.commit_oplog(&id).await?;
-                let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 if let Some(pending) = pending_body(&entries, &stored_key)? {
                     ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                     info!(?entries, ?pending, "Committed first chunk delivered; next child and consume-body parent open");
@@ -249,7 +255,7 @@ async fn pending_response_body(
             refresh.await?;
         }
         drop(first.finish_body);
-        let stopped = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+        let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         assert_invocation(&stopped, &stored_key, 0)?;
         ensure!(pending_body(&stopped, &stored_key)? == Some(original), "stop changed the retained body prefix: {stopped:#?}");
         peer.assert_counts(1, 0, 1)?;
@@ -310,7 +316,7 @@ async fn pending_response_body(
                     .is_err()
             );
         }
-        executor.wait_for_status(&id, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
+        executor.wait_for_status(&owned, if durable { AgentStatus::Suspended } else { AgentStatus::Failed }, Duration::from_secs(10)).await?;
         ensure!(count_agent_invocation_pair_since(&stopped, OplogIndex::INITIAL) == (2, 1));
         info!(?resource, ?mode, ?errors, suspends, "HTTP stop retained one unfinished method with mode-specific lifecycle outcome");
         flush_stopped_usage(&limits, &registry, resource).await?;
@@ -352,7 +358,7 @@ async fn pending_response_body(
             }
             registry.set_policy(grant);
             applied_refresh(&limits, &registry, context.account_id).await?.await?;
-            executor.resume(&id, false).await?;
+            executor.resume(&owned, false).await?;
             let second = peer.request().await?;
             ensure!(second.number == 2);
             ensure!(second.idempotency_key == first.idempotency_key);
@@ -360,7 +366,7 @@ async fn pending_response_body(
             let repaired_pending = tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
                     executor.commit_oplog(&id).await?;
-                    let entries = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+                    let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                     if let Some(pending) = history::retained_pending(&entries, &stored_key, original)? {
                         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
                         info!(?entries, ?pending, "Body repair retains the original parent and chunk Starts");
@@ -374,7 +380,7 @@ async fn pending_response_body(
             let resumed = tokio::time::timeout(Duration::from_secs(15), &mut invocation)
                 .await.context("retained HTTP body invocation and mandatory finalization")???;
             ensure!(resumed.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
-            let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             let raw_recovered = executor.stored_oplog(&id).await;
             ensure!(raw_recovered.len() >= committed_prefix.len());
             ensure!(&raw_recovered[..committed_prefix.len()] == committed_prefix.as_slice(), "complete committed prefix must survive body repair");
@@ -399,7 +405,7 @@ async fn pending_response_body(
             let stored = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent(&component, &name, "stored_send_error", data_value!())).await??;
             ensure!(stored.into_typed::<String>()? == "none");
             peer.assert_counts(2, 1, 1)?;
-            let completed_history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let completed_history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             recovered_body(&completed_history, &stored_key, original, repaired_pending)?;
             ensure!(count_agent_invocation_pair_since(&completed_history, OplogIndex::INITIAL) == (3, 3));
 
@@ -417,7 +423,7 @@ async fn pending_response_body(
             let (fresh, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(fresh, response) }).await??;
             ensure!(fresh.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
             peer.assert_counts(3, 2, 1)?;
-            let history = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(count_agent_invocation_pair_since(&history, OplogIndex::INITIAL) == (4, 4));
             history::assert_settled_history(&history, original)?;
             assert_invocation(&history, &stored_key, 1)?;
@@ -433,7 +439,7 @@ async fn pending_response_body(
             ensure!(tokio::time::timeout(Duration::from_secs(10), executor.invoke_and_await_agent_with_key(&component, &name, &key, "get_for_quota_wait", data_value!(peer.url.clone()))).await?.is_err());
             peer.assert_counts(1, 0, 1)?;
             // Only an independent durable invocation may reuse the single HTTP pool slot.
-            let probe_name = agent_id!("HttpClient4");
+            let probe_name = agent_key!("HttpClient4");
             let probe_key = IdempotencyKey::fresh();
             let probe = executor.invoke_and_await_agent_with_key(&component, &probe_name, &probe_key, "get_for_quota_wait", data_value!(peer.url.clone()));
             let response = async {
@@ -446,13 +452,13 @@ async fn pending_response_body(
             };
             let (probe, ()) = tokio::time::timeout(Duration::from_secs(15), async { tokio::try_join!(probe, response) }).await??;
             ensure!(probe.into_typed::<Result<String, String>>()? == Ok("200 hello-body".to_string()));
-            let failed = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+            let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(pending_body(&failed, &stored_key)? == Some(original));
             assert_invocation(&failed, &stored_key, 0)?;
             ensure!(count_agent_invocation_pair_since(&failed, OplogIndex::INITIAL) == (2, 1));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!failed.iter().any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))));
-            executor.wait_for_status(&id, AgentStatus::Failed, Duration::from_secs(10)).await?;
+            executor.wait_for_status(&owned, AgentStatus::Failed, Duration::from_secs(10)).await?;
             ensure!(!worker.is_loaded().await);
             peer.assert_counts(2, 1, 1)?;
             info!(?resource, %key, ?original, requests = 2, "Ephemeral HTTP body failure stayed terminal; independent durable Worker reused single pool slot");
@@ -466,7 +472,7 @@ async fn pending_response_body(
     // Stop and join the peer independently, including failure cleanup of every socket handler.
     let cleanup = peer.finish().await;
     if result.is_err() {
-        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&id)).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), executor.interrupt(&owned)).await;
         let _ = tokio::time::timeout(
             Duration::from_secs(10),
             worker.join_accepted_stops_for_test(),

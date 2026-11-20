@@ -157,6 +157,10 @@ jobs:
           echo "GOCACHE=$PWD/.validation-cache/go-build" >> "$GITHUB_ENV"
           echo "GOMODCACHE=$PWD/.validation-cache/go-mod" >> "$GITHUB_ENV"
           echo "SBT_OPTS=-Dsbt.ivy.home=$PWD/.validation-cache/ivy -Dsbt.global.base=$PWD/.validation-cache/sbt-global -Dsbt.boot.directory=$PWD/.validation-cache/sbt-boot" >> "$GITHUB_ENV"
+          # Mill reads the Ivy local repository from ~/.ivy2, not from SBT_OPTS.
+          mkdir -p "$PWD/.validation-cache/ivy"
+          rm -rf "$HOME/.ivy2"
+          ln -s "$PWD/.validation-cache/ivy" "$HOME/.ivy2"
       - uses: ./.validation-control/.github/actions/setup-main-validation
       - name: Validate the selected source
         id: workload

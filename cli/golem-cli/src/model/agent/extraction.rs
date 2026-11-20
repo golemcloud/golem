@@ -26,6 +26,7 @@ fn map_extraction_error(
     stdout: pipe::MemoryOutputPipe,
     stderr: pipe::MemoryOutputPipe,
     err: anyhow::Error,
+    print_stdout: impl FnOnce(&str),
 ) -> anyhow::Error {
     let stdout_contents = stdout.contents();
     let stderr_contents = stderr.contents();
@@ -44,7 +45,7 @@ fn map_extraction_error(
         return anyhow!(format_stderr(&stderr));
     }
 
-    print_line(&stdout);
+    print_stdout(&stdout);
     eprint_line(&stderr);
 
     err
@@ -72,5 +73,23 @@ pub async fn extract_component_metadata(
         enable_wasmtime_fs_cache,
     )
     .await
-    .map_err(|err| map_extraction_error(stdout, stderr, err))
+    .map_err(|err| map_extraction_error(stdout, stderr, err, |line| print_line(line)))
+}
+
+/// Extracts metadata from a package's WASM snapshot without writing to stdout.
+pub async fn extract_component_metadata_from_bytes(
+    bytes: &[u8],
+) -> anyhow::Result<ExtractedComponentMetadata> {
+    let stdout = pipe::MemoryOutputPipe::new(usize::MAX);
+    let stderr = pipe::MemoryOutputPipe::new(usize::MAX);
+
+    golem_common::model::agent::extraction::extract_component_metadata_from_bytes_with_streams(
+        bytes,
+        Some(stdout.clone()),
+        Some(stderr.clone()),
+        true,
+        false,
+    )
+    .await
+    .map_err(|err| map_extraction_error(stdout, stderr, err, |line| eprint_line(line)))
 }

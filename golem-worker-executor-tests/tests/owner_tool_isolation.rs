@@ -16,13 +16,13 @@ use crate::Tracing;
 use crate::instance_layer::{
     activation, owner_component_metadata, run_synchronous_entity_invocation,
 };
-use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::entity::{AgentEntity, ExecutableTarget, FilesystemCapability};
 use golem_common::model::tool::ToolName;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -41,7 +41,7 @@ inherit_test_dep!(Tracing);
 #[derive(Debug)]
 struct StoreObservation {
     owner: OwnedAgentId,
-    principal: Principal,
+    caller: golem_common::model::caller::Caller,
     store_address: usize,
 }
 
@@ -61,8 +61,8 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
         .store()
         .await?;
     let owners = [
-        agent_id!("Clock", "tool-owner-a"),
-        agent_id!("Clock", "tool-owner-b"),
+        agent_key!("Clock", "tool-owner-a"),
+        agent_key!("Clock", "tool-owner-b"),
     ];
     let mut owner_ids = Vec::new();
     let mut oplog_before_reconstruction = Vec::new();
@@ -72,7 +72,7 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
         executor
             .invoke_and_await_agent(&component, owner, "healthcheck", data_value!())
             .await?;
-        let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let owner_id = worker_id.clone();
         let active = executor
             .active_agent(&owner_id)
             .await
@@ -138,14 +138,14 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
                 &owner_id,
                 &entity,
                 activation,
-                move |_, store, principal| {
+                move |_, store, caller| {
                     Box::pin(async move {
                         barrier.wait().await;
                         let observed_owner = store.data().durable_ctx().owned_agent_id().clone();
                         let store_address = store as *mut _ as usize;
                         Ok(StoreObservation {
                             owner: observed_owner,
-                            principal,
+                            caller,
                             store_address,
                         })
                     })
@@ -159,20 +159,20 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
     for call in first_calls {
         observations.push(call.await??);
     }
-    observations.sort_by_key(|observation| observation.owner.agent_name());
+    observations.sort_by_key(|observation| {
+        owner_ids
+            .iter()
+            .position(|owner_id| *owner_id == observation.owner)
+    });
     assert_eq!(observations[0].owner, owner_ids[0]);
     assert_eq!(observations[1].owner, owner_ids[1]);
     assert_eq!(
-        observations[0].principal,
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner_ids[0].agent_id.clone(),
-        })
+        observations[0].caller,
+        callers::agent(owner_ids[0].agent_id, owners[0].agent_type.clone())
     );
     assert_eq!(
-        observations[1].principal,
-        Principal::Agent(AgentPrincipal {
-            agent_id: owner_ids[1].agent_id.clone(),
-        })
+        observations[1].caller,
+        callers::agent(owner_ids[1].agent_id, owners[1].agent_type.clone())
     );
     assert_ne!(observations[0].store_address, observations[1].store_address);
 
@@ -196,13 +196,13 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
             owner_id,
             &entity,
             activation,
-            |_, store, principal| {
+            |_, store, caller| {
                 Box::pin(async move {
                     let observed_owner = store.data().durable_ctx().owned_agent_id().clone();
                     let store_address = store as *mut _ as usize;
                     Ok(StoreObservation {
                         owner: observed_owner,
-                        principal,
+                        caller,
                         store_address,
                     })
                 })

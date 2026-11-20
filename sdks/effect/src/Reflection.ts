@@ -3,27 +3,26 @@ export * from "./ToolReflection.js"
 import { Effect, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
-import * as CoreTypes from "golem:core/types@2.0.0"
-import { uuidToString } from "golem:core/types@2.0.0"
-import * as AgentIdentity from "./AgentIdentity.js"
+import type * as CoreTypes from "golem:core/types@2.0.0"
+import type { AgentId } from "./AgentId.js"
 import {
-  bindIdentity,
+  bindAgentId,
   ClientBindingError,
-  type IdentityBinding,
+  connectById,
+  connectionAgentId,
+  type AgentIdBinding,
   type RemoteCallError,
 } from "./Client.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
-import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
+import { RpcClient, type RpcConnection, type RpcHostError } from "./host/RpcClient.js"
 import type { InvocationMetadata } from "./Client.js"
 import type { InvokeOptions } from "./DynamicClient.js"
+import { agentIdToWit } from "./internal/agentId.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
 import { field, t, type SchemaGraph, type SchemaType } from "./internal/schema-model/model.js"
 import { schemaGraphFromWit, schemaGraphToWit } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
-
-export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** A reflected method and its concrete input/output schema roots. @since 1.6.0 @category models */
 export interface AgentMethod {
@@ -46,7 +45,6 @@ export type ReflectionError =
   | SchemaRenderError
   | RemoteOutputError
   | UnknownMethodError
-  | AgentIdentity.AgentIdentityError
   | ReflectionHostError
   | ReflectionSchemaError
 
@@ -111,11 +109,15 @@ export interface ReflectedAgentClient {
   readonly method: (name: string) => Effect.Effect<ReflectedMethod, ReflectionError>
 }
 
-/** Durable phantom allocation result. @since 1.6.0 @category models */
-export interface ReflectedPhantomClient {
-  readonly agentId: AgentIdentity.Identity
-  readonly phantomId: string
-  readonly client: ReflectedAgentClient
+/**
+ * Reflected client of one durable agent. `agentId` reads the ID of the agent from the host; on
+ * a client of `upsert` it creates the agent when it is missing.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface ReflectedDurableAgentClient extends ReflectedAgentClient {
+  readonly agentId: Effect.Effect<AgentId, ReflectionError>
 }
 
 /** Canonical JSON override for a declared local configuration path. @since 1.6.0 @category models */
@@ -139,140 +141,76 @@ export interface ReflectedConfigDeclaration {
   readonly defaultValue?: CoreTypes.SchemaValueTree
 }
 
+/**
+ * Options of a reflected `create`. `keyed` creates the keyed agent of the constructor input and
+ * fails with a `conflict` cause when it already exists; otherwise the new agent has a new ID.
+ * `config` overrides declared local configuration values and `env` adds environment variables.
+ *
+ * @since 1.6.0
+ * @category models
+ */
+export interface ReflectedCreateOptions<Entry> {
+  readonly keyed?: boolean
+  readonly config?: ReadonlyArray<Entry>
+  readonly env?: Readonly<Record<string, string>>
+}
+
 /** Durable reflected client factory. @since 1.6.0 @category models */
 export interface DurableClientFactory {
-  readonly get: (
+  /** Connect to the keyed agent of the constructor input, creating it when it is missing. */
+  readonly upsert: (
     input: JsonValue,
-    config?: ReadonlyArray<ReflectedConfigJsonEntry>,
-  ) => Effect.Effect<
-    ReflectedAgentClient,
-    ReflectionError,
-    AgentHostClient | RpcClient | Scope.Scope
-  >
-  readonly getValue: (
+  ) => Effect.Effect<ReflectedDurableAgentClient, ReflectionError, RpcClient | Scope.Scope>
+  readonly upsertValue: (
     input: CoreTypes.SchemaValueTree,
-    config?: ReadonlyArray<ReflectedConfigValueEntry>,
-  ) => Effect.Effect<
-    ReflectedAgentClient,
-    ReflectionError,
-    AgentHostClient | RpcClient | Scope.Scope
-  >
-  readonly getPhantom: (
+  ) => Effect.Effect<ReflectedDurableAgentClient, ReflectionError, RpcClient | Scope.Scope>
+  /** Create an agent and connect to it after its successful initialization. */
+  readonly create: (
     input: JsonValue,
-    phantomId: string,
-    config?: ReadonlyArray<ReflectedConfigJsonEntry>,
-  ) => Effect.Effect<
-    ReflectedAgentClient,
-    ReflectionError,
-    AgentHostClient | RpcClient | Scope.Scope
-  >
-  readonly getPhantomValue: (
+    options?: ReflectedCreateOptions<ReflectedConfigJsonEntry>,
+  ) => Effect.Effect<ReflectedDurableAgentClient, ReflectionError, RpcClient | Scope.Scope>
+  readonly createValue: (
     input: CoreTypes.SchemaValueTree,
-    phantomId: string,
-    config?: ReadonlyArray<ReflectedConfigValueEntry>,
-  ) => Effect.Effect<
-    ReflectedAgentClient,
-    ReflectionError,
-    AgentHostClient | RpcClient | Scope.Scope
-  >
-  readonly newPhantom: (
-    input: JsonValue,
-    config?: ReadonlyArray<ReflectedConfigJsonEntry>,
-  ) => Effect.Effect<
-    ReflectedPhantomClient,
-    ReflectionError,
-    AgentHostClient | DurabilityModeClient | RpcClient | Scope.Scope
-  >
-  readonly newPhantomValue: (
-    input: CoreTypes.SchemaValueTree,
-    config?: ReadonlyArray<ReflectedConfigValueEntry>,
-  ) => Effect.Effect<
-    ReflectedPhantomClient,
-    ReflectionError,
-    AgentHostClient | DurabilityModeClient | RpcClient | Scope.Scope
-  >
+    options?: ReflectedCreateOptions<ReflectedConfigValueEntry>,
+  ) => Effect.Effect<ReflectedDurableAgentClient, ReflectionError, RpcClient | Scope.Scope>
+  /**
+   * Connect to the existing agent with the given ID. An unknown ID or an ID of another agent
+   * type fails with a `not-found` cause.
+   */
+  readonly getById: (
+    id: AgentId,
+  ) => Effect.Effect<ReflectedDurableAgentClient, ReflectionError, RpcClient | Scope.Scope>
 }
 
-/** Ephemeral factory; each invocation allocates its own identity. @since 1.6.0 @category models */
+/** Ephemeral factory; each invocation runs on a new one-shot instance. @since 1.6.0 @category models */
 export interface EphemeralClientFactory {
-  readonly getPhantom: (
+  readonly upsert: (
     input: JsonValue,
-    phantomId: string,
-    config?: ReadonlyArray<ReflectedConfigJsonEntry>,
   ) => Effect.Effect<ReflectedAgentClient, ReflectionError, RpcClient | Scope.Scope>
-  readonly getPhantomValue: (
+  readonly upsertValue: (
     input: CoreTypes.SchemaValueTree,
-    phantomId: string,
-    config?: ReadonlyArray<ReflectedConfigValueEntry>,
-  ) => Effect.Effect<ReflectedAgentClient, ReflectionError, RpcClient | Scope.Scope>
-  readonly newPhantom: (
-    input: JsonValue,
-    config?: ReadonlyArray<ReflectedConfigJsonEntry>,
-  ) => Effect.Effect<ReflectedAgentClient, ReflectionError, RpcClient | Scope.Scope>
-  readonly newPhantomValue: (
-    input: CoreTypes.SchemaValueTree,
-    config?: ReadonlyArray<ReflectedConfigValueEntry>,
   ) => Effect.Effect<ReflectedAgentClient, ReflectionError, RpcClient | Scope.Scope>
 }
 
-interface AgentTypeMetadata extends IdentityBinding<
-  ReflectedAgentClient,
+interface AgentTypeMetadata extends AgentIdBinding<
+  ReflectedDurableAgentClient,
   ReflectionError | ClientBindingError,
   RpcClient | Scope.Scope
 > {
   readonly name: string
   readonly description: string
   readonly sourceLanguage: string
-  readonly implementedBy: CoreTypes.ComponentId
   readonly constructorInput: SchemaRef
   readonly methods: ReadonlyArray<AgentMethod>
   readonly config: ReadonlyArray<ReflectedConfigDeclaration>
   readonly method: (name: string) => AgentMethod | undefined
-  readonly bindWithConfig: (
-    identity: AgentIdentity.Identity,
-    config: ReadonlyArray<ReflectedConfigValueEntry>,
-  ) => Effect.Effect<
-    ReflectedAgentClient,
-    ReflectionError | ClientBindingError,
-    RpcClient | Scope.Scope
-  >
-  readonly bindWithJsonConfig: (
-    identity: AgentIdentity.Identity,
-    config: ReadonlyArray<ReflectedConfigJsonEntry>,
-  ) => Effect.Effect<
-    ReflectedAgentClient,
-    ReflectionError | ClientBindingError,
-    RpcClient | Scope.Scope
-  >
 }
 
 /** Immutable reflected registration, narrowed by lifecycle mode. @since 1.6.0 @category models */
 export type AgentType = AgentTypeMetadata &
   (
-    | {
-        readonly mode: "durable"
-        readonly client: DurableClientFactory
-        readonly agentId: (
-          input: JsonValue,
-          phantomId?: string,
-        ) => Effect.Effect<AgentIdentity.Identity, ReflectionError, AgentHostClient>
-        readonly agentIdValue: (
-          input: CoreTypes.SchemaValueTree,
-          phantomId?: string,
-        ) => Effect.Effect<AgentIdentity.Identity, ReflectionError, AgentHostClient>
-      }
-    | {
-        readonly mode: "ephemeral"
-        readonly client: EphemeralClientFactory
-        readonly agentId: (
-          input: JsonValue,
-          phantomId: string,
-        ) => Effect.Effect<AgentIdentity.Identity, ReflectionError, AgentHostClient>
-        readonly agentIdValue: (
-          input: CoreTypes.SchemaValueTree,
-          phantomId: string,
-        ) => Effect.Effect<AgentIdentity.Identity, ReflectionError, AgentHostClient>
-      }
+    | { readonly mode: "durable"; readonly client: DurableClientFactory }
+    | { readonly mode: "ephemeral"; readonly client: EphemeralClientFactory }
   )
 
 const schemaError = (error: unknown): SchemaRenderError =>
@@ -291,20 +229,6 @@ const pack = (schema: SchemaRef, input: JsonValue) =>
           ),
         )
   })
-const parsePhantom = (
-  phantomId?: string,
-): Effect.Effect<CoreTypes.Uuid | undefined, RemoteCallError> =>
-  Effect.try({
-    try: () => (phantomId === undefined ? undefined : CoreTypes.parseUuid(phantomId)),
-    catch: (cause) => ({ _tag: "InvalidUuidError", value: phantomId!, reason: String(cause) }),
-  })
-const makeId = (typeName: string, input: CoreTypes.SchemaValueTree, phantomId?: string) =>
-  AgentIdentity.make({
-    typeName,
-    constructorValue: input,
-    ...(phantomId === undefined ? {} : { phantomId }),
-  })
-
 const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
   const raw = structuredClone(registration.agentType)
   const indices = raw.schema.typeNodes.map((_, index) => index)
@@ -419,188 +343,99 @@ const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
         }),
       catch: schemaError,
     })
-  const agentIdValue = (input: CoreTypes.SchemaValueTree, phantomId?: string) =>
-    Effect.flatMap(validate(constructorInput, input), () =>
-      raw.mode === "ephemeral" && phantomId === undefined
-        ? Effect.fail(
-            new AgentIdentity.AgentIdentityError(
-              new TypeError(`ephemeral agent type '${raw.typeName}' requires a phantom ID`),
-            ),
-          )
-        : makeId(raw.typeName, input, phantomId),
+  const connected = (acquire: Effect.Effect<RpcConnection, RpcHostError>) =>
+    Effect.acquireRelease(
+      Effect.mapError(acquire, (error) => wrapHostThrow(error.cause)),
+      (connection) => Effect.sync(() => connection.drop()),
     )
-  const bind = (
+  const durableClient = (rpc: RpcConnection): ReflectedDurableAgentClient =>
+    Object.freeze({ ...reflectedClient(result, rpc), agentId: connectionAgentId(rpc) })
+  const upsertValue = (input: CoreTypes.SchemaValueTree) =>
+    Effect.gen(function* () {
+      yield* validate(constructorInput, input)
+      const host = yield* RpcClient
+      return yield* connected(host.upsert(raw.typeName, input))
+    })
+  const createValue = (
     input: CoreTypes.SchemaValueTree,
-    phantomId?: string,
-    parsedPhantom?: CoreTypes.Uuid,
-    configEntries: ReadonlyArray<AgentCommon.TypedAgentConfigValue> = [],
+    configEntries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
+    options: ReflectedCreateOptions<unknown> | undefined,
   ) =>
     Effect.gen(function* () {
       yield* validate(constructorInput, input)
-      const uuid = parsedPhantom ?? (yield* parsePhantom(phantomId))
       const host = yield* RpcClient
-      const rpc = yield* Effect.acquireRelease(
-        host
-          .connect(raw.typeName, input, uuid, configEntries)
-          .pipe(Effect.mapError((error) => wrapHostThrow(error.cause))),
-        (connection) => Effect.sync(() => connection.drop()),
-      )
-      return reflectedClient(result, rpc)
-    })
-  const newPhantomValue: DurableClientFactory["newPhantomValue"] = (input, entries = []) =>
-    Effect.gen(function* () {
-      const configEntries = yield* validateConfigValues(entries)
-      const durability = yield* DurabilityModeClient
-      const uuid = yield* Effect.try({
-        try: () => durability.generateIdempotencyKey(),
-        catch: wrapHostThrow,
-      })
-      const phantomId = uuidToString(uuid)
-      const agentId = yield* agentIdValue(input, phantomId)
-      const client = yield* bind(input, phantomId, undefined, configEntries)
-      return Object.freeze({ agentId, phantomId, client })
-    })
-  const factoryBase = {
-    newPhantom: (input: JsonValue, entries: ReadonlyArray<ReflectedConfigJsonEntry> = []) =>
-      Effect.flatMap(pack(constructorInput, input), (value) =>
-        Effect.flatMap(packConfigJson(entries), (configEntries) =>
-          Effect.gen(function* () {
-            const durability = yield* DurabilityModeClient
-            const uuid = yield* Effect.try({
-              try: () => durability.generateIdempotencyKey(),
-              catch: wrapHostThrow,
-            })
-            const phantomId = uuidToString(uuid)
-            const agentId = yield* agentIdValue(value, phantomId)
-            const client = yield* bind(value, phantomId, undefined, configEntries)
-            return Object.freeze({ agentId, phantomId, client })
+      const rpc = yield* connected(
+        Effect.map(
+          host.create(raw.typeName, input, {
+            keyed: options?.keyed ?? false,
+            agentConfig: [...configEntries],
+            env: Object.entries(options?.env ?? {}),
           }),
+          ({ connection }) => connection,
         ),
-      ),
-    newPhantomValue,
-  }
+      )
+      return durableClient(rpc)
+    })
+  const getById = (id: AgentId) =>
+    Effect.gen(function* () {
+      const witId = yield* Effect.try({
+        try: () => agentIdToWit(id),
+        catch: (cause): RemoteCallError => ({
+          _tag: "InvalidUuidError",
+          value: String(id?.uuid),
+          reason: String(cause),
+        }),
+      })
+      return durableClient(yield* connectById(raw.typeName, witId))
+    })
+  const upsertJson = (input: JsonValue) =>
+    Effect.flatMap(pack(constructorInput, input), upsertValue)
   const lifecycle =
     raw.mode === "ephemeral"
       ? {
           mode: "ephemeral" as const,
           client: Object.freeze({
-            getPhantom: (
-              input: JsonValue,
-              id: string,
-              entries: ReadonlyArray<ReflectedConfigJsonEntry> = [],
-            ) =>
-              Effect.flatMap(pack(constructorInput, input), (value) =>
-                Effect.flatMap(packConfigJson(entries), (configEntries) =>
-                  bind(value, id, undefined, configEntries),
-                ),
-              ),
-            getPhantomValue: (
-              input: CoreTypes.SchemaValueTree,
-              id: string,
-              entries: ReadonlyArray<ReflectedConfigValueEntry> = [],
-            ) =>
-              Effect.flatMap(validateConfigValues(entries), (configEntries) =>
-                bind(input, id, undefined, configEntries),
-              ),
-            newPhantom: (input: JsonValue, entries: ReadonlyArray<ReflectedConfigJsonEntry> = []) =>
-              Effect.flatMap(pack(constructorInput, input), (value) =>
-                Effect.flatMap(packConfigJson(entries), (configEntries) =>
-                  bind(value, undefined, undefined, configEntries),
-                ),
-              ),
-            newPhantomValue: (
-              input: CoreTypes.SchemaValueTree,
-              entries: ReadonlyArray<ReflectedConfigValueEntry> = [],
-            ) =>
-              Effect.flatMap(validateConfigValues(entries), (configEntries) =>
-                bind(input, undefined, undefined, configEntries),
-              ),
+            upsert: (input: JsonValue) =>
+              Effect.map(upsertJson(input), (rpc) => reflectedClient(result, rpc)),
+            upsertValue: (input: CoreTypes.SchemaValueTree) =>
+              Effect.map(upsertValue(input), (rpc) => reflectedClient(result, rpc)),
           }) satisfies EphemeralClientFactory,
         }
       : {
           mode: "durable" as const,
           client: Object.freeze({
-            ...factoryBase,
-            get: (input, entries = []) =>
+            upsert: (input) => Effect.map(upsertJson(input), durableClient),
+            upsertValue: (input) => Effect.map(upsertValue(input), durableClient),
+            create: (input, options) =>
               Effect.flatMap(pack(constructorInput, input), (value) =>
-                Effect.flatMap(packConfigJson(entries), (configEntries) =>
-                  bind(value, undefined, undefined, configEntries),
+                Effect.flatMap(packConfigJson(options?.config ?? []), (configEntries) =>
+                  createValue(value, configEntries, options),
                 ),
               ),
-            getValue: (input, entries = []) =>
-              Effect.flatMap(validateConfigValues(entries), (configEntries) =>
-                bind(input, undefined, undefined, configEntries),
+            createValue: (input, options) =>
+              Effect.flatMap(validateConfigValues(options?.config ?? []), (configEntries) =>
+                createValue(input, configEntries, options),
               ),
-            getPhantom: (input, id, entries = []) =>
-              Effect.flatMap(pack(constructorInput, input), (value) =>
-                Effect.flatMap(packConfigJson(entries), (configEntries) =>
-                  bind(value, id, undefined, configEntries),
-                ),
-              ),
-            getPhantomValue: (input, id, entries = []) =>
-              Effect.flatMap(validateConfigValues(entries), (configEntries) =>
-                bind(input, id, undefined, configEntries),
-              ),
+            getById,
           } satisfies DurableClientFactory),
         }
-  const bindExisting = (
-    identity: AgentIdentity.Identity,
-    configEntries: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
-  ) =>
-    Effect.gen(function* () {
-      if (raw.mode === "ephemeral")
-        return yield* Effect.fail(
-          new ClientBindingError(
-            `Cannot bind existing identity '${identity.encoded}' to ephemeral agent type '${raw.typeName}'; use getPhantom(...) or newPhantom(...)`,
-          ),
-        )
-      if (identity.typeName !== raw.typeName)
-        return yield* Effect.fail(
-          new ClientBindingError(
-            `Reflected agent type '${raw.typeName}' cannot bind '${identity.typeName}'`,
-          ),
-        )
-      const checked = constructorInput.validateValue(identity.constructorValue)
-      if (!checked.success)
-        return yield* Effect.fail(
-          new ClientBindingError(
-            `Reflected agent type '${raw.typeName}' cannot bind identity '${identity.encoded}': constructor value does not conform to the reflected schema`,
-          ),
-        )
-      const phantom = yield* Effect.try({
-        try: () => AgentIdentity.rawPhantomId(identity),
-        catch: (cause) => new ClientBindingError(String(cause)),
-      })
-      return yield* bind(identity.constructorValue, undefined, phantom, configEntries)
-    })
   const result: AgentType = Object.freeze({
     name: raw.typeName,
     description: raw.description,
     sourceLanguage: raw.sourceLanguage,
     ...lifecycle,
-    implementedBy: deepFreeze(structuredClone(registration.implementedBy)),
     constructorInput,
     methods,
     config,
     method: (name: string) => methods.find((method) => method.name === name),
-    bindWithConfig: (
-      identity: AgentIdentity.Identity,
-      entries: ReadonlyArray<ReflectedConfigValueEntry>,
-    ) =>
-      Effect.flatMap(validateConfigValues(entries), (configEntries) =>
-        bindExisting(identity, configEntries),
-      ),
-    bindWithJsonConfig: (
-      identity: AgentIdentity.Identity,
-      entries: ReadonlyArray<ReflectedConfigJsonEntry>,
-    ) =>
-      Effect.flatMap(packConfigJson(entries), (configEntries) =>
-        bindExisting(identity, configEntries),
-      ),
-    agentId: (input: JsonValue, phantomId?: string) =>
-      Effect.flatMap(pack(constructorInput, input), (value) => agentIdValue(value, phantomId)),
-    agentIdValue,
-    [bindIdentity]: (identity: AgentIdentity.Identity) => bindExisting(identity, []),
+    [bindAgentId]: (id: AgentId) =>
+      raw.mode === "ephemeral"
+        ? Effect.fail(
+            new ClientBindingError(
+              `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${raw.typeName}'; use upsert(...)`,
+            ),
+          )
+        : getById(id),
   })
   return result
 }
@@ -677,14 +512,6 @@ const reflectedClient = (type: AgentType, rpc: RpcConnection): ReflectedAgentCli
     },
   })
 
-const deepFreeze = <T>(value: T): T => {
-  if (value !== null && typeof value === "object") {
-    for (const child of Object.values(value)) deepFreeze(child)
-    Object.freeze(value)
-  }
-  return value
-}
-
 /** Discover every visible agent type. @since 1.6.0 @category discovery */
 export const getAllAgentTypes: Effect.Effect<
   ReadonlyArray<AgentType>,
@@ -723,9 +550,16 @@ export const getAgentType = (
     })
   })
 
-/** Optionally discover the current deployed type for an environment-scoped identity. @since 1.6.0 @category discovery */
+/**
+ * Optionally discover the deployed agent type that the type tag of an agent ID names. It
+ * returns `undefined` when no deployed agent type has that tag; it does not check that an agent
+ * with the ID exists.
+ *
+ * @since 1.6.0
+ * @category discovery
+ */
 export const getAgentTypeByAgentId = (
-  identity: AgentIdentity.Identity,
+  id: AgentId,
 ): Effect.Effect<
   AgentType | undefined,
   ReflectionHostError | ReflectionSchemaError,
@@ -734,7 +568,7 @@ export const getAgentTypeByAgentId = (
   Effect.gen(function* () {
     const host = yield* AgentHostClient
     const found = yield* Effect.try({
-      try: () => host.getAgentTypeByAgentId(identity.encoded),
+      try: () => host.getAgentTypeByAgentId(agentIdToWit(id)),
       catch: (cause) => new ReflectionHostError(cause),
     })
     if (found === undefined) return undefined

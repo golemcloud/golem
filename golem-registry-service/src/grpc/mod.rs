@@ -79,6 +79,7 @@ pub async fn start_grpc_server(
                     services.resource_definition_service.clone(),
                     services.mcp_oauth_service.clone(),
                     services.mcp_import_resolver.clone(),
+                    services.golem_issuer.clone(),
                 ))
                 .send_compressed(CompressionEncoding::Gzip)
                 .accept_compressed(CompressionEncoding::Gzip),

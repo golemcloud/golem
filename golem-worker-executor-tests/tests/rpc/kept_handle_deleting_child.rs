@@ -7,6 +7,7 @@
 // not found, without a panic.
 
 use super::*;
+use crate::panic_watch::{panics_naming, watch_panics_naming};
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::component::ComponentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -56,53 +57,6 @@ impl WorkerDeletionHook for GateBeforeStage {
         }
         Ok(())
     }
-}
-
-// The executor is built with `panic = "abort"` (`[profile.release]` and `[profile.dev]` in the
-// root `Cargo.toml`), so a panic that the unwinding test harness contains in a spawned task
-// aborts a production executor. Panics that name one of the watched agents, and every state
-// actor panic, are recorded.
-static WATCHED_PANICS: std::sync::OnceLock<Mutex<(Vec<String>, Vec<String>)>> =
-    std::sync::OnceLock::new();
-
-// Matched as well as the agent name, so a change in how the agent is named in the panic message
-// cannot make the check pass without looking.
-const STATE_ACTOR_PANIC: &str = "Worker state actor";
-
-fn watch_panics_naming(name: &str) {
-    static INSTALL: std::sync::Once = std::sync::Once::new();
-    let watched = WATCHED_PANICS.get_or_init(|| Mutex::new((Vec::new(), Vec::new())));
-    watched.lock().unwrap().0.push(name.to_string());
-    INSTALL.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let message = info.to_string();
-            if let Some(watched) = WATCHED_PANICS.get()
-                && let Ok(mut watched) = watched.lock()
-                && (message.contains(STATE_ACTOR_PANIC)
-                    || watched.0.iter().any(|name| message.contains(name.as_str())))
-            {
-                watched.1.push(message);
-            }
-            previous(info);
-        }));
-    });
-}
-
-fn panics_naming(name: &str) -> Vec<String> {
-    WATCHED_PANICS
-        .get()
-        .map(|watched| {
-            watched
-                .lock()
-                .unwrap()
-                .1
-                .iter()
-                .filter(|message| message.contains(name) || message.contains(STATE_ACTOR_PANIC))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 struct RaceGate {
@@ -231,8 +185,8 @@ async fn kept_call_during_gated_deletion(
     let caller_name = format!("kept-deleting-caller-{suffix}");
     let child_name = format!("kept-deleting-child-{suffix}");
     watch_panics_naming(&format!("\"{child_name}\""));
-    let caller: ParsedAgentKey = agent_id!("GolemHostApi", caller_name.as_str());
-    let counter: ParsedAgentKey = agent_id!("Counter", child_name.as_str());
+    let caller: ParsedAgentKey = agent_key!("GolemHostApi", caller_name.as_str());
+    let counter: ParsedAgentKey = agent_key!("Counter", child_name.as_str());
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -248,9 +202,8 @@ async fn kept_call_during_gated_deletion(
         .into_typed::<Result<(), String>>()?;
     assert_eq!(kept, Ok(()));
 
-    let counter_worker =
-        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
-    let owned_counter = OwnedAgentId::new(context.default_environment_id, &counter_worker);
+    let counter_worker = crate::agent::keyed_agent_id(counter_component.environment_id, &counter);
+    let owned_counter = counter_worker.clone();
     let hook = Arc::new(GateBeforeStage {
         target: owned_counter.clone(),
         stage,
@@ -505,8 +458,8 @@ async fn pinned_call_racing_deletion(
     let caller_name = format!("race-deleting-caller-{suffix}");
     let child_name = format!("race-deleting-child-{suffix}");
     watch_panics_naming(&format!("\"{child_name}\""));
-    let caller: ParsedAgentKey = agent_id!("GolemHostApi", caller_name.as_str());
-    let counter: ParsedAgentKey = agent_id!("Counter", child_name.as_str());
+    let caller: ParsedAgentKey = agent_key!("GolemHostApi", caller_name.as_str());
+    let counter: ParsedAgentKey = agent_key!("Counter", child_name.as_str());
     executor
         .start_agent(&caller_component.id, caller.clone())
         .await?;
@@ -521,9 +474,8 @@ async fn pinned_call_racing_deletion(
         .into_typed::<Result<(), String>>()?;
     assert_eq!(kept, Ok(()));
 
-    let counter_worker =
-        AgentId::from_agent_id(counter_component.id, &counter).map_err(anyhow::Error::msg)?;
-    let owned_counter = OwnedAgentId::new(context.default_environment_id, &counter_worker);
+    let counter_worker = crate::agent::keyed_agent_id(counter_component.environment_id, &counter);
+    let owned_counter = counter_worker.clone();
 
     // The only forced-revision metadata lookup of the child on these paths follows the pin, in
     // `rpc_target_worker` for a call and in `schedule_invocation` for a schedule, so the call is
@@ -581,8 +533,7 @@ async fn pinned_call_racing_deletion(
         Ok(result) => Ok(result.into_typed::<Result<(), String>>()?),
         Err(error) => Err(format!("{error:#}")),
     };
-    let caller_worker =
-        AgentId::from_agent_id(caller_component.id, &caller).map_err(anyhow::Error::msg)?;
+    let caller_worker = crate::agent::keyed_agent_id(caller_component.environment_id, &caller);
     let caller_errors = executor
         .get_oplog(
             &caller_worker,

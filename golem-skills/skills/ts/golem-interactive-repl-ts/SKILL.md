@@ -18,7 +18,7 @@ Starts a TypeScript REPL with all agent client classes from the bridge libraries
 ### Example: Invoking a counter agent
 
 ```typescript
-const c1 = await CounterAgent.get("c1")
+const c1 = CounterAgent.upsert("c1")
 await c1.increment()
 await c1.increment()
 const value = await c1.getValue()
@@ -51,7 +51,7 @@ Run the script after creating it, unless the user explicitly asked not to.
 ### Example script (`test.ts`)
 
 ```typescript
-const c2 = await CounterAgent.get("c2")
+const c2 = CounterAgent.upsert("c2")
 await c2.increment()
 await c2.increment()
 ```

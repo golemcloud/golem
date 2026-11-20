@@ -19,7 +19,7 @@ use axum::routing::any;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -241,7 +241,7 @@ async fn ts_custom_durability_scopes_stay_apart_under_concurrency(
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurabilityTs", "scopes");
+    let agent_id = agent_key!("CustomDurabilityTs", "scopes");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -390,7 +390,7 @@ async fn ts_custom_durability_parents_wait_and_escaped_work_leaves_the_scope(
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurabilityTs", "lifecycle");
+    let agent_id = agent_key!("CustomDurabilityTs", "lifecycle");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -556,7 +556,7 @@ async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurabilityTs", "partial-recovery");
+    let agent_id = agent_key!("CustomDurabilityTs", "partial-recovery");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -577,7 +577,7 @@ async fn ts_custom_durability_recovers_one_completed_and_one_incomplete_sibling(
         .in_current_span()
     });
     tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
 
     let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let start = invocation_start(&before, "concurrentFirstFinishes");
@@ -745,7 +745,7 @@ async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operat
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurabilityTs", "cancelled-call");
+    let agent_id = agent_key!("CustomDurabilityTs", "cancelled-call");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -766,7 +766,7 @@ async fn ts_custom_durability_recovers_a_request_cancelled_inside_an_open_operat
         .in_current_span()
     });
     tokio::time::timeout(Duration::from_secs(20), checkpoint.notified()).await?;
-    executor.commit_oplog(&worker_id).await?;
+    executor.commit_oplog(&worker_id.agent_id).await?;
 
     let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let start = invocation_start(&before, "cancelledCall");
@@ -890,7 +890,7 @@ async fn ts_custom_durability_parent_admits_children_until_it_stops_waiting(
         .component_dep(&context.default_environment_id, agent_sdk_ts)
         .store()
         .await?;
-    let agent_id = agent_id!("CustomDurabilityTs", "late-children");
+    let agent_id = agent_key!("CustomDurabilityTs", "late-children");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;

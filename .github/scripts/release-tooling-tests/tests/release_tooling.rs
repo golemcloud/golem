@@ -25,6 +25,24 @@ fn copy_makefiles(repo: &Path) {
 }
 
 #[test]
+fn managed_xfs_reuses_downloads_without_reusing_vm_state() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            "integration-tests/scripts/managed-filesystem/test-run-lima.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn main_validation_dashboard_validates_and_persists_public_observations() {
     let output = Command::new("python3")
         .args([
@@ -84,6 +102,24 @@ fn main_validation_slack_preserves_delivery_receipts_with_formatted_alerts() {
         .args([
             "-B",
             ".github/scripts/release-tooling-tests/tests/main_validation_slack.py",
+        ])
+        .current_dir(workspace_path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn main_validation_discovers_durable_events_and_preserves_webhook_configuration() {
+    let output = Command::new("python3")
+        .args([
+            "-B",
+            ".github/scripts/release-tooling-tests/tests/main_validation_events.py",
         ])
         .current_dir(workspace_path())
         .output()
@@ -210,55 +246,38 @@ for (const value of cases) {
 }
 
 #[test]
-fn cutover_keeps_maintenance_ci_without_main_pr_tests() {
+fn main_uses_main_validation_without_legacy_workflows() {
     let load = |name: &str| -> serde_yaml::Value {
         serde_yaml::from_str(
             &fs::read_to_string(workspace_path().join(".github/workflows").join(name)).unwrap(),
         )
         .unwrap()
     };
-    let ci = load("ci.yaml");
-    let bash = load("builtin-bash.yaml");
-    let steps = ci["jobs"]["unit-tests-and-checks"]["steps"]
-        .as_sequence()
-        .unwrap();
-    let python = steps
-        .iter()
-        .position(|step| step["uses"] == "actions/setup-python@v6")
-        .unwrap();
-    let release_tests = steps
-        .iter()
-        .position(|step| step["name"] == "Test release tooling")
-        .unwrap();
-    assert!(python < release_tests);
-    assert_eq!(steps[python]["with"]["python-version"], "3.14");
-    for workflow in [&ci, &bash] {
-        for event in ["push", "pull_request"] {
-            assert_eq!(
-                workflow["on"][event]["branches"],
-                serde_yaml::to_value(["[0-9]+.[0-9]+.x"]).unwrap()
-            );
-        }
-        assert!(workflow["on"].get("workflow_dispatch").is_some());
-    }
-    assert!(ci["on"].get("workflow_call").is_some());
-    for event in ["push", "pull_request"] {
-        assert_eq!(
-            ci["on"][event]["paths-ignore"],
-            serde_yaml::to_value([
-                "docs/**",
-                "golem-cloud-billing/**",
-                ".github/workflows/golem-cloud-billing.yaml"
-            ])
-            .unwrap()
+    for path in [
+        ".github/workflows/ci.yaml",
+        ".github/workflows/builtin-bash.yaml",
+        ".github/actions/publish-native-binaries/action.yml",
+        ".github/actions/restore-binaries/action.yml",
+        ".github/actions/restore-binary-publication/action.yml",
+        ".github/actions/restore-builtin-artifacts/action.yml",
+        ".github/actions/restore-cli-test-binary/action.yml",
+        ".github/actions/restore-test-components/action.yml",
+    ] {
+        assert!(
+            !workspace_path().join(path).exists(),
+            "{path} remains on main"
         );
     }
+    let validation = load("main-validation.yaml");
+    assert!(validation["on"].get("schedule").is_some());
+    assert!(validation["on"].get("workflow_dispatch").is_some());
+    assert!(validation["on"].get("push").is_none());
+    assert!(validation["on"].get("pull_request").is_none());
     assert!(
         !workspace_path()
             .join(".github/workflows/skill-harness-pr.yaml")
             .exists()
     );
-    assert!(ci["jobs"].get("skill-harness-unit-tests").is_some());
     for name in ["builtin-bash-oracle-drift.yaml", "golem-cloud-billing.yaml"] {
         let workflow = load(name);
         assert_eq!(

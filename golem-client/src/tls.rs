@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn plain_websocket_without_connector_gets_no_tls_configuration() {
-        let uri: Uri = "ws://127.0.0.1:9006/v1/agents/invoke-agent-session"
+        let uri: Uri = "ws://127.0.0.1:9006/v1/runtime/envs/00000000-0000-0000-0000-000000000001/invoke-agent-session"
             .parse()
             .unwrap();
         assert!(connector_for(&uri, None).unwrap().is_none());
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn connector_from_the_caller_is_kept() {
-        let uri: Uri = "ws://127.0.0.1:9006/v1/agents/invoke-agent-session"
+        let uri: Uri = "ws://127.0.0.1:9006/v1/runtime/envs/00000000-0000-0000-0000-000000000001/invoke-agent-session"
             .parse()
             .unwrap();
         assert!(matches!(

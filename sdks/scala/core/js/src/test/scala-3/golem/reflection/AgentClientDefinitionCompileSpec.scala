@@ -15,22 +15,22 @@ import zio.test._
 
 object AgentClientDefinitionCompileSpec extends ZIOSpecDefault {
   def spec = suite("AgentClientDefinition compile-time capabilities")(
-    test("method-only and full durable definitions can bind") {
+    test("method-only and full durable definitions can get by ID") {
       val errors = typeCheckErrors("""
         import golem.reflection.*
         import golem.runtime.InputRecordCodec
 
-        val id = ParsedAgentId("Counter(main)")
-        AgentClientDefinition.methodOnly.bind(id)
+        val id = golem.AgentId(java.util.UUID.randomUUID())
+        AgentClientDefinition.methodOnly.getById(id)
         AgentClientDefinition.full(
           name = "Counter",
           mode = AgentMode.Durable,
           constructor = InputRecordCodec.single[String]("name")
-        ).bind(id)
+        ).getById(id)
       """)
       assertTrue(errors.isEmpty)
     },
-    test("full ephemeral definitions cannot bind") {
+    test("full ephemeral definitions cannot get by ID") {
       val errors = typeCheckErrors("""
         import golem.reflection.*
         import golem.runtime.InputRecordCodec
@@ -39,11 +39,11 @@ object AgentClientDefinitionCompileSpec extends ZIOSpecDefault {
           name = "Request",
           mode = AgentMode.Ephemeral,
           constructor = InputRecordCodec.single[String]("route")
-        ).bind(ParsedAgentId("Request(live)"))
+        ).getById(golem.AgentId(java.util.UUID.randomUUID()))
       """)
       assertTrue(errors.nonEmpty)
     },
-    test("full definitions expose identity and lifecycle factories") {
+    test("full definitions expose upsert, create and getById factories") {
       val errors = typeCheckErrors("""
         import golem.reflection.*
         import golem.runtime.InputRecordCodec
@@ -53,27 +53,54 @@ object AgentClientDefinitionCompileSpec extends ZIOSpecDefault {
           mode = AgentMode.Durable,
           constructor = InputRecordCodec.single[String]("name")
         )
-        durable.agentId("main")
-        durable.client.get("main")
-        durable.client.getPhantom("main", java.util.UUID.randomUUID())
-        durable.client.newPhantom("main")
+        durable.client.upsert("main")
+        durable.client.create("main")
+        durable.client.create("main", keyed = true, env = Map("REGION" -> "eu"))
+        durable.client.getById(golem.AgentId(java.util.UUID.randomUUID()))
 
         val ephemeral = AgentClientDefinition.full(
           name = "Request",
           mode = AgentMode.Ephemeral,
           constructor = InputRecordCodec.single[String]("route")
         )
-        ephemeral.agentId("live")
-        ephemeral.client.getPhantom("live", java.util.UUID.randomUUID())
-        ephemeral.client.newPhantom("live")
+        ephemeral.client.upsert("live")
       """)
       assertTrue(errors.isEmpty)
     },
-    test("method-only definitions do not expose identity or lifecycle factories") {
+    test("removed identity factories and offline ID derivation do not exist") {
+      val errors = List(
+        typeCheckErrors("""
+          import golem.reflection.*
+          import golem.runtime.InputRecordCodec
+          val durable = AgentClientDefinition.full("Counter", AgentMode.Durable, InputRecordCodec.single[String]("name"))
+          durable.agentId("main")
+        """),
+        typeCheckErrors("""
+          import golem.reflection.*
+          import golem.runtime.InputRecordCodec
+          val durable = AgentClientDefinition.full("Counter", AgentMode.Durable, InputRecordCodec.single[String]("name"))
+          durable.client.get("main")
+        """),
+        typeCheckErrors("""
+          import golem.reflection.*
+          import golem.runtime.InputRecordCodec
+          val durable = AgentClientDefinition.full("Counter", AgentMode.Durable, InputRecordCodec.single[String]("name"))
+          durable.client.getPhantom("main", java.util.UUID.randomUUID())
+        """),
+        typeCheckErrors("""
+          import golem.reflection.*
+          import golem.runtime.InputRecordCodec
+          val durable = AgentClientDefinition.full("Counter", AgentMode.Durable, InputRecordCodec.single[String]("name"))
+          durable.client.newPhantom("main")
+        """),
+        typeCheckErrors("""golem.reflection.ParsedAgentId("Counter(main)")""")
+      )
+      assertTrue(errors.forall(_.nonEmpty))
+    },
+    test("method-only definitions do not expose lifecycle factories") {
       val errors = typeCheckErrors("""
         import golem.reflection.*
 
-        AgentClientDefinition.methodOnly.agentId(())
         AgentClientDefinition.methodOnly.client
       """)
       assertTrue(errors.nonEmpty)

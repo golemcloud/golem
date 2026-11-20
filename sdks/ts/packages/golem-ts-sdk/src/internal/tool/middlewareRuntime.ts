@@ -51,7 +51,7 @@ import {
   type UniversalToolMiddlewareInvocation,
   type UniversalToolUnderlying,
 } from '../../tool';
-import type { Principal } from '../../principal';
+import type { Caller } from '../../caller';
 import type {
   MonomorphicToolMiddlewareSource,
   UniversalToolMiddlewareSource,
@@ -215,7 +215,7 @@ export interface MonomorphicToolMiddlewareInvocation {
   readonly stdin: AsyncIterable<number> | undefined;
   readonly stdout?: ToolOutputWriter;
   readonly stderr?: ToolOutputWriter;
-  readonly principal: Principal;
+  readonly caller: Caller;
 }
 
 export async function invokeMonomorphicToolMiddleware(
@@ -223,7 +223,7 @@ export async function invokeMonomorphicToolMiddleware(
   invocation: MonomorphicToolMiddlewareInvocation,
   raw: RawUnderlyingTool,
 ): Promise<WireInvocationResult> {
-  const { commandPath, input, parameters, stdin: rawStdin, principal } = invocation;
+  const { commandPath, input, parameters, stdin: rawStdin, caller } = invocation;
   return withInvocationScopedUnderlying(
     raw,
     rawStdin,
@@ -253,7 +253,7 @@ export async function invokeMonomorphicToolMiddleware(
       validatePresentedStdin(body, stdin);
 
       const context: Record<string, unknown> = {
-        principal,
+        caller,
         parameters: decodeMiddlewareParameters(source.parameterCodec, parameters),
         underlying: createToolUnderlyingForExtendedTool(
           source.expected,
@@ -324,7 +324,7 @@ export async function invokeUniversalToolMiddleware(
                 stdin,
                 stdout: invocation.stdout,
                 stderr: invocation.stderr,
-                principal: invocation.principal,
+                caller: invocation.caller,
               },
           {
             underlying,

@@ -30,7 +30,7 @@ The following plugin configuration keys are available:
 | `headers` | Custom HTTP headers |
 | `service-name-mode` | Either `agent-id` or `agent-type` |
 
-With `agent-type`, `service.name` is the agent type only. Constructor parameters and a phantom-agent instance ID are excluded, while `golem.agent.id` still identifies the full agent. This keeps service grouping stable and avoids unbounded service names.
+With `agent-id`, `service.name` is the agent ID, a UUID. With `agent-type`, `service.name` is the agent type only, while `golem.agent.id` still identifies the agent. This keeps service grouping stable and avoids unbounded service names.
 
 ### Custom spans
 
@@ -169,7 +169,7 @@ The following metrics are exported per agent:
 | `golem.update.failure_count` | Counter | Failed updates |
 | `golem.durable_stream.event_count` | Counter | Stream lifecycle records and logical items, distinguished by the `event` attribute |
 
-Each metric resource includes `service.name`, `golem.agent.id`, `golem.component.id`, and `golem.component.version`. Collector backends may normalize dotted metric names to underscores.
+Each metric resource includes `service.name`, `golem.agent.id`, `golem.agent.type` (when the agent has a type), and `golem.component.version`. Collector backends may normalize dotted metric names to underscores.
 
 Metric data-point dimensions are intentionally bounded. Active resource and memory values are gauges; individual resource IDs, stream IDs, and payload values are not data-point attributes. The agent identity remains a resource attribute.
 

@@ -14,9 +14,8 @@ import { uuidToString } from "./mocks/golem-core-types.js"
  */
 const HostLayer = Layer.mergeAll(AgentHostLive, PromiseLive)
 
-const makeAgentId = (label: string): Agents.AgentId => ({
-  componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-  agentId: label,
+const agentIdOf = (lowBits: bigint): Agents.AgentId => ({
+  uuid: { highBits: 0x1n, lowBits: 0x8000000000000000n | lowBits },
 })
 
 beforeEach(() => {
@@ -30,22 +29,24 @@ describe("Agents — metadata", () => {
   it.effect("getSelfMetadata returns the host's self metadata", () =>
     Effect.gen(function* () {
       const out = yield* Agents.getSelfMetadata
-      expect(out.agentId.agentId).toBe("Test()")
+      expect(out.agentTypeName).toBe("Test")
+      expect(out.agentId).toEqual({ uuid: { highBits: 0x1n, lowBits: 0x8000000000000001n } })
     }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("getAgentMetadata returns undefined for an unknown agent", () =>
     Effect.gen(function* () {
-      const out = yield* Agents.getAgentMetadata(makeAgentId("Other()"))
+      const out = yield* Agents.getAgentMetadata(agentIdOf(0x10n))
       expect(out).toBeUndefined()
     }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("getAgentMetadata returns seeded metadata", () =>
     Effect.gen(function* () {
-      const id = makeAgentId("Other()")
+      const id = agentIdOf(0x10n)
       ApiHostMock.__setAgentMetadata(id, {
         agentId: id,
+        fingerprint: { highBits: 0n, lowBits: 3n },
         args: [],
         env: [],
         config: [],
@@ -67,15 +68,9 @@ describe("Agents — metadata", () => {
     const ThrowingAgentHost = Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({
-        makeAgentId: () => {
-          throw new Error("not used by this test")
-        },
         getAgentType: (() => undefined) as never,
         getAgentTypeByAgentId: (() => undefined) as never,
         getAllAgentTypes: (() => []) as never,
-        parseAgentId: (() => {
-          throw new Error("not used by this test")
-        }) as never,
         getSelfMetadata: () => {
           throw new Error("nope")
         },
@@ -100,12 +95,6 @@ describe("Agents — metadata", () => {
         resolveComponentId: (() => {
           throw new Error("not used by this test")
         }) as never,
-        resolveAgentId: (() => {
-          throw new Error("not used by this test")
-        }) as never,
-        resolveAgentIdStrict: (() => {
-          throw new Error("not used by this test")
-        }) as never,
         getAgentsCtor: (() => {
           throw new Error("not used by this test")
         }) as never,
@@ -127,7 +116,7 @@ describe("Agents — metadata", () => {
 describe("Agents — lifecycle", () => {
   it.effect("updateAgent forwards target revision and mode", () =>
     Effect.gen(function* () {
-      const id = makeAgentId("Counter()")
+      const id = agentIdOf(0x11n)
       yield* Agents.updateAgent({ agentId: id, targetRevision: 7n, mode: "automatic" })
       expect(ApiHostMock.__getUpdateCalls()).toEqual([
         { agentId: id, targetRevision: 7n, mode: "automatic" },
@@ -139,7 +128,7 @@ describe("Agents — lifecycle", () => {
     Effect.gen(function* () {
       const exit = yield* Effect.exit(
         Agents.updateAgent({
-          agentId: makeAgentId("Counter()"),
+          agentId: agentIdOf(0x11n),
           targetRevision: -1,
           mode: "automatic",
         }),
@@ -151,18 +140,20 @@ describe("Agents — lifecycle", () => {
     }).pipe(Effect.provide(HostLayer)),
   )
 
-  it.effect("forkAgent records the call", () =>
+  it.effect("forkAgent records the call and returns the ID that Golem issued", () =>
     Effect.gen(function* () {
-      const source = makeAgentId("A()")
-      const target = makeAgentId("B()")
-      yield* Agents.forkAgent({ source, target, oplogIdxCutOff: 42n })
-      expect(ApiHostMock.__getForkCalls()).toEqual([{ source, target, oplogIdxCutOff: 42n }])
+      const source = agentIdOf(0x20n)
+      const forked = agentIdOf(0x21n)
+      ApiHostMock.__setForkedAgentId(forked)
+      const out = yield* Agents.forkAgent({ source, oplogIdxCutOff: 42n })
+      expect(out).toEqual(forked)
+      expect(ApiHostMock.__getForkCalls()).toEqual([{ source, oplogIdxCutOff: 42n }])
     }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("revertAgent supports both target variants", () =>
     Effect.gen(function* () {
-      const id = makeAgentId("X()")
+      const id = agentIdOf(0x14n)
       yield* Agents.revertAgent(id, Agents.RevertTarget.toOplogIndex(99n))
       const target = yield* Agents.RevertTarget.lastInvocations(3)
       yield* Agents.revertAgent(id, target)
@@ -185,12 +176,12 @@ describe("Agents — lifecycle", () => {
     Effect.gen(function* () {
       ApiHostMock.__setForkResult({
         tag: "forked",
-        val: { forkedPhantomId: { highBits: 0n, lowBits: 99n } },
+        val: { forkedAgentId: agentIdOf(99n) },
       })
       const out = yield* Agents.fork
       expect(out.tag).toBe("forked")
       if (out.tag === "forked") {
-        expect(out.val.forkedPhantomId.lowBits).toBe(99n)
+        expect(out.val.forkedAgentId).toEqual(agentIdOf(99n))
       }
     }).pipe(Effect.provide(HostLayer)),
   )
@@ -205,34 +196,23 @@ describe("Agents — resolution helpers", () => {
     }).pipe(Effect.provide(HostLayer)),
   )
 
-  it.effect("resolveAgentId returns undefined for unknown refs", () =>
-    Effect.gen(function* () {
-      const out = yield* Agents.resolveAgentId("missing", "X()")
-      expect(out).toBeUndefined()
-    }).pipe(Effect.provide(HostLayer)),
-  )
-
-  it.effect("resolveAgentIdStrict mirrors resolveAgentId via separate seed map", () =>
-    Effect.gen(function* () {
-      const id = makeAgentId("Y()")
-      ApiHostMock.__seedStrictAgentId("acct/proj/comp", "Y()", id)
-      const out = yield* Agents.resolveAgentIdStrict("acct/proj/comp", "Y()")
-      expect(out).toEqual(id)
-    }).pipe(Effect.provide(HostLayer)),
-  )
+  it("no longer exposes agent-name resolution", () => {
+    expect("resolveAgentId" in Agents).toBe(false)
+    expect("resolveAgentIdStrict" in Agents).toBe(false)
+  })
 })
 
 describe("Agents — Filter DSL", () => {
   it("compiles a single leaf filter", () => {
-    const f = Agents.Filter.name("equal", "Counter()")
+    const f = Agents.Filter.key("equal", "Counter()")
     const raw = Agents.toRawFilter(f)
     expect(raw.filters).toEqual([
-      { filters: [{ tag: "name", val: { comparator: "equal", value: "Counter()" } }] },
+      { filters: [{ tag: "key", val: { comparator: "equal", value: "Counter()" } }] },
     ])
   })
 
   it("compiles AND chains into a single AllFilter", () => {
-    const f = Agents.Filter.name("equal", "X")
+    const f = Agents.Filter.key("equal", "X")
       .and(Agents.Filter.status("equal", "running"))
       .and(Agents.Filter.version("greater-equal", 1n))
     const raw = Agents.toRawFilter(f)
@@ -249,21 +229,21 @@ describe("Agents — Filter DSL", () => {
   it("expands `(A or B) and C` into proper DNF", () => {
     // (name=A or name=B) and status=running
     // -> (name=A and status=running) or (name=B and status=running)
-    const f = Agents.Filter.name("equal", "A")
-      .or(Agents.Filter.name("equal", "B"))
+    const f = Agents.Filter.key("equal", "A")
+      .or(Agents.Filter.key("equal", "B"))
       .and(Agents.Filter.status("equal", "running"))
     const raw = Agents.toRawFilter(f)
     expect(raw.filters.length).toBe(2)
     for (const conj of raw.filters) {
       expect(conj.filters.length).toBe(2)
       const tags = conj.filters.map((p) => p.tag).sort()
-      expect(tags).toEqual(["name", "status"])
+      expect(tags).toEqual(["key", "status"])
     }
   })
 
   it("expands `A and (B or C)` into proper DNF", () => {
     const f = Agents.Filter.status("equal", "running").and(
-      Agents.Filter.name("equal", "A").or(Agents.Filter.name("equal", "B")),
+      Agents.Filter.key("equal", "A").or(Agents.Filter.key("equal", "B")),
     )
     const raw = Agents.toRawFilter(f)
     expect(raw.filters.length).toBe(2)
@@ -273,8 +253,8 @@ describe("Agents — Filter DSL", () => {
   })
 
   it("expands `(A or B) and (C or D)` into 4 conjunctions", () => {
-    const f = Agents.Filter.name("equal", "A")
-      .or(Agents.Filter.name("equal", "B"))
+    const f = Agents.Filter.key("equal", "A")
+      .or(Agents.Filter.key("equal", "B"))
       .and(Agents.Filter.status("equal", "running").or(Agents.Filter.status("equal", "idle")))
     const raw = Agents.toRawFilter(f)
     expect(raw.filters.length).toBe(4)
@@ -284,9 +264,10 @@ describe("Agents — Filter DSL", () => {
 describe("Agents — getAgents stream", () => {
   it.effect("collects paged metadata in order", () =>
     Effect.gen(function* () {
-      const componentId: Agents.ComponentId = { uuid: { highBits: 0n, lowBits: 7n } }
       const a: Agents.AgentMetadata = {
-        agentId: makeAgentId("A()"),
+        agentId: agentIdOf(0x12n),
+        agentTypeName: "Counter",
+        fingerprint: { highBits: 0n, lowBits: 3n },
         args: [],
         env: [],
         config: [],
@@ -297,25 +278,30 @@ describe("Agents — getAgents stream", () => {
       }
       const b: Agents.AgentMetadata = {
         ...a,
-        agentId: makeAgentId("B()"),
+        agentId: agentIdOf(0x13n),
       }
       const c: Agents.AgentMetadata = {
         ...a,
-        agentId: makeAgentId("C()"),
+        agentId: agentIdOf(0x16n),
       }
-      ApiHostMock.__seedAgentsForComponent(componentId, [[a, b], [c]])
+      ApiHostMock.__seedAgentsForType("Counter", [[a, b], [c]])
 
-      const out = yield* Stream.runCollect(Agents.getAgents({ componentId }))
-      expect(out.map((m) => m.agentId.agentId)).toEqual(["A()", "B()", "C()"])
+      const out = yield* Stream.runCollect(Agents.getAgents({ agentTypeName: "Counter" }))
+      expect(out.map((m) => m.agentId)).toEqual([
+        agentIdOf(0x12n),
+        agentIdOf(0x13n),
+        agentIdOf(0x16n),
+      ])
       expect(ApiHostMock.__getGetAgentsDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("disposes the pager when downstream stops early", () =>
     Effect.gen(function* () {
-      const componentId: Agents.ComponentId = { uuid: { highBits: 0n, lowBits: 8n } }
       const metadata: Agents.AgentMetadata = {
-        agentId: makeAgentId("A()"),
+        agentId: agentIdOf(0x12n),
+        agentTypeName: "Counter",
+        fingerprint: { highBits: 0n, lowBits: 3n },
         args: [],
         env: [],
         config: [],
@@ -324,9 +310,9 @@ describe("Agents — getAgents stream", () => {
         retryCount: 0n,
         environmentId: { uuid: { highBits: 0n, lowBits: 1n } },
       }
-      ApiHostMock.__seedAgentsForComponent(componentId, [[metadata], [metadata]])
+      ApiHostMock.__seedAgentsForType("Counter", [[metadata], [metadata]])
 
-      yield* Stream.runCollect(Agents.getAgents({ componentId }).pipe(Stream.take(1)))
+      yield* Stream.runCollect(Agents.getAgents({ agentTypeName: "Counter" }).pipe(Stream.take(1)))
       expect(ApiHostMock.__getGetAgentsDisposeCount()).toBe(1)
     }).pipe(Effect.provide(HostLayer)),
   )
@@ -400,7 +386,7 @@ describe("Agents — Promises", () => {
   // Defensive sanity check: keep the unused import alive so a future refactor
   // removing it doesn't go unnoticed.
   it("agent ids are stringifiable for diagnostics", () => {
-    const id = makeAgentId("X()")
-    expect(uuidToString(id.componentId.uuid)).toMatch(/^[0-9a-f]{8}-/)
+    const id = agentIdOf(0x14n)
+    expect(uuidToString(id.uuid)).toMatch(/^[0-9a-f]{8}-/)
   })
 })

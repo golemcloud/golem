@@ -19,7 +19,6 @@ import (
 	"reflect"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -28,14 +27,6 @@ import (
 func namedFields(g *engine.GraphBuilder, fs []engine.Field) []common.NamedField {
 	out := make([]common.NamedField, 0, len(fs))
 	for _, f := range fs {
-		if f.AutoInjected {
-			out = append(out, common.NamedField{
-				Name:   f.Name,
-				Source: common.MakeFieldSourceAutoInjected(common.AutoInjectedKindPrincipal),
-				Schema: g.Node(principalSlotCodec),
-			})
-			continue
-		}
 		out = append(out, common.NamedField{
 			Name:   f.Name,
 			Source: common.MakeFieldSourceUserSupplied(),
@@ -43,18 +34,6 @@ func namedFields(g *engine.GraphBuilder, fs []engine.Field) []common.NamedField 
 		})
 	}
 	return out
-}
-
-// principalSlotCodec types a principal field in the schema. The field carries
-// no value, so like the Rust SDK it is an empty record; its own key type keeps
-// it apart from a misplaced Principal's codec.
-type principalSlot struct{}
-
-var principalSlotCodec = &engine.Codec{
-	Typ: reflect.TypeFor[principalSlot](),
-	Body: func(*engine.GraphBuilder) types.SchemaTypeBody {
-		return types.MakeSchemaTypeBodyRecordType([]types.NamedFieldType{})
-	},
 }
 
 // buildAgentType derives the full agent-type metadata reported by
@@ -76,8 +55,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		readOnly := witTypes.None[common.ReadOnlyConfig]()
 		if m.readOnly != nil {
 			readOnly = witTypes.Some(common.ReadOnlyConfig{
-				CachePolicy:   m.readOnly.policy.toWit(),
-				UsesPrincipal: len(principalFields(m.inFields)) > 0,
+				CachePolicy: m.readOnly.policy.toWit(),
 			})
 		}
 		methods = append(methods, common.AgentMethod{

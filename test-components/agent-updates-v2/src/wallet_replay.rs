@@ -102,8 +102,7 @@ pub trait WalletSnapshotProbe {
     fn arm_snapshot_change(
         &self,
         card: golem_rust::golem_schema::CardId,
-        component: golem_rust::ComponentId,
-        target: String,
+        target: Option<golem_rust::AgentId>,
     );
     fn observe(&self, card: golem_rust::golem_schema::CardId) -> (bool, u64, bool, bool);
 }
@@ -112,8 +111,7 @@ pub struct WalletSnapshotProbeImpl {
     change: std::cell::RefCell<
         Option<(
             golem_rust::golem_schema::CardId,
-            golem_rust::ComponentId,
-            String,
+            Option<golem_rust::AgentId>,
         )>,
     >,
 }
@@ -129,10 +127,9 @@ impl WalletSnapshotProbe for WalletSnapshotProbeImpl {
     fn arm_snapshot_change(
         &self,
         card: golem_rust::golem_schema::CardId,
-        component: golem_rust::ComponentId,
-        target: String,
+        target: Option<golem_rust::AgentId>,
     ) {
-        *self.change.borrow_mut() = Some((card, component, target));
+        *self.change.borrow_mut() = Some((card, target));
     }
 
     fn observe(&self, card: golem_rust::golem_schema::CardId) -> (bool, u64, bool, bool) {
@@ -150,22 +147,16 @@ impl WalletSnapshotProbe for WalletSnapshotProbeImpl {
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
         let change = self.change.borrow_mut().take();
-        if let Some((id, component, target)) = change {
+        if let Some((id, target)) = change {
             let card = wallet_cards()
                 .find(|handle| golem_rust::golem_schema::CardId::from(types::id(handle)) == id)
                 .expect("the save-hook card must be installed");
-            if target.is_empty() {
+            if let Some(target) = target {
+                wallet::install_card(card, types::Holder::Agent((&target).into()))
+                    .map_err(|error| format!("{error:?}"))?;
+            } else {
                 let count = revoke::revoke_card(card).map_err(|error| format!("{error:?}"))?;
                 assert_eq!(count, 1);
-            } else {
-                wallet::install_card(
-                    card,
-                    &types::Holder::Agent(golem_rust::schema::wit::wire::AgentId {
-                        component_id: component.into(),
-                        agent_id: target,
-                    }),
-                )
-                .map_err(|error| format!("{error:?}"))?;
             }
         }
         Ok(Vec::new())

@@ -13,12 +13,12 @@ use super::{
     DurableStreamsHandler, MAX_ITEMS, body_response, has_header, rejection_response, response,
     route_method, route_stream_load_key,
 };
+use crate::service::worker::RoutedTarget;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     AppendToStreamSlotRequest, ExternalStreamProducer, StreamSessionCreationIntent,
     StreamSessionExpiryPolicy, TypedStreamSlotItems, append_to_stream_slot_request::Payload,
     append_to_stream_slot_response::Result as Outcome,
 };
-use golem_common::model::AgentId;
 use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::render::from_untrusted_json_value;
@@ -36,13 +36,14 @@ impl DurableStreamsHandler {
         request: &mut RichRequest,
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
-        agent_id: &AgentId,
+        target: &RoutedTarget,
         session: &str,
         slot: &str,
         allow_create: bool,
         allow: &str,
         expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let agent_id = &target.agent_id;
         let Some(declared_slot) = declared_slot(behaviour, slot)? else {
             return Ok(response(StatusCode::NOT_FOUND));
         };
@@ -197,7 +198,7 @@ impl DurableStreamsHandler {
                 request,
                 route,
                 behaviour,
-                agent_id,
+                target,
                 session,
                 StreamSessionCreationIntent::LazyPost,
                 expiry_policy,
@@ -209,7 +210,7 @@ impl DurableStreamsHandler {
             .append_to_stream_slot(
                 agent_id,
                 AppendToStreamSlotRequest {
-                    agent_id: Some(agent_id.clone().into()),
+                    agent_id: Some((*agent_id).into()),
                     environment_id: Some(route.route.environment_id.into()),
                     auth_ctx: Some(AuthCtx::System.into()),
                     route_scope: super::route_scope(route),

@@ -62,10 +62,10 @@ use crate::chaos::PinnedConfig;
 use crate::chaos::history::Stream;
 use crate::chaos::workload::{self, WorkloadContext};
 use anyhow::Context;
-use golem_common::model::agent::ParsedAgentKey;
+use golem_common::model::agent::{AgentKey, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, RoutingTable};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
@@ -117,29 +117,35 @@ pub fn candidate_agent_name(key_prefix: &str, index: u32) -> String {
     format!("{key_prefix}-{}-{index:04}", Stream::PinnedHttp)
 }
 
-/// The routing-table `AgentId` for one agent of `agent_type`.
+/// The routing-table `AgentId` for the keyed agent of `agent_type` named `agent`.
 ///
-/// This has to match how the worker-service builds the id it routes on —
-/// the component id plus the *string form* of the parsed agent id — or the
-/// ownership calculation would be answering a different question from the one
-/// the platform answers.
+/// This has to match the ID the platform routes on — the keyed agent ID that
+/// derives from the environment, the registry-assigned type ID and the key — or
+/// the ownership calculation would be answering a different question from the
+/// one the platform answers.
 pub fn routing_agent_id(ctx: &WorkloadContext, agent_type: &str, agent: &str) -> AgentId {
     routing_agent_id_in(&ctx.counters, agent_type, agent)
 }
 
 /// [`routing_agent_id`] against a named component rather than the counters one.
 ///
-/// Ownership is per agent id and an agent id contains its component, so an agent
-/// type that lives in a different component — S11's waiters are in the promise
-/// component — hashes to a different shard than the same name would under
-/// `counters`. Looking one up against the wrong component would silently aim a
-/// kill at whichever executor happened to own a name nothing uses.
+/// The type ID comes from the component's deployed metadata, so `component` must be
+/// fetched after the deployment that registered `agent_type`. Looking an agent type
+/// up in a component that does not implement it is a driver bug, and panics rather
+/// than silently aiming a kill at whichever executor owns an ID nothing uses.
 pub fn routing_agent_id_in(component: &ComponentDto, agent_type: &str, agent: &str) -> AgentId {
-    let parsed: ParsedAgentKey = agent_id!(agent_type, agent.to_string());
-    AgentId {
-        component_id: component.id,
-        agent_id: parsed.to_string(),
-    }
+    let parsed: ParsedAgentKey = agent_key!(agent_type, agent.to_string());
+    let type_id = component
+        .metadata
+        .agent_types
+        .iter()
+        .find(|candidate| candidate.declaration.type_name == parsed.agent_type)
+        .unwrap_or_else(|| panic!("component {} does not implement {agent_type}", component.id))
+        .type_id
+        .unwrap_or_else(|| panic!("agent type {agent_type} has no registry-assigned type id"));
+    let key = AgentKey::new(parsed.agent_type, parsed.parameters)
+        .unwrap_or_else(|err| panic!("invalid agent key for {agent_type}: {err}"));
+    AgentId::keyed(component.environment_id, type_id, &key)
 }
 
 /// Groups agents of `agent_type` by the executor that owns them.
@@ -386,7 +392,7 @@ pub fn start(
 /// Submits one pinned operation and waits for it to resolve.
 async fn submit_one(ctx: &WorkloadContext, agent: &str, seq: u64, millis: u32) {
     let key = ctx.idempotency_key(agent, seq);
-    let parsed: ParsedAgentKey = agent_id!(COUNTER_AGENT, agent.to_string());
+    let parsed: ParsedAgentKey = agent_key!(COUNTER_AGENT, agent.to_string());
     let ctx2 = ctx.clone();
 
     workload::run_operation(

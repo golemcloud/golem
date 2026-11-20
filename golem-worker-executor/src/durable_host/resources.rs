@@ -249,7 +249,10 @@ impl PrivateDurableWorkerState {
 impl ResourceStore for PrivateDurableWorkerState {
     fn self_uri(&self) -> Uri {
         Uri {
-            value: self.owned_agent_id.agent_id.to_agent_urn(),
+            value: format!(
+                "urn:agent:{}/{}",
+                self.owned_agent_id.environment_id, self.owned_agent_id.agent_id
+            ),
         }
     }
 

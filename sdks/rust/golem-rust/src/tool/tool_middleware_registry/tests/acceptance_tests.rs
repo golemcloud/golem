@@ -18,8 +18,8 @@ use crate::schema::wit::{GuestQuotaTokenHandle, GuestSecretHandle, wire as schem
 use crate::schema::{FromSchema, IntoSchema, SchemaType, SchemaValue, TypedSchemaValue};
 use crate::tool::wire;
 use crate::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError,
-    ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, Principal, RawCustomToolError,
+    Tool, ToolInvokeError, ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use crate::{
     IntoTypedSchemaValue, decode_typed_schema_value_owned, encode_typed_schema_value_owned,
@@ -37,10 +37,8 @@ use std::task::{Context, Poll, Waker};
 use test_r::test;
 use wit_bindgen::rt::async_support::StreamVtable;
 
-type TestStreamItem = Result<
-    Vec<u8>,
-    crate::golem_agentic::golem::tool::streams::ByteStreamFailure,
->;
+type TestStreamItem =
+    Result<Vec<u8>, crate::golem_agentic::golem::tool::streams::ByteStreamFailure>;
 static TEST_STREAMS: Mutex<BTreeMap<u32, VecDeque<TestStreamItem>>> = Mutex::new(BTreeMap::new());
 static NEXT_TEST_STREAM: AtomicU32 = AtomicU32::new(1);
 static TEST_STREAM_NEW_CALLS: AtomicU32 = AtomicU32::new(0);
@@ -73,11 +71,7 @@ unsafe extern "C" fn test_stream_new() -> u64 {
     0
 }
 
-unsafe extern "C" fn test_stream_read(
-    handle: u32,
-    destination: *mut u8,
-    amount: usize,
-) -> u32 {
+unsafe extern "C" fn test_stream_read(handle: u32, destination: *mut u8, amount: usize) -> u32 {
     let mut streams = test_streams();
     let Some(stream) = streams.get_mut(&handle) else {
         return 1;
@@ -94,11 +88,7 @@ unsafe extern "C" fn test_stream_read(
     ((count as u32) << 4) | u32::from(stream.is_empty())
 }
 
-unsafe extern "C" fn test_stream_write(
-    _handle: u32,
-    _source: *const u8,
-    _amount: usize,
-) -> u32 {
+unsafe extern "C" fn test_stream_write(_handle: u32, _source: *const u8, _amount: usize) -> u32 {
     1
 }
 
@@ -187,7 +177,7 @@ async fn invoke(
     command_path: Vec<String>,
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
-    principal: Principal,
+    context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     get_tool_middleware_invoker_by_name(middleware_name)
@@ -202,7 +192,7 @@ async fn invoke(
         stdin,
         None,
         None,
-        principal,
+        context,
         underlying,
     )
     .await
@@ -361,7 +351,7 @@ async fn invoke_echo(
             vec![SchemaValue::String(value.to_string())],
         ),
         stdin,
-        Principal::Anonymous,
+        InvocationContext::anonymous(),
         underlying,
     )
     .await
@@ -534,13 +524,15 @@ fn adapter_underlying(calls: AdapterCalls, result: Result<u64, String>) -> Under
         Box::pin(async move {
             match result {
                 Ok(value) => Ok(typed_result(value)),
-                Err(message) => Err(wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
-                    name: "failed".to_string(),
-                    payload: encode_typed_schema_value_owned(
-                        message.into_typed_schema_value().unwrap(),
-                    )
-                    .unwrap(),
-                })),
+                Err(message) => Err(wire::ToolError::CustomError(
+                    crate::schema::wit::wire::CustomToolError {
+                        name: "failed".to_string(),
+                        payload: encode_typed_schema_value_owned(
+                            message.into_typed_schema_value().unwrap(),
+                        )
+                        .unwrap(),
+                    },
+                )),
             }
         })
     }))
@@ -557,7 +549,7 @@ async fn invoke_adapter(
         vec!["convert".to_string()],
         canonical_input::<AdapterPresentedUnderlying>(&["convert"], vec![SchemaValue::U32(value)]),
         None,
-        Principal::Anonymous,
+        InvocationContext::anonymous(),
         underlying,
     )
     .await
@@ -606,7 +598,11 @@ fn adapter_converts_input_output_and_custom_errors_between_exact_descriptors(
             panic!("mapped adapter error is custom")
         };
         assert_eq!(
-            PresentedError::from_error_payload_value(error.name.clone(), error.payload().unwrap().clone()).unwrap(),
+            PresentedError::from_error_payload_value(
+                error.name.clone(),
+                error.payload().unwrap().clone()
+            )
+            .unwrap(),
             Some(PresentedError::Rejected("denied".to_string()))
         );
     });
@@ -712,7 +708,7 @@ async fn invoke_nested(
             ],
         ),
         None,
-        Principal::Anonymous,
+        InvocationContext::anonymous(),
         underlying,
     )
     .await
@@ -784,7 +780,7 @@ async fn universal_acceptance(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    principal: Principal,
+    context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     UNIVERSAL_OBSERVATION.with(|observation| {
@@ -792,7 +788,7 @@ async fn universal_acceptance(
             tool_name,
             tool_version: tool_metadata.version,
             command_path: command_path.clone(),
-            anonymous_principal: matches!(principal, Principal::Anonymous),
+            anonymous_principal: matches!(context.caller().immediate(), Principal::Anonymous),
             raw_value: format!("{:?}", input.value()),
             had_stdin: stdin.is_some(),
         });
@@ -836,7 +832,7 @@ fn universal_middleware_observes_runtime_context_and_forwards_raw_semantics(
             vec!["echo".to_string()],
             input,
             None,
-            Principal::Anonymous,
+            InvocationContext::anonymous(),
             underlying,
         )
         .await
@@ -914,10 +910,10 @@ fn stream_underlying(include_stdout: bool, include_stderr: bool) -> UnderlyingTo
                 .concat();
             assert_eq!(bytes, b"request");
             Ok(Some(
-                    encode_typed_schema_value_owned(
-                        "copied".to_string().into_typed_schema_value().unwrap(),
-                    )
-                    .unwrap(),
+                encode_typed_schema_value_owned(
+                    "copied".to_string().into_typed_schema_value().unwrap(),
+                )
+                .unwrap(),
             ))
         });
         (
@@ -940,16 +936,14 @@ async fn invoke_stream(
         vec!["copy".to_string()],
         canonical_input::<StreamToolUnderlying>(&["copy"], vec![]),
         stdin,
-        Principal::Anonymous,
+        InvocationContext::anonymous(),
         underlying,
     )
     .await
 }
 
 #[test]
-fn middleware_receives_ordinary_output_writer_parameter(
-    _registry_test_state: &RegistryTestState,
-) {
+fn middleware_receives_ordinary_output_writer_parameter(_registry_test_state: &RegistryTestState) {
     TEST_STREAM_NEW_CALLS.store(0, Ordering::Relaxed);
     run_acceptance(async {
         let result = invoke_stream(
@@ -1030,7 +1024,7 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
                 vec![SchemaValue::String("value".to_string())],
             ),
             None,
-            Principal::Anonymous,
+            InvocationContext::anonymous(),
             echo_underlying(Rc::new(Cell::new(0)), false),
         )
         .await;
@@ -1049,7 +1043,7 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
                 .into_typed_schema_value()
                 .unwrap(),
             None,
-            Principal::Anonymous,
+            InvocationContext::anonymous(),
             echo_underlying(Rc::new(Cell::new(0)), false),
         )
         .await;
@@ -1076,12 +1070,11 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
             Err(ToolInvokeError::InvalidInput(_))
         ));
 
-        let missing_stdout =
-            invoke_stream(
-                Some(readable_stream(b"request")),
-                stream_underlying(false, true),
-            )
-            .await;
+        let missing_stdout = invoke_stream(
+            Some(readable_stream(b"request")),
+            stream_underlying(false, true),
+        )
+        .await;
         assert!(matches!(
             missing_stdout,
             Err(ToolInvokeError::InvalidResult(_))
@@ -1211,7 +1204,7 @@ fn nested_secret_and_quota_capabilities_cross_monomorphic_and_universal_once(
             vec!["carry".to_string()],
             capability_input(&secret, &quota),
             None,
-            Principal::Anonymous,
+            InvocationContext::anonymous(),
             capability_underlying(Rc::clone(&seen)),
         )
         .await
@@ -1230,7 +1223,7 @@ fn nested_secret_and_quota_capabilities_cross_monomorphic_and_universal_once(
             vec!["carry".to_string()],
             capability_input(&secret, &quota),
             None,
-            Principal::Anonymous,
+            InvocationContext::anonymous(),
             capability_underlying(Rc::clone(&seen)),
         )
         .await

@@ -26,11 +26,7 @@ import {
 import { DiscriminatedUnion, Int32, Uint32 } from "../src/WitTypes.js"
 import { UnsupportedSchemaError } from "../src/WitCodec.js"
 import { StaticDefaultsConfig } from "../integration-test/components/static-config/src/main.js"
-import {
-  __resetGetConfigValueImpl,
-  __setGetConfigValueImpl,
-  __setParseAgentIdImpl,
-} from "./mocks/golem-agent-host.js"
+import { __resetGetConfigValueImpl, __setGetConfigValueImpl } from "./mocks/golem-agent-host.js"
 import { __setCaller } from "./mocks/golem-agent-invocation-context.js"
 import { __setEnvironment } from "./mocks/wasi-cli-environment.js"
 
@@ -161,7 +157,12 @@ describe("portable static config", () => {
           ).toBe(true)
           expect(leaf.source).toBe("local")
           expect(
-            leaf.defaultValue === undefined ? undefined : SchemaRef.fromImmutableGraph(leaf.declarationGraph, leaf.declarationGraph.root).unpackJson(leaf.defaultValue),
+            leaf.defaultValue === undefined
+              ? undefined
+              : SchemaRef.fromImmutableGraph(
+                  leaf.declarationGraph,
+                  leaf.declarationGraph.root,
+                ).unpackJson(leaf.defaultValue),
           ).toEqual(
             declaration.default_value === undefined
               ? undefined
@@ -184,8 +185,20 @@ describe("portable static config", () => {
         .discoverAgentTypes()
         .find((agent) => agent.typeName === "EffectStaticDefaultsAgent")!
       const reference = yield* StaticDefaultsConfig.__compile()
-      expect(agent.config.map((declaration) => declaration.defaultValue === undefined ? undefined : new SchemaRef(agent.schema, declaration.valueType).unpackJson(declaration.defaultValue))).toEqual(
-        corpus.schemas.reference.declarations.map((declaration: any) => declaration.default_value === undefined ? undefined : JSON.parse(declaration.default_value)),
+      expect(
+        agent.config.map((declaration) =>
+          declaration.defaultValue === undefined
+            ? undefined
+            : new SchemaRef(agent.schema, declaration.valueType).unpackJson(
+                declaration.defaultValue,
+              ),
+        ),
+      ).toEqual(
+        corpus.schemas.reference.declarations.map((declaration: any) =>
+          declaration.default_value === undefined
+            ? undefined
+            : JSON.parse(declaration.default_value),
+        ),
       )
       for (const [index, declaration] of agent.config.entries()) {
         expect(declaration.path).toEqual(reference.leaves[index]!.path)
@@ -272,7 +285,12 @@ describe("portable static config", () => {
         ["delivery"],
         ["tree"],
       ])
-      expect(SchemaRef.fromImmutableGraph(compiled.leaves[1]!.declarationGraph, compiled.leaves[1]!.declarationGraph.root).unpackJson(compiled.leaves[1]!.defaultValue!)).toEqual({
+      expect(
+        SchemaRef.fromImmutableGraph(
+          compiled.leaves[1]!.declarationGraph,
+          compiled.leaves[1]!.declarationGraph.root,
+        ).unpackJson(compiled.leaves[1]!.defaultValue!),
+      ).toEqual({
         deliveryKind: "queue",
         queueName: "limits.support_default",
       })
@@ -484,9 +502,8 @@ describe("portable static config", () => {
     const snapshot = await saveSnapshot.save()
     expect(new TextDecoder().decode(snapshot.payload)).not.toContain("code-default")
     await __resetAgents()
-    __setEnvironment([["GOLEM_AGENT_ID", 'EffectStaticDefaultsAgent("owner")']])
-    __setParseAgentIdImpl(() => ["EffectStaticDefaultsAgent", { value: id() }, undefined])
-    await loadSnapshot.load(snapshot)
+    __setEnvironment([["GOLEM_AGENT_TYPE", "EffectStaticDefaultsAgent"]])
+    await loadSnapshot.load(snapshot, id())
     expect(await read()).toEqual(corpus.staticCases[0].expected)
     values = corpus.staticCases[3].expected
     expect(await read()).toEqual(values)

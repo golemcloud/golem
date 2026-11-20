@@ -22,7 +22,7 @@ import type {
 } from 'golem:tool/common@0.1.0';
 import type { UnderlyingTool } from 'golem:tool/underlying@0.1.0';
 import type { ToolOutputWriter } from 'golem:tool/streams@0.1.0';
-import type { Principal } from '../../principal';
+import type { Caller } from '../../caller';
 import type { UniversalToolMiddlewareInvoke } from '../../tool';
 import type { ExtendedToolRuntime, ExtendedToolType } from '../tool';
 import { encodeTool } from '../tool';
@@ -65,7 +65,7 @@ export interface RawToolMiddlewareInvocation {
   readonly stdin: AsyncIterable<number> | undefined;
   readonly stdout: ToolOutputWriter | undefined;
   readonly stderr: ToolOutputWriter | undefined;
-  readonly principal: Principal;
+  readonly caller: Caller;
   readonly wrapped: Pick<UnderlyingTool, 'invoke'>;
 }
 

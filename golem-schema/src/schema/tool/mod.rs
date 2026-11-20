@@ -43,6 +43,8 @@ pub mod argv;
 pub mod canonical;
 pub mod compatibility;
 pub mod constraints;
+pub mod http;
+pub use http::{CommandHttp, ToolHttpEndpoint, ToolHttpMount, ToolHttpPrefix};
 pub mod process;
 mod process_exit_status;
 pub use process_exit_status::ProcessExitStatus;
@@ -103,6 +105,7 @@ impl CommandIndex {
 pub struct Tool {
     pub version: String,
     pub requires_filesystem: bool,
+    pub http_mount: Option<ToolHttpMount>,
     pub commands: CommandTree,
     /// Named-type registry shared by this tool's commands. Typed positions in
     /// the command tree may reference these definitions via
@@ -226,6 +229,7 @@ pub struct CommandNode {
     pub name: String,
     pub aliases: Vec<String>,
     pub doc: Doc,
+    pub http: Option<CommandHttp>,
     pub globals: Globals,
     pub subcommands: Vec<CommandIndex>,
     pub body: Option<CommandBody>,

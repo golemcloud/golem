@@ -53,11 +53,11 @@ async fn resource_metering_configuration_controls_startup_and_invocation(
     }
 
     if dimensions.is_empty() {
-        let ephemeral_agent = agent_id!("EphemeralCounter", "metering-disabled-ephemeral");
+        let ephemeral_agent = agent_key!("EphemeralCounter", "metering-disabled-ephemeral");
         executor
             .invoke_and_await_agent(&component, &ephemeral_agent, "increment", data_value!())
             .await?;
-        let durable_agent = agent_id!("Counter", "metering-disabled-durable");
+        let durable_agent = agent_key!("Counter", "metering-disabled-durable");
         executor
             .start_agent(&component.id, durable_agent.clone())
             .await?;
@@ -75,17 +75,29 @@ async fn resource_metering_configuration_controls_startup_and_invocation(
             IntegrationExhaustion::DurableStorage => (&component, "Counter", false),
             IntegrationExhaustion::EphemeralStorage => (&component, "EphemeralCounter", false),
         };
-        let loaded_agent = agent_id!(agent_type, format!("loaded-{exhausted:?}"));
-        let loaded_worker_id = executor
-            .start_agent(&target_component.id, loaded_agent.clone())
-            .await?;
-        if !matches!(exhausted, IntegrationExhaustion::EphemeralStorage) {
+        let loaded_agent = agent_key!(agent_type, format!("loaded-{exhausted:?}"));
+        let ephemeral_target = matches!(exhausted, IntegrationExhaustion::EphemeralStorage);
+        let loaded_worker_id = if ephemeral_target {
+            executor
+                .create_unkeyed_agent(
+                    &target_component.id,
+                    None,
+                    loaded_agent.clone(),
+                    HashMap::new(),
+                )
+                .await?
+        } else {
+            executor
+                .start_agent(&target_component.id, loaded_agent.clone())
+                .await?
+        };
+        if !ephemeral_target {
             let initial = executor
                 .invoke_and_await_agent(target_component, &loaded_agent, "increment", data_value!())
                 .await?;
             assert_eq!(initial.into_typed::<u32>()?, 1);
         }
-        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &loaded_worker_id);
+        let owned_agent_id = loaded_worker_id.clone();
         if must_be_resident {
             executor
                 .wait_for_status(
@@ -151,9 +163,15 @@ async fn resource_metering_configuration_controls_startup_and_invocation(
         let invocation_key = IdempotencyKey::fresh();
         let before_blocked_invocation = executor.oplog_max_index(&loaded_worker_id).await?;
 
-        if matches!(exhausted, IntegrationExhaustion::EphemeralStorage) {
+        if ephemeral_target {
             let error = executor
-                .invoke_and_await_agent(target_component, &loaded_agent, "increment", data_value!())
+                .invoke_and_await_agent_by_id(
+                    target_component,
+                    &loaded_worker_id,
+                    None,
+                    "increment",
+                    data_value!(),
+                )
                 .await
                 .expect_err("the ephemeral target must reject the exhausted policy");
             assert!(
@@ -189,8 +207,12 @@ async fn resource_metering_configuration_controls_startup_and_invocation(
             registry.set_policy(available_policy.clone());
             wait_for_policy_admission(&executor, &component, exhausted).await?;
             executor.resume(&loaded_worker_id, false).await?;
-            wait_for_invocation_pair(&executor, &loaded_worker_id, before_blocked_invocation)
-                .await?;
+            wait_for_invocation_pair(
+                &executor,
+                &loaded_worker_id.agent_id,
+                before_blocked_invocation,
+            )
+            .await?;
             let recovered_oplog = executor
                 .get_oplog(&loaded_worker_id, OplogIndex::INITIAL)
                 .await?;
@@ -217,6 +239,8 @@ async fn resource_metering_configuration_controls_startup_and_invocation(
         registry.set_policy(available_policy.clone());
         wait_for_policy_admission(&executor, &component, exhausted).await?;
         assert_eq!(registry.monthly_usage_mode_revision(), 0);
+        // An ephemeral agent takes one invocation, so the recovered invocation runs on a fresh
+        // instance of the type.
         let recovered = executor
             .invoke_and_await_agent(target_component, &loaded_agent, "increment", data_value!())
             .await?;
@@ -310,7 +334,7 @@ async fn all_disabled_account_metering_preserves_per_agent_memory_limit(
         .component_dep(&context.default_environment_id, large_dynamic_memory)
         .store()
         .await?;
-    let agent_id = agent_id!(
+    let agent_id = agent_key!(
         "LargeDynamicMemoryAgent",
         "unmetered-per-agent-memory-limit"
     );

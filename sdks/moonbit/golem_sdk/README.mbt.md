@@ -49,8 +49,8 @@ Pure initialization does not implicitly read self metadata. Keep metadata reads 
 of an untrusted evaluator instead of granting self-view for bootstrap. Declare no
 tools or secrets and admit only the host operations the evaluator needs.
 Self metadata is a host operation, not a pure source of identity. Snapshot restoration reads
-`GOLEM_AGENT_ID` through the WASI environment API rather than self metadata, so it
-requires the separate environment-read permission for that variable. Granting
+`GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE` through the WASI environment API rather than self
+metadata, so it requires the separate environment-read permission for those variables. Granting
 self-view does not grant environment-read permission, and granting environment-read
 permission does not grant self-view.
 
@@ -304,7 +304,7 @@ let current : Result[String, @tool.ToolError[WeatherError]] =
 client.drop()
 ```
 
-Parameters typed as `@tool.Principal` or `@tool.ProviderOutput` are provided by the runtime and
+Parameters typed as `@tool.InvocationContext` or `@tool.ProviderOutput` are provided by the runtime and
 omitted from typed client inputs; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
 An `@asyncCore.Stream[Byte]` input becomes a client parameter. Either declared output selects the
 started-invocation result shape, with independent optional stdout/stderr streams, structured result,
@@ -428,7 +428,7 @@ pub async fn audit(
 ] {
   ignore(invocation.tool_name())
   ignore(invocation.tool_metadata())
-  ignore(invocation.principal())
+  ignore(invocation.invocation_context())
   underlying.invoke_raw(
     invocation.command_path(),
     invocation.input(),

@@ -41,6 +41,11 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
   guest never saw. The serialized direct path records no markers
   (`DurableCallSession::replay` rejects `CompletionDelivered` for a non-accessor call) and
   delivers at the host return.
+- **Delivered hooks** (`OnDelivered`, `deliver_at_accessor_terminal_with_delivered`) run inside
+  Wasmtime's event loop when the guest receives a completion. A hook must not touch the Store,
+  block or panic (the executor builds with `panic = "abort"`), and may take only a lock that no
+  holder keeps across a call into Wasmtime. Build the hook from the response, so live and replay
+  run the same hook at the same delivery.
 - **Host-internal results** retain durable Start/End and cancellation tracking, but create no
   guest-terminal observer, delivery token, delivery/discard marker, or replay-tail gate. Use
   `invoke_host_internal_access` with an outer call that owns cancellation until the host
@@ -49,9 +54,10 @@ name, owner, optional request payload). *Observe* is the guest reading the resul
 
 ## Identity on the replay path
 
-Any value replay must reproduce (idempotency keys, phantom ids, scope discriminators, span ids
+Any value replay must reproduce (idempotency keys, agent IDs, scope discriminators, span ids
 that reach the guest) derives from oplog indices or recorded data — `derive_idempotency_key`,
-`ephemeral_invocation_phantom_id` (UUIDv5 of the key). Fresh randomness or clock reads are
+`AgentId::allocated` (from the `Start` index), `AgentId::keyed` (from a recorded agent type),
+`AgentId::ephemeral_invocation` (from the owner key). Fresh randomness or clock reads are
 allowed only when appended and committed before the guest can observe them and read back on
 replay (as `caller_attempt_id` does); unrecorded guest-observable randomness is a bug.
 

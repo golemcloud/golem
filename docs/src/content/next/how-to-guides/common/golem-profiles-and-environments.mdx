@@ -341,6 +341,46 @@ Golem resolves the base component, including its template and component presets,
 agent overrides and agent presets. Preset properties merge with or override the base properties of
 their layer using the same merge modes (`envMergeMode`, `pluginsMergeMode`, etc.).
 
+## How the presets differ
+
+The built-in Rust, MoonBit, and Go templates define a `debug` and a `release` preset. The template's
+`local` environment selects `debug` and its `cloud` environment selects `release`. Both presets build
+the same source, but in Rust and MoonBit the program can behave differently between them. Before you
+deploy, test with the preset that the target environment selects, for example
+`golem build --yes -P release`.
+
+**Rust.** `debug` runs `cargo build --target wasm32-wasip2`, which uses Cargo's `dev` profile.
+`release` runs `cargo build --target wasm32-wasip2 --release` with the generated
+`[profile.release]` (`opt-level = "s"`, `lto = true`, `strip = "symbols"`). Golem keeps Cargo's defaults for `overflow-checks` and `debug-assertions`:
+`debug` checks integer overflow and runs `debug_assert!`, and `release` does neither. For example,
+`u8::MAX + 1` on a runtime value panics in `debug` and fails the invocation, but gives `0` in
+`release`. A failing `debug_assert!` panics only in `debug`. When code must behave the same in both
+presets, use `checked_add`, `wrapping_add`, or `saturating_add` and `assert!`, or set
+the same `overflow-checks` and `debug-assertions` values in `[profile.dev]` and in the generated
+`[profile.release]`.
+
+**MoonBit.** `debug` runs `moon build --target wasm` and `release` runs
+`moon build --target wasm --release`. The `targets` option in a package's `moon.pkg` can give a file
+a `debug` or `release` condition, and `moon` then compiles that file only into the matching build:
+
+```moonbit
+options(
+  targets: {
+    "checks_debug.mbt": [ "debug" ],
+    "checks_release.mbt": [ "release" ],
+  },
+)
+```
+
+With such conditions the two presets compile different files, so the behavior can differ between
+them. Golem does not check or warn about these conditions. A package whose `targets` names no
+`debug` or `release` condition compiles the same files in both presets.
+
+**Go.** Both presets run the same `componentize-go build`. `release` then removes the `name` custom
+section, which holds the Go function names, with `wasm-tools strip`. This section is removable debug
+metadata, so the behavior does not differ between the presets. Only Wasm trap backtraces of a
+`release` build show function indexes instead of function names.
+
 ## Per-Agent Configuration
 
 Configuration in the manifest is **per agent**. Each agent type can have its own:

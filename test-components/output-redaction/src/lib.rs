@@ -4,8 +4,8 @@ use golem_rust::schema::tool::Tool;
 use golem_rust::schema::validation::value::validate_value;
 use golem_rust::schema::{SchemaGraph, SchemaType, SchemaValue};
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, ToolInvokeError,
-    UnderlyingTool,
+    InputStream, InvocationContext, InvocationResult, OutputStream, RawCustomToolError,
+    ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{FromSchema, IntoSchema, TypedSchemaValue, universal_tool_middleware};
 use std::collections::BTreeSet;
@@ -553,7 +553,7 @@ async fn output_redaction(
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
     stderr: Option<OutputStream>,
-    _principal: Principal,
+    _context: InvocationContext,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     let policy = Policy::compile(parameters, &tool_metadata, &command_path)
@@ -601,11 +601,13 @@ mod tests {
         Tool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
+            http_mount: None,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: "fixture".to_string(),
                     aliases: vec![],
                     doc: Doc::default(),
+                    http: None,
                     globals: Globals::default(),
                     subcommands: vec![],
                     body: Some(CommandBody {

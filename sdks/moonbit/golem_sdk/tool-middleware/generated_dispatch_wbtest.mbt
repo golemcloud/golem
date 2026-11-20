@@ -57,7 +57,7 @@ async fn invoke_generated(
     command_path,
     input,
     stdin,
-    @agentCommon.Principal::Anonymous,
+    @caller.InvocationContext::anonymous(),
     underlying,
   )
 }

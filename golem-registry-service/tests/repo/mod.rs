@@ -30,6 +30,7 @@ use golem_registry_service::repo::environment::EnvironmentRepo;
 use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepo;
 use golem_registry_service::repo::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRepo;
 use golem_registry_service::repo::http_api_deployment::HttpApiDeploymentRepo;
+use golem_registry_service::repo::installation::InstallationRepo;
 use golem_registry_service::repo::mcp_deployment::McpDeploymentRepo;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRevisionRecord,
@@ -82,6 +83,7 @@ pub struct Deps {
     pub account_resource_override_repo: std::sync::Arc<dyn AccountResourceOverrideRepo>,
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
+    pub installation_repo: Box<dyn InstallationRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
     pub environment_repo: Arc<dyn EnvironmentRepo>,
     pub blob_storage: Arc<dyn BlobStorage>,

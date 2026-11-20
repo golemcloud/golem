@@ -16,7 +16,6 @@ use golem_common::SafeDisplay;
 use golem_common::config::LoadOrDump;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_worker_service::WorkerService;
-use golem_worker_service::bootstrap::Services;
 use golem_worker_service::config::{WorkerServiceConfig, make_worker_service_config_loader};
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
@@ -69,10 +68,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 pub async fn dump_openapi_yaml() -> anyhow::Result<()> {
-    let config = WorkerServiceConfig::default();
-    let services = Services::new(&config).await?;
-    let open_api_service = golem_worker_service::api::make_open_api_service(&services);
-    println!("{}", open_api_service.spec_yaml());
+    println!("{}", golem_worker_service::openapi_yaml().await?);
     Ok(())
 }
 

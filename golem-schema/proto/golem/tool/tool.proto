@@ -4,12 +4,14 @@ package golem.tool;
 
 import "golem/common/empty.proto";
 import "golem/schema/schema.proto";
+import "golem/http/http.proto";
 
 message Tool {
   string version = 1;
   CommandTree commands = 2;
   golem.schema.SchemaGraph schema = 3;
   bool requires_filesystem = 4;
+  optional ToolHttpMount http_mount = 5;
 }
 
 message ToolMiddleware {
@@ -44,6 +46,33 @@ message CommandNode {
   Globals globals = 4;
   repeated int32 subcommands = 5;
   optional CommandBody body = 6;
+  optional CommandHttp http = 7;
+}
+
+message ToolHttpMount {
+  repeated golem.http.PathSegment path_prefix = 1;
+}
+
+message CommandHttp {
+  oneof value {
+    ToolHttpEndpoint endpoint = 1;
+    ToolHttpPrefix prefix = 2;
+  }
+}
+
+message ToolHttpPrefix {
+  repeated golem.http.PathSegment path_suffix = 1;
+}
+
+message ToolHttpEndpoint {
+  optional string route_id = 1;
+  golem.http.HttpMethod http_method = 2;
+  repeated golem.http.PathSegment path_suffix = 3;
+  repeated golem.http.QueryVariable query_vars = 4;
+  repeated golem.http.HeaderVariable header_vars = 5;
+  repeated golem.http.FileResponseHeader response_headers = 6;
+  optional golem.http.HttpRouteMode mode = 7;
+  optional golem.http.DurableStreamRouteOptions durable_streams = 8;
 }
 
 message Globals {

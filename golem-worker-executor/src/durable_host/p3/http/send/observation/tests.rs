@@ -211,10 +211,7 @@ async fn assert_send_abandonment_after_live_tail(recorded_end: bool, completed_e
     let replay = ReplayState::new_for_owner(
         OwnedAgentId {
             environment_id: golem_common::model::environment::EnvironmentId::new(),
-            agent_id: AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "http-repair".to_string(),
-            },
+            agent_id: AgentId::from_parts(7, 1),
         },
         oplog.clone(),
         golem_common::model::regions::DeletedRegions::default(),

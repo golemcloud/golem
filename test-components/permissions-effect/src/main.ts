@@ -1,7 +1,6 @@
 import { Duration, Effect, Equal, Option, Schema } from "effect";
 import {
   defineAgent,
-  defineAgentClient,
   method,
   Permissions,
   SelfAgentId,
@@ -27,11 +26,6 @@ const calleeMethods = {
 const calleeId = { name: Schema.String };
 
 const Callee = defineAgent({
-  name: "EffectPermissionCallee",
-  id: calleeId,
-  methods: calleeMethods,
-});
-const CalleeClient = defineAgentClient({
   name: "EffectPermissionCallee",
   id: calleeId,
   methods: calleeMethods,
@@ -187,11 +181,11 @@ defineAgent({
           );
 
           // 4. Attach a scope card to awaited calls.
-          const callee = yield* Callee.client.get({ name: calleeName });
+          const callee = yield* Callee.client.upsert({ name: calleeName });
           result.calleeBefore = yield* callee.probe({});
           const scope = yield* Permissions.deriveScope([walletCard], bounds);
           result.calleePerCallScope = yield* callee.probe.withScopeCard(scope)({});
-          const scoped = yield* Callee.client.get(
+          const scoped = yield* Callee.client.upsert(
             { name: calleeName },
             { scopeCard: scope },
           );
@@ -204,8 +198,8 @@ defineAgent({
           keptScope = yield* Permissions.deriveScope([scope], bounds);
 
           // 5. Install a card on another agent.
-          const identity = yield* CalleeClient.agentId({ name: calleeName });
-          const holder = yield* Permissions.agentHolder(identity);
+          const identity = yield* callee.agentId;
+          const holder = Permissions.Holder.agent(identity);
           const installed = yield* Permissions.derive(card, bounds);
           yield* Permissions.install(installed, holder);
           result.calleeAfterInstall = yield* callee.probe({});
@@ -284,7 +278,7 @@ defineAgent({
       Effect.scoped(
         Effect.gen(function* () {
           if (keptScope === undefined) return yield* Effect.die("no kept scope card");
-          const callee = yield* Callee.client.get({ name: calleeName });
+          const callee = yield* Callee.client.upsert({ name: calleeName });
           return yield* callErrorTag(callee.probe.withScopeCard(keptScope)({}));
         }),
       ),

@@ -36,7 +36,7 @@
 //! | `pipe(target, run, count, keep) -> list<u32>` | write, read, drop | Writes records 1..=count into `consume` (or `consume_then_drop` when `keep < count`) of the fixture agent `target`, and returns its result |
 //! | `read_remote(target, run, count, pause_after, gate) -> list<u32>` | read over RPC | The records of `produce` of the fixture agent `target` |
 //!
-//! A gate has the schema shape of the WIT `promise-id` record, with the component id nested as a
+//! A gate has the schema shape of the WIT `promise-id` record, with the agent id nested as a
 //! `{ uuid }` record. A fixture whose SDK represents promise ids in another shape declares its own
 //! record of this shape, as the Go, Scala and MoonBit fixtures do.
 //!

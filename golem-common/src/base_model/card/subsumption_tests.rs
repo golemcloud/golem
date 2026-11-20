@@ -15,8 +15,9 @@
 use super::*;
 use crate::model::auth::TokenId;
 use crate::model::card::owner::{
-    AccountOwnerPattern, AgentOwnerPattern, ApplicationOwnerPattern, ComponentOwnerPattern,
-    EmptyOwnerPattern, EnvironmentOwnerPattern, OwnerPattern, ToolOwnerPattern,
+    AccountOwnerPattern, AgentOwnerLeafPattern, AgentOwnerPattern, ApplicationOwnerPattern,
+    ComponentOwnerPattern, EmptyOwnerPattern, EnvironmentOwnerPattern, OwnerPattern,
+    ToolOwnerPattern,
 };
 use crate::model::card::recipient::RecipientPattern;
 use RecipientPattern as AccountRecipientPattern;
@@ -69,7 +70,8 @@ fn network(recipient: &str, resource: NetworkResourcePattern) -> PermissionPatte
 fn oplog_read(resource: OplogResourcePattern) -> PermissionPattern {
     PermissionPattern::Oplog(ClassPermissionPattern::<OplogClass> {
         verb: Some(OplogVerb::Read),
-        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/00000007-0000-8000-8000-000000000002")
+            .unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource,
     })
@@ -101,51 +103,96 @@ fn card(lower_positive: Vec<PermissionPattern>, upper_positive: Vec<PermissionPa
 #[test]
 fn owner_wildcards_subsume_segments() {
     let broad = AgentOwnerPattern::parse("acme/shop/prod/*/*").unwrap();
-    let narrow = AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap();
+    let narrow =
+        AgentOwnerPattern::parse("acme/shop/prod/cart/00000007-0000-8000-8000-000000000002")
+            .unwrap();
 
     assert!(broad.subsumes(&narrow));
     assert!(!narrow.subsumes(&broad));
 }
 
+/// Parses owner text whose concrete agent leaf may be written `Type#n`: agent `n` of type tag 7
+/// with the trusted type name `Type`, as Golem builds the owner of a running agent.
+fn owner(text: &str) -> AgentOwnerPattern {
+    match text.rsplit_once('/') {
+        Some((prefix, leaf)) if leaf.contains('#') => {
+            let (agent_type, n) = leaf.split_once('#').unwrap();
+            let agent_id = crate::base_model::AgentId::from_parts(7, n.parse().unwrap());
+            let mut pattern = AgentOwnerPattern::parse(&format!("{prefix}/{agent_id}")).unwrap();
+            if let AgentOwnerPattern::Agent { agent, .. } = &mut pattern {
+                *agent = AgentOwnerLeafPattern::agent(
+                    agent_id,
+                    Some(crate::model::agent::AgentTypeName(agent_type.to_string())),
+                );
+            }
+            pattern
+        }
+        _ => AgentOwnerPattern::parse(text).unwrap(),
+    }
+}
+
 #[test_gen]
 fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
     let cases = [
-        ("acme/shop/prod/*/*", "acme/shop/prod/cart/agent", true),
-        ("acme/shop/*/*/*", "acme/shop/prod/cart/agent", true),
-        ("*/*/*/*/*", "acme/shop/prod/cart/agent", true),
+        ("acme/shop/prod/*/*", "acme/shop/prod/cart/Agent#1", true),
+        ("acme/shop/*/*/*", "acme/shop/prod/cart/Agent#1", true),
+        ("*/*/*/*/*", "acme/shop/prod/cart/Agent#1", true),
         (
-            "acme/shop/prod/cart/agent",
-            "acme/shop/prod/cart/agent",
+            "acme/shop/prod/cart/Agent#1",
+            "acme/shop/prod/cart/Agent#1",
             true,
         ),
-        ("acme/shop/prod/cart/agent", "acme/shop/prod/cart/*", false),
         (
-            "acme/shop/prod/cart/agent",
-            "other/shop/prod/cart/agent",
+            "acme/shop/prod/cart/00000007-0000-8000-8000-000000000001",
+            "acme/shop/prod/cart/Agent#1",
+            true,
+        ),
+        (
+            "acme/shop/prod/cart/Agent#1",
+            "acme/shop/prod/cart/Agent#2",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Agent#1",
+            "acme/shop/prod/cart/*",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/Agent#1",
+            "other/shop/prod/cart/Agent#1",
             false,
         ),
         (
             "acme/shop/prod/cart/CartAgent(*)",
-            "acme/shop/prod/cart/CartAgent(\"42\")",
+            "acme/shop/prod/cart/CartAgent#4",
             true,
         ),
         (
-            "acme/shop/prod/cart/CartAgent(\"42\")",
+            "acme/shop/prod/cart/CartAgent#4",
             "acme/shop/prod/cart/CartAgent(*)",
             false,
         ),
         (
             "acme/shop/prod/cart/ShoppingCart(*)",
-            "acme/shop/prod/cart/ShoppingCart(\"42\")",
+            "acme/shop/prod/cart/ShoppingCart#4",
             true,
         ),
         (
             "acme/shop/prod/cart/ShoppingCart(*)",
-            "acme/shop/prod/cart/Order(\"42\")",
+            "acme/shop/prod/cart/Order#4",
             false,
         ),
-        ("acme/shop/prod/cart/*", "acme/shop/prod/other/agent", false),
-        ("acme/*/*/*/*", "other/shop/prod/cart/agent", false),
+        (
+            "acme/shop/prod/cart/ShoppingCart(*)",
+            "acme/shop/prod/cart/00000007-0000-8000-8000-000000000004",
+            false,
+        ),
+        (
+            "acme/shop/prod/cart/*",
+            "acme/shop/prod/other/Agent#1",
+            false,
+        ),
+        ("acme/*/*/*/*", "other/shop/prod/cart/Agent#1", false),
     ];
 
     for (left, right, expected) in cases {
@@ -163,10 +210,7 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let left = AgentOwnerPattern::parse(left).unwrap();
-                let right = AgentOwnerPattern::parse(right).unwrap();
-
-                assert_eq!(left.subsumes(&right), expected);
+                assert_eq!(owner(left).subsumes(&owner(right)), expected);
             }
         );
     }
@@ -175,11 +219,14 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
 #[test]
 fn invalid_owner_paths_fail_subsumption() {
     assert_matches!(
-        AgentOwnerPattern::parse("acme//prod/cart/agent"),
-        Err(path) if path == "acme//prod/cart/agent"
+        AgentOwnerPattern::parse("acme//prod/cart/00000007-0000-8000-8000-000000000002"),
+        Err(path) if path == "acme//prod/cart/00000007-0000-8000-8000-000000000002"
     );
     assert_matches!(AgentOwnerPattern::parse("acme/*/prod/*/*"), Err(_));
-    assert_matches!(AgentOwnerPattern::parse("*/shop/prod/cart/agent"), Err(_));
+    assert_matches!(
+        AgentOwnerPattern::parse("*/shop/prod/cart/00000007-0000-8000-8000-000000000002"),
+        Err(_)
+    );
 }
 
 #[test]
@@ -348,12 +395,12 @@ fn parse_recipient(value: &str) -> RecipientPattern {
 #[test]
 fn glob_resource_subsumes_concrete_resource() {
     let broad = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let narrow = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), fs_lit("item.json")]),
     );
@@ -447,9 +494,13 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             format!("glob_resource_subsumption_{name}"),
             TestProperties::unit_test(),
             || {
-                let left = fs("acme/shop/prod/cart/agent", "acme/*/*/*/*", (*left).clone());
+                let left = fs(
+                    "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
+                    "acme/*/*/*/*",
+                    (*left).clone(),
+                );
                 let right = fs(
-                    "acme/shop/prod/cart/agent",
+                    "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
                     "acme/*/*/*/*",
                     (*right).clone(),
                 );
@@ -709,19 +760,22 @@ fn generate_domain_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
 fn verb_wildcard_subsumes_class_verbs_only() {
     let any_filesystem = fs_permission(ClassPermissionPattern::<FilesystemClass> {
         verb: None,
-        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/00000007-0000-8000-8000-000000000002")
+            .unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     });
     let read_file = fs_permission(ClassPermissionPattern::<FilesystemClass> {
         verb: Some(FilesystemVerb::Read),
-        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/00000007-0000-8000-8000-000000000002")
+            .unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     });
     let write_file = fs_permission(ClassPermissionPattern::<FilesystemClass> {
         verb: Some(FilesystemVerb::Write),
-        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/agent").unwrap(),
+        owner: AgentOwnerPattern::parse("acme/shop/prod/cart/00000007-0000-8000-8000-000000000002")
+            .unwrap(),
         recipient: AgentRecipientPattern::parse("acme/*/*/*/*").unwrap(),
         resource: fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     });
@@ -788,7 +842,7 @@ fn oplog_ranges_subsume_inner_ranges() {
 #[test]
 fn subsumption_requires_same_permission_class() {
     let filesystem = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
@@ -807,17 +861,17 @@ fn subsumption_requires_same_permission_class() {
 #[test]
 fn derivation_must_be_subsumed_by_parent_union() {
     let parent_grant = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
     let denied_child = fs(
-        "other/shop/prod/cart/agent",
+        "other/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
@@ -839,17 +893,17 @@ fn derivation_must_be_subsumed_by_parent_union() {
 #[test]
 fn derivation_checks_upper_bounds_against_parent_upper_surface() {
     let parent_upper = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_upper = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
     let too_broad_child_upper = fs(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         "acme/shop/prod/cart/agent",
         fs_path(vec![fs_lit("other"), fs_lit("file.txt")]),
     );
@@ -879,13 +933,14 @@ fn derivation_checks_upper_bounds_against_parent_upper_surface() {
 #[test]
 fn attenuation_rejects_upper_positive_for_disjoint_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let parent_upper = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_upper = fs(
-        holder,
+        owner,
         "acme/shop/prod/cart/child",
         fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
@@ -901,19 +956,20 @@ fn attenuation_rejects_upper_positive_for_disjoint_recipient() {
 #[test]
 fn attenuation_rejects_narrowing_upper_positive_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let other_recipient = "acme/shop/prod/cart/other";
     let parent_upper = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let child_upper = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let lower_grant = fs(
-        holder,
+        owner,
         other_recipient,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -926,7 +982,7 @@ fn attenuation_rejects_narrowing_upper_positive_recipient() {
             .unwrap();
     let child_surface =
         EffectiveSurface::from_cards(&[child_ceiling, companion], &recipient).unwrap();
-    let secret = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+    let secret = fs_target(owner, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
 
     assert!(!parent_surface.authorize(&secret).unwrap());
     assert!(child_surface.authorize(&secret).unwrap());
@@ -940,14 +996,14 @@ fn attenuation_rejects_narrowing_upper_positive_recipient() {
 
 #[test]
 fn attenuation_accepts_equivalent_disjoint_recipient_ceilings() {
-    let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let upper_a = fs(
-        holder,
+        owner,
         "acme/shop/prod/cart/a",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let upper_b = fs(
-        holder,
+        owner,
         "acme/shop/prod/cart/b",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
@@ -965,21 +1021,21 @@ fn attenuation_accepts_equivalent_disjoint_recipient_ceilings() {
 
 #[test]
 fn attenuation_accepts_lower_grant_where_retained_ceiling_is_locally_top() {
-    let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let recipient_a = "acme/shop/prod/cart/a";
     let recipient_b = "acme/shop/prod/cart/b";
     let parent_lower = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_lower = fs(
-        holder,
+        owner,
         recipient_b,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let retained_upper = fs(
-        holder,
+        owner,
         recipient_a,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
@@ -1002,14 +1058,15 @@ fn attenuation_accepts_lower_grant_where_retained_ceiling_is_locally_top() {
 #[test]
 fn attenuation_rejects_dropped_positive_ceiling_when_child_has_lower_grant() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let recipient = RecipientPattern::parse(holder).unwrap();
     let read_public = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let read_secret = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1021,7 +1078,7 @@ fn attenuation_rejects_dropped_positive_ceiling_when_child_has_lower_grant() {
 
     let child = card(vec![read_public.clone()], Vec::new());
     let child_surface = EffectiveSurface::from_cards(&[child, companion], &recipient).unwrap();
-    let secret_target = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+    let secret_target = fs_target(owner, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
 
     assert!(!parent_surface.authorize(&secret_target).unwrap());
     assert!(child_surface.authorize(&secret_target).unwrap());
@@ -1039,18 +1096,19 @@ fn attenuation_rejects_dropped_positive_ceiling_when_child_has_lower_grant() {
 #[test]
 fn attenuation_preserves_parent_denials_and_accepts_additions_on_both_bounds() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let parent_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
     );
     let added_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![
             fs_lit("other"),
@@ -1058,7 +1116,7 @@ fn attenuation_preserves_parent_denials_and_accepts_additions_on_both_bounds() {
         ]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1103,18 +1161,19 @@ fn attenuation_preserves_parent_denials_and_accepts_additions_on_both_bounds() {
 #[test]
 fn attenuation_witness_excludes_grantless_lower_denial_parent() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let parent_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1134,24 +1193,25 @@ fn attenuation_witness_excludes_grantless_lower_denial_parent() {
 #[test]
 fn attenuation_does_not_preserve_a_parent_denial_with_an_unrelated_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let unrelated_recipient_negative = fs(
-        holder,
+        owner,
         "other/shop/prod/cart/agent",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1166,7 +1226,7 @@ fn attenuation_does_not_preserve_a_parent_denial_with_an_unrelated_recipient() {
     child.upper_negative = vec![unrelated_recipient_negative.clone()];
     let child_surface =
         EffectiveSurface::from_cards(std::slice::from_ref(&child), &recipient).unwrap();
-    let denied_target = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+    let denied_target = fs_target(owner, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
 
     assert!(!parent_surface.authorize(&denied_target).unwrap());
     assert!(child_surface.authorize(&denied_target).unwrap());
@@ -1194,19 +1254,20 @@ fn attenuation_does_not_preserve_a_parent_denial_with_an_unrelated_recipient() {
 #[test]
 fn attenuation_keeps_inherited_denials_scoped_to_the_parent_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let child_recipient = "acme/shop/prod/cart/child";
     let parent_grant = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        holder,
+        owner,
         child_recipient,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1237,18 +1298,19 @@ fn attenuation_keeps_inherited_denials_scoped_to_the_parent_recipient() {
 #[test]
 fn attenuation_rejects_narrowing_an_inherited_upper_denial_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let parent_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let narrowed_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1269,15 +1331,15 @@ fn attenuation_rejects_narrowing_an_inherited_upper_denial_recipient() {
 
 #[test]
 fn attenuation_rejects_omitting_selected_parent_denials_for_other_recipients() {
-    let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let other_recipient = "acme/shop/prod/cart/other";
     let parent_grant = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         other_recipient,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1294,15 +1356,16 @@ fn attenuation_rejects_omitting_selected_parent_denials_for_other_recipients() {
 #[test]
 fn attenuation_rejects_upper_denial_scoped_away_from_lower_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let lower_recipient = "acme/shop/prod/cart/child";
     let unrelated_upper_recipient = "acme/shop/prod/cart/other";
     let parent_grant = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1316,17 +1379,17 @@ fn attenuation_rejects_upper_denial_scoped_away_from_lower_recipient() {
     .unwrap();
 
     let child_lower = fs(
-        holder,
+        owner,
         lower_recipient,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_upper = fs(
-        holder,
+        owner,
         unrelated_upper_recipient,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let child_negative = fs(
-        holder,
+        owner,
         unrelated_upper_recipient,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1337,7 +1400,7 @@ fn attenuation_rejects_upper_denial_scoped_away_from_lower_recipient() {
         &RecipientPattern::parse(lower_recipient).unwrap(),
     )
     .unwrap();
-    let secret = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+    let secret = fs_target(owner, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
 
     assert!(!parent_effective_surface.authorize(&secret).unwrap());
     assert!(child_surface.authorize(&secret).unwrap());
@@ -1355,13 +1418,14 @@ fn attenuation_rejects_upper_denial_scoped_away_from_lower_recipient() {
 #[test]
 fn attenuation_accepts_retained_negative_only_ceiling_without_lower_grants() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let retained_negative = fs(
-        holder,
+        owner,
         "*",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1380,13 +1444,14 @@ fn attenuation_accepts_retained_negative_only_ceiling_without_lower_grants() {
 #[test]
 fn attenuation_rejects_negative_only_child_ceiling_that_drops_parent_positive_ceiling() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let recipient = RecipientPattern::parse(holder).unwrap();
     let parent_upper = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
-    let deny_parent_upper = fs(holder, holder, FilesystemResourcePattern::any());
+    let deny_parent_upper = fs(owner, holder, FilesystemResourcePattern::any());
     let network_grant = network(holder, NetworkResourcePattern::Any);
     let network_target = network_grant.to_target();
     let parent = card(Vec::new(), vec![parent_upper]);
@@ -1416,17 +1481,18 @@ fn attenuation_rejects_negative_only_child_ceiling_that_drops_parent_positive_ce
 #[test]
 fn attenuation_requires_retaining_positive_ceiling_even_when_negative_denies_it() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let parent_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
-    let deny_everything = fs(holder, holder, FilesystemResourcePattern::any());
+    let deny_everything = fs(owner, holder, FilesystemResourcePattern::any());
     let parent = card(vec![parent_grant.clone()], vec![parent_grant.clone()]);
     let parent_id = parent.card_id;
     let parent_surface = DelegationSurface::from_cards(std::slice::from_ref(&parent));
@@ -1456,8 +1522,9 @@ fn attenuation_requires_retaining_positive_ceiling_even_when_negative_denies_it(
 #[test]
 fn attenuation_accepts_identical_fully_denied_parent_ceiling() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let retained_positive = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
@@ -1481,8 +1548,9 @@ fn attenuation_accepts_identical_fully_denied_parent_ceiling() {
 #[test]
 fn attenuation_accepts_identical_fully_denied_parent_lower_bound() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let retained_positive = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
@@ -1695,8 +1763,9 @@ fn attenuation_accepts_fully_denied_ceiling_against_implicit_and_explicit_top() 
 #[test]
 fn attenuation_accepts_exactly_retained_negative_only_ceiling() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1715,19 +1784,20 @@ fn attenuation_accepts_exactly_retained_negative_only_ceiling() {
 #[test]
 fn attenuation_rejects_negative_only_ceiling_retained_for_another_recipient() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let other_recipient = "acme/shop/prod/cart/other";
     let inherited_negative = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let mismatched_negative = fs(
-        holder,
+        owner,
         other_recipient,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let lower_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
@@ -1744,7 +1814,7 @@ fn attenuation_rejects_negative_only_ceiling_retained_for_another_recipient() {
     child_ceiling.upper_negative = vec![mismatched_negative.clone()];
     let child_surface =
         EffectiveSurface::from_cards(&[child_ceiling, companion], &recipient).unwrap();
-    let secret = fs_target(holder, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
+    let secret = fs_target(owner, fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]));
 
     assert!(!parent_surface.authorize(&secret).unwrap());
     assert!(child_surface.authorize(&secret).unwrap());
@@ -1765,13 +1835,14 @@ fn attenuation_rejects_negative_only_ceiling_retained_for_another_recipient() {
 #[test]
 fn wallet_derivation_parent_selection_chooses_highest_qualifying_card_id() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let parent_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let child_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
@@ -1798,13 +1869,14 @@ fn wallet_derivation_parent_selection_chooses_highest_qualifying_card_id() {
 #[test]
 fn wallet_derivation_parent_selection_detects_multi_source_lower_union() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let first_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("first.txt")]),
     );
     let second_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("second.txt")]),
     );
@@ -1834,13 +1906,14 @@ fn wallet_derivation_parent_selection_rejects_empty_wallet() {
 #[test]
 fn wallet_derivation_parent_selection_preserves_combined_attenuation_failure() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let available_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("available.txt")]),
     );
     let unavailable_grant = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("unavailable.txt")]),
     );
@@ -1860,23 +1933,24 @@ fn wallet_derivation_parent_selection_preserves_combined_attenuation_failure() {
 #[test]
 fn wallet_derivation_parent_selection_applies_upper_intersection_after_lower_union() {
     let holder = "acme/shop/prod/cart/agent";
+    let owner = "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002";
     let first_lower = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("first.txt")]),
     );
     let second_lower = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("second.txt")]),
     );
     let broad_upper = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
     );
     let narrow_upper = fs(
-        holder,
+        owner,
         holder,
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
@@ -1953,20 +2027,20 @@ fn rdbms_unanalyzed_requires_explicit_scoped_authority() {
 #[test]
 fn negative_grants_override_positive_grants() {
     let public = fs_target(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         fs_path(vec![fs_lit("data"), fs_lit("public.txt")]),
     );
     let secret = fs_target(
-        "acme/shop/prod/cart/agent",
+        "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
         fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
     );
     let surface = GrantSurface {
         positive: vec![fs_target(
-            "acme/shop/prod/cart/agent",
+            "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
             fs_path(vec![fs_lit("data"), FilesystemPathSegmentPattern::GlobStar]),
         )],
         negative: vec![fs_target(
-            "acme/shop/prod/cart/agent",
+            "acme/shop/prod/cart/00000007-0000-8000-8000-000000000002",
             fs_path(vec![fs_lit("data"), fs_lit("secret.txt")]),
         )],
     };

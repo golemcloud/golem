@@ -15,6 +15,8 @@
 import type { FlagShape, FlagSpec, OptionSpec, Tool } from 'golem:tool/common@0.1.0';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
+import { readFileSync } from 'node:fs';
+import * as http from '../src/http';
 import { compileSchema } from '../src/schema/adapter';
 import type { SchemaCodec } from '../src/schema/codec';
 import { KeyValue, Path, s } from '../src/schema/markers';
@@ -32,6 +34,122 @@ import {
 
 const stringCodec = compileSchema(z.string());
 const pathCodec = compileSchema(Path());
+
+it('encodes the shared HTTP report declarations through the public builder', () => {
+  const definition = toolDefinition('report')
+    .http(http.mount('/reports'))
+    .version('2.0.0')
+    .command('generate', (c) => c.http(http.post('/generate')).body((b) => b.returns(z.string())))
+    .command('status', (c) =>
+      c.http(http.get('/status/{id}')).body((b) => b.positional('id', z.string())),
+    )
+    .command('admin', (c) =>
+      c
+        .http(http.prefix('/admin'))
+        .command('purge', (p) =>
+          p.http(http.delete('/purge/{id}')).body((b) => b.positional('id', z.string())),
+        ),
+    );
+  const wire = encodeTool(getExtendedToolDefinition(definition));
+  const path = (segments: NonNullable<typeof wire.httpMount>['pathPrefix']) =>
+    '/' +
+    segments
+      .map((s) =>
+        s.tag === 'literal'
+          ? s.val
+          : `{${s.tag === 'remaining-path-variable' ? '*' : ''}${s.val.variableName}}`,
+      )
+      .join('/');
+  const commands: unknown[] = [];
+  const visit = (index: number, names: string[]) => {
+    const node = wire.commands.nodes[index];
+    if (node.http?.tag === 'prefix')
+      commands.push({ command: names.join('.'), prefix: path(node.http.val.pathSuffix) });
+    if (node.http?.tag === 'endpoint')
+      commands.push({
+        command: names.join('.'),
+        method: node.http.val.httpMethod.tag.toUpperCase(),
+        suffix: path(node.http.val.pathSuffix),
+      });
+    for (const child of node.subcommands) visit(child, [...names, wire.commands.nodes[child].name]);
+  };
+  visit(0, []);
+  expect({ mount: path(wire.httpMount!.pathPrefix), commands }).toEqual(
+    JSON.parse(
+      readFileSync(
+        new URL('../../../../../test-data/tool-http-report.json', import.meta.url),
+        'utf8',
+      ),
+    ),
+  );
+  expect(wire.commands.nodes[1].http).toMatchObject({ tag: 'endpoint', val: { mode: undefined } });
+});
+
+it('grafts HTTP declarations without importing the child mount or mutating it', () => {
+  const child = toolDefinition('admin')
+    .http(http.mount('/discarded'))
+    .http(http.prefix('/own'))
+    .command('purge', (c) => c.http(http.delete('/purge')).body((b) => b.returns(z.string())));
+  const retained = toolDefinition('parent').http(http.mount('/parent')).command('admin', child);
+  const overridden = toolDefinition('parent')
+    .http(http.mount('/parent'))
+    .command('admin', child.http(http.prefix('/override')));
+  const wire = (definition: typeof retained) => encodeTool(getExtendedToolDefinition(definition));
+  expect(wire(retained).httpMount).toEqual({ pathPrefix: [{ tag: 'literal', val: 'parent' }] });
+  expect(wire(retained).commands.nodes[1].http).toEqual({
+    tag: 'prefix',
+    val: { pathSuffix: [{ tag: 'literal', val: 'own' }] },
+  });
+  expect(wire(overridden).commands.nodes[1].http).toEqual({
+    tag: 'prefix',
+    val: { pathSuffix: [{ tag: 'literal', val: 'override' }] },
+  });
+  const standalone = encodeTool(getExtendedToolDefinition(child));
+  expect(standalone.httpMount).toEqual({ pathPrefix: [{ tag: 'literal', val: 'discarded' }] });
+  expect(standalone.commands.nodes[0].http).toEqual(wire(retained).commands.nodes[1].http);
+});
+
+it('preserves tool endpoint options and rejects agent-only settings', () => {
+  const declaration = http.post('/events?filter={filter}', {
+    routeId: 'report-events',
+    mode: 'durableStreams',
+    headers: { 'X-Trace': 'trace' },
+    responseHeaders: { 'X-Report': 'ready' },
+    durableStreams: {
+      slots: [{ source: 'output', slot: 'stdout', name: 'events', contentType: 'text/plain' }],
+      load: { maxConcurrentReadersPerStream: 3, maxAppendRequestsPerSecondPerStream: 7 },
+    },
+  });
+  const definition = toolDefinition('options')
+    .http(http.mount('/options'))
+    .command('events', (c) =>
+      c
+        .http(declaration)
+        .body((b) => b.positional('filter', z.string()).positional('trace', z.string())),
+    );
+  const endpoint = encodeTool(getExtendedToolDefinition(definition)).commands.nodes[1].http;
+  expect(endpoint).toMatchObject({
+    tag: 'endpoint',
+    val: {
+      routeId: 'report-events',
+      mode: 'durable-streams',
+      headerVars: [{ headerName: 'X-Trace', variableName: 'trace' }],
+      queryVars: [{ queryParamName: 'filter', variableName: 'filter' }],
+      responseHeaders: [{ name: 'X-Report', value: 'ready' }],
+      durableStreams: {
+        slots: [
+          { source: { tag: 'output', val: 'stdout' }, name: 'events', contentType: 'text/plain' },
+        ],
+        load: { maxConcurrentReadersPerStream: 3, maxAppendRequestsPerSecondPerStream: 7 },
+      },
+    },
+  });
+  expect(() => http.compileToolHttp(http.post('/events', { auth: true }))).toThrow('export');
+  expect(() => http.compileToolMount(http.mount('/{agent-type}'))).toThrow('system variables');
+  expect(() => http.compileEndpoint(http.post('/events', { routeId: 'tool-only' }))).toThrow(
+    'tool endpoint options',
+  );
+});
 
 function doc(summary = '') {
   return emptyDoc(summary, summary ? `${summary}.` : '');

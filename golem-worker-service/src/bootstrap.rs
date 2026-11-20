@@ -36,6 +36,7 @@ use crate::mcp::session::{
 };
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
+use crate::service::agent_types::AgentTypeResolver;
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
 use crate::service::limit::{LimitService, RemoteLimitService};
@@ -72,6 +73,7 @@ pub struct Services {
     pub mcp_capability_lookup: Arc<dyn McpCapabilityLookup + Sync + Send + 'static>,
     pub registry_service: Arc<dyn RegistryService>,
     pub agent_resolution_cache: Arc<AgentResolutionCache>,
+    pub agent_types: Arc<AgentTypeResolver>,
     pub route_resolver: Arc<RouteResolver>,
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
@@ -79,12 +81,15 @@ pub struct Services {
     pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
     pub invocation_session_config: crate::config::InvocationSessionConfig,
     pub mcp_config: crate::config::McpConfig,
-    /// The installation's Golem issuer: the configured one, or the one generated at start.
+    /// The installation's Golem issuer, which the registry keeps.
     pub golem_issuer: GolemIssuer,
 }
 
 impl Services {
-    pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
+    pub async fn new(
+        config: &WorkerServiceConfig,
+        golem_issuer: GolemIssuer,
+    ) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
         config.validate_keep_alive().map_err(anyhow::Error::msg)?;
         config.mcp.session.validate().map_err(anyhow::Error::msg)?;
@@ -93,7 +98,6 @@ impl Services {
             .validate()
             .map_err(anyhow::Error::msg)?;
         config.blob_storage.validate()?;
-        let golem_issuer = GolemIssuer::configured_or_generated(config.golem_issuer.clone());
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
             BlobStorageConfig::LocalFileSystem(config) => {
@@ -162,12 +166,21 @@ impl Services {
             config.agent_resolution_cache.eviction_period,
         ));
 
+        let agent_types = Arc::new(AgentTypeResolver::new(
+            registry_service_client.clone(),
+            config.agent_resolution_cache.max_capacity,
+            config.agent_resolution_cache.ttl,
+            config.agent_resolution_cache.eviction_period,
+        ));
+
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
             component_service.clone(),
             auth_service.clone(),
             limit_service.clone(),
             worker_client.clone(),
             agent_resolution_cache.clone(),
+            agent_types.clone(),
+            golem_issuer.clone(),
         ));
 
         let api_definition_lookup_service: Arc<dyn HttpApiDefinitionsLookup> = Arc::new(
@@ -236,6 +249,7 @@ impl Services {
             mcp_capability_lookup,
             registry_service: registry_service_client,
             agent_resolution_cache,
+            agent_types,
             route_resolver,
             identity_provider,
             session_store,

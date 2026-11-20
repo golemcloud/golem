@@ -12625,18 +12625,6 @@ components:
             - Any
           value:
             $ref: '#/components/schemas/Empty'
-    AgentId:
-      type: object
-      title: AgentId
-      required:
-      - componentId
-      - agentId
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        agentId:
-          type: string
     AgentMethodSchema:
       type: object
       required:
@@ -13640,10 +13628,6 @@ components:
           type: array
           items:
             type: string
-    AutoInjectedKind:
-      type: string
-      enum:
-      - principal
     BinaryRestrictions:
       type: object
       properties:
@@ -13862,7 +13846,8 @@ components:
           type: string
           format: uuid
         agentId:
-          $ref: '#/components/schemas/AgentId'
+          type: string
+          format: uuid
         invocationKey:
           type: string
           format: uuid
@@ -14056,6 +14041,31 @@ components:
           allOf:
           - $ref: '#/components/schemas/CommandAnnotations'
           - nullable: true
+    CommandHttp:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - endpoint
+          value:
+            $ref: '#/components/schemas/ToolHttpEndpoint'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - prefix
+          value:
+            $ref: '#/components/schemas/ToolHttpPrefix'
     CommandNode:
       type: object
       required:
@@ -14073,6 +14083,11 @@ components:
             type: string
         doc:
           $ref: '#/components/schemas/Doc'
+        http:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandHttp'
+          - nullable: true
         globals:
           $ref: '#/components/schemas/Globals'
         subcommands:
@@ -14137,6 +14152,8 @@ components:
       properties:
         componentName:
           type: string
+        packageMetadata:
+          $ref: '#/components/schemas/ComponentPackageMetadata'
         configSchema:
           default:
             schema:
@@ -14256,6 +14273,8 @@ components:
         wasmHash:
           type: string
           format: hash
+        packageMetadata:
+          $ref: '#/components/schemas/ComponentPackageMetadata'
     ComponentMetadataDto:
       type: object
       title: ComponentMetadataDto
@@ -14320,6 +14339,21 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ToolMiddlewareDeploymentMetadata'
+    ComponentPackageMetadata:
+      type: object
+      title: ComponentPackageMetadata
+      description: Package origin supplied by the client. Only the Wasm layer digest is verified by Golem.
+      required:
+      - source
+      - packageDigest
+      - layerDigest
+      properties:
+        source:
+          type: string
+        packageDigest:
+          type: string
+        layerDigest:
+          type: string
     ComponentProvisionConfig:
       type: object
       title: ComponentProvisionConfig
@@ -14398,6 +14432,11 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        packageMetadata:
+          description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
+          allOf:
+          - $ref: '#/components/schemas/ComponentPackageMetadata'
+          - description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
         configSchema:
           $ref: '#/components/schemas/ComponentConfigSchema'
         componentProvisionConfig:
@@ -14600,7 +14639,6 @@ components:
             $ref: '#/components/schemas/DeployValidationWarning'
     CustomHttpMethod:
       type: object
-      title: CustomHttpMethod
       required:
       - value
       properties:
@@ -15481,7 +15519,6 @@ components:
           format: int64
     Empty:
       type: object
-      title: Empty
     EnforcementAction:
       type: string
       enum:
@@ -16618,17 +16655,6 @@ components:
             type: string
             enum:
             - user-supplied
-      - type: object
-        required:
-        - tag
-        - value
-        properties:
-          tag:
-            type: string
-            enum:
-            - auto-injected
-          value:
-            $ref: '#/components/schemas/AutoInjectedKind'
     FileMapping:
       type: object
       oneOf:
@@ -17001,53 +17027,116 @@ components:
     HttpMethod:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_Empty'
-      - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
-      discriminator:
-        propertyName: type
-        mapping:
-          Get: '#/components/schemas/HttpMethod_Empty'
-          Head: '#/components/schemas/HttpMethod_Empty'
-          Post: '#/components/schemas/HttpMethod_Empty'
-          Put: '#/components/schemas/HttpMethod_Empty'
-          Delete: '#/components/schemas/HttpMethod_Empty'
-          Connect: '#/components/schemas/HttpMethod_Empty'
-          Options: '#/components/schemas/HttpMethod_Empty'
-          Trace: '#/components/schemas/HttpMethod_Empty'
-          Patch: '#/components/schemas/HttpMethod_Empty'
-          Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
-    HttpMethod_CustomHttpMethod:
-      allOf:
       - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Custom
-            example: Custom
-      - $ref: '#/components/schemas/CustomHttpMethod'
-    HttpMethod_Empty:
-      allOf:
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Get
+        - $ref: '#/components/schemas/Empty'
       - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Patch
-            example: Patch
-      - $ref: '#/components/schemas/Empty'
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Head
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Post
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Put
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Delete
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Connect
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Options
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Trace
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Patch
+        - $ref: '#/components/schemas/Empty'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Custom
+        - $ref: '#/components/schemas/CustomHttpMethod'
     HttpMountDetails:
       type: object
       title: HttpMountDetails
@@ -17270,7 +17359,6 @@ components:
           default: false
     LiteralSegment:
       type: object
-      title: LiteralSegment
       required:
       - value
       properties:
@@ -18496,39 +18584,39 @@ components:
     PathSegment:
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PathSegment_LiteralSegment'
-      - $ref: '#/components/schemas/PathSegment_PathVariable'
-      - $ref: '#/components/schemas/PathSegment_PathVariable'
-      discriminator:
-        propertyName: type
-        mapping:
-          Literal: '#/components/schemas/PathSegment_LiteralSegment'
-          PathVariable: '#/components/schemas/PathSegment_PathVariable'
-          RemainingPathVariable: '#/components/schemas/PathSegment_PathVariable'
-    PathSegment_LiteralSegment:
-      allOf:
       - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - Literal
-            example: Literal
-      - $ref: '#/components/schemas/LiteralSegment'
-    PathSegment_PathVariable:
-      allOf:
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - Literal
+        - $ref: '#/components/schemas/LiteralSegment'
       - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - RemainingPathVariable
-            example: RemainingPathVariable
-      - $ref: '#/components/schemas/PathVariable'
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - PathVariable
+        - $ref: '#/components/schemas/PathVariable'
+      - type: object
+        allOf:
+        - type: object
+          required:
+          - type
+          properties:
+            type:
+              type: string
+              enum:
+              - RemainingPathVariable
+        - $ref: '#/components/schemas/PathVariable'
     PathSpec:
       type: object
       required:
@@ -18551,7 +18639,6 @@ components:
           nullable: true
     PathVariable:
       type: object
-      title: PathVariable
       required:
       - variableName
       properties:
@@ -19244,12 +19331,9 @@ components:
       title: ReadOnlyConfig
       required:
       - cachePolicy
-      - usesPrincipal
       properties:
         cachePolicy:
           $ref: '#/components/schemas/CachePolicy'
-        usesPrincipal:
-          type: boolean
     Ref:
       type: object
       oneOf:
@@ -21638,6 +21722,11 @@ components:
           type: string
         requires_filesystem:
           type: boolean
+        http_mount:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolHttpMount'
+          - nullable: true
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
@@ -21755,6 +21844,64 @@ components:
       - unset
       - allowed
       - denied
+    ToolHttpEndpoint:
+      type: object
+      required:
+      - http_method
+      - path_suffix
+      - query_vars
+      - header_vars
+      - response_headers
+      properties:
+        route_id:
+          type: string
+          nullable: true
+        http_method:
+          $ref: '#/components/schemas/HttpMethod'
+        path_suffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+        query_vars:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueryVariable'
+        header_vars:
+          type: array
+          items:
+            $ref: '#/components/schemas/HeaderVariable'
+        response_headers:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileResponseHeader'
+        mode:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/HttpRouteMode'
+          - nullable: true
+        durable_streams:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/DurableStreamRouteOptions'
+          - nullable: true
+    ToolHttpMount:
+      type: object
+      required:
+      - path_prefix
+      properties:
+        path_prefix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
+    ToolHttpPrefix:
+      type: object
+      required:
+      - path_suffix
+      properties:
+        path_suffix:
+          type: array
+          items:
+            $ref: '#/components/schemas/PathSegment'
     ToolMiddleware:
       type: object
       required:

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect"
 import { defineAgent, Http, method, Method } from "../src/index.js"
-import { Principal, PrincipalSchema } from "../src/Principal.js"
+import { InvocationContext } from "../src/InvocationContext.js"
 
 defineAgent({
   name: "ReadOnlyHandlerServices",
@@ -17,8 +17,8 @@ defineAgent({
       Method.withHttp(Http.get("/value")),
     ),
     ordinary: method({ input: { value: Schema.Number }, success: Schema.String }),
-    explicitPrincipal: method({
-      input: { principal: PrincipalSchema },
+    ttl: method({
+      input: {},
       success: Schema.String,
       error: Schema.String,
       readOnly: { cache: { ttlNanos: 1n } },
@@ -27,14 +27,16 @@ defineAgent({
 }).implement({
   init: () => Effect.void,
   methods: () => ({
-    // @ts-expect-error Principal is unavailable to read-only handlers
-    literal: () => Effect.as(Principal, "literal"),
-    // @ts-expect-error Principal is unavailable for read-only cache options
-    options: () => Effect.as(Principal, "options"),
-    // @ts-expect-error withHttp must preserve the read-only handler services
-    withHttp: () => Effect.as(Principal, "http"),
-    ordinary: ({ value }) => Effect.as(Principal, String(value)),
-    explicitPrincipal: ({ principal }) =>
-      principal.tag === "anonymous" ? Effect.fail("anonymous") : Effect.succeed(principal.tag),
+    // Every handler, read-only ones included, may read the invocation context.
+    literal: () => Effect.map(InvocationContext, (context) => context.caller.immediate.kind),
+    options: () => Effect.map(InvocationContext, (context) => context.caller.immediate.kind),
+    withHttp: () => Effect.map(InvocationContext, (context) => context.caller.immediate.kind),
+    ordinary: ({ value }) => Effect.as(InvocationContext, String(value)),
+    ttl: () =>
+      Effect.flatMap(InvocationContext, (context) =>
+        context.caller.immediate.kind === "anonymous"
+          ? Effect.fail("anonymous")
+          : Effect.succeed(context.caller.immediate.kind),
+      ),
   }),
 })

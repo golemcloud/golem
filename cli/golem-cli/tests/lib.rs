@@ -17,7 +17,7 @@
 use golem_cli::fs;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 use test_r::{tag_suite, test_dep};
 
 test_r::enable!();
@@ -26,6 +26,7 @@ mod app;
 mod bridge_gen;
 #[cfg(unix)]
 mod git_remote;
+mod package;
 
 // Tag for the it-cli `bridge_gen` and `bridge_gen_rust` CI shards (see the it-cli matrix in
 // ci.yaml); `bridge_gen::rust` is additionally tagged `bridge_gen_rust` in bridge_gen/mod.rs.
@@ -34,11 +35,15 @@ tag_suite!(bridge_gen, bridge_gen);
 #[derive(Debug)]
 pub struct Tracing;
 
+static TRACING_INIT: Once = Once::new();
+
 impl Tracing {
     pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::test(
-            "golem-cli-integration-tests",
-        ));
+        TRACING_INIT.call_once(|| {
+            init_tracing_with_default_debug_env_filter(&TracingConfig::test(
+                "golem-cli-integration-tests",
+            ));
+        });
         Self
     }
 }

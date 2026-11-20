@@ -24,8 +24,8 @@ use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
 pub trait MyAgent {
-    // Constructor parameters form the agent's identity.
-    // Two agents with the same parameters are the same agent.
+    // Constructor parameters form the agent's key.
+    // Addressed by its key, the same parameters reach the same agent.
     fn new(name: String) -> Self;
 
     // Agent methods — can be sync or async
@@ -131,7 +131,7 @@ Returning `Err(WithdrawError::...)` completes the invocation successfully — th
 
 - All agent method parameters are passed by value (no references)
 - All custom types need the `Schema` derive
-- Constructor parameters form the agent identity — two agents with the same parameters are the same agent
-- Agents are created implicitly on first invocation — no separate creation step
+- Constructor parameters form the agent's key — `MyAgent("name")` and `MyAgentClient::upsert(...)` with the same parameters reach the same keyed agent. Every agent also has an agent ID, a UUID that Golem issues
+- Keyed agents are created implicitly on first invocation — no separate creation step; `golem agent create` without `--keyed` and the client's `create` without `keyed` make agents without a key (see `golem-multi-instance-agent-rust`)
 - Invocations are processed sequentially. Async I/O and stream tasks can overlap cooperatively within one invocation; this does not provide CPU-thread parallelism.
 - **Never use `block_on`** — all agent methods run in an async context. Use `async` methods and `.await` instead of blocking on futures

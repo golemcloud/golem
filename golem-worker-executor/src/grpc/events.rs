@@ -16,7 +16,7 @@ use super::{
     AgentEvent, AgentStatus, BroadcastStreamRecvError, ConnectWorkerRequest, Context, HasAll,
     InternalWorkerEvent, InterruptKind, Pin, Poll, Response, Status, Stream, Timestamp,
     UsesAllDeps, Worker, WorkerCtx, WorkerEventReceiver, WorkerExecutor, WorkerExecutorError,
-    WorkerExecutorImpl, extract_owned_agent_id, extract_principal, golem, info,
+    WorkerExecutorImpl, extract_caller, extract_owned_agent_id, golem, info,
     record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
 };
 
@@ -33,7 +33,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let principal = extract_principal(&request.principal);
+        let caller = extract_caller(&request.caller)?;
 
         self.ensure_not_being_deleted(&owned_agent_id).await?;
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
@@ -51,7 +51,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let worker = self
-                .get_existing_for_management(&owned_agent_id, principal, "connect")
+                .get_existing_for_management(&owned_agent_id, caller, "connect")
                 .await?;
             let event_service = worker.event_service();
 

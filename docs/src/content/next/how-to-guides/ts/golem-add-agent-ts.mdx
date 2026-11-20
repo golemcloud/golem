@@ -50,7 +50,7 @@ export const CounterImpl = Counter.implement({
 
 State lives in the object returned by `init()` and is read/written through `this` inside the handlers — there are no class fields. A method with no parameters declares `input: {}` and its handler takes no argument; a method with parameters declares one schema per named parameter and receives them as a single destructured object.
 
-Do not use `config`, `getId`, `getPhantomId`, or `getPrincipal` as top-level state fields returned by `init()` or a snapshot `load()`. These names belong to the SDK's configuration accessor and identity/principal helpers. Initialization and restoration reject these fields even when their value is `undefined`. Rename them or put them inside another state field; nested fields may use these names.
+Do not use `config`, `getId`, or `getPrincipal` as top-level state fields returned by `init()` or a snapshot `load()`. These names belong to the SDK's configuration accessor and identity/principal helpers. Initialization and restoration reject these fields even when their value is `undefined`. Rename them or put them inside another state field; nested fields may use these names.
 
 ## Custom Types
 
@@ -135,9 +135,9 @@ If the throw happens **after** a durable side effect has completed, it does not 
 ## Key Constraints
 
 - Every agent is declared with `defineAgent({...})` and given behaviour with `<Def>.implement({...})`
-- The `id` record fields define agent identity — they must be serializable schema types
+- The `id` record fields are the constructor parameters and form the agent's key, `Counter("name")` — they must be serializable schema types. Golem issues each agent a separate agent ID, a UUID
 - State is the object returned by `init()` and is accessed through `this` in the handlers — do not use class fields
 - String enums need a schema: use `z.enum(MyEnum)` (Zod 4) or `z.nativeEnum(MyEnum)` (Zod 3), or use `z.enum([...])` for string-literal unions
-- Agents are created implicitly on first invocation — no separate creation step
+- A keyed agent is created implicitly on its first invocation — no separate creation step
 - Invocations are processed sequentially; async work within one invocation can overlap cooperatively, without CPU-thread parallelism
 - Each method's `input` is a record of one schema per named parameter; `returns` is the success-value schema (use `z.void()` for no return value)

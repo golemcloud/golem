@@ -103,9 +103,9 @@ object AgentDefinitionMacro {
     def params(method: Symbol): List[(String, TypeRepr)] = method.paramSymss.flatten.filter(_.isTerm).map { p =>
       p.name -> p.tree.asInstanceOf[ValDef].tpt.tpe
     }
-    def isPrincipal(tpe: TypeRepr): Boolean                    = tpe.dealias.typeSymbol.fullName == "golem.Principal"
+    def isInvocationContext(tpe: TypeRepr): Boolean            = tpe.dealias.typeSymbol.fullName == "golem.InvocationContext"
     def input(values: List[(String, TypeRepr)]): InputMetadata = InputMetadata(values.collect {
-      case (name, tpe) if !isPrincipal(tpe) => ParameterMetadata(name, FieldSource.UserSupplied, graph(tpe))
+      case (name, tpe) if !isInvocationContext(tpe) => ParameterMetadata(name, FieldSource.UserSupplied, graph(tpe))
     })
     val (identity, constructorDescription) = if (router) {
       if (sym.declarations.exists(c => c.isClassDef && (c.name == "Id" || HttpDeclarationMacro.has(c, "id"))))
@@ -135,20 +135,24 @@ object AgentDefinitionMacro {
         if ((handler || provider) && !router) report.errorAndAbort("HTTP roles require @httpRouter")
         if (router && (handler == provider))
           report.errorAndAbort("router-method-role: each method must have exactly one HTTP role")
-        val arguments      = params(method)
-        val principalNames = arguments.collect { case (name, tpe) if isPrincipal(tpe) => name }.toSet
-        val headers        = extractHeaderVars(method)
+        val arguments = params(method)
+        arguments.foreach { case (parameter, tpe) =>
+          LiveValueCheck.reject(s"Parameter '$parameter' of method '${method.name}' of agent '$name'", tpe)
+        }
+        val contextNames = arguments.collect { case (name, tpe) if isInvocationContext(tpe) => name }.toSet
+        val headers      = extractHeaderVars(method)
         if (router && (HttpDeclarationMacro.has(method, "endpoint") || headers.nonEmpty))
           report.errorAndAbort("handler-endpoint-policy: router policy belongs to the mount")
         if (provider && arguments.nonEmpty)
           report.errorAndAbort("provider-schema: provider must be parameterless")
-        validateEndpoints(method, name, mount.isDefined, arguments.map(_._1).toSet, principalNames, headers)
-        val readonly = extractReadOnly(method, principalNames.nonEmpty)
+        validateEndpoints(method, name, mount.isDefined, arguments.map(_._1).toSet, contextNames, headers)
+        val readonly = extractReadOnly(method)
         if (mode.contains("ephemeral") && readonly.nonEmpty)
           report.errorAndAbort(s"Agent '$name' is ephemeral but method '${method.name}' is marked with @readOnly.")
-        val out         = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
+        val out = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
+        LiveValueCheck.reject(s"Result of method '${method.name}' of agent '$name'", out)
         val methodInput = if (handler) {
-          arguments.filterNot { case (_, tpe) => isPrincipal(tpe) } match {
+          arguments.filterNot { case (_, tpe) => isInvocationContext(tpe) } match {
             case List(("request", request)) if request.dealias =:= TypeRepr.of[HttpRequest] =>
               InputMetadata(
                 List(ParameterMetadata("request", FieldSource.UserSupplied, HttpExchangeCodec.requestGraph))
@@ -212,7 +216,11 @@ object AgentDefinitionMacro {
     )
     mount.foreach { m =>
       HttpValidation
-        .validateMountVarsAreNotPrincipal(name, m, identity.collect { case (n, tpe) if isPrincipal(tpe) => n }.toSet)
+        .validateMountVarsAreNotInvocationContext(
+          name,
+          m,
+          identity.collect { case (n, tpe) if isInvocationContext(tpe) => n }.toSet
+        )
         .left
         .foreach(error => report.errorAndAbort(error))
     }
@@ -295,16 +303,16 @@ object AgentDefinitionMacro {
     val ctorDescription = traitDescription.getOrElse(agentTypeName)
     val idSchema        = inferIdSchema(typeRepr, Expr(ctorDescription))
 
-    // --- Mount-level Principal validation ---
+    // --- Mount-level InvocationContext validation ---
     if (hasMount) {
-      val mountPath         = extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).getOrElse("")
-      val mountSegments     = HttpRouteParser.parsePathOnly(mountPath, "mount").getOrElse(Nil)
-      val idPrincipalParams = idConstructorPrincipalParams(typeRepr)
-      if (idPrincipalParams.nonEmpty) {
+      val mountPath                 = extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).getOrElse("")
+      val mountSegments             = HttpRouteParser.parsePathOnly(mountPath, "mount").getOrElse(Nil)
+      val idInvocationContextParams = idConstructorInvocationContextParams(typeRepr)
+      if (idInvocationContextParams.nonEmpty) {
         if (HttpDeclarationMacro.exposesFiles(typeSymbol))
           report.errorAndAbort("filesystem-constructor: caller-dependent identities cannot expose files")
         val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None, Nil)
-        HttpValidation.validateMountVarsAreNotPrincipal(agentTypeName, mount, idPrincipalParams) match {
+        HttpValidation.validateMountVarsAreNotInvocationContext(agentTypeName, mount, idInvocationContextParams) match {
           case Left(err) => report.errorAndAbort(err)
           case Right(()) => ()
         }
@@ -468,21 +476,21 @@ object AgentDefinitionMacro {
     val endpointListExpr = literal(endpointDetails)
 
     // --- Compile-time validation ---
-    val principalFullName   = "golem.Principal"
-    val allTermParams       = method.paramSymss.flatten.filter(_.isTerm)
-    val methodParamNames    = allTermParams.map(_.name).toSet
-    val principalParamNames = allTermParams.collect {
+    val contextFullName   = "golem.InvocationContext"
+    val allTermParams     = method.paramSymss.flatten.filter(_.isTerm)
+    val methodParamNames  = allTermParams.map(_.name).toSet
+    val contextParamNames = allTermParams.collect {
       case sym if sym.tree match {
-            case v: ValDef => v.tpt.tpe.dealias.typeSymbol.fullName == principalFullName
+            case v: ValDef => v.tpt.tpe.dealias.typeSymbol.fullName == contextFullName
             case _         => false
           } =>
         sym.name
     }.toSet
 
-    validateEndpoints(method, agentName, hasMount, methodParamNames, principalParamNames, headerVars)
+    validateEndpoints(method, agentName, hasMount, methodParamNames, contextParamNames, headerVars)
 
     // --- Read-only extraction ---
-    val readOnlyExpr = literal(extractReadOnly(method, principalParamNames.nonEmpty))
+    val readOnlyExpr = literal(extractReadOnly(method))
 
     '{
       MethodMetadata(
@@ -502,12 +510,11 @@ object AgentDefinitionMacro {
 
   /**
    * Extract the optional `@readOnly(cache = ...)` annotation from a method and
-   * build its metadata. `usesPrincipal` is derived from whether the method has
-   * a Principal parameter (it is *not* user-configurable).
+   * build its metadata.
    */
   private def extractReadOnly(using
     Quotes
-  )(method: quotes.reflect.Symbol, usesPrincipal: Boolean): Option[ReadOnlyConfig] = {
+  )(method: quotes.reflect.Symbol): Option[ReadOnlyConfig] = {
     import quotes.reflect.*
 
     val readOnlyAnnotations = method.annotations.collect {
@@ -532,7 +539,7 @@ object AgentDefinitionMacro {
         case Right(value) => value
       }
 
-      Some(ReadOnlyConfig(policy, usesPrincipal))
+      Some(ReadOnlyConfig(policy))
     }
   }
 
@@ -545,9 +552,12 @@ object AgentDefinitionMacro {
           case v: ValDef => (sym.name, v.tpt.tpe)
           case other     => report.errorAndAbort(s"Unsupported parameter declaration in ${method.name}: $other")
         }
-    }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
+    }
+    params.foreach { case (parameter, tpe) =>
+      LiveValueCheck.reject(s"Parameter '$parameter' of method '${method.name}'", tpe)
+    }
 
-    inputMetadataExpr(params)
+    inputMetadataExpr(params.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.InvocationContext" })
   }
 
   /**
@@ -571,6 +581,7 @@ object AgentDefinitionMacro {
     method.tree match {
       case d: DefDef =>
         val outputType = unwrapAsyncType(d.returnTpt.tpe)
+        LiveValueCheck.reject(s"Result of method '${method.name}'", outputType)
         outputMetadataExpr(outputType)
       case other =>
         report.errorAndAbort(s"Unable to read return type for ${method.name}: $other")
@@ -691,9 +702,14 @@ object AgentDefinitionMacro {
               case v: ValDef => (sym.name, v.tpt.tpe)
               case other     => report.errorAndAbort(s"Unsupported parameter declaration in Constructor: $other")
             }
-        }.filter { case (_, tpe) => tpe.dealias.typeSymbol.fullName != "golem.Principal" }
+        }
+        params.foreach { case (parameter, tpe) =>
+          LiveValueCheck.reject(s"Constructor parameter '$parameter' of agent '${typeSymbol.name}'", tpe)
+        }
 
-        val inputMeta           = inputMetadataExpr(params)
+        val inputMeta = inputMetadataExpr(params.filter { case (_, tpe) =>
+          tpe.dealias.typeSymbol.fullName != "golem.InvocationContext"
+        })
         val ctorDescriptionExpr =
           docstringText(classSym) match {
             case Some(doc) => Expr(doc)
@@ -704,17 +720,18 @@ object AgentDefinitionMacro {
   }
 
   /**
-   * Finds the Id constructor class and returns the names of any Principal-typed
-   * parameters. Returns empty set if no Id class or no Principal params.
+   * Finds the Id constructor class and returns the names of any
+   * InvocationContext-typed parameters. Returns empty set if no Id class or no
+   * InvocationContext params.
    */
-  private def idConstructorPrincipalParams(using
+  private def idConstructorInvocationContextParams(using
     Quotes
   )(traitRepr: quotes.reflect.TypeRepr): Set[String] = {
     import quotes.reflect.*
 
-    val typeSymbol   = traitRepr.typeSymbol
-    val idFQN        = "golem.runtime.annotations.id"
-    val principalFQN = "golem.Principal"
+    val typeSymbol = traitRepr.typeSymbol
+    val idFQN      = "golem.runtime.annotations.id"
+    val contextFQN = "golem.InvocationContext"
 
     def hasIdAnnotation(sym: Symbol): Boolean =
       sym.annotations.exists {
@@ -736,8 +753,8 @@ object AgentDefinitionMacro {
         classSym.primaryConstructor.paramSymss.flatten.collect {
           case sym if sym.isTerm =>
             sym.tree match {
-              case v: ValDef if v.tpt.tpe.dealias.typeSymbol.fullName == principalFQN => sym.name
-              case _                                                                  => null
+              case v: ValDef if v.tpt.tpe.dealias.typeSymbol.fullName == contextFQN => sym.name
+              case _                                                                => null
             }
         }.filter(_ != null).toSet
     }
@@ -978,7 +995,7 @@ object AgentDefinitionMacro {
   }
 
   /** Extract @header annotations from method parameters. */
-  private def extractHeaderVars(using Quotes)(method: quotes.reflect.Symbol): List[HeaderVariable] = {
+  private[macros] def extractHeaderVars(using Quotes)(method: quotes.reflect.Symbol): List[HeaderVariable] = {
     import quotes.reflect.*
 
     method.paramSymss.flatten.collect {
@@ -1005,7 +1022,7 @@ object AgentDefinitionMacro {
   /**
    * Extract @endpoint annotations from a method and build metadata for each.
    */
-  private def extractEndpoints(using
+  private[macros] def extractEndpoints(using
     Quotes
   )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[HttpEndpointDetails] = {
     import quotes.reflect.*
@@ -1223,7 +1240,7 @@ object AgentDefinitionMacro {
     agentName: String,
     hasMount: Boolean,
     methodParamNames: Set[String],
-    principalParamNames: Set[String],
+    contextParamNames: Set[String],
     headerVars: List[HeaderVariable]
   ): Unit = {
     import quotes.reflect.*
@@ -1231,6 +1248,16 @@ object AgentDefinitionMacro {
     method.annotations.foreach {
       case Apply(Select(New(tpt), _), args)
           if tpt.tpe.dealias.typeSymbol.fullName == "golem.runtime.annotations.endpoint" =>
+
+        List("prefix" -> 5, "routeId" -> 6, "responseHeaders" -> 7).foreach { case (name, index) =>
+          val value = args.collectFirst { case NamedArg(`name`, value) => value }.orElse {
+            args.lift(index).collect {
+              case value if (value match { case NamedArg(_, _) => false; case _ => true }) => value
+            }
+          }
+          if (value.exists(value => !value.symbol.name.contains("$default$")))
+            report.errorAndAbort(s"@$name is a tool-only endpoint option")
+        }
 
         val methodStrOpt = args.collectFirst {
           case Literal(StringConstant(v))                     => v
@@ -1272,7 +1299,7 @@ object AgentDefinitionMacro {
             method.name,
             endpoint,
             methodParamNames,
-            principalParamNames,
+            contextParamNames,
             hasMount
           ) match {
             case Left(err) => report.errorAndAbort(err)

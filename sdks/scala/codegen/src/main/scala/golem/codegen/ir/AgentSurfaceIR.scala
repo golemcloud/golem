@@ -33,7 +33,7 @@ object AgentSurfaceIR {
     name: String,
     params: List[ParamSurface],
     returnTypeExpr: String,
-    principalParams: List[Boolean]
+    contextParams: List[Boolean]
   )
 
   final case class ConfigFieldSurface(

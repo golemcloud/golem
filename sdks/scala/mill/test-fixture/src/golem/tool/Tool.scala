@@ -1,6 +1,6 @@
 package golem.tool
 
-import golem.Principal
+import golem.InvocationContext
 import golem.schema.{FromSchema, SchemaValue, TypedSchemaValue}
 import golem.tool.wire.WitTool
 
@@ -58,7 +58,7 @@ final case class UniversalToolMiddlewareInvocation(
   commandPath: List[String],
   input: TypedSchemaValue,
   stdin: Option[ToolMiddlewareInputHandle],
-  principal: Principal
+  context: InvocationContext
 )
 
 trait UniversalToolMiddleware {

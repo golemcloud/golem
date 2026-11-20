@@ -6,13 +6,20 @@ The `#[agent_definition]` macro auto-generates a `<AgentName>Client` type for ea
 
 ## Getting a Client
 
-Use `<AgentName>Client::get(...)` with the target agent's constructor parameters:
+Use `<AgentName>Client::upsert(...)` with the target agent's constructor parameters:
 
 ```rust
-let counter = CounterAgentClient::get("my-counter".to_string());
+let counter = CounterAgentClient::upsert("my-counter".to_string());
 ```
 
-This does **not** create the agent — the agent is created implicitly on its first invocation. If it already exists, you get a handle to the existing instance.
+`upsert` connects to the **keyed** agent of these constructor parameters. If the agent does not exist yet, `upsert` creates it and returns after its initialization. If it already exists, you get a handle to the existing instance, and its constructor does not run again.
+
+To connect to an existing agent by its agent ID (a UUID that Golem issues), use `get_by_id`. It never creates the agent and fails with `GolemReflectError::RemoteNotFound` when no agent of this type has the ID:
+
+```rust
+let id: golem_rust::AgentId = counter.agent_id().await?;
+let same = CounterAgentClient::get_by_id(&id)?;
+```
 
 ## Awaited Call
 
@@ -25,9 +32,9 @@ let count = counter.get_count().await;
 
 The calling agent **blocks** until the target agent processes the request and returns. This is the standard RPC pattern.
 
-## Phantom Agents
+## Multiple Agents With the Same Parameters
 
-To create multiple distinct instances with the same constructor parameters, use phantom agents. See the [`golem-multi-instance-agent-rust`](/next/how-to-guides/rust/golem-multi-instance-agent-rust) guide.
+To create multiple distinct agents with the same constructor parameters, use the async `create`, which creates an agent without a key and with a new agent ID. See the [`golem-multi-instance-agent-rust`](/next/how-to-guides/rust/golem-multi-instance-agent-rust) guide.
 
 ## Cross-Component RPC
 

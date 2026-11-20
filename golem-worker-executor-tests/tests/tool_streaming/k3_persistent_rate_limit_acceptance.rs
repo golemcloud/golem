@@ -1,5 +1,4 @@
 use super::*;
-use golem_common::model::AgentId;
 use test_r::test;
 
 #[test]
@@ -16,9 +15,9 @@ async fn k3_rate_configuration_is_part_of_backend_identity(
         .component_dep(&context.default_environment_id, rate_limit)
         .store()
         .await?;
-    let old = agent_id!("RateLimitBackend", "same-policy", 1u64, 3_600_000u64);
-    let changed_limit = agent_id!("RateLimitBackend", "same-policy", 2u64, 3_600_000u64);
-    let changed_window = agent_id!("RateLimitBackend", "same-policy", 1u64, 7_200_000u64);
+    let old = agent_key!("RateLimitBackend", "same-policy", 1u64, 3_600_000u64);
+    let changed_limit = agent_key!("RateLimitBackend", "same-policy", 2u64, 3_600_000u64);
+    let changed_window = agent_key!("RateLimitBackend", "same-policy", 1u64, 7_200_000u64);
     assert_ne!(old, changed_limit);
     assert_ne!(old, changed_window);
     assert_ne!(changed_limit, changed_window);
@@ -47,7 +46,7 @@ async fn k3_rate_configuration_is_part_of_backend_identity(
         );
     }
     // Returning to the old identity reconstructs the old policy, not the latest configuration.
-    let old_worker = AgentId::from_agent_id(component.id, &old).map_err(anyhow::Error::msg)?;
+    let old_worker = crate::agent::keyed_agent_id(component.environment_id, &old);
     executor.simulated_crash(&old_worker).await?;
     executor
         .invoke_and_await_agent(&component, &old, "admit", data_value!("principal", "first"))
@@ -212,7 +211,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         provider,
         caller,
         rate_limit,
-        "k3-rate-1-principal",
+        "k3-rate-1-caller",
         1,
         context,
         environment,
@@ -224,8 +223,8 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
     );
     let principal_a = oidc_principal("k3-principal-a");
     let principal_b = oidc_principal("k3-principal-b");
-    let owner_a = agent_id!("ToolStreamingCaller", "k3-rate-1-owner-a");
-    let owner_b = agent_id!("ToolStreamingCaller", "k3-rate-1-owner-b");
+    let owner_a = agent_key!("ToolStreamingCaller", "k3-rate-1-owner-a");
+    let owner_b = agent_key!("ToolStreamingCaller", "k3-rate-1-owner-b");
     let worker_a = executor
         .start_agent(&caller_component.id, owner_a.clone())
         .await?;
@@ -234,7 +233,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         .await?;
 
     let first_a: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &owner_a,
             principal_a.clone(),
@@ -246,7 +245,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
     assert_eq!(first_a, "leaf(owner-a-first)");
 
     let exhausted_a = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &owner_a,
             principal_a,
@@ -256,11 +255,11 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         .await;
     assert!(
         exhausted_a.is_err(),
-        "call N+1 for one principal key must fail"
+        "call N+1 for one caller key must fail"
     );
 
     let first_b: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &owner_b,
             principal_b,
@@ -277,7 +276,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         entity_starts(&oplog_a, PublicAgentEntityKind::Tool, "middleware-probe").len()
             + entity_starts(&oplog_b, PublicAgentEntityKind::Tool, "middleware-probe").len(),
         2,
-        "the exhausted principal must not consume the independent principal's capacity"
+        "the exhausted caller must not consume the independent caller's capacity"
     );
     Ok(())
 }
@@ -313,7 +312,7 @@ async fn k3_rate_2_distinct_owners_contend_on_one_principal_key(
     );
     let mut owners = Vec::with_capacity(OWNERS);
     for ordinal in 0..OWNERS {
-        let agent_id = agent_id!("ToolStreamingCaller", format!("k3-rate-2-owner-{ordinal}"));
+        let agent_id = agent_key!("ToolStreamingCaller", format!("k3-rate-2-owner-{ordinal}"));
         let worker_id = executor
             .start_agent(&caller_component.id, agent_id.clone())
             .await?;
@@ -321,20 +320,20 @@ async fn k3_rate_2_distinct_owners_contend_on_one_principal_key(
     }
 
     let barrier = Arc::new(tokio::sync::Barrier::new(OWNERS));
-    let principal = oidc_principal("k3-shared-principal");
+    let caller = oidc_principal("k3-shared-caller");
     let calls = owners.iter().enumerate().map(|(ordinal, (agent_id, _))| {
         let barrier = barrier.clone();
-        let principal = principal.clone();
+        let caller = caller.clone();
         let executor = &executor;
         let caller_component = &caller_component;
         let agent_id = agent_id.clone();
         async move {
             barrier.wait().await;
             executor
-                .invoke_and_await_agent_as_principal(
+                .invoke_and_await_agent_as_caller(
                     caller_component,
                     &agent_id,
-                    principal,
+                    caller,
                     "middleware_probe_once",
                     data_value!(format!("k3-owner-{ordinal}")),
                 )
@@ -359,7 +358,7 @@ async fn k3_rate_2_distinct_owners_contend_on_one_principal_key(
     }
     assert_eq!(leaf_effects, LIMIT, "only committed charges reach the leaf");
 
-    let backend_id = agent_id!(
+    let backend_id = agent_key!(
         "RateLimitBackend",
         "k3-rate-2-contention",
         LIMIT as u64,
@@ -406,7 +405,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
     let (effect_port, mut effects, effect_server) = start_probe_effect_server().await;
     let (checkpoint_port, checkpoint_server, mut arrivals) =
         start_promise_checkpoint_server().await;
-    let agent_id = agent_id!("ToolStreamingCaller", "k3-rate-3-owner");
+    let agent_id = agent_key!("ToolStreamingCaller", "k3-rate-3-owner");
     let worker_id = executor
         .start_agent_with(
             &caller_component.id,
@@ -424,10 +423,10 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
             Vec::new(),
         )
         .await?;
-    let invocation = executor.invoke_and_await_agent_as_principal(
+    let invocation = executor.invoke_and_await_agent_as_caller(
         &caller_component,
         &agent_id,
-        oidc_principal("k3-replay-principal"),
+        oidc_principal("k3-replay-caller"),
         "middleware_probe_once",
         data_value!("lifecycle-effect(k3-pre-leaf)"),
     );
@@ -448,7 +447,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
         )
         .await?;
 
-    let backend_id = agent_id!("RateLimitBackend", "k3-rate-3-replay", 2u64, 3_600_000u64);
+    let backend_id = agent_key!("RateLimitBackend", "k3-rate-3-replay", 2u64, 3_600_000u64);
     let at_checkpoint: RateLimitBackendStats = executor
         .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
         .await?
@@ -515,6 +514,7 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
 
     executor
         .complete_promise(
+            &executor.context.default_environment_id,
             &executor
                 .promise_id(&worker_id, checkpoint.oplog_idx)
                 .await?,
@@ -555,17 +555,17 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
     );
 
     let fresh: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            oidc_principal("k3-replay-principal"),
+            oidc_principal("k3-replay-caller"),
             "middleware_probe_once",
             data_value!("fresh-after-configuration-change"),
         )
         .await?
         .into_typed()?;
     assert_eq!(fresh, "leaf(fresh-after-configuration-change)");
-    let changed_backend = agent_id!("RateLimitBackend", "k3-rate-3-replay", 1u64, 7_200_000u64);
+    let changed_backend = agent_key!("RateLimitBackend", "k3-rate-3-replay", 1u64, 7_200_000u64);
     let changed_stats: RateLimitBackendStats = executor
         .invoke_and_await_agent(
             &rate_limit_component,

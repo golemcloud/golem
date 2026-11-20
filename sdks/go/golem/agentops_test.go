@@ -29,15 +29,17 @@ import (
 // embedded nil interface.
 type fakeHost struct {
 	agentHost
-	pages   [][]apiHost.AgentMetadata
-	pageErr error
-	closed  bool
-	strict  []bool
+	pages     [][]apiHost.AgentMetadata
+	pageErr   error
+	closed    bool
+	typeName  string
+	forkedOff []uint64
 }
 
-func (h *fakeHost) fork() (bool, UUID, error) { return true, UUID{7}, nil }
+func (h *fakeHost) fork() (bool, AgentID, error) { return true, AgentIDFromUUID(UUID{7}), nil }
 
-func (h *fakeHost) getAgents(types.ComponentId, witTypes.Option[apiHost.AgentAnyFilter], bool) agentPages {
+func (h *fakeHost) getAgents(agentTypeName string, _ witTypes.Option[apiHost.AgentAnyFilter], _ bool) agentPages {
+	h.typeName = agentTypeName
 	return h
 }
 
@@ -52,9 +54,9 @@ func (h *fakeHost) next() ([]apiHost.AgentMetadata, bool, error) {
 
 func (h *fakeHost) close() { h.closed = true }
 
-func (h *fakeHost) resolveAgentID(_, name string, strict bool) (types.AgentId, bool) {
-	h.strict = append(h.strict, strict)
-	return types.AgentId{AgentId: name}, true
+func (h *fakeHost) forkAgent(source types.AgentId, cutOff uint64) (types.AgentId, error) {
+	h.forkedOff = append(h.forkedOff, cutOff)
+	return types.AgentId{Uuid: types.Uuid{HighBits: source.Uuid.HighBits, LowBits: source.Uuid.LowBits + 1}}, nil
 }
 
 func withFakeHost(t *testing.T, h *fakeHost) {
@@ -66,14 +68,23 @@ func withFakeHost(t *testing.T, h *fakeHost) {
 
 func TestForkReportsTheSide(t *testing.T) {
 	withFakeHost(t, &fakeHost{})
-	forked, phantom := MustForkSelf()
-	if !forked || phantom != (UUID{7}) {
-		t.Fatalf("forked=%v phantom=%v", forked, phantom)
+	forked, forkedID := MustForkSelf()
+	if !forked || forkedID != AgentIDFromUUID(UUID{7}) {
+		t.Fatalf("forked=%v forkedID=%v", forked, forkedID)
+	}
+}
+
+func TestForkAgentReturnsTheIssuedID(t *testing.T) {
+	h := &fakeHost{}
+	withFakeHost(t, h)
+	forked := MustForkAgent(AgentIDFromUUID(UUID{15: 1}), 9)
+	if forked != AgentIDFromUUID(UUID{15: 2}) || !slices.Equal(h.forkedOff, []uint64{9}) {
+		t.Fatalf("forked=%v cut-offs=%v", forked, h.forkedOff)
 	}
 }
 
 func TestAgentFilterFlattensToAnyOfAll(t *testing.T) {
-	a := AgentNameFilter(StringFilterStartsWith, "a")
+	a := AgentKeyFilter(StringFilterStartsWith, "a")
 	b := AgentStatusFilter(FilterEqual, AgentStatusIdle)
 	c := AgentVersionFilter(FilterGreater, 2)
 	d := AgentEnvFilter("E", StringFilterEqual, "d")
@@ -89,7 +100,7 @@ func TestAgentFilterFlattensToAnyOfAll(t *testing.T) {
 		tags = append(tags, row)
 	}
 	want := [][]uint8{
-		{apiHost.AgentPropertyFilterName, apiHost.AgentPropertyFilterStatus, apiHost.AgentPropertyFilterEnv},
+		{apiHost.AgentPropertyFilterKey, apiHost.AgentPropertyFilterStatus, apiHost.AgentPropertyFilterEnv},
 		{apiHost.AgentPropertyFilterVersion, apiHost.AgentPropertyFilterEnv},
 	}
 	if !slices.EqualFunc(tags, want, slices.Equal) {
@@ -129,29 +140,34 @@ func TestEnumsMatchTheHost(t *testing.T) {
 }
 
 func TestGetAgentsPagesAndStops(t *testing.T) {
-	md := func(name string) apiHost.AgentMetadata {
+	md := func(n uint64) apiHost.AgentMetadata {
 		return apiHost.AgentMetadata{
-			AgentId: types.AgentId{AgentId: name},
-			Env:     []witTypes.Tuple2[string, string]{{F0: "K", F1: "V"}},
-			Status:  apiHost.AgentStatusRetrying,
+			AgentId:       types.AgentId{Uuid: types.Uuid{LowBits: n}},
+			AgentTypeName: witTypes.Some("Counter"),
+			Fingerprint:   types.Uuid{HighBits: n},
+			Env:           []witTypes.Tuple2[string, string]{{F0: "K", F1: "V"}},
+			Status:        apiHost.AgentStatusRetrying,
 		}
 	}
-	h := &fakeHost{pages: [][]apiHost.AgentMetadata{{md("a"), md("b")}, {md("c")}}, pageErr: errors.New("boom")}
+	h := &fakeHost{pages: [][]apiHost.AgentMetadata{{md(1), md(2)}, {md(3)}}, pageErr: errors.New("boom")}
 	withFakeHost(t, h)
-	var names []string
+	var ids []AgentID
 	var failed error
-	for m, err := range GetAgents(UUID{}, GetAgentsOptions{}) {
+	for m, err := range GetAgents("Counter", GetAgentsOptions{}) {
 		if err != nil {
 			failed = err
 			break
 		}
-		if m.Env["K"] != "V" || m.Status != AgentStatusRetrying {
+		n := m.AgentID.UUID()[15]
+		if m.Env["K"] != "V" || m.Status != AgentStatusRetrying || m.AgentTypeName != Some("Counter") ||
+			m.Fingerprint != uuidFromWit(types.Uuid{HighBits: uint64(n)}) {
 			t.Fatalf("metadata = %+v", m)
 		}
-		names = append(names, m.AgentID.AgentID)
+		ids = append(ids, m.AgentID)
 	}
-	if !slices.Equal(names, []string{"a", "b", "c"}) || failed == nil || !h.closed {
-		t.Fatalf("names=%v failed=%v closed=%v", names, failed, h.closed)
+	want := []AgentID{AgentIDFromUUID(UUID{15: 1}), AgentIDFromUUID(UUID{15: 2}), AgentIDFromUUID(UUID{15: 3})}
+	if !slices.Equal(ids, want) || failed == nil || !h.closed || h.typeName != "Counter" {
+		t.Fatalf("ids=%v failed=%v closed=%v type=%q", ids, failed, h.closed, h.typeName)
 	}
 
 	h = &fakeHost{pageErr: errors.New("boom")}
@@ -161,7 +177,7 @@ func TestGetAgentsPagesAndStops(t *testing.T) {
 			t.Fatal("MustGetAgents did not panic on a failing page")
 		}
 	}()
-	for range MustGetAgents(UUID{}, GetAgentsOptions{}) {
+	for range MustGetAgents("Counter", GetAgentsOptions{}) {
 	}
 }
 
@@ -185,15 +201,5 @@ func TestSelfMetadataResultPreservesHostErrors(t *testing.T) {
 		if !errors.As(err, &typed) || err.Error() != agentOperationErrorFromWit(raw).Error() {
 			t.Fatalf("host error lost: %v", err)
 		}
-	}
-}
-
-func TestResolveAgentIDStrictness(t *testing.T) {
-	h := &fakeHost{}
-	withFakeHost(t, h)
-	ResolveAgentID("c", "A()")
-	ResolveAgentIDStrict("c", "A()")
-	if !slices.Equal(h.strict, []bool{false, true}) {
-		t.Fatalf("strict = %v", h.strict)
 	}
 }

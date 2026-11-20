@@ -399,9 +399,9 @@ func secretErrorToGo(path []string, e secrets.SecretError) error {
 }
 
 // ---------------------------------------------------------------------------
-// config-on-RPC: a caller can override a callee's local config values at client
-// creation. The values are encoded here (pure) and threaded into make-wasm-rpc
-// by ClientFor.
+// config-on-RPC: a caller can override a callee's local config values when it
+// creates the callee. The values are encoded here (pure) and threaded into the
+// create options of wasm-rpc.create by Create.
 // ---------------------------------------------------------------------------
 
 // configOverrideFn produces the config overrides for one WithConfig option,
@@ -409,25 +409,25 @@ func secretErrorToGo(path []string, e secrets.SecretError) error {
 // client-creation time.
 type configOverrideFn func(d *definitions) ([]common.TypedAgentConfigValue, error)
 
-// WithConfig supplies the target agent's local config values at client
-// creation (make-wasm-rpc's agent-config), overriding what the platform would
+// WithConfig supplies the new agent's local config values to Create (the
+// agent-config of its create options), overriding what the platform would
 // otherwise provision:
 //
-//	client := shop.Agent.Get(shop.ID{Name: "eu"}, shop.Agent.WithConfig(shop.Config{Greeting: "Hi"}))
+//	client, err := shop.Agent.Create(shop.ID{Name: "eu"}, golem.Keyed(), shop.Agent.WithConfig(shop.Config{Greeting: "Hi"}))
 //
 // value replaces every local value: each local field of Cfg, its zero value
 // included, is sent as an override and validated against the target's
 // declarations. To override some values and keep the rest, use
 // [WithConfigEntries]. Secret fields are provisioned by the platform, not by a
 // caller, so they are skipped.
-func (a *AgentDefinition[Id, Cfg]) WithConfig(value Cfg) ClientOpt { return withConfig(value) }
+func (a *AgentDefinition[Id, Cfg]) WithConfig(value Cfg) CreateOpt { return withConfig(value) }
 
-// WithConfig supplies the target agent's local config values at client
-// creation, as [AgentDefinition.WithConfig] does for a local agent.
-func (a *FullAgentClient[Id, Cfg]) WithConfig(value Cfg) ClientOpt { return withConfig(value) }
+// WithConfig supplies the new agent's local config values to Create, as
+// [AgentDefinition.WithConfig] does for a local agent.
+func (a *FullAgentClient[Id, Cfg]) WithConfig(value Cfg) CreateOpt { return withConfig(value) }
 
-func withConfig[Cfg any](value Cfg) ClientOpt {
-	return func(o *clientOpts) {
+func withConfig[Cfg any](value Cfg) CreateOpt {
+	return func(o *createOpts) {
 		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {
 			return encodeConfigOverrides(d, value)
 		})
@@ -448,12 +448,12 @@ func ConfigEntryOf[T any](path []string, value T) ConfigEntry {
 	}}
 }
 
-// WithConfigEntries supplies some of the callee's local config values at
-// client creation, each at its own path; the rest keep their provisioned
+// WithConfigEntries supplies some of the new agent's local config values to
+// Create, each at its own path; the rest keep their provisioned
 // values. Generated clients build these from their typed configuration
 // structs, whose fields need not follow [AgentDefinition.WithConfig]'s field-name paths.
-func WithConfigEntries(entries ...ConfigEntry) ClientOpt {
-	return func(o *clientOpts) {
+func WithConfigEntries(entries ...ConfigEntry) CreateOpt {
+	return func(o *createOpts) {
 		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {
 			out := make([]common.TypedAgentConfigValue, 0, len(entries))
 			for _, entry := range entries {
@@ -491,9 +491,10 @@ func encodeConfigOverrides[Cfg any](d *definitions, value Cfg) ([]common.TypedAg
 	return out, nil
 }
 
-// buildAgentConfig encodes and validates the client's config overrides against
-// the target agent's declarations. Pure — the encode and the declared-key check
-// are both native-testable; ClientFor supplies the live definition set.
+// buildAgentConfig encodes and validates the config overrides of a Create
+// against the target agent's declarations. Pure — the encode and the
+// declared-key check are both native-testable; Create supplies the live
+// definition set.
 func buildAgentConfig(d *definitions, e *agentEntry, overrides []configOverrideFn) ([]common.TypedAgentConfigValue, error) {
 	if len(overrides) == 0 {
 		return nil, nil

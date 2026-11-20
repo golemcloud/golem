@@ -10,6 +10,7 @@ fn stdout_test_def(name : String) -> ToolDef {
       doc: { summary: name, description: "", examples: [], },
       globals: { options: [], flags: [], },
       subcommands: [],
+      http: None,
       body: Some({
         positionals: { fixed: [], tail: None, },
         options: [],
@@ -35,6 +36,7 @@ fn stdout_test_def(name : String) -> ToolDef {
   {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: [
       { ..root, subcommands: [1, 2], },
       command("required", Some(stream(true))),
@@ -153,7 +155,7 @@ test "ordinary registry keeps private invokers hidden and releases rejected stdi
           Some(stdin),
           None,
           None,
-          Principal::Anonymous,
+          InvocationContext::anonymous(),
         )
         is Err(@types.ToolError::InvalidToolName(_)),
       )
@@ -168,7 +170,7 @@ test "ordinary registry keeps private invokers hidden and releases rejected stdi
         None,
         None,
         None,
-        Principal::Anonymous,
+        InvocationContext::anonymous(),
       )
       is Ok(_),
     )

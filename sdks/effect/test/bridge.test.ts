@@ -1,69 +1,122 @@
 import { describe, expect, it } from "@effect/vitest"
 import { vi } from "vitest"
-import { Effect, Fiber, Layer, Stream } from "effect"
+import { Effect, Fiber, Stream } from "effect"
+import type * as AgentHost from "golem:agent/host@2.0.0"
+import type * as CoreTypes from "golem:core/types@2.0.0"
+import type { AgentId } from "../src/AgentId.js"
 import * as Bridge from "../src/Bridge.js"
-import { AgentHostClient } from "../src/host/AgentHostClient.js"
-import { RpcClient, RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
-import { hostInvocationMetadata } from "./invocation-metadata.js"
+import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
+import { agentIdFor, hostAgentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
+import { rpcLayer } from "./rpc-fake.js"
+
+const graph: Bridge.SchemaGraph = { defs: new Map(), root: Bridge.t.string() }
 
 describe("Bridge", () => {
-  it.effect(
-    "prepares ephemeral connections without making reusable IDs and releases on failure",
-    () =>
-      Effect.gen(function* () {
-        const makeAgentId = vi.fn(() => "unexpected")
-        const drop = vi.fn()
-        const connect = vi.fn(() => Effect.succeed({ drop } as unknown as RpcConnection))
-        const services = Layer.merge(
-          Layer.succeed(AgentHostClient, { makeAgentId } as never),
-          Layer.succeed(RpcClient, {
-            bindSelf: () => Effect.die("unexpected self binding"),
-            connect,
-          }),
-        )
-        const resolve = Bridge.resolveRemoteAgent(
-          "Ephemeral",
-          Bridge.v.record([]),
-          undefined,
-          [],
-          "ephemeral",
-        )
-        expect(connect).not.toHaveBeenCalled()
-        const result = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const remote = yield* resolve
-            expect(remote.agentId).toBe("Ephemeral")
-            expect(drop).not.toHaveBeenCalled()
-            return yield* Effect.fail("caller failed")
-          }),
-        ).pipe(Effect.provide(services), Effect.result)
-        expect(result).toMatchObject({ _tag: "Failure", failure: "caller failed" })
-        expect(makeAgentId).not.toHaveBeenCalled()
-        expect(connect).toHaveBeenCalledTimes(1)
-        expect(drop).toHaveBeenCalledTimes(1)
+  it.effect("maps upsert, create and getById to the host and releases on failure", () =>
+    Effect.gen(function* () {
+      const drop = vi.fn()
+      const connection = (id: CoreTypes.AgentId) =>
+        ({ agentId: () => Promise.resolve(id), drop }) as unknown as RpcConnection
+      const opens: Array<unknown> = []
+      const services = rpcLayer({
+        upsert: (agentType, constructor) => {
+          opens.push(["upsert", agentType, constructor])
+          return Effect.succeed(connection(hostAgentIdFor("upserted")))
+        },
+        create: (agentType, constructor, options) => {
+          opens.push(["create", agentType, constructor, options])
+          return Effect.succeed({
+            connection: connection(hostAgentIdFor("created")),
+            agentId: hostAgentIdFor("created"),
+          })
+        },
+        getById: (agentType, id) => {
+          opens.push(["getById", agentType, id])
+          return Effect.succeed(connection(id))
+        },
+      })
+      const upsert = Bridge.upsertRemoteAgent("Example", Bridge.v.record([]))
+      expect(opens).toEqual([])
+      const ids = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const upserted = yield* upsert
+          const created = yield* Bridge.createRemoteAgent("Example", Bridge.v.record([]), {
+            keyed: true,
+            configs: [{ path: ["mode"], value: { graph, value: Bridge.v.string("fast") } }],
+            env: { LEVEL: "debug" },
+          })
+          const found = yield* Bridge.getRemoteAgentById("Example", agentIdFor("existing"))
+          return [yield* upserted.agentId, yield* created.agentId, yield* found.agentId]
+        }),
+      ).pipe(Effect.provide(services))
+      expect(ids).toEqual([agentIdFor("upserted"), agentIdFor("created"), agentIdFor("existing")])
+      expect(opens.map((open) => (open as Array<unknown>).slice(0, 2))).toEqual([
+        ["upsert", "Example"],
+        ["create", "Example"],
+        ["getById", "Example"],
+      ])
+      expect(opens[1]).toMatchObject([
+        "create",
+        "Example",
+        { valueNodes: [{ tag: "record-value" }] },
+        {
+          keyed: true,
+          agentConfig: [
+            {
+              path: ["mode"],
+              value: { value: { valueNodes: [{ tag: "string-value", val: "fast" }] } },
+            },
+          ],
+          env: [["LEVEL", "debug"]],
+        },
+      ])
+      expect(opens[2]).toEqual(["getById", "Example", hostAgentIdFor("existing")])
+      expect(drop).toHaveBeenCalledTimes(3)
 
-        const cause = { tag: "denied" as const, val: "denied by host" }
-        const rejected = yield* resolve.pipe(
-          Effect.scoped,
-          Effect.provide(
-            Layer.merge(
-              Layer.succeed(AgentHostClient, { makeAgentId } as never),
-              Layer.succeed(RpcClient, {
-                bindSelf: () => Effect.die("unexpected self binding"),
-                connect: () => Effect.fail(new RpcHostError(cause, "WasmRpc.create")),
-              }),
-            ),
-          ),
-          Effect.result,
-        )
-        expect(rejected).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "RpcCallError", cause },
-        })
-        if (rejected._tag === "Failure" && rejected.failure._tag === "RpcCallError")
-          expect(rejected.failure.cause).toBe(cause)
-        expect(drop).toHaveBeenCalledTimes(1)
-      }),
+      const failed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* upsert
+          return yield* Effect.fail("caller failed")
+        }),
+      ).pipe(Effect.provide(services), Effect.result)
+      expect(failed).toMatchObject({ _tag: "Failure", failure: "caller failed" })
+      expect(drop).toHaveBeenCalledTimes(4)
+
+      const plain = yield* Effect.scoped(
+        Bridge.createRemoteAgent("Example", Bridge.v.record([])),
+      ).pipe(Effect.provide(services))
+      expect(yield* plain.agentId).toEqual(agentIdFor("created"))
+      expect(opens[4]).toMatchObject([
+        "create",
+        "Example",
+        {},
+        { keyed: false, agentConfig: [], env: [] },
+      ])
+
+      const conflict: AgentHost.RpcError = { tag: "conflict", val: "the key Example() is current" }
+      const rejected = yield* Bridge.createRemoteAgent("Example", Bridge.v.record([]), {
+        keyed: true,
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          rpcLayer({ create: () => Effect.fail(new RpcHostError(conflict, "WasmRpc.create")) }),
+        ),
+        Effect.result,
+      )
+      expect(rejected).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "RpcCallError", cause: conflict },
+      })
+      if (rejected._tag === "Failure" && rejected.failure._tag === "RpcCallError")
+        expect(rejected.failure.cause).toBe(conflict)
+
+      const invalid = yield* Bridge.getRemoteAgentById("Example", {
+        uuid: "bad",
+      } as AgentId).pipe(Effect.scoped, Effect.provide(services), Effect.result)
+      expect(invalid).toMatchObject({ _tag: "Failure", failure: { _tag: "InvalidUuidError" } })
+      expect(opens).toHaveLength(5)
+      expect(drop).toHaveBeenCalledTimes(5)
+    }),
   )
 
   it.live("keeps resolution and invocation lazy and cancels an interrupted await", () => {
@@ -72,6 +125,7 @@ describe("Bridge", () => {
     let cancels = 0
     let drops = 0
     const connection: RpcConnection = {
+      agentId: () => Promise.resolve(hostAgentIdFor("example")),
       invokeAndAwait: () => ({ metadata: hostInvocationMetadata("agent") }),
       invoke: () => hostInvocationMetadata("agent"),
       asyncInvokeAndAwait: () => {
@@ -90,29 +144,13 @@ describe("Bridge", () => {
       }),
       drop: () => undefined,
     }
-    const rpc = Layer.succeed(
-      RpcClient,
-      RpcClient.of({
-        bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => {
-          connects++
-          return Effect.succeed(connection)
-        },
-      }),
-    )
-    const agents = Layer.succeed(
-      AgentHostClient,
-      AgentHostClient.of({
-        makeAgentId: () => "Example()",
-      } as never),
-    )
-    const unresolved = Bridge.resolveRemoteAgent(
-      "Example",
-      { tag: "record", fields: [] },
-      undefined,
-      [],
-      "durable",
-    )
+    const rpc = rpcLayer({
+      upsert: () => {
+        connects++
+        return Effect.succeed(connection)
+      },
+    })
+    const unresolved = Bridge.upsertRemoteAgent("Example", { tag: "record", fields: [] })
     expect(connects).toBe(0)
     return Effect.scoped(
       Effect.gen(function* () {
@@ -127,7 +165,7 @@ describe("Bridge", () => {
         expect(cancels).toBe(1)
         expect(drops).toBe(1)
       }),
-    ).pipe(Effect.provide(Layer.merge(rpc, agents))) as Effect.Effect<void, unknown, never>
+    ).pipe(Effect.provide(rpc)) as Effect.Effect<void, unknown, never>
   })
 
   it("preserves a nested stream item's generated codec", async () => {

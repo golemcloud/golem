@@ -23,7 +23,8 @@ pub async fn invoke(
   stderr : @streams.ToolOutputWriter?,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
-  let principal = @invocationContext.caller().immediate
+  let context = @tool.InvocationContext::current()
+  defer context.end()
   let stdin = stdin.map(source => @tool.byte_stream(source))
   match
     @tool.validate_tool_outputs(
@@ -43,7 +44,7 @@ pub async fn invoke(
     }
     Ok(_) => ()
   }
-  match (stdout, stderr) {
+  let result = match (stdout, stderr) {
     (None, None) =>
       @tool.invoke_registered_tool(
         tool_name,
@@ -52,7 +53,7 @@ pub async fn invoke(
         stdin,
         None,
         None,
-        principal,
+        context,
       )
     (Some(writer), None) => {
       let stdout = @tool.provider_output(writer)
@@ -64,7 +65,7 @@ pub async fn invoke(
           stdin,
           Some(stdout),
           None,
-          principal,
+          context,
         )
       })
     }
@@ -78,7 +79,7 @@ pub async fn invoke(
           stdin,
           None,
           Some(stderr),
-          principal,
+          context,
         )
       })
     }
@@ -94,10 +95,20 @@ pub async fn invoke(
             stdin,
             Some(stdout),
             Some(stderr),
-            principal,
+            context,
           )
         })
       })
     }
   }
+  // A result that holds a stream keeps the caller for its producer.
+  context.end(
+    returned_stream=result is Ok(invocation) &&
+      (
+        invocation.stdout is Some(_) ||
+        invocation.stderr is Some(_) ||
+        (invocation.result is Some(typed) && @caller.holds_stream(typed.value))
+      ),
+  )
+  result
 }

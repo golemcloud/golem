@@ -2,12 +2,15 @@ import { z } from "zod"
 import {
   acquireQuotaToken,
   AgentStream,
+  Datetime,
   defineAgent,
   method,
   ok,
-  ParsedAgentId,
+  AgentId,
   reflection,
+  Result,
   s,
+  type StartedToolInvocation,
   toolDefinition,
 } from "@golemcloud/golem-ts-sdk"
 import { EffectFixture } from "effect-fixture-guest-client"
@@ -70,7 +73,7 @@ TsEphemeralPeer.implement({
 
 export const TsPrincipalPeer = defineAgent({
   name: "TsPrincipalPeer",
-  id: { tenant: z.string(), caller: s.principal() },
+  id: { tenant: z.string(), owner: s.principalRef() },
   methods: { value: method({ input: {}, returns: z.string() }) },
 })
 
@@ -165,22 +168,24 @@ TsPeer.implement({
       return token
     },
     async callEffect({ tenant, requestId }) {
-      const result = await EffectFixture.getWithConfig(tenant, "ts-override").transform({
+      const client = await EffectFixture.create(tenant, { config: { prefix: "ts-override" } })
+      const result = await client.transform({
         header: { requestId, flags: [true, false] },
         items: [{ sku: "TS", quantities: [2, 3] }],
       })
-      return "ok" in result
-        ? `${result.ok.summary}:${result.ok.accepted[0]?.total}`
-        : `error:${result.err.code}`
+      return result.tag === "ok"
+        ? `${result.val.summary}:${result.val.accepted[0]?.total}`
+        : `error:${result.val.code}`
     },
     async callEffectFailure({ tenant, requestId }) {
-      const result = await EffectFixture.getWithConfig(tenant, "ts-failure").transform({
+      const client = await EffectFixture.create(tenant, { config: { prefix: "ts-failure" } })
+      const result = await client.transform({
         header: { requestId, flags: [false] },
         items: [],
       })
-      return "err" in result
-        ? `${result.err.code}:${result.err.requestId}`
-        : `unexpected:${result.ok.summary}`
+      return result.tag === "err"
+        ? `${result.val.code}:${result.val.requestId}`
+        : `unexpected:${result.val.summary}`
     },
     async callEffectStream({ tenant }) {
       let pulled = 0
@@ -197,7 +202,7 @@ TsPeer.implement({
           }
         })(),
       )
-      const output = await EffectFixture.get(tenant).transformStream({
+      const output = await EffectFixture.upsert(tenant).transformStream({
         prefix: "typescript",
         items: source,
       })
@@ -222,9 +227,9 @@ TsPeer.implement({
           controller.close()
         },
       })
-      const { result, stdout } = await EffectCrossStreamingClient.newClient()
-        .effect_cross_streaming(this.name, stdin)
-        .collect()
+      const { result, stdout } = await collectSuccessfulInvocation(
+        EffectCrossStreamingClient.newClient().effect_cross_streaming(this.name, stdin),
+      )
       return `${result}|${new TextDecoder().decode(stdout)}`
     },
     async reflectedEffectTool({ payload }) {
@@ -238,12 +243,14 @@ TsPeer.implement({
           },
         })
       const command = tool.client.command([])
-      const json = await command.startJson({ label: this.name }, stdin()).collect()
-      const native = await command
-        .startValue(command.inputSchema!.packJson({ label: this.name }), stdin())
-        .collect()
-      const dynamic = await new reflection.DynamicToolClient("effect-cross-streaming")
-        .start(
+      const json = await collectSuccessfulInvocation(
+        command.startJson({ label: this.name }, stdin()),
+      )
+      const native = await collectSuccessfulInvocation(
+        command.startValue(command.inputSchema!.packJson({ label: this.name }), stdin()),
+      )
+      const dynamic = await collectSuccessfulInvocation(
+        new reflection.DynamicToolClient("effect-cross-streaming").start(
           [],
           {
             graph: command.inputSchema!.graph,
@@ -251,8 +258,8 @@ TsPeer.implement({
           },
           stdin(),
           true,
-        )
-        .collect()
+        ),
+      )
       let invalidRejected = false
       try {
         await command.startJson({ label: 7 }, stdin()).collect()
@@ -286,44 +293,40 @@ TsPeer.implement({
     async reflectedEffectAgent() {
       const agentType = reflection.getAgentType("EffectSnapshotFixture")
       if (!agentType) return "missing-snapshot-fixture"
-      const client = agentType.client.get({ tenant: `ts-reflected-${this.name}` })
+      const client = agentType.client.upsert({ tenant: `ts-reflected-${this.name}` })
       const value = client.method("value")
       const empty = { tag: "record" as const, fields: [] }
       const beforeJson = await value.invokeJson({})
       const beforeNative = await value.invokeValue(empty)
       await client.method("add").invokeJson({ by: 1 })
       const afterJson = await value.invokeJson({})
-      const agentId = new ParsedAgentId(beforeJson.metadata.agentId)
-      const parts = agentId.parts()
+      const agentId = AgentId.parse(AgentId.from(beforeJson.metadata.agentId).toString())
       const discovered = reflection.getAgentTypeByAgentId(agentId)
       if (!discovered || !value.definition.output) return "missing-reflected-output"
-      const rebound = agentId.client(discovered)
+      const rebound = await discovered.client.getById(agentId)
       const reboundValue = await rebound.method("value").invokeValue(empty)
-      const dynamicValue = await new reflection.DynamicAgentClient(agentId)
+      const dynamicValue = await (await reflection.DynamicAgentClient.getById(agentId))
         .method("value")
         .invokeValue(empty)
       const output = value.definition.output
-      return `${parts.typeName}|${discovered.name}|${beforeJson.value}|${output.unpackJson(beforeNative.value!)}|${afterJson.value}|${output.unpackJson(reboundValue.value!)}|${output.unpackJson(dynamicValue.value!)}`
+      const sameId = (await rebound.agentId()).equals(agentId)
+      return `${sameId}|${discovered.name}|${beforeJson.value}|${output.unpackJson(beforeNative.value!)}|${afterJson.value}|${output.unpackJson(reboundValue.value!)}|${output.unpackJson(dynamicValue.value!)}`
     },
     async principalIdentityRoundTrip() {
       const tenant = `principal-${this.name}`
-      const complete = await TsPrincipalPeer.client.get({ tenant }).value()
+      const typed = TsPrincipalPeer.client.upsert({ tenant })
+      const complete = await typed.value()
       const discovered = reflection.getAgentType("TsPrincipalPeer")
       if (!discovered) return "missing-principal-type"
-      const reflected = await discovered.client.get({ tenant }).method("value").invokeJson({})
-      const identity = new ParsedAgentId(reflected.metadata.agentId)
-      const parts = identity.parts()
-      if (
-        parts.typeName !== "TsPrincipalPeer" ||
-        parts.constructorValue.tag !== "record" ||
-        parts.constructorValue.fields.length !== 1 ||
-        parts.constructorValue.fields[0]?.tag !== "string" ||
-        parts.constructorValue.fields[0].value !== tenant
-      ) {
+      const reflected = await discovered.client.upsert({ tenant }).method("value").invokeJson({})
+      const identity = AgentId.parse(AgentId.from(reflected.metadata.agentId).toString())
+      if (!(await typed.agentId()).equals(identity)) {
         return "invalid-principal-identity"
       }
-      const completeById = await identity.client(TsPrincipalPeer).value()
-      const reflectedById = await identity.client(discovered).method("value").invokeJson({})
+      const completeById = await (await TsPrincipalPeer.client.getById(identity)).value()
+      const reflectedById = await (await discovered.client.getById(identity))
+        .method("value")
+        .invokeJson({})
       return `${complete}|${reflected.value}|${completeById}|${reflectedById.value}`
     },
     async reflectedConfigRoundTrip() {
@@ -337,23 +340,25 @@ TsPeer.implement({
           items: [{ sku: "CONFIG", quantities: [1] }],
         },
       }
-      const first = await agentType.client
-        .get({ tenant }, [{ path: ["prefix"], value: prefix }])
-        .method("transform")
-        .invokeJson(request)
-      const second = await agentType.client
-        .get({ tenant }, [{ path: ["prefix"], value: `changed-${this.name}` }])
-        .method("transform")
-        .invokeJson(request)
+      const created = await agentType.client.create(
+        { tenant },
+        { config: [{ path: ["prefix"], value: prefix }] },
+      )
+      const first = await created.method("transform").invokeJson(request)
+      const rebound = await agentType.client.getById(await created.agentId())
+      const second = await rebound.method("transform").invokeJson(request)
       let unknownRejected = false
       let invalidRejected = false
       try {
-        agentType.client.get({ tenant }, [{ path: ["unknown"], value: "value" }])
+        await agentType.client.create(
+          { tenant },
+          { config: [{ path: ["unknown"], value: "value" }] },
+        )
       } catch (error) {
         unknownRejected = error instanceof TypeError
       }
       try {
-        agentType.client.get({ tenant }, [{ path: ["prefix"], value: 7 }])
+        await agentType.client.create({ tenant }, { config: [{ path: ["prefix"], value: 7 }] })
       } catch (error) {
         invalidRejected = error instanceof TypeError
       }
@@ -361,7 +366,7 @@ TsPeer.implement({
     },
     async quotaThroughEffect({ tenant }) {
       const token = acquireQuotaToken("cross-sdk-quota", 2n)
-      const returned = await EffectFixture.get(tenant).reserveForwardedQuota(token)
+      const returned = await EffectFixture.upsert(tenant).reserveForwardedQuota(token)
       returned.reserve(1n).unwrap().commit(1n)
       let oldRejected = false
       try {
@@ -372,7 +377,7 @@ TsPeer.implement({
       return `reserved-after-effect:${oldRejected}`
     },
     async richCorpusThroughEffect({ tenant }) {
-      const result = await EffectRichFixture.get(tenant).transformRichCorpus({
+      const result = await EffectRichFixture.upsert(tenant).transformRichCorpus({
         u8: 254,
         u16: 65530,
         u32: 2_147_483_647,
@@ -392,10 +397,10 @@ TsPeer.implement({
         fixed: ["left", "right"],
         map: new Map([["answer", 42]]),
         option: undefined,
-        result: { ok: 31 },
+        result: Result.ok(31),
         path: "notes.txt",
         url: "https://golem.cloud/corpus",
-        datetime: "2024-02-29T12:34:56.123456789Z",
+        datetime: Datetime.parse("2024-02-29T12:34:56.123456789Z"),
         duration: 9_223_372_036_854_775_000n,
         choice: { tag: "name", val: "name:alice" },
       })
@@ -419,7 +424,7 @@ TsPeer.implement({
         fixed: ["right", "left"],
         map: [["answer!", -42]],
         option: "effect-option",
-        result: { err: "effect:31" },
+        result: { tag: "err", val: "effect:31" },
         path: "effect-notes.txt",
         url: "https://golem.cloud/corpus",
         datetime: "2024-02-29T12:34:56.123456789Z",
@@ -429,6 +434,7 @@ TsPeer.implement({
       const actual = {
         ...result,
         map: [...result.map],
+        datetime: Datetime.toISOString(result.datetime),
       }
       for (const [key, value] of Object.entries(expected)) {
         const actualValue = actual[key as keyof typeof actual]
@@ -443,15 +449,15 @@ TsPeer.implement({
       return "rich-corpus-ok"
     },
     async snapshotAdd({ tenant, by }) {
-      return EffectSnapshotFixture.get(tenant).add(by)
+      return EffectSnapshotFixture.upsert(tenant).add(by)
     },
     async snapshotValue({ tenant }) {
-      return EffectSnapshotFixture.get(tenant).value()
+      return EffectSnapshotFixture.upsert(tenant).value()
     },
     async schemaNodesThroughEffect({ tenant }) {
       const type = reflection.getAgentType("EffectSchemaFixture")
       if (!type || type.mode !== "durable") return "missing-schema-fixture"
-      const client = type.client.get({ tenant })
+      const client = type.client.upsert({ tenant })
       const invoke = (name: string, value: unknown) =>
         client.method(name).invokeValue({
           tag: "record",
@@ -524,3 +530,11 @@ TsPeer.implement({
     },
   },
 })
+
+async function collectSuccessfulInvocation<T>(invocation: StartedToolInvocation<T>) {
+  const { result, stdout, stderr } = await invocation.collect()
+  if (result.status === "rejected") throw result.reason
+  if (stdout.status === "rejected") throw stdout.reason
+  if (stderr.status === "rejected") throw stderr.reason
+  return { result: result.value, stdout: stdout.value }
+}

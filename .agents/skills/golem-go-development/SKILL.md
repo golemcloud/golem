@@ -98,8 +98,8 @@ cd sdks/go/golem  && go build ./... && go test ./... \
 
 The guest SDK is vetted for wasm at `.` only: the generated `internal/wit` bindings trip
 vet's `unsafe.Pointer` and unkeyed-field checks, so they are compiled, not vetted. CI runs
-this set, the binding drift check and the linters in the `build-golem-go` job
-(`.github/workflows/ci.yaml`).
+this set, the binding drift check and the linters in the `validate-sdk-go` task
+(`Makefile.sdk-validation.toml`).
 
 Generated binding code lands in `internal/wit/` and is wiped on every run. The
 standalone driver in `dev-tools/go-bindgen` enables private memory conversion helpers.

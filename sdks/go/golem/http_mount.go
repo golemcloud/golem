@@ -16,15 +16,18 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	coreHTTP "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_http"
+	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -118,9 +121,12 @@ type Endpoint struct {
 	authCount int        // how many times EndpointAuth was applied (>1 is a misuse)
 	cors      []string
 
-	streams      *StreamRoute // nil = Durable Streams defaults
-	streamsCount int          // how many times DurableStreams was applied (>1 is a misuse)
-	mode         RouteMode
+	streams         *StreamRoute // nil = Durable Streams defaults
+	streamsCount    int          // how many times DurableStreams was applied (>1 is a misuse)
+	mode            RouteMode
+	prefix          bool
+	routeID         *string
+	responseHeaders []FileResponseHeader
 }
 
 // wireBind maps a wire name (a header or query-parameter name) to the input
@@ -138,10 +144,132 @@ func newEndpoint(method, path string, opts []EndpointOpt) Endpoint {
 	return e
 }
 
+// Prefix declares a tool command-group suffix without publishing an endpoint.
+func Prefix(path string) Endpoint { return Endpoint{path: path, prefix: true} }
+
+// RouteID sets an explicit tool route identity, independent of its command path.
+func RouteID(id string) EndpointOpt { return func(e *Endpoint) { e.routeID = &id } }
+
+// ResponseHeaders adds response headers to a typed tool endpoint.
+func ResponseHeaders(headers ...FileResponseHeader) EndpointOpt {
+	return func(e *Endpoint) { e.responseHeaders = append(e.responseHeaders, headers...) }
+}
+
+// ToolDeclaration compiles neutral HTTP metadata for the tool authoring package.
+// The canonical descriptor validator checks binding scope and input shapes.
+func (ep Endpoint) ToolDeclaration() (toolCommon.CommandHttp, error) {
+	if ep.auth != nil || len(ep.cors) != 0 {
+		return toolCommon.CommandHttp{}, fmt.Errorf("tool HTTP admission and CORS belong to the export")
+	}
+	pp, errs := parsePath(ep.path, !ep.prefix)
+	if len(errs) != 0 {
+		return toolCommon.CommandHttp{}, fmt.Errorf("tool HTTP path: %s", strings.Join(errs, "; "))
+	}
+	path := make([]coreHTTP.PathSegment, 0, len(pp.segs))
+	for _, segment := range witSegments(pp.segs) {
+		if segment.Tag() != common.PathSegmentSegment {
+			return toolCommon.CommandHttp{}, fmt.Errorf("tool paths cannot use agent system variables")
+		}
+		path = append(path, segment.Segment())
+	}
+	if ep.prefix {
+		return toolCommon.MakeCommandHttpPrefix(toolCommon.ToolHttpPrefix{PathSuffix: path}), nil
+	}
+	method := witMethod(ep.method)
+	endpoint := toolCommon.ToolHttpEndpoint{HttpMethod: method.Method(), PathSuffix: path}
+	if ep.routeID != nil {
+		endpoint.RouteId = witTypes.Some(*ep.routeID)
+	}
+	for _, q := range append(pp.query, ep.query...) {
+		endpoint.QueryVars = append(endpoint.QueryVars, coreHTTP.QueryVariable{QueryParamName: q.wire, VariableName: q.field})
+	}
+	for _, h := range ep.headers {
+		endpoint.HeaderVars = append(endpoint.HeaderVars, coreHTTP.HeaderVariable{HeaderName: h.wire, VariableName: h.field})
+	}
+	for _, h := range ep.responseHeaders {
+		endpoint.ResponseHeaders = append(endpoint.ResponseHeaders, coreHTTP.FileResponseHeader{Name: h.Name, Value: h.Value})
+	}
+	switch ep.mode {
+	case "":
+	case RoutePlain:
+		endpoint.Mode = witTypes.Some(coreHTTP.HttpRouteModePlain)
+	case RouteDurableStreams:
+		endpoint.Mode = witTypes.Some(coreHTTP.HttpRouteModeDurableStreams)
+	case RouteSSE:
+		endpoint.Mode = witTypes.Some(coreHTTP.HttpRouteModeSse)
+	case RouteWebSocket:
+		endpoint.Mode = witTypes.Some(coreHTTP.HttpRouteModeWebSocket)
+	default:
+		return toolCommon.CommandHttp{}, fmt.Errorf("unknown HTTP route mode %q", ep.mode)
+	}
+	if ep.streamsCount > 1 {
+		return toolCommon.CommandHttp{}, fmt.Errorf("DurableStreams set more than once")
+	}
+	if route := ep.streams; route != nil {
+		options := coreHTTP.DurableStreamRouteOptions{}
+		for _, slot := range route.Slots {
+			var source coreHTTP.DurableStreamSlotSource
+			switch {
+			case slot.Input != "" && slot.Output == "" && !slot.Result:
+				source = coreHTTP.MakeDurableStreamSlotSourceInput(slot.Input)
+			case slot.Output != "" && slot.Input == "" && !slot.Result:
+				source = coreHTTP.MakeDurableStreamSlotSourceOutput(slot.Output)
+			case slot.Result && slot.Input == "" && slot.Output == "":
+				source = coreHTTP.MakeDurableStreamSlotSourceOutput("$result")
+			default:
+				return toolCommon.CommandHttp{}, fmt.Errorf("stream slot must select exactly one source")
+			}
+			options.Slots = append(options.Slots, coreHTTP.DurableStreamSlotOptions{Source: source, Name: someHTTPString(slot.Name), ContentType: someHTTPString(slot.ContentType)})
+		}
+		load := coreHTTP.DurableStreamRouteLoadOptions{}
+		if route.MaxReadersPerStream != 0 {
+			load.MaxConcurrentReadersPerStream = witTypes.Some(route.MaxReadersPerStream)
+		}
+		if route.MaxAppendsPerSecond != 0 {
+			load.MaxAppendRequestsPerSecondPerStream = witTypes.Some(route.MaxAppendsPerSecond)
+		}
+		if route.MaxReadersPerStream != 0 || route.MaxAppendsPerSecond != 0 {
+			options.Load = witTypes.Some(load)
+		}
+		endpoint.DurableStreams = witTypes.Some(options)
+	}
+	return toolCommon.MakeCommandHttpEndpoint(endpoint), nil
+}
+
+func someHTTPString(value string) witTypes.Option[string] {
+	if value == "" {
+		return witTypes.None[string]()
+	}
+	return witTypes.Some(value)
+}
+
+// ToolDeclaration compiles a path-only mount for the tool authoring package.
+func (mount Mount) ToolDeclaration() (toolCommon.ToolHttpMount, error) {
+	if mount.Auth || len(mount.CORS) != 0 || mount.PhantomAgent || mount.PhantomID.declared() || mount.WebhookSuffix != "" || len(mount.ExposeFiles) != 0 || len(mount.FileResponseHeaders) != 0 {
+		return toolCommon.ToolHttpMount{}, fmt.Errorf("tool mounts declare only a path; admission belongs to the export")
+	}
+	decl, err := Prefix(mount.Path).ToolDeclaration()
+	if err != nil {
+		return toolCommon.ToolHttpMount{}, err
+	}
+	return toolCommon.ToolHttpMount{PathPrefix: decl.Prefix().PathSuffix}, nil
+}
+
+// ToolHTTPDeclaration compiles a single HTTP option for a tool command group.
+func ToolHTTPDeclaration(opts ...MethodOpt) (toolCommon.CommandHttp, error) {
+	var options methodOpts
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if len(options.endpoints) != 1 {
+		return toolCommon.CommandHttp{}, fmt.Errorf("a tool command declares exactly one endpoint or prefix")
+	}
+	return options.endpoints[0].ToolDeclaration()
+}
+
 // GET builds a GET endpoint; like the other verb constructors below it names an
-// HTTP method plus a path suffix. GET and HEAD are bodyless (they must bind
-// every input field, since there is no request body to carry the rest); the
-// other verbs carry unbound fields in the body.
+// HTTP method plus a path suffix. GET, HEAD and DELETE read remaining input
+// fields from the query string; other verbs read them from the body.
 func GET(path string, opts ...EndpointOpt) Endpoint { return newEndpoint("GET", path, opts) }
 
 // HEAD builds a HEAD endpoint, bodyless like GET.
@@ -339,7 +467,7 @@ func validVarName(n string) string {
 
 func isBodyless(verb string) bool {
 	switch strings.ToUpper(verb) {
-	case "GET", "HEAD":
+	case "GET", "HEAD", "DELETE":
 		return true
 	}
 	return false
@@ -356,6 +484,30 @@ func bindableKind(k reflect.Kind) bool {
 		return true
 	}
 	return false
+}
+
+func queryBindableType(t reflect.Type) bool {
+	switch t {
+	case reflect.TypeFor[values.Text](), reflect.TypeFor[values.Binary](),
+		reflect.TypeFor[values.URL](), reflect.TypeFor[values.Path](), reflect.TypeFor[values.UUID](),
+		reflect.TypeFor[time.Duration]():
+		return false
+	}
+	if t.Kind() == reflect.Pointer {
+		return queryBindableType(t.Elem())
+	}
+	if elem, ok := values.OptionElem(reflect.Zero(t).Interface()); ok {
+		return queryBindableType(elem)
+	}
+	switch t.Kind() {
+	case reflect.Slice:
+		return bindableKind(t.Elem().Kind()) && queryBindableType(t.Elem())
+	case reflect.Map:
+		return bindableKind(t.Key().Kind()) && queryBindableType(t.Key()) &&
+			bindableKind(t.Elem().Kind()) && queryBindableType(t.Elem())
+	default:
+		return bindableKind(t.Kind())
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -391,9 +543,8 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		return mount, endpoints, errs
 	}
 
-	idNames := fieldNameSet(userFields(e.idFields))
-	idPrincipals := fieldNameSet(principalFields(e.idFields))
-	selector, serrs := compilePhantomSelector(e, mp, idNames, idPrincipals)
+	idNames := fieldNameSet(e.idFields)
+	selector, serrs := compilePhantomSelector(e, mp, idNames)
 	for _, se := range serrs {
 		rec("", "%s", se)
 	}
@@ -412,14 +563,12 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		}
 		if s.kind == varSeg {
 			mountVars[s.value] = true
-			if idPrincipals[s.value] {
-				rec("", "HTTP mount path variable {%s} names the principal, which the host fills; it cannot be bound", s.value)
-			} else if !idNames[s.value] {
+			if !idNames[s.value] {
 				rec("", "HTTP mount path variable {%s} is not a constructor (Id) field", s.value)
 			}
 		}
 	}
-	for _, f := range userFields(e.idFields) {
+	for _, f := range e.idFields {
 		if !mountVars[f.Name] {
 			rec("", "HTTP mount path does not bind Id field %q; every constructor field must appear as a {var}", f.Name)
 		}
@@ -470,11 +619,10 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	endpoints := map[string][]common.HttpEndpointDetails{}
 	for _, name := range e.order {
 		m := e.methods[name]
-		inNames := fieldNameSet(userFields(m.inFields))
-		inKind := fieldKindMap(userFields(m.inFields))
-		principals := fieldNameSet(principalFields(m.inFields))
+		inNames := fieldNameSet(m.inFields)
+		inTypes := fieldTypeMap(m.inFields)
 		for _, ep := range m.endpoints {
-			det, eerrs := validateAndCompileEndpoint(ep, inNames, inKind, principals, mountVars, methodStreamSlots(m.inFields, m.outType))
+			det, eerrs := validateAndCompileEndpoint(ep, inNames, inTypes, mountVars, methodStreamSlots(m.inFields, m.outType))
 			for _, ee := range eerrs {
 				rec(name, "%s", ee)
 			}
@@ -490,7 +638,7 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 
 // compilePhantomSelector checks the mount's phantom selector against the
 // agent's mode, file exposure and Id fields, and compiles it to WIT.
-func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames, idPrincipals map[string]bool) (witTypes.Option[common.PhantomIdBinding], []string) {
+func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames map[string]bool) (witTypes.Option[common.PhantomIdBinding], []string) {
 	sel := e.mount.PhantomID
 	if !sel.declared() {
 		return witTypes.None[common.PhantomIdBinding](), nil
@@ -515,7 +663,7 @@ func compilePhantomSelector(e *agentEntry, mp parsedPath, idNames, idPrincipals 
 			captures++
 		}
 	}
-	if idNames[sel.name] || idPrincipals[sel.name] || captures != 1 {
+	if idNames[sel.name] || captures != 1 {
 		errs = append(errs, fmt.Sprintf("phantom path selector {%s} must name exactly one mount capture, not a constructor (Id) field", sel.name))
 	}
 	return witTypes.Some(common.MakePhantomIdBindingPath(details)), errs
@@ -551,8 +699,11 @@ func phantomSelectorConflict(sel PhantomSelector, det common.HttpEndpointDetails
 	return ""
 }
 
-func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map[string]reflect.Kind, principals map[string]bool, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
+func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inTypes map[string]reflect.Type, mountVars map[string]bool, slots streamSlots) (common.HttpEndpointDetails, []string) {
 	var errs []string
+	if ep.prefix || ep.routeID != nil || len(ep.responseHeaders) != 0 {
+		errs = append(errs, "prefix, RouteID and ResponseHeaders are tool HTTP declarations")
+	}
 	if ep.authCount > 1 {
 		errs = append(errs, fmt.Sprintf("%s %q: EndpointAuth set %d times (an endpoint has one auth setting)", ep.method, ep.path, ep.authCount))
 	}
@@ -563,17 +714,13 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 
 	bound := map[string]int{}
 	bind := func(field, where string) {
-		if principals[field] {
-			errs = append(errs, fmt.Sprintf("%s variable {%s} names the principal, which the host fills; it cannot be bound", where, field))
-			return
-		}
 		if !inNames[field] && !mountVars[field] {
 			errs = append(errs, fmt.Sprintf("%s variable {%s} is not an input field of the method (nor a mount variable)", where, field))
 			return
 		}
 		if inNames[field] {
-			if k, ok := inKind[field]; ok && !bindableKind(k) {
-				errs = append(errs, fmt.Sprintf("%s cannot bind input field %q (kind %s); only scalar fields decode from a URL", where, field, k))
+			if typ, ok := inTypes[field]; ok && ((where == "query" && !queryBindableType(typ)) || (where != "query" && !bindableKind(typ.Kind()))) {
+				errs = append(errs, fmt.Sprintf("%s cannot bind input field %q (kind %s); only scalar fields or query collections decode from a URL", where, field, typ.Kind()))
 			}
 		}
 		bound[field]++
@@ -618,8 +765,16 @@ func validateAndCompileEndpoint(ep Endpoint, inNames map[string]bool, inKind map
 
 	if isBodyless(ep.method) {
 		for _, f := range sortedKeys(inNames) {
+			if _, stream := slots.inputs[f]; stream {
+				continue
+			}
 			if bound[f] == 0 {
-				errs = append(errs, fmt.Sprintf("%s endpoint must bind every input field, but %q is unbound (a bodyless verb carries no request body)", ep.method, f))
+				if !queryBindableType(inTypes[f]) {
+					errs = append(errs, fmt.Sprintf("%s cannot bind implicit query input %q; records and rich payloads require a body method", ep.method, f))
+				}
+				if queryWire[f] {
+					errs = append(errs, fmt.Sprintf("implicit query input %q conflicts with an explicit query binding", f))
+				}
 			}
 		}
 	}
@@ -778,16 +933,6 @@ func verbName(m common.HttpMethod) string {
 	}
 }
 
-// userFields are the fields a caller supplies; principalFields are the ones
-// the host fills.
-func userFields(fs []engine.Field) []engine.Field {
-	return slices.DeleteFunc(slices.Clone(fs), func(f engine.Field) bool { return f.AutoInjected })
-}
-
-func principalFields(fs []engine.Field) []engine.Field {
-	return slices.DeleteFunc(slices.Clone(fs), func(f engine.Field) bool { return !f.AutoInjected })
-}
-
 func fieldNameSet(fs []engine.Field) map[string]bool {
 	m := make(map[string]bool, len(fs))
 	for _, f := range fs {
@@ -796,10 +941,10 @@ func fieldNameSet(fs []engine.Field) map[string]bool {
 	return m
 }
 
-func fieldKindMap(fs []engine.Field) map[string]reflect.Kind {
-	m := make(map[string]reflect.Kind, len(fs))
+func fieldTypeMap(fs []engine.Field) map[string]reflect.Type {
+	m := make(map[string]reflect.Type, len(fs))
 	for _, f := range fs {
-		m[f.Name] = f.Typ.Kind()
+		m[f.Name] = f.Typ
 	}
 	return m
 }

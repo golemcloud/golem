@@ -23,7 +23,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 pub use golem_schema::schema::tool::{
-    BoolFlagShape, DuplicateKeyPolicy, ErrorKind, FlagShape, Quantifier, Repetition,
+    BoolFlagShape, CommandHttp, DuplicateKeyPolicy, ErrorKind, FlagShape, Quantifier, Repetition,
+    ToolHttpEndpoint, ToolHttpMount, ToolHttpPrefix,
 };
 
 mod schema_graph;
@@ -70,6 +71,7 @@ pub trait ToolSchemaRepr: Clone + std::fmt::Debug {
 pub struct ExtendedToolType<S: ToolSchemaRepr = SchemaGraph> {
     pub version: String,
     pub requires_filesystem: bool,
+    pub http_mount: Option<ToolHttpMount>,
     pub commands: Vec<ExtendedCommandNode<S>>,
 }
 
@@ -122,6 +124,7 @@ pub struct ExtendedCommandNode<S: ToolSchemaRepr = SchemaGraph> {
     pub name: String,
     pub aliases: Vec<String>,
     pub doc: Doc,
+    pub http: Option<CommandHttp>,
     pub globals: ExtendedGlobals<S>,
     pub subcommands: Vec<i32>,
     pub body: Option<ExtendedCommandBody<S>>,
@@ -407,6 +410,11 @@ pub struct ExtendedForbidsC<S: ToolSchemaRepr = SchemaGraph> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolBuildError {
+    InvalidHttpDeclaration {
+        command: String,
+        input: Option<String>,
+        detail: String,
+    },
     EmptyCommandTree,
     CommandIndexOutOfBounds {
         index: i32,
@@ -449,7 +457,6 @@ pub enum ToolBuildError {
     VariantInInputPosition(String),
     CommandNotFound(String),
     UnresolvedConstraintRef(String),
-    AutoInjectedToolParameter(String),
     InvalidNumericBound(String),
     RefinementTypeMismatch {
         refinement: &'static str,
@@ -519,6 +526,17 @@ impl Display for ToolBuildError {
                 write!(f, "schema at {position} is not well-formed: {detail}")
             }
             ToolBuildError::EncodeError(s) => write!(f, "tool metadata encode error: {s}"),
+            ToolBuildError::InvalidHttpDeclaration {
+                command,
+                input,
+                detail,
+            } => {
+                write!(f, "invalid HTTP declaration on command {command:?}")?;
+                if let Some(input) = input {
+                    write!(f, " for input {input:?}")?;
+                }
+                write!(f, ": {detail}")
+            }
             ToolBuildError::DefaultTypeMismatch(s) => {
                 write!(f, "default value does not match schema: {s}")
             }
@@ -541,10 +559,6 @@ impl Display for ToolBuildError {
             ToolBuildError::UnresolvedConstraintRef(s) => {
                 write!(f, "constraint references an unknown argument: {s}")
             }
-            ToolBuildError::AutoInjectedToolParameter(s) => write!(
-                f,
-                "auto-injected types are not valid tool value parameters or results: {s}"
-            ),
             ToolBuildError::InvalidNumericBound(s) => {
                 write!(f, "invalid numeric bound: {s}")
             }
