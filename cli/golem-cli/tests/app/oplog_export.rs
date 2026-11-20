@@ -270,10 +270,9 @@ async fn start_multi_status_server() -> u16 {
     port
 }
 
-/// Deploys the probe app on a server that keeps oplog entries above 64 KiB out of oplog pages,
-/// fills the probe agents, and points the CLI at a recording proxy in front of the router.
-/// Starts a local server with `server_config` added to its configuration, and deploys the probe
-/// app.
+/// Starts a local server that keeps oplog entries above 64 KiB out of oplog pages, with
+/// `server_config` added to its configuration. Deploys the probe app on it, fills the probe
+/// agents, and points the CLI at a recording proxy in front of the router.
 async fn setup_probe_app(ctx: &mut TestContext, server_config: &str) -> RecordingProxy {
     let config_file = ctx.working_dir.join("golem-server.toml");
     std::fs::write(
@@ -373,6 +372,84 @@ async fn setup_probe_app(ctx: &mut TestContext, server_config: &str) -> Recordin
     let proxy = RecordingProxy::start(router).await;
     ctx.add_env_var("GOLEM_BUILTIN_LOCAL_URL", proxy.url.clone());
     proxy
+}
+
+/// Waits until the archive moved the oplog of `agent` to the blob layer: the indexed storage of the
+/// local server holds a blob layer manifest of the agent, and the primary oplog of the agent holds
+/// no entry. The local server keeps one SQLite file for each agent and layer in `kv-store`, and
+/// names the file by the BLAKE3 hash of the agent.
+async fn wait_until_archived(ctx: &TestContext, agent: &str) {
+    let component = ctx
+        .cli([cmd::COMPONENT, cmd::GET, flag::FORMAT, "json"])
+        .await;
+    assert!(component.success_or_dump());
+    let mut ids = Vec::new();
+    component
+        .stdout_json::<Value>()
+        .iter()
+        .for_each(|document| collect_ids(document, &mut ids));
+    let component_id = ids
+        .into_iter()
+        .find_map(|(key, id)| (key == "componentId").then_some(id))
+        .expect("no componentId in the component metadata");
+    let metadata = ctx
+        .cli([cmd::AGENT, cmd::GET, agent, flag::FORMAT, "json"])
+        .await;
+    assert!(metadata.success_or_dump());
+    let agent_name = metadata.stdout_json::<Value>()[0]["metadata"]["agentId"]
+        .as_str()
+        .expect("no agentId in the agent metadata")
+        .to_string();
+    let hash = blake3::hash(format!("{component_id}/{agent_name}").as_bytes()).to_string();
+    let kv_store = ctx.data_dir.path().join("kv-store");
+    let (primary, manifest) = (
+        kv_store.join(format!("durable-oplog-{hash}.db")),
+        kv_store.join(format!("durable-blob-oplog-l0-{hash}.db")),
+    );
+    let archived = move || {
+        let (primary, manifest) = (primary.clone(), manifest.clone());
+        async move {
+            let primary_entries = match primary.exists() {
+                false => 0,
+                true => {
+                    let pool = sqlx::SqlitePool::connect(&format!(
+                        "sqlite://{}?mode=ro",
+                        primary.display()
+                    ))
+                    .await
+                    .unwrap();
+                    let (count,): (i64,) = sqlx::query_as(
+                        "SELECT COUNT(*) FROM index_storage WHERE namespace = 'durable-worker-oplog'",
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                    pool.close().await;
+                    count
+                }
+            };
+            manifest.exists() && primary_entries == 0
+        }
+    };
+    let done = futures_util::StreamExt::filter(
+        futures_util::StreamExt::then(futures_util::stream::repeat(()), move |()| {
+            let archived = archived();
+            async move {
+                let done = archived.await;
+                if !done {
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+                done
+            }
+        }),
+        |done| futures_util::future::ready(*done),
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        futures_util::StreamExt::next(&mut Box::pin(done)),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the oplog of {agent} was not archived"));
 }
 
 /// Texts that must not appear in an obfuscated report of `agent`: the marker as text, as base64
@@ -1132,7 +1209,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     let mut ctx = TestContext::new();
     // A scan budget far below the length of the oplogs ends each search page early, and the
     // archive interval moves the oplog of each idle agent to the archive layers.
-    let _proxy = setup_probe_app(
+    let proxy = setup_probe_app(
         &mut ctx,
         indoc! { r#"
             [worker_executor.limits.scan_budget]
@@ -1143,9 +1220,9 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         "# },
     )
     .await;
-    // The agents are idle, so their oplogs move to the archive (archive_interval=2s + scheduler
-    // process_interval<=2s; 8s is a comfortable margin).
-    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+    // The agents are idle, so the archive moves their oplogs to the blob layer.
+    wait_until_archived(&ctx, LONG_PROBE).await;
+    wait_until_archived(&ctx, PROBE).await;
 
     // The long probe has more entries than one page of the HTTP batch size (50).
     let plain = plain_dump(&ctx, LONG_PROBE).await;
@@ -1162,6 +1239,29 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         .await;
     assert!(paged.success_or_dump());
     assert_eq!(paged.stdout_json::<Value>(), plain);
+
+    // `--format json` prints the entries of a page before it reads the next page: the proxy holds
+    // the read of the second page, and the first documents are on stdout meanwhile. A command
+    // that keeps all entries until the last page prints nothing, and the wait for the line fails.
+    let (held, release) = proxy.hold(is_oplog_page_after_cursor, 0);
+    ctx.add_env_var("GOLEM_HTTP_BATCH_SIZE", "2");
+    let (mut streaming, first_line) = ctx
+        .cli_process_after_line(
+            [cmd::AGENT, "oplog", LONG_PROBE, flag::FORMAT, "json"],
+            "\"agent.oplog\"",
+        )
+        .await;
+    ctx.env_mut().remove("GOLEM_HTTP_BATCH_SIZE");
+    tokio::time::timeout(std::time::Duration::from_secs(60), held)
+        .await
+        .expect("the CLI never read the second page")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&first_line).unwrap(),
+        plain[0]
+    );
+    release.send(()).unwrap();
+    assert!(streaming.wait().await.unwrap().success());
     let to = last - 3;
     let path = ctx.cwd_path_join("export/oplog.jsonl");
     let outputs = ctx
@@ -1185,6 +1285,34 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         .collect::<Vec<_>>();
     assert_eq!(lines.len() as u64, to);
     assert_eq!(lines, plain[..to as usize].to_vec());
+
+    // The export writes in full the entries that oplog pages omit for their size.
+    let large = plain_dump(&ctx, LARGE_PROBE).await;
+    let large_path = ctx.cwd_path_join("export/large.jsonl");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            LARGE_PROBE,
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            large_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let written = fs::read_to_string(&large_path).unwrap();
+    assert!(
+        written.lines().any(|line| line.len() > 600_000),
+        "the export has no line of the 600 KB entry"
+    );
+    assert_eq!(
+        written
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>(),
+        large
+    );
 
     // A query combines with a range: only the matches in the range are exported.
     const QUERY: &str = "agent-invocation-started";
@@ -1230,6 +1358,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     );
 
     // A file export needs the JSON Lines format, and a range must not end before it starts.
+    proxy.take();
     let text = ctx
         .cli([
             cmd::AGENT,
@@ -1257,12 +1386,69 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         ])
         .await;
     assert!(!reversed.success(), "{}", reversed.stdout_text());
-    // A failed export leaves no file behind, and no temporary file in the directory.
+    // The CLI refuses the range before it reads the oplog, and leaves no file behind.
+    assert!(
+        !proxy
+            .take()
+            .iter()
+            .any(|request| request.contains("/oplog")),
+        "the CLI read the oplog for a range that ends before it starts"
+    );
     assert!(!reversed_path.exists());
-    let mut files = std::fs::read_dir(ctx.cwd_path_join("export"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .collect::<Vec<_>>();
-    files.sort();
-    assert_eq!(files, vec!["oplog.jsonl", "query.jsonl"]);
+    let exported_files = || {
+        let mut files = std::fs::read_dir(ctx.cwd_path_join("export"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        files.sort();
+        files
+    };
+    let expected_files = vec!["large.jsonl", "oplog.jsonl", "query.jsonl"];
+    assert_eq!(exported_files(), expected_files);
+
+    // An export that fails after some pages leaves no file and no temporary file. The proxy holds
+    // the read of the third page until the agent is deleted, so the read of that page fails.
+    let failed_path = ctx.cwd_path_join("export/failed.jsonl");
+    let (held, release) = proxy.hold(is_oplog_page_after_cursor, 1);
+    let failed_export = ctx.cli_with_env(
+        [
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            failed_path.to_str().unwrap(),
+        ],
+        &[("GOLEM_HTTP_BATCH_SIZE", "2")],
+    );
+    let delete = async {
+        tokio::time::timeout(std::time::Duration::from_secs(300), held)
+            .await
+            .expect("the export never read the third page")
+            .unwrap();
+        let outputs = ctx
+            .cli_with_env(
+                [flag::YES, cmd::AGENT, "delete", LONG_PROBE],
+                &proxy.bypass(),
+            )
+            .await;
+        assert!(outputs.success_or_dump());
+        release.send(()).unwrap();
+    };
+    let (failed, ()) = tokio::join!(failed_export, delete);
+    assert!(!failed.success(), "{}", failed.stdout_text());
+    assert!(!failed_path.exists());
+    assert_eq!(exported_files(), expected_files);
+}
+
+/// A read of an oplog page that continues the pages before it: a request of the oplog endpoint
+/// with a `cursor`.
+fn is_oplog_page_after_cursor(request: &str) -> bool {
+    request
+        .split_whitespace()
+        .nth(1)
+        .and_then(|uri| uri.split('?').next())
+        .is_some_and(|path| path.ends_with("/oplog"))
+        && query_param(request, "cursor").is_some()
 }

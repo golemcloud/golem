@@ -1576,10 +1576,6 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     assert_eq!(result2.len(), 3, "imported-function");
     assert_eq!(result3.len(), 2, "id:G1001 OR id:G1000");
 
-    // The agent is idle, so its oplog moves to the archive (archive_interval=2s +
-    // scheduler process_interval<=2s; 8s is a comfortable margin).
-    tokio::time::sleep(Duration::from_secs(8)).await;
-
     // A query combines with a range: only the matches in the range are returned.
     let (first, second) = (result1[0].oplog_index, result1[1].oplog_index);
     let last = OplogIndex::from_u64(user.get_oplog_last_index(&agent_id).await?);
