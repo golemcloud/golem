@@ -157,6 +157,11 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     registry_entry!("AgentCreateView", "agent.new", arb_agent_new_result),
     registry_entry!("AgentOplogEntryView", "agent.oplog", arb_agent_oplog_result),
     registry_entry!(
+        "AgentOplogExportReportView",
+        "agent.oplog-export",
+        arb_agent_oplog_export_report
+    ),
+    registry_entry!(
         "AgentOplogExportHeaderView",
         "agent.oplog-export-header",
         arb_agent_oplog_export_header
@@ -675,7 +680,7 @@ fn cli_output_schema_output_definitions_have_agent_metadata() {
         let definition = definitions
             .get(output_type)
             .unwrap_or_else(|| panic!("missing definition for {output_type}"));
-        for field in ["description", "x-golem-output-mode", "x-golem-command"] {
+        for field in ["description", "x-golem-output-mode"] {
             assert!(
                 definition.get(field).is_some(),
                 "{output_type} must define top-level {field} metadata"
@@ -691,6 +696,31 @@ fn cli_output_schema_output_definitions_have_agent_metadata() {
             "{output_type} has invalid x-golem-output-mode {output_mode:?}"
         );
 
+        // Each output type has one owner: the command that emits it, or the typed MCP tool that
+        // returns it. The MCP tests check that a tool owner is a typed tool of the server.
+        match (
+            definition.get("x-golem-command"),
+            definition.get("x-golem-mcp-tool"),
+        ) {
+            (Some(_), None) => {}
+            (None, Some(tool)) => {
+                let tool = tool
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{output_type} must define string x-golem-mcp-tool"));
+                assert!(
+                    !tool.trim().is_empty(),
+                    "{output_type} must define non-empty x-golem-mcp-tool"
+                );
+                assert!(
+                    definition.get("x-golem-commands").is_none(),
+                    "{output_type} is owned by a tool and must not list commands"
+                );
+                continue;
+            }
+            _ => panic!(
+                "{output_type} must define exactly one of x-golem-command and x-golem-mcp-tool"
+            ),
+        }
         let primary_command = definition
             .get("x-golem-command")
             .and_then(Value::as_str)
@@ -4087,6 +4117,45 @@ fn arb_agent_oplog_export_entry() -> OutputDocumentStrategy {
     serialized_output(
         prop_oneof![full, omitted]
             .prop_map(crate::model::agent::oplog_export_view::AgentOplogExportEntryView),
+    )
+}
+
+/// A report built from the generated header, entry and coverage documents, read back into their
+/// DTOs.
+fn arb_agent_oplog_export_report() -> OutputDocumentStrategy {
+    use crate::oplog_export::model::{
+        OplogExportCoverage, OplogExportHeader, OplogExportReport, OplogReportHeader, ReportEntry,
+    };
+    fn dto<T: serde::de::DeserializeOwned>(mut document: Value) -> T {
+        document
+            .as_object_mut()
+            .unwrap()
+            .remove(CLI_OUTPUT_TYPE_FIELD);
+        serde_json::from_value(document).unwrap()
+    }
+    serialized_output(
+        (
+            arb_agent_oplog_export_header(),
+            proptest::collection::vec(arb_agent_oplog_export_entry(), 0..4),
+            arb_agent_oplog_export_coverage(),
+            1u64..1000,
+            0u64..1000,
+        )
+            .prop_map(|(header, entries, coverage, from, span)| {
+                let mut export: OplogExportHeader = dto(header);
+                export.filtered = false;
+                crate::model::agent::oplog_export_view::AgentOplogExportReportView(
+                    OplogExportReport {
+                        header: OplogReportHeader {
+                            export,
+                            from,
+                            to: from + span,
+                        },
+                        entries: entries.into_iter().map(dto::<ReportEntry>).collect(),
+                        coverage: dto::<OplogExportCoverage>(coverage),
+                    },
+                )
+            }),
     )
 }
 

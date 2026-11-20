@@ -19,7 +19,8 @@ use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::*;
 use crate::oplog_export::model::{
     CaseNode, CoverageList, KnownRole, ListNode, MapNode, OplogExportCoverage, OplogExportHeader,
-    QuantityNode, RecordNode, ReportEntry, ReportNode, ScalarNode, StrNode, TypeDescription,
+    OplogExportReport, QuantityNode, RecordNode, ReportEntry, ReportNode, ScalarNode, StrNode,
+    TypeDescription,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,35 @@ pub struct AgentOplogExportEntryView(pub ReportEntry);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AgentOplogExportCoverageView(pub OplogExportCoverage);
+
+/// One complete bounded report, which the `agent_oplog_export` MCP tool returns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentOplogExportReportView(pub OplogExportReport);
+
+impl StructuredOutput for AgentOplogExportReportView {
+    const KIND: &'static str = "agent.oplog-export";
+}
+
+impl TextOutput for AgentOplogExportReportView {
+    fn log(&self) {
+        for line in header_lines(&self.0.header.export) {
+            logln(line);
+        }
+        logln(format!(
+            "{PAD}range:             {} to {}",
+            self.0.header.from, self.0.header.to
+        ));
+        for entry in &self.0.entries {
+            for line in entry_lines(entry) {
+                logln(line);
+            }
+        }
+        for line in coverage_lines(&self.0.coverage) {
+            logln(line);
+        }
+    }
+}
 
 impl StructuredOutput for AgentOplogExportHeaderView {
     const KIND: &'static str = "agent.oplog-export-header";

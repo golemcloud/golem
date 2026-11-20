@@ -19,7 +19,7 @@ use crate::model;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::worker::ConnectWorkerStream;
-use crate::service::worker::{WorkerService, proxy_worker_connection};
+use crate::service::worker::{OplogRangeRead, WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
@@ -32,8 +32,8 @@ use golem_common::model::card::StoredCard;
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
-use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
 use golem_common::model::oplog::{PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, PromiseId, ScanCursor};
 use golem_common::{SafeDisplay, recorded_http_api_request};
@@ -639,6 +639,18 @@ impl WorkerApi {
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
+        /// The last oplog index of a range read, inclusive. A range read reads no entry after
+        /// it, and the response reports its scan in `scan`. It needs `from`, and no `query`.
+        to: Query<Option<u64>>,
+        /// The scan allowance that a range read may still spend: the number of oplog entries.
+        /// It goes with `scanMillis`. Without them, the read gets the configured allowance of
+        /// the server; the server never grants more than its configured allowance.
+        #[oai(name = "scanEntries")]
+        scan_entries: Query<Option<u64>>,
+        /// The scan allowance that a range read may still spend: the time in milliseconds. It
+        /// goes with `scanEntries`.
+        #[oai(name = "scanMillis")]
+        scan_millis: Query<Option<u64>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -649,14 +661,24 @@ impl WorkerApi {
 
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
-        let response = self
-            .get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, auth)
-            .instrument(record.span.clone())
-            .await;
+        let response = async {
+            let range = oplog_range_read(
+                from.0,
+                query.0.as_deref(),
+                to.0,
+                scan_entries.0,
+                scan_millis.0,
+            )?;
+            self.get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, range, auth)
+                .await
+        }
+        .instrument(record.span.clone())
+        .await;
 
         record.result(response)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn get_oplog_internal(
         &self,
         agent_id: AgentId,
@@ -664,6 +686,7 @@ impl WorkerApi {
         count: u64,
         cursor: Option<OplogCursor>,
         query: Option<String>,
+        range: Option<OplogRangeRead>,
         auth: AuthCtx,
     ) -> Result<Json<GetOplogResponse>> {
         let mut response = match (from, query) {
@@ -677,7 +700,14 @@ impl WorkerApi {
             }
             (Some(from), None) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
+                    .get_oplog(
+                        &agent_id,
+                        OplogIndex::from_u64(from),
+                        cursor,
+                        count,
+                        range,
+                        auth,
+                    )
                     .await?
             }
             (None, Some(query)) => {
@@ -687,7 +717,7 @@ impl WorkerApi {
             }
             (None, None) => {
                 self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
+                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, None, auth)
                     .await?
             }
         };
@@ -1289,6 +1319,56 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
             golem_common::safe(format!("Invalid file name: {error}")),
         )
     })
+}
+
+/// The range read that the `to`, `scanEntries` and `scanMillis` parameters of an oplog read
+/// select, if any. A range read needs `from` and no `query`, and `to` at or after `from`; the
+/// two allowance parameters go together, and only with `to`.
+fn oplog_range_read(
+    from: Option<u64>,
+    query: Option<&str>,
+    to: Option<u64>,
+    scan_entries: Option<u64>,
+    scan_millis: Option<u64>,
+) -> Result<Option<OplogRangeRead>> {
+    let invalid = |message: &str| {
+        ApiEndpointError::bad_request(
+            api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+            golem_common::safe(message.to_string()),
+        )
+    };
+    let allowance = match (scan_entries, scan_millis) {
+        (Some(entries), Some(millis)) => Some(OplogScanAllowance { entries, millis }),
+        (None, None) => None,
+        _ => {
+            return Err(invalid(
+                "The 'scanEntries' and 'scanMillis' parameters go together",
+            ));
+        }
+    };
+    let Some(to) = to else {
+        if allowance.is_some() {
+            return Err(invalid(
+                "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter",
+            ));
+        }
+        return Ok(None);
+    };
+    if query.is_some() {
+        return Err(invalid(
+            "Cannot specify both the 'to' and the 'query' parameters",
+        ));
+    }
+    match from {
+        Some(from) if from >= 1 && from <= to => Ok(Some(OplogRangeRead {
+            to: OplogIndex::from_u64(to),
+            allowance,
+        })),
+        Some(_) => Err(invalid(
+            "The 'from' parameter of a range read must be at least 1 and at most 'to'",
+        )),
+        None => Err(invalid("The 'to' parameter needs the 'from' parameter")),
+    }
 }
 
 #[cfg(test)]

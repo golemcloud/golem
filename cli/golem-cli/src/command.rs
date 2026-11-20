@@ -1164,7 +1164,7 @@ pub mod shared_args {
         #[arg(
             long,
             value_name = "N",
-            default_value_t = 16_777_216,
+            default_value_t = crate::oplog_export::export::DEFAULT_MAX_ENTRY_BYTES,
             requires = "obfuscate"
         )]
         pub max_entry_bytes: u64,
@@ -2061,6 +2061,11 @@ pub mod mcp {
         /// `golem -E app/prod mcp serve` or from the application manifest. No tool takes an
         /// environment, and a tool refuses an agent or component of another environment. Start
         /// one server for each environment.
+        ///
+        /// One tool has no command: `agent_oplog_export` returns one complete obfuscated
+        /// report of the oplog entries from `from` to `to`, inclusive. It reads the range
+        /// within one scan budget of the server, and fails with `scan-budget-exceeded` or
+        /// `output-too-large` instead of returning a part of the report.
         ///
         /// The tool of a destructive command takes `confirm`, which confirms that one call as
         /// `--yes` does on the CLI. Neither `--yes` nor `cli.autoConfirm` confirms a tool call.
