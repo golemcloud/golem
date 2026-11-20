@@ -22,7 +22,8 @@ import { StandardSchemaV1 } from './schema/standardSchema';
 import { MethodSpec } from './method';
 import type { InputRecord, MethodHasHttpOf } from './method';
 import { bindAgentClient, ParsedAgentId, type AgentClientBinding } from './agentId';
-import { Principal } from './principal';
+import type { InvocationContext } from './caller';
+import type { RejectLiveValues } from './liveValues';
 import { Uuid } from './uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
 import { ConfigSpec } from './config';
@@ -115,20 +116,13 @@ type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
 };
 
-/** Keys whose values are supplied by the host rather than an RPC caller. */
-type AutoInjectedKeys<R extends Record<string, StandardSchemaV1>> = {
-  [K in keyof R & string]: [MarkerKindOf<R[K]>] extends ['principal'] ? K : never;
-}[keyof R & string];
-
-/** The schema fields an RPC caller supplies after host-injected fields are removed. */
-export type CallerInput<R extends Record<string, StandardSchemaV1>> = Omit<R, AutoInjectedKeys<R>>;
-
-/** The handler signature inferred for a method spec (no-arg when input is empty). */
+/**
+ * The handler signature inferred for a method spec: the decoded input record, then the
+ * {@link InvocationContext} of the call. A method with no input receives `{}` first.
+ */
 type HandlerFor<M> =
   M extends MethodSpec<infer Input, infer Output, boolean>
-    ? keyof Input extends never
-      ? () => Output | Promise<Output>
-      : (input: InferRecord<Input>) => Output | Promise<Output>
+    ? (input: InferRecord<Input>, ctx: InvocationContext) => Output | Promise<Output>
     : never;
 
 /** SDK helpers available on a handler's `this` (alongside state). */
@@ -142,7 +136,6 @@ export interface AgentContext<Config extends ConfigSpec = {}> {
   getId(): ParsedAgentId;
   /** Read the phantom ID from the current durable identity observation. */
   getPhantomId(): Uuid | undefined;
-  getPrincipal(): Principal;
   /**
    * The agent's config accessor: one fresh-reading getter per declared field.
    * Local fields read their decoded value directly; secret fields yield a lazy
@@ -151,9 +144,11 @@ export interface AgentContext<Config extends ConfigSpec = {}> {
   readonly config: ConfigView<Config>;
 }
 
-export interface InitContext<Id extends IdRecord, Config extends ConfigSpec = {}> {
+export interface InitContext<
+  Id extends IdRecord,
+  Config extends ConfigSpec = {},
+> extends InvocationContext {
   readonly id: InferRecord<Id>;
-  readonly principal: Principal;
   readonly phantomId: Uuid | undefined;
   /** The agent's config accessor (see {@link AgentContext.config}). */
   readonly config: ConfigView<Config>;
@@ -247,8 +242,8 @@ export interface FullAgentClientDefinition<
 > extends FullAgentClientShape<Id, Methods, Config, Mode> {
   /** Construct the environment-scoped identity for an agent addressed by this definition. */
   readonly agentId: Mode extends 'ephemeral'
-    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
-    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
+    ? (id: InferRecord<Id>, phantomId: Uuid) => ParsedAgentId
+    : (id: InferRecord<Id>, phantomId?: Uuid) => ParsedAgentId;
   /** A client factory compiled from this definition's local schemas. */
   readonly client: FullAgentClientFactory<Id, Methods, Config, Mode>;
   [bindAgentClient](
@@ -313,7 +308,7 @@ interface AgentSpecBase<
 > {
   /** The wire-level agent type name. */
   name: string;
-  id: Id;
+  id: Id & RejectLiveValues<[InferRecord<Id>]>;
   methods: Methods;
   /** Human-readable description, surfaced as `agent-type.description`. */
   description?: string;

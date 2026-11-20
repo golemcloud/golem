@@ -331,7 +331,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         stdin,
         stdout,
         stderr,
-        principal,
+        caller,
         output_contract,
         result_streams,
     } = invocation;
@@ -420,7 +420,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     store
         .data_mut()
         .durable_ctx_mut()
-        .set_invocation_principal(Some(principal));
+        .set_invocation_caller(Some(caller));
     let parent = store.data().durable_ctx().owner_invocation_id()?;
     let instance_pre = instance.instance_pre(&store);
     let replay = store.data().durable_ctx().state.replay_state.clone();
@@ -690,7 +690,7 @@ pub(super) async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
     store
         .data_mut()
         .durable_ctx_mut()
-        .set_invocation_principal(None);
+        .set_invocation_caller(None);
     if !matches!(&result, Ok(Ok(_))) {
         durability::abort_producer_disposals(store.data_mut().durable_ctx_mut()).await;
     }

@@ -23,6 +23,7 @@ use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::{HasActiveAgents, HasOplog};
 use golem_worker_executor::worker::EvictionClass;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit_and_overrides,
@@ -605,6 +606,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                     .clone()
                     .invoke(golem_common::model::AgentInvocation::SaveSnapshot {
                         idempotency_key: golem_common::model::InvocationId(uuid::Uuid::new_v4()),
+                        caller: golem_common::model::caller::Caller::anonymous(),
                     })
                     .await
                     .is_err()
@@ -1156,7 +1158,7 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(executor.auth_ctx().into()),
-            principal: None,
+            caller: Some(callers::anonymous().into()),
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,

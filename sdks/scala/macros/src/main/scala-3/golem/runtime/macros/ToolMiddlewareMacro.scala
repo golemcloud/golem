@@ -424,7 +424,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
             )
           '{ ToolMiddlewareParamDecoder.InstallationParameters($from.asInstanceOf[FromSchema[Any]]) }
       }
-    else if (core.isPrincipal(tpe)) '{ ToolMiddlewareParamDecoder.PrincipalParam }
+    else if (core.isInvocationContext(tpe)) '{ ToolMiddlewareParamDecoder.InvocationContextParam }
     else if (tpe =:= TypeRepr.of[ToolMiddlewareInputHandle]) '{ ToolMiddlewareParamDecoder.StdinParam }
     else if (core.isStdout(tpe))
       report.errorAndAbort("generated middleware input methods must not contain output parameters", pos)

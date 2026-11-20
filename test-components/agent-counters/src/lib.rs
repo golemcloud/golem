@@ -6,6 +6,30 @@ use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
+#[derive(golem_rust::ConfigSchema)]
+#[allow(dead_code)] // The CLI exercises these declarations without invoking the agent.
+struct PackageFileConfig {
+    file: golem_rust::schema::File,
+    text: String,
+}
+
+#[agent_definition]
+trait PackageFileAgent {
+    fn new(#[agent_config] config: golem_rust::agentic::Config<PackageFileConfig>) -> Self;
+    fn ping(&self);
+}
+
+struct PackageFileAgentImpl;
+
+#[agent_implementation]
+impl PackageFileAgent for PackageFileAgentImpl {
+    fn new(#[agent_config] _config: golem_rust::agentic::Config<PackageFileConfig>) -> Self {
+        Self
+    }
+
+    fn ping(&self) {}
+}
+
 /// Resource name the chaos suite's quota stream reserves against. Must match the
 /// resource the chaos prep creates on the environment — see
 /// `integration_tests::chaos::prep`.
@@ -608,9 +632,10 @@ impl FailingCounter for FailingCounterImpl {
 mod constructor_probe {
     use golem_rust::agentic::{
         AgentInitiator, AgentInvocationResult, AgentParameterProbe, AgentParameterSchema,
-        BaseAgent, DirectAgentInput, Principal, ResolvedAgent, SnapshotData,
+        BaseAgent, DirectAgentInput, ResolvedAgent, SnapshotData,
         SnapshotRestoreContext, custom_error, invalid_input_error, invalid_method_error,
     };
+    use golem_rust::caller::InvocationContext;
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConstructor, AgentError, AgentMethod, AgentMode, AgentType, AgentTypeKind,
         InputSchema, OutputSchema, Snapshotting,
@@ -636,7 +661,10 @@ mod constructor_probe {
             (&AgentParameterProbe::<String>(PhantomData)).parameter_schema("name", &mut schema),
             (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("fail", &mut schema),
             (&AgentParameterProbe::<bool>(PhantomData)).parameter_schema("block", &mut schema),
-        ];
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let output = <u32 as direct::WireSchema>::append_schema(&mut schema);
         let root = schema.push(wire::SchemaTypeBody::RecordType(vec![]));
         AgentType {
@@ -677,7 +705,7 @@ mod constructor_probe {
         async fn initiate(
             &self,
             params: wire::SchemaValueTree,
-            _principal: Principal,
+            _context: InvocationContext,
         ) -> Result<ResolvedAgent, AgentError> {
             let (name, fail, block) = (|| {
                 let mut input = DirectAgentInput::new(params)?;
@@ -724,7 +752,7 @@ mod constructor_probe {
             &mut self,
             method_name: String,
             input: wire::SchemaValueTree,
-            _principal: Principal,
+            _context: InvocationContext,
         ) -> Result<AgentInvocationResult, AgentError> {
             if method_name != "increment" {
                 return Err(invalid_method_error(method_name));

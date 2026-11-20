@@ -21,13 +21,13 @@
 //!
 //! The golden vectors in `test-data/caller-identity/` fix the text form of a pair, the Golem
 //! subjects and the identity-proof format, for every implementation to test against.
-//!
-//! Invocations still carry the principal of `base_model::agent`; this model replaces it.
 
 mod identity_proof;
 mod pair;
 mod principal;
 mod subject;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use identity_proof::*;
 pub use pair::*;

@@ -18,6 +18,7 @@ test_r::enable!();
 pub use uuid::Uuid;
 pub use wasip3;
 
+pub mod caller;
 pub mod http;
 
 #[doc(hidden)]
@@ -629,6 +630,7 @@ pub enum AgentStatus {
     Retrying,
     Failed,
     Exited,
+    Sandboxed,
 }
 
 impl From<host_api::AgentStatus> for AgentStatus {
@@ -641,6 +643,7 @@ impl From<host_api::AgentStatus> for AgentStatus {
             host_api::AgentStatus::Retrying => Self::Retrying,
             host_api::AgentStatus::Failed => Self::Failed,
             host_api::AgentStatus::Exited => Self::Exited,
+            host_api::AgentStatus::Sandboxed => Self::Sandboxed,
         }
     }
 }
@@ -655,6 +658,7 @@ impl From<AgentStatus> for host_api::AgentStatus {
             AgentStatus::Retrying => Self::Retrying,
             AgentStatus::Failed => Self::Failed,
             AgentStatus::Exited => Self::Exited,
+            AgentStatus::Sandboxed => Self::Sandboxed,
         }
     }
 }

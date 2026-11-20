@@ -1033,7 +1033,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
                 if !admission.store_replay_state.is_incomplete_entity()
                     && !(admission.role() == ReplayToLiveRole::PrimaryAgent && replay_ended)
                 {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(replay_state.last_replayed_index(),
                             format!("custom durable Start {{ invocation_id: {invocation_id} }}"),
                             format!(
                                 "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
@@ -1203,6 +1203,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
         }) => {
             let response = response.ok_or_else(|| {
                 WorkerExecutorError::unexpected_oplog_entry(
+                    start_index,
                     "End { response: Some(..) }",
                     "End { response: None }".to_string(),
                 )
@@ -1249,7 +1250,7 @@ async fn begin_custom_invocation<U: Send + 'static, Ctx: WorkerCtx>(
             if async_completion {
                 std::future::pending::<()>().await;
             }
-            Err(WorkerExecutorError::unexpected_oplog_entry(
+            Err(WorkerExecutorError::unexpected_oplog_entry(marker_idx,
                     "End",
                     format!(
                         "End at {end_idx} marked CompletionDiscarded at {marker_idx} for a custom durable invocation"

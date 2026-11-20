@@ -152,7 +152,7 @@ test "error: endpoint variable not in method params" {
 }
 
 ///|
-test "error: endpoint variable binds to Principal param" {
+test "error: endpoint variable binds to InvocationContext param" {
   let content =
     #|#derive.agent
     #|#derive.mount("/items/{name}")
@@ -165,7 +165,7 @@ test "error: endpoint variable binds to Principal param" {
     #|}
     #|
     #|#derive.endpoint(get="/by-user/{user}")
-    #|pub fn ItemAgent::get_by_user(self : Self, user : @common.Principal) -> String {
+    #|pub fn ItemAgent::get_by_user(self : Self, user : @agents.InvocationContext) -> String {
     #|  self.name
     #|}
   let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
@@ -175,7 +175,7 @@ test "error: endpoint variable binds to Principal param" {
   debug_inspect(
     result,
     content=(
-      #|Err(AgentParseError("Endpoint variable 'user' in method 'get_by_user' on agent 'ItemAgent' binds to a Principal param which is not HTTP-safe"))
+      #|Err(AgentParseError("Endpoint variable 'user' in method 'get_by_user' on agent 'ItemAgent' binds to an InvocationContext param which is not HTTP-safe"))
     ),
   )
 }

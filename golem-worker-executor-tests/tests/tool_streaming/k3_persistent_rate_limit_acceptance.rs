@@ -212,7 +212,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         provider,
         caller,
         rate_limit,
-        "k3-rate-1-principal",
+        "k3-rate-1-caller",
         1,
         context,
         environment,
@@ -222,8 +222,8 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         rate_limit_component,
         agent_type
     );
-    let principal_a = oidc_principal("k3-principal-a");
-    let principal_b = oidc_principal("k3-principal-b");
+    let principal_a = oidc_principal("k3-caller-a");
+    let principal_b = oidc_principal("k3-caller-b");
     let owner_a = agent_id!("ToolStreamingCaller", "k3-rate-1-owner-a");
     let owner_b = agent_id!("ToolStreamingCaller", "k3-rate-1-owner-b");
     let worker_a = executor
@@ -234,7 +234,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         .await?;
 
     let first_a: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &owner_a,
             principal_a.clone(),
@@ -246,7 +246,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
     assert_eq!(first_a, "leaf(owner-a-first)");
 
     let exhausted_a = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &owner_a,
             principal_a,
@@ -256,11 +256,11 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         .await;
     assert!(
         exhausted_a.is_err(),
-        "call N+1 for one principal key must fail"
+        "call N+1 for one caller key must fail"
     );
 
     let first_b: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &owner_b,
             principal_b,
@@ -277,7 +277,7 @@ async fn k3_rate_1_capacity_is_independent_between_principals(
         entity_starts(&oplog_a, PublicAgentEntityKind::Tool, "middleware-probe").len()
             + entity_starts(&oplog_b, PublicAgentEntityKind::Tool, "middleware-probe").len(),
         2,
-        "the exhausted principal must not consume the independent principal's capacity"
+        "the exhausted caller must not consume the independent caller's capacity"
     );
     Ok(())
 }
@@ -321,20 +321,20 @@ async fn k3_rate_2_distinct_owners_contend_on_one_principal_key(
     }
 
     let barrier = Arc::new(tokio::sync::Barrier::new(OWNERS));
-    let principal = oidc_principal("k3-shared-principal");
+    let caller = oidc_principal("k3-shared-caller");
     let calls = owners.iter().enumerate().map(|(ordinal, (agent_id, _))| {
         let barrier = barrier.clone();
-        let principal = principal.clone();
+        let caller = caller.clone();
         let executor = &executor;
         let caller_component = &caller_component;
         let agent_id = agent_id.clone();
         async move {
             barrier.wait().await;
             executor
-                .invoke_and_await_agent_as_principal(
+                .invoke_and_await_agent_as_caller(
                     caller_component,
                     &agent_id,
-                    principal,
+                    caller,
                     "middleware_probe_once",
                     data_value!(format!("k3-owner-{ordinal}")),
                 )
@@ -424,10 +424,10 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
             Vec::new(),
         )
         .await?;
-    let invocation = executor.invoke_and_await_agent_as_principal(
+    let invocation = executor.invoke_and_await_agent_as_caller(
         &caller_component,
         &agent_id,
-        oidc_principal("k3-replay-principal"),
+        oidc_principal("k3-replay-caller"),
         "middleware_probe_once",
         data_value!("lifecycle-effect(k3-pre-leaf)"),
     );
@@ -555,10 +555,10 @@ async fn k3_rate_3_post_admission_pre_leaf_crash_replays_without_extra_charge_or
     );
 
     let fresh: String = executor
-        .invoke_and_await_agent_as_principal(
+        .invoke_and_await_agent_as_caller(
             &caller_component,
             &agent_id,
-            oidc_principal("k3-replay-principal"),
+            oidc_principal("k3-replay-caller"),
             "middleware_probe_once",
             data_value!("fresh-after-configuration-change"),
         )

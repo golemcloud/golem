@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -736,16 +737,14 @@ async fn path_1_audit_path_policy_real_file_tool_allows_and_denies(
         )
         .await?;
     let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-    let principal = Principal::GolemUser(GolemUserPrincipal {
-        account_id: context.account_id,
-    });
+    let caller = callers::account(context.account_id);
     let definitions = filesystem_definitions(&filesystem_metadata);
     let allowed_content = "allowed-content-must-not-enter-audit";
     let allowed = invoke_filesystem_tool_success(
         &executor,
         &worker_id,
         fingerprint,
-        principal.clone(),
+        caller.clone(),
         &definitions,
         "write-file",
         write_input("allowed/result.txt", allowed_content),
@@ -772,7 +771,7 @@ async fn path_1_audit_path_policy_real_file_tool_allows_and_denies(
         &executor,
         &worker_id,
         fingerprint,
-        principal,
+        caller,
         &definitions,
         "write-file",
         write_input(denied_path, "denied-content-must-not-be-written"),
@@ -888,14 +887,12 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
             )
             .await?;
         let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
-        let principal = Principal::GolemUser(GolemUserPrincipal {
-            account_id: context.account_id,
-        });
+        let caller = callers::account(context.account_id);
         invoke_filesystem_tool_success(
             &executor,
             &worker_id,
             fingerprint,
-            principal.clone(),
+            caller.clone(),
             &definitions,
             "write-file",
             write_input("durable/state.txt", content),
@@ -905,7 +902,7 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
             context.default_environment_id,
             worker_id,
             fingerprint,
-            principal,
+            caller,
             owner_name.to_string(),
             base.to_string(),
             content.to_string(),
@@ -914,13 +911,13 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
 
     for reconstruction_pass in [false, true] {
         for index in [1_usize, 0_usize] {
-            let (_environment_id, worker_id, fingerprint, principal, _owner_name, base, content) =
+            let (_environment_id, worker_id, fingerprint, caller, _owner_name, base, content) =
                 &owners[index];
             let own = invoke_filesystem_tool_success(
                 &executor,
                 worker_id,
                 *fingerprint,
-                principal.clone(),
+                caller.clone(),
                 &definitions,
                 "read-file",
                 read_input("durable/state.txt"),
@@ -934,7 +931,7 @@ async fn path_2_two_owner_roots_remain_isolated_after_reconstruction(
                 &executor,
                 worker_id,
                 *fingerprint,
-                principal.clone(),
+                caller.clone(),
                 &definitions,
                 "read-file",
                 read_input(&other_path),

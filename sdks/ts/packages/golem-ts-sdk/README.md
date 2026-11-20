@@ -25,10 +25,29 @@ export const Counter = counter.implement({
 ```
 
 The state returned by `init()` or a snapshot `load()` must not contain top-level fields named
-`config`, `getId`, `getPhantomId`, or `getPrincipal`. These names are reserved for the SDK's
-configuration accessor and identity/principal helpers. The SDK rejects these fields during
+`config`, `getId`, or `getPhantomId`. These names are reserved for the SDK's
+configuration accessor and identity helpers. The SDK rejects these fields during
 initialization or restoration, even if their value is `undefined`. Rename them or nest them
 inside another state field; nested fields may use these names.
+
+## Who called
+
+Every method handler receives an `InvocationContext` as its second argument (a method with no
+input gets `{}` first), and `init` receives the same `caller` on its context:
+
+```ts
+methods: {
+  whoami(_input, ctx) {
+    return ctx.caller.original.toString(); // `user ("https://login.example","u-1")`
+  },
+}
+```
+
+`ctx.caller` has the `original` and `immediate` principals (`user`, `account`, `agent`, `tool` or
+`anonymous`) and the provenance of its `tokens`. A principal prints as `<kind> <ref text>` and never
+prints its claims. A `Principal` or `Caller` is a live value and cannot be a method input, a result
+or part of a value type; to store who called, keep `ctx.caller.original.ref`, a `PrincipalRef`, and
+declare it with `s.principalRef()`.
 
 ## Agent endpoint query inputs
 
@@ -652,7 +671,7 @@ discovery/error implementations; no role or alternate world is selected.
 
 The application bundles the SDK's preserved runtime modules, rather than importing a complete
 SDK embedded in the wrapper. Rollup can therefore remove absent registries and agent snapshot,
-principal serialization, and lifecycle code when they are unreachable. Builder methods are not
+legacy envelope reading, and lifecycle code when they are unreachable. Builder methods are not
 rewritten or removed by the build. Opaque registration helpers and computed SDK access conservatively
 retain capabilities. Host modules remain external.
 

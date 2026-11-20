@@ -457,9 +457,10 @@ mod successful_update_proto_tests {
     use test_r::test;
 
     use crate::model::component::ComponentRevision;
+    use crate::model::oplog::protobuf::tests::replay_divergence_tests;
     use crate::model::oplog::{
         FailedSnapshotAssistedUpdateDetails, FilesystemSnapshotName, OplogEntry,
-        SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription,
+        SnapshotAssistedUpdateDetails, SnapshotFault, UpdateDescription, UpdateFailureClass,
     };
     use crate::model::regions::OplogRegion;
     use crate::model::{OplogIndex, Timestamp};
@@ -504,6 +505,11 @@ mod successful_update_proto_tests {
             }),
             update_attempt_index: Some(OplogIndex::from_u64(5)),
             snapshot_fault: Some(SnapshotFault::Incompatible),
+            failure_class: UpdateFailureClass::Divergence,
+            divergence: replay_divergence_tests::divergences()
+                .into_iter()
+                .next()
+                .map(Box::new),
         };
 
         let proto: RawOplogEntry = original.clone().try_into().unwrap();
@@ -513,28 +519,51 @@ mod successful_update_proto_tests {
     }
 
     #[test]
-    fn raw_failed_update_preserves_every_snapshot_fault() {
-        [
+    fn raw_failed_update_preserves_every_snapshot_fault_class_and_divergence() {
+        let faults = [
             None,
             Some(SnapshotFault::Unavailable),
             Some(SnapshotFault::Incompatible),
-        ]
-        .into_iter()
-        .for_each(|snapshot_fault| {
-            let original = OplogEntry::FailedUpdate {
-                timestamp: Timestamp::now_utc(),
-                target_revision: ComponentRevision::new(2).unwrap(),
-                details: None,
-                snapshot_assisted_details: None,
-                update_attempt_index: None,
-                snapshot_fault,
-            };
+        ];
+        let classes = [
+            UpdateFailureClass::Divergence,
+            UpdateFailureClass::TargetTrap,
+            UpdateFailureClass::NotReplayable,
+            UpdateFailureClass::TargetRejected,
+            UpdateFailureClass::Interrupted,
+            UpdateFailureClass::Operational,
+            UpdateFailureClass::Other,
+        ];
+        let divergences = std::iter::once(None)
+            .chain(replay_divergence_tests::divergences().into_iter().map(Some))
+            .collect::<Vec<_>>();
+        let mut cases = Vec::new();
+        for snapshot_fault in faults {
+            for failure_class in classes {
+                for divergence in &divergences {
+                    cases.push((snapshot_fault, failure_class, divergence.clone()));
+                }
+            }
+        }
+        cases
+            .into_iter()
+            .for_each(|(snapshot_fault, failure_class, divergence)| {
+                let original = OplogEntry::FailedUpdate {
+                    timestamp: Timestamp::now_utc(),
+                    target_revision: ComponentRevision::new(2).unwrap(),
+                    details: None,
+                    snapshot_assisted_details: None,
+                    update_attempt_index: None,
+                    snapshot_fault,
+                    failure_class,
+                    divergence: divergence.map(Box::new),
+                };
 
-            let proto: RawOplogEntry = original.clone().try_into().unwrap();
-            let roundtrip: OplogEntry = proto.try_into().unwrap();
+                let proto: RawOplogEntry = original.clone().try_into().unwrap();
+                let roundtrip: OplogEntry = proto.try_into().unwrap();
 
-            assert_eq!(roundtrip, original);
-        });
+                assert_eq!(roundtrip, original);
+            });
     }
 
     #[test]
@@ -863,5 +892,234 @@ mod queued_card_event_proto_tests {
             let result = std::panic::catch_unwind(|| super::raw_queued_card_event_from_proto(proto));
             prop_assert!(result.is_ok(), "malformed raw queued card transfer payload panicked");
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod replay_divergence_tests {
+    use test_r::test;
+
+    use crate::base_model::OplogIndex;
+    use crate::base_model::oplog::{
+        DurableInvocationId, PublicDurableFunctionType, ReplayDivergence, ReplayHostCall,
+        ReplayStep, StartIdentityField, UpdateFailureClass,
+    };
+    use crate::schema::{
+        IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+    };
+    use golem_api_grpc::proto::golem::worker as proto;
+    use golem_schema::Empty;
+    use golem_schema::schema::SchemaValueStream;
+
+    fn host_call(function_name: &str, request: Option<&str>) -> ReplayHostCall {
+        ReplayHostCall {
+            function_name: function_name.to_string(),
+            durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+            parent_start_index: Some(OplogIndex::from_u64(4)),
+            invocation_id: Some(DurableInvocationId::new(OplogIndex::from_u64(2), 3)),
+            observational_owner: Some(OplogIndex::from_u64(5)),
+            carries_request: true,
+            request: request
+                .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
+        }
+    }
+
+    pub(crate) fn divergences() -> Vec<ReplayDivergence> {
+        vec![
+            ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(host_call("http::send", Some("recorded"))),
+                actual: ReplayStep::HostCall(ReplayHostCall {
+                    durable_function_type: PublicDurableFunctionType::ReadLocal(Empty {}),
+                    parent_start_index: None,
+                    invocation_id: None,
+                    observational_owner: None,
+                    carries_request: false,
+                    ..host_call("rpc::invoke", Some("replayed"))
+                }),
+                mismatched: vec![
+                    StartIdentityField::FunctionName,
+                    StartIdentityField::FunctionType,
+                    StartIdentityField::InvocationId,
+                    StartIdentityField::ObservationalOwner,
+                    StartIdentityField::RequestPresence,
+                    StartIdentityField::Parent,
+                ],
+            },
+            ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(3),
+                expected: ReplayStep::HostCall(host_call("clocks::now", None)),
+                actual: ReplayStep::invocation_end(),
+                mismatched: vec![],
+            },
+            ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(9),
+                expected: ReplayStep::end_of_history(),
+                actual: ReplayStep::HostCall(host_call("random::bytes", Some("replayed"))),
+                mismatched: vec![],
+            },
+            ReplayDivergence::described(
+                OplogIndex::from_u64(12),
+                "a recorded completion delivery",
+                "a discarded completion",
+            ),
+        ]
+    }
+
+    #[test]
+    fn replay_divergence_roundtrips_through_protobuf_desert_and_json() {
+        for original in divergences() {
+            let proto: proto::ReplayDivergence = original.clone().try_into().unwrap();
+            let from_proto: ReplayDivergence = proto.try_into().unwrap();
+            assert_eq!(from_proto, original);
+
+            let bytes = desert_rust::serialize_to_byte_vec(&original).unwrap();
+            let from_desert: ReplayDivergence = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(from_desert, original);
+
+            let json = serde_json::to_value(&original).unwrap();
+            let from_json: ReplayDivergence = serde_json::from_value(json).unwrap();
+            assert_eq!(from_json, original);
+        }
+    }
+
+    fn with_request(function_name: &str, request: TypedSchemaValue) -> ReplayHostCall {
+        ReplayHostCall {
+            request: Some(Box::new(request)),
+            ..host_call(function_name, None)
+        }
+    }
+
+    #[test]
+    fn a_request_without_a_protobuf_form_leaves_only_its_own_host_call() {
+        let live_stream = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::stream(None)),
+            SchemaValue::Stream(SchemaValueStream::from_host_endpoint(42_u32)),
+        );
+        let encodable = "recorded".to_string().into_typed_schema_value().unwrap();
+        for (expected, actual, expected_kept, actual_kept) in [
+            (
+                Some(encodable.clone()),
+                Some(live_stream.clone()),
+                true,
+                false,
+            ),
+            (Some(live_stream), Some(encodable), false, true),
+        ] {
+            let divergence = ReplayDivergence {
+                oplog_index: OplogIndex::from_u64(7),
+                expected: ReplayStep::HostCall(ReplayHostCall {
+                    request: expected.map(Box::new),
+                    ..host_call("http::send", None)
+                }),
+                actual: ReplayStep::HostCall(ReplayHostCall {
+                    request: actual.map(Box::new),
+                    ..host_call("rpc::invoke", None)
+                }),
+                mismatched: vec![StartIdentityField::FunctionName],
+            };
+
+            let decoded: ReplayDivergence = divergence
+                .into_proto_keeping_structure()
+                .try_into()
+                .unwrap();
+
+            let request_of = |step: &ReplayStep| match step {
+                ReplayStep::HostCall(call) => call.request.clone(),
+                other => panic!("expected a host call, got {other}"),
+            };
+            let expected_request = request_of(&decoded.expected);
+            let actual_request = request_of(&decoded.actual);
+            assert_eq!(expected_request.is_some(), expected_kept);
+            assert_eq!(actual_request.is_some(), actual_kept);
+            let kept = expected_request.or(actual_request).unwrap();
+            assert_eq!(kept.value(), &SchemaValue::String("recorded".to_string()));
+            assert_eq!(decoded.mismatched, vec![StartIdentityField::FunctionName]);
+        }
+    }
+
+    #[test]
+    fn a_host_call_with_a_nested_nan_request_equals_its_clone() {
+        let nan_request = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::list(SchemaType::option(SchemaType::f64()))),
+            SchemaValue::List {
+                elements: vec![SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::F64(f64::NAN))),
+                }],
+            },
+        );
+        let call = with_request("http::send", nan_request);
+        assert_eq!(call, call.clone());
+
+        let divergence = ReplayDivergence {
+            oplog_index: OplogIndex::from_u64(7),
+            expected: ReplayStep::HostCall(call.clone()),
+            actual: ReplayStep::HostCall(call),
+            mismatched: vec![],
+        };
+        assert_eq!(divergence, divergence.clone());
+
+        let other_payload = with_request(
+            "http::send",
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::f64()),
+                SchemaValue::F64(-0.0),
+            ),
+        );
+        assert_ne!(
+            other_payload,
+            with_request(
+                "http::send",
+                TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::f64()),
+                    SchemaValue::F64(0.0),
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn host_calls_with_different_requests_are_different_calls() {
+        assert_ne!(
+            host_call("http::send", Some("recorded")),
+            host_call("http::send", Some("replayed"))
+        );
+        assert_eq!(
+            host_call("http::send", Some("recorded"))
+                .mismatched_fields(&host_call("http::send", Some("replayed"))),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn update_failure_class_roundtrips_every_class() {
+        for class in [
+            UpdateFailureClass::Divergence,
+            UpdateFailureClass::TargetTrap,
+            UpdateFailureClass::NotReplayable,
+            UpdateFailureClass::TargetRejected,
+            UpdateFailureClass::Interrupted,
+            UpdateFailureClass::Operational,
+            UpdateFailureClass::Other,
+        ] {
+            assert_eq!(
+                UpdateFailureClass::from_proto_number(class.proto_number()).unwrap(),
+                class
+            );
+            let bytes = desert_rust::serialize_to_byte_vec(&class).unwrap();
+            assert_eq!(
+                desert_rust::deserialize::<UpdateFailureClass>(&bytes).unwrap(),
+                class
+            );
+            let json = serde_json::to_string(&class).unwrap();
+            assert_eq!(
+                serde_json::from_str::<UpdateFailureClass>(&json).unwrap(),
+                class
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&UpdateFailureClass::NotReplayable).unwrap(),
+            "\"not-replayable\""
+        );
     }
 }

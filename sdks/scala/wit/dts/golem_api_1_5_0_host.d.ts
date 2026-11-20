@@ -138,7 +138,7 @@ declare module 'golem:api/host@1.5.0' {
   /**
    * The current status of an agent
    */
-  export type AgentStatus = "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited";
+  export type AgentStatus = "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited" | "sandboxed";
   /**
    * Describes a filter condition on agent IDs when enumerating agents
    */

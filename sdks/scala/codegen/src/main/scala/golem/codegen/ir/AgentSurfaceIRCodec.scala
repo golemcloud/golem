@@ -58,10 +58,10 @@ object AgentSurfaceIRCodec {
 
   private def methodToJson(m: MethodSurface): ujson.Value =
     ujson.Obj(
-      "name"            -> m.name,
-      "params"          -> ujson.Arr.from(m.params.map(p => ujson.Obj("name" -> p.name, "typeExpr" -> p.typeExpr))),
-      "returnTypeExpr"  -> m.returnTypeExpr,
-      "principalParams" -> ujson.Arr.from(m.principalParams.map(ujson.Bool(_)))
+      "name"           -> m.name,
+      "params"         -> ujson.Arr.from(m.params.map(p => ujson.Obj("name" -> p.name, "typeExpr" -> p.typeExpr))),
+      "returnTypeExpr" -> m.returnTypeExpr,
+      "contextParams"  -> ujson.Arr.from(m.contextParams.map(ujson.Bool(_)))
     )
 
   private def configFieldToJson(cf: ConfigFieldSurface): ujson.Value =
@@ -121,8 +121,10 @@ object AgentSurfaceIRCodec {
       name = v("name").str,
       params = params,
       returnTypeExpr = v("returnTypeExpr").str,
-      principalParams = v.obj
-        .get("principalParams")
+      // An IR written before 2.0 names the field `principalParams`; it reads the same.
+      contextParams = v.obj
+        .get("contextParams")
+        .orElse(v.obj.get("principalParams"))
         .map(_.arr.toList.map(_.bool))
         .getOrElse(List.fill(params.length)(false))
     )

@@ -25,7 +25,7 @@ import golem.schema.{AgentStream, IntoSchema, SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
 import golem.tool.wire.{WitCustomToolError, WitToolError}
-import golem.{FutureInterop, Principal}
+import golem.FutureInterop
 import zio.test._
 import zio.ZIO
 
@@ -42,10 +42,14 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private def guest: js.Dynamic = Guest.golemTool010Guest
 
-  private val accountId                      = java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
-  private val golemUserPrincipal: js.Dynamic = js.Dynamic.literal(
-    "tag" -> "golem-user",
-    "val" -> js.Dynamic.literal("accountId" -> js.Dynamic.literal("uuid" -> golem.host.js.JsUuid.fromUuid(accountId)))
+  private val accountId                    = java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9")
+  private val accountPrincipal: js.Dynamic = js.Dynamic.literal(
+    "tag" -> "account",
+    "val" -> js.Dynamic.literal(
+      "pair"           -> js.Dynamic.literal("issuer" -> "golem", "subject" -> s"account:$accountId"),
+      "accountId"      -> js.Dynamic.literal("uuid" -> golem.host.js.JsUuid.fromUuid(accountId)),
+      "authentication" -> "api-token"
+    )
   )
 
   /** An absent `stdin` parameter, pre-typed for `js.Dynamic` application. */
@@ -78,15 +82,15 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private final class Captured {
     var commandPath: List[String] = Nil
-    var principal: Principal      = Principal.Anonymous
+    var caller: String            = ""
     var stdinPresent: Boolean     = true
   }
 
   private lazy val echoCaptured: Captured = {
     val captured                          = new Captured
-    val invoker: ToolRegistry.ToolInvoker = (path, input, stdin, _, _, principal) => {
+    val invoker: ToolRegistry.ToolInvoker = (path, input, stdin, _, _, context) => {
       captured.commandPath = path
-      captured.principal = principal
+      captured.caller = context.caller.immediate.toString
       captured.stdinPresent = stdin.isDefined
       Future.successful(Right(ToolInvocationResult(Some(input))))
     }
@@ -453,7 +457,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       val input    = SchemaWireInterop.typedToJs(typed("hello"))
       for {
         res <- fromPromise(
-                 withImmediateCaller(golemUserPrincipal) {
+                 withImmediateCaller(accountPrincipal) {
                    guest
                      .invoke("guest-echo", js.Array[String](), input, noStdin, noStdout, noStderr)
                      .asInstanceOf[js.Promise[JsInvocationResult]]
@@ -463,7 +467,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       } yield assertTrue(
         result.contains(typed("hello")),
         captured.commandPath == Nil,
-        captured.principal == Principal.GolemUser(accountId),
+        captured.caller == s"""account ("golem","account:$accountId")""",
         !captured.stdinPresent
       )
     },

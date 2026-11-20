@@ -268,7 +268,9 @@ fn invocation_started_for(
     OplogEntry::AgentInvocationStarted {
         timestamp: Timestamp::now_utc(),
         invocation_id,
-        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+        payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        })),
         trace_id: TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
@@ -350,7 +352,7 @@ async fn claim_rejected_tool_reconstruction(
     {
         ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
         ReplayStartClaimOutcome::ReplayEnded
-        | ReplayStartClaimOutcome::DeletedRegion
+        | ReplayStartClaimOutcome::DeletedRegion { .. }
         | ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("expected rejected tool reconstruction Start")
         }
@@ -393,6 +395,68 @@ fn custom_request(value: i32) -> HostRequest {
 
 fn test_invocation_id(ordinal: u64) -> DurableInvocationId {
     DurableInvocationId::new(OplogIndex::from_u64(1), ordinal)
+}
+
+fn divergence_of(error: &WorkerExecutorError) -> &ReplayDivergence {
+    match error {
+        WorkerExecutorError::UnexpectedOplogEntry { divergence } => divergence,
+        other => panic!("expected a replay divergence, got {other:?}"),
+    }
+}
+
+fn host_call_of(step: &ReplayStep) -> &ReplayHostCall {
+    match step {
+        ReplayStep::HostCall(call) => call,
+        other => panic!("expected a host call, got {other}"),
+    }
+}
+
+/// Asserts that `error` is the divergence of the claim of `claimed` from the recorded `Start` of
+/// `recorded` at `index`, on exactly the `mismatched` identity fields.
+fn assert_start_divergence(
+    error: &WorkerExecutorError,
+    index: u64,
+    recorded: HostFunctionName,
+    claimed: HostFunctionName,
+    mismatched: &[StartIdentityField],
+) {
+    let divergence = divergence_of(error);
+    assert_eq!(
+        divergence.oplog_index,
+        OplogIndex::from_u64(index),
+        "{error}"
+    );
+    assert_eq!(
+        host_call_of(&divergence.expected).function_name,
+        recorded.to_string()
+    );
+    assert_eq!(
+        host_call_of(&divergence.actual).function_name,
+        claimed.to_string()
+    );
+    assert_eq!(divergence.mismatched, mismatched, "{error}");
+}
+
+/// Asserts that `error` is the divergence of the claim of `claimed` from the recorded entry of
+/// kind `recorded` at `index`, which is not a `Start`.
+fn assert_entry_divergence(
+    error: &WorkerExecutorError,
+    index: u64,
+    recorded: &str,
+    claimed: HostFunctionName,
+) {
+    let divergence = divergence_of(error);
+    assert_eq!(
+        divergence.oplog_index,
+        OplogIndex::from_u64(index),
+        "{error}"
+    );
+    assert_eq!(divergence.expected, ReplayStep::described(recorded));
+    assert_eq!(
+        host_call_of(&divergence.actual).function_name,
+        claimed.to_string()
+    );
+    assert!(divergence.mismatched.is_empty(), "{error}");
 }
 
 fn custom_start(name: &str, value: i32, parent: Option<u64>, invocation_id: u64) -> OplogEntry {
@@ -869,7 +933,14 @@ async fn custom_claim_rejects_start_without_invocation_id() {
     let Err(err) = result else {
         panic!("custom replay must require a deterministic invocation ID");
     };
-    assert!(format!("{err}").contains("no matching Start"));
+    let generator = HostFunctionName::Custom("generator".to_string());
+    assert_start_divergence(
+        &err,
+        2,
+        generator.clone(),
+        generator,
+        &[StartIdentityField::InvocationId],
+    );
 }
 
 #[test]
@@ -956,7 +1027,13 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
     let Err(err) = result else {
         panic!("an exact invocation ID with divergent metadata must be rejected");
     };
-    assert!(format!("{err}").contains("no matching Start"));
+    assert_start_divergence(
+        &err,
+        2,
+        HostFunctionName::Custom("different-operation".to_string()),
+        HostFunctionName::Custom("operation".to_string()),
+        &[StartIdentityField::FunctionName],
+    );
 }
 
 #[test]
@@ -1328,7 +1405,8 @@ async fn disposal_refusal_retained_membership_ignores_observational_owner() {
         assert!(
             state
                 .starts
-                .retained_values()
+                .retained_iter()
+                .map(|(_, retained)| retained)
                 .all(|retained| retained.enclosing_entities.is_empty())
         );
     }
@@ -3089,6 +3167,74 @@ async fn missing_start_claim_remains_divergence_while_replaying() {
     );
 }
 
+/// A missing `Start` diverges at the first unconsumed entry that the claim would consume: past
+/// the `Start` claimed before it and past the hint between them.
+#[test]
+async fn missing_start_divergence_names_the_entry_behind_a_hint() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        start_now(),
+        stdout_log("between"),
+        remove_retry_policy(),
+    ])
+    .await;
+    let claimed = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(claimed, ReplayStartClaimOutcome::Claimed { .. }));
+
+    let missing = HostFunctionName::Custom("missing".to_string());
+    let Err(error) = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &missing,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+    else {
+        panic!("a claim with no recorded Start must diverge");
+    };
+    assert_entry_divergence(&error, 4, "RemoveRetryPolicy", missing);
+}
+
+/// A claim whose invocation id belongs to a recorded `Start` further ahead diverges at that
+/// `Start`, not at the entry at the cursor.
+#[test]
+async fn same_invocation_id_divergence_names_the_start_ahead() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        remove_retry_policy(),
+        custom_start("recorded", 1, None, 5),
+    ])
+    .await;
+
+    let Err(error) = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("claimed".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        test_invocation_id(5),
+    )
+    .await
+    else {
+        panic!("a Start with the claim's own invocation id must not be skipped");
+    };
+    assert_start_divergence(
+        &error,
+        3,
+        HostFunctionName::Custom("recorded".to_string()),
+        HostFunctionName::Custom("claimed".to_string()),
+        &[StartIdentityField::FunctionName],
+    );
+}
+
 #[test]
 async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     let oplog = Arc::new(InMemoryOplog::new());
@@ -3115,7 +3261,10 @@ async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
         .await
         .unwrap();
 
-    assert!(matches!(outcome, ReplayStartClaimOutcome::DeletedRegion));
+    assert!(matches!(
+        outcome,
+        ReplayStartClaimOutcome::DeletedRegion { .. }
+    ));
 }
 
 #[test]
@@ -3704,11 +3853,17 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         rs.invocation_finish_before(OplogIndex::from_u64(6)),
         Some(terminal)
     );
-    assert!(rs.invocation_has_recorded_local_failure(anchor));
+    assert_eq!(
+        rs.recorded_local_failure_of_invocation(anchor),
+        Some(terminal)
+    );
     rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
-    assert!(!rs.invocation_has_recorded_local_failure(anchor));
+    assert_eq!(rs.recorded_local_failure_of_invocation(anchor), None);
     rs.set_replay_target(OplogIndex::from_u64(7)).await.unwrap();
-    assert!(rs.invocation_has_recorded_local_failure(anchor));
+    assert_eq!(
+        rs.recorded_local_failure_of_invocation(anchor),
+        Some(terminal)
+    );
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
@@ -4126,10 +4281,10 @@ async fn invocation_boundary_rejects_terminal_without_start() {
     let err = read_invocation_finished(&rs)
         .await
         .expect_err("terminal without a matching abandoned Start must be fatal");
-    assert!(
-        err.to_string().contains("AgentInvocationFinished"),
-        "unexpected error: {err}"
-    );
+    let divergence = divergence_of(&err);
+    assert_eq!(divergence.oplog_index, OplogIndex::from_u64(2), "{err}");
+    assert!(divergence.expected.to_string().starts_with("End"), "{err}");
+    assert_eq!(divergence.actual, ReplayStep::invocation_end(), "{err}");
 }
 
 #[test]
@@ -4148,10 +4303,16 @@ async fn invocation_boundary_rejects_unrelated_entry() {
     let err = read_invocation_finished(&rs)
         .await
         .expect_err("unrelated positional entry must be fatal");
+    let divergence = divergence_of(&err);
+    assert_eq!(divergence.oplog_index, OplogIndex::from_u64(2), "{err}");
     assert!(
-        err.to_string().contains("AgentInvocationFinished"),
-        "unexpected error: {err}"
+        divergence
+            .expected
+            .to_string()
+            .starts_with("RemoveRetryPolicy"),
+        "the recorded entry is the expected step: {err}"
     );
+    assert_eq!(divergence.actual, ReplayStep::invocation_end(), "{err}");
 }
 
 #[test]
@@ -4316,10 +4477,9 @@ async fn invocation_boundary_rejects_terminal_of_resolved_claimed_start() {
     let err = read_invocation_finished(&rs)
         .await
         .expect_err("a duplicate terminal of a resolved claimed Start must be fatal");
-    assert!(
-        err.to_string().contains("AgentInvocationFinished"),
-        "unexpected error: {err}"
-    );
+    let divergence = divergence_of(&err);
+    assert!(divergence.expected.to_string().starts_with("End"), "{err}");
+    assert_eq!(divergence.actual, ReplayStep::invocation_end(), "{err}");
 }
 
 #[test]
@@ -8679,7 +8839,7 @@ async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() 
                 handle.start_idx()
             )
         }
-        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion { .. } => {
             panic!("expected StoreAlreadyLive")
         }
     }
@@ -8733,7 +8893,7 @@ async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() 
         ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("a matching unclaimed Start ahead of the cursor must be claimed, not skipped")
         }
-        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion { .. } => {
             panic!("expected Claimed")
         }
     }
@@ -8791,7 +8951,8 @@ async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_t
                 handle.start_idx()
             )
         }
-        ReplayStartClaimOutcome::StoreAlreadyLive | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::StoreAlreadyLive
+        | ReplayStartClaimOutcome::DeletedRegion { .. } => {
             panic!("expected ReplayEnded")
         }
     }
@@ -9043,9 +9204,12 @@ async fn closed_retained_starts_are_released_at_live_invocation_end() {
         )
         .await
         .unwrap_err();
-    assert!(
-        err.to_string().contains("end of replay"),
-        "unexpected error: {err}"
+    let divergence = divergence_of(&err);
+    assert_eq!(divergence.oplog_index, OplogIndex::from_u64(6), "{err}");
+    assert_eq!(divergence.expected, ReplayStep::end_of_history());
+    assert_eq!(
+        host_call_of(&divergence.actual).function_name,
+        HostFunctionName::MonotonicClockNow.to_string()
     );
 }
 
@@ -12435,7 +12599,17 @@ async fn custom_claim_rejects_invocation_id_collision() {
         Err(error) => error,
     };
 
-    assert!(format!("{error}").contains("no matching Start"));
+    // Only the identity differs: the recorded scope has the same name and invocation id.
+    assert_start_divergence(
+        &error,
+        2,
+        scope_name.clone(),
+        scope_name,
+        &[
+            StartIdentityField::FunctionType,
+            StartIdentityField::RequestPresence,
+        ],
+    );
     assert!(!rs.at_replay_tail());
 }
 
@@ -13161,9 +13335,10 @@ async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_
         Err(error) => error,
         Ok(_) => panic!("a settled body's unconsumed head must not hide the missing Start"),
     };
-    assert!(
-        format!("{error}").contains("no matching Start"),
-        "missing replay claim must be strict divergence: {error}"
+    assert_eq!(
+        divergence_of(&error).oplog_index,
+        OplogIndex::from_u64(3),
+        "missing replay claim must be strict divergence at the unconsumed Start: {error}"
     );
 }
 
@@ -14575,7 +14750,7 @@ async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
         assert!(
             matches!(
                 rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await,
-                Err(error) if error.to_string().contains("no matching Start")
+                Err(error) if divergence_of(&error).oplog_index == OplogIndex::from_u64(3)
             ),
             "sibling_claimed_first = {sibling_claimed_first}"
         );
@@ -14697,10 +14872,15 @@ async fn missing_start_claim_with_the_invocation_id_of_an_unclaimed_start_is_div
         ])
         .await;
         if retained {
-            assert!(matches!(
-                rs.claim_start_or_replay_end(wait_for_claim(Some(3))).await,
-                Err(error) if error.to_string().contains("no matching Start")
-            ));
+            let Err(error) = rs.claim_start_or_replay_end(wait_for_claim(Some(3))).await else {
+                panic!("a claim with no recorded Start must diverge");
+            };
+            assert_entry_divergence(
+                &error,
+                4,
+                "RemoveRetryPolicy",
+                HostFunctionName::P3MonotonicClockWaitFor,
+            );
             assert!(rs.has_unclaimed_retained_starts());
         }
 
@@ -14717,9 +14897,13 @@ async fn missing_start_claim_with_the_invocation_id_of_an_unclaimed_start_is_div
             Err(error) => error,
             Ok(_) => panic!("a Start with the claim's own invocation id must not be retained"),
         };
-        assert!(
-            error.to_string().contains("same invocation id"),
-            "unexpected error: {error}"
+        // The divergence names the recorded Start, whether it is retained or still ahead.
+        assert_start_divergence(
+            &error,
+            2,
+            HostFunctionName::Custom("recorded".to_string()),
+            HostFunctionName::Custom("claimed".to_string()),
+            &[StartIdentityField::FunctionName],
         );
     }
 }
@@ -14737,9 +14921,12 @@ async fn missing_start_claim_is_divergence_at_a_positional_entry_after_a_sibling
         Err(error) => error,
         Ok(_) => panic!("a positional entry of the claiming Store must not end replay"),
     };
-    assert!(
-        error.to_string().contains("no matching Start"),
-        "unexpected error: {error}"
+    // The retained sibling Start is not the divergence; the positional entry behind it is.
+    assert_entry_divergence(
+        &error,
+        3,
+        "RemoveRetryPolicy",
+        HostFunctionName::P3MonotonicClockWaitFor,
     );
 
     let sibling = claimed(&rs, wait_for_claim(Some(2))).await;
@@ -15768,4 +15955,43 @@ async fn live_bootstrap_cursor_replays_a_partial_block_then_goes_live_locally() 
     );
     assert_eq!(main.last_replayed_index(), main_position);
     assert!(!main.is_live_published());
+}
+
+#[test]
+fn unclosed_abandoned_starts_diverge_at_the_lowest_open_index() {
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "abandoned".to_string(),
+        },
+    );
+    for order in [[12, 9, 6, 3, 5], [3, 5, 6, 9, 12], [9, 3, 12, 5, 6]] {
+        let mut abandoned = AbandonedStarts::default();
+        for index in order {
+            abandoned.record_start(
+                OplogIndex::from_u64(index),
+                HostFunctionName::MonotonicClockNow,
+                None,
+            );
+        }
+        abandoned
+            .record_terminal(OplogIndex::from_u64(3), OplogIndex::from_u64(4), "End")
+            .unwrap();
+
+        let error = abandoned.finish(&owned_agent_id).unwrap_err();
+
+        let WorkerExecutorError::UnexpectedOplogEntry { divergence } = error else {
+            panic!("expected a replay divergence, got {error}");
+        };
+        assert_eq!(divergence.oplog_index, OplogIndex::from_u64(5));
+        assert!(
+            divergence
+                .actual
+                .to_string()
+                .contains("at 5 (MonotonicClockNow), 6"),
+            "the unclosed Starts are listed in index order: {}",
+            divergence.actual
+        );
+    }
 }

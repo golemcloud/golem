@@ -49,8 +49,9 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::agent::{
-    AgentMetadataDto, AgentTarget, Principal, ResolvedRevert, RevertWorkerTarget,
+    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
 };
+use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -473,7 +474,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
@@ -488,7 +489,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
@@ -641,7 +642,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
@@ -685,7 +686,7 @@ pub trait WorkerClient: Send + Sync {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput>;
@@ -991,7 +992,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
@@ -1014,7 +1015,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         environment_id: Some(environment_id.into()),
                         ignore_already_existing,
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: principal.clone(),
+                        caller: Some(caller.clone()),
                         invocation_context: invocation_context.clone(),
                         idempotency_key: idempotency_key.clone().map(Into::into),
                         freshness_disposition: match freshness_disposition {
@@ -1053,7 +1054,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
-        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let target = agent_id;
@@ -1082,7 +1083,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             environment_id: Some(environment_id.into()),
                             ignore_already_existing,
                             auth_ctx: Some(auth_ctx.clone().into()),
-                            principal: principal.clone(),
+                            caller: Some(caller.clone()),
                             invocation_context: invocation_context.clone(),
                             idempotency_key: Some(idempotency_key.clone().into()),
                             freshness_disposition: 0,
@@ -1131,7 +1132,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        // The 1.6 load caller; the caller of Golem-started work is set later.
+                        caller: Some(Caller::anonymous().into()),
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
@@ -1172,7 +1174,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             )),
             environment_id: Some(environment_id.into()),
             auth_ctx: Some(auth_ctx.into()),
-            principal: None,
+            caller: Some(Caller::anonymous().into()),
         };
 
         // How many times the request has been handed to a connection. Both
@@ -1281,7 +1283,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         recover_immediately,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1403,7 +1405,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     force: Some(force),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1444,7 +1446,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     disable_wakeup,
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1671,7 +1673,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         path: path_clone.to_string(),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1731,7 +1733,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         component_owner_account_id: Some(account_id.into()),
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     },
                 ))
             },
@@ -1789,7 +1791,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.into()),
                             auth_ctx: Some(auth_ctx.clone().into()),
-                            principal: None,
+                            caller: Some(Caller::anonymous().into()),
                             selection: Some(selection.into()),
                         };
                     Box::pin(async move {
@@ -1836,7 +1838,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1876,7 +1878,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         plugin_priority: plugin_priority.0,
                         environment_id: Some(environment_id.into()),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: None,
+                        caller: Some(Caller::anonymous().into()),
                     }),
                 )
             },
@@ -1905,12 +1907,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         account_email: AccountEmail,
-        principal: Principal,
+        caller: Caller,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_agent_id = source_agent_id.clone();
         let target_agent_id = target_agent_id.clone();
-        let principal: golem_api_grpc::proto::golem::component::Principal = principal.into();
+        let caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
         self.call_worker_executor(
             source_agent_id.clone(),
             "fork_worker",
@@ -1925,7 +1927,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     oplog_index_cutoff: oplog_index_cut_off.into(),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: Some(principal.clone()),
+                    caller: Some(caller.clone()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1964,7 +1966,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     target: Some(target.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                     resolved_revert: resolved_revert.map(|resolved| {
                         golem_api_grpc::proto::golem::common::ResolvedRevert {
                             last_oplog_index: resolved.last_oplog_index.as_u64(),
@@ -2059,7 +2061,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     idempotency_key: Some(idempotency_key.into()),
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    principal: None,
+                    caller: Some(Caller::anonymous().into()),
                     scheduled: scheduled.clone(),
                 }))
             },
@@ -2252,7 +2254,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
-        principal: golem_api_grpc::proto::golem::component::Principal,
+        caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
@@ -2283,7 +2285,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         request_key: Some(request_key.clone().into()),
                         context: invocation_context.clone(),
                         auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: Some(principal.clone()),
+                        caller: Some(caller.clone()),
                         environment_id: Some(environment_id.into()),
                         config: config.clone().into_iter().map(Into::into).collect(),
                         component_owner_account_id: Some(account_id.into()),
@@ -3405,7 +3407,8 @@ mod rejection_mapping_tests {
     };
     use golem_api_grpc::proto::golem::workerexecutor::v1::*;
     use golem_common::model::account::AccountId;
-    use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition, Principal};
+    use golem_common::model::agent::{AgentTarget, InvocationFreshnessDisposition};
+    use golem_common::model::caller::Caller;
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::AgentError as OplogAgentError;
@@ -4020,7 +4023,7 @@ mod rejection_mapping_tests {
                 EnvironmentId::new(),
                 AccountId::new(),
                 AuthCtx::System,
-                Principal::anonymous().into(),
+                Caller::anonymous().into(),
                 None,
                 None,
             )
@@ -4050,7 +4053,7 @@ mod rejection_mapping_tests {
                     environment_id,
                     AuthCtx::System,
                     None,
-                    None,
+                    Caller::anonymous().into(),
                     None,
                 )
             };

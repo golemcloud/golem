@@ -32,7 +32,11 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    to other owners; see "Entry ownership". Operator-reverted entries are excluded). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
-   not tolerated.
+   not tolerated. The error is `UnexpectedOplogEntry` with a `ReplayDivergence`: the oplog index
+   of the first divergence, the expected and the actual step, and the identity fields of a host
+   call that differ. Every producer names the entry it compared. `FailedUpdate` keeps the
+   divergence and a required `failure_class`, which `start_outcome` sets from the problem and the
+   `FailureProvenance` of the failure (see `worker/start_outcome/mod.rs::failure_class`).
 
 2. **The resident runtime is disposable.** The Wasmtime `Store`, the worker task, the executor
    process, sockets, channels and subscriptions can vanish while work is pending. Suspension,
@@ -1408,7 +1412,7 @@ or join the reconciler.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
-Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, principal, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
+Create admission is caller-specific even when construction is shared. After construction completes, `worker/acquisition.rs::ensure_created` checks exclusive followers, warm acquisitions and cold reloads against the original Create under the oplog lifecycle guard. Only the initiating caller whose attempt actually wrote Create gets the new-creation exemption; starting reconstruction does not qualify. That caller completes even if its shard left after Create committed; retirement then gives up the published worker. A caller's rejection never replaces shared construction success. Nonexclusive demand joins after owner-kind validation without taking the lifecycle guard, so maintenance does not block warm invocation acquisition. Exclusive Create without a matching supplied key returns `AgentAlreadyExists` (HTTP 409), even with identical overrides. With the same key, compare request kind, canonical key, the full caller record, environment overrides by name and config overrides by path: equal identity retains the original fingerprint; changed identity returns `CreateIdempotencyKeyConflict` (HTTP 422). Normalize incoming config through each stored override's projected schema, not current deployment defaults. Tracing context is not retry identity. If deletion wins exclusive admission, return a retryable routing error rather than an unknown-agent result; the retry can create after deletion removes the cached generation. The worker-service generates one internal key per logical create outside its routing retry closure; transport and shard retries retain that key and fingerprint. This key is independent of the user's Idempotency-Key. The gRPC preflight is absent; constructor startup and waiting remain separate from admission. Tests: `pre_create_single_flight_admits_each_caller_against_the_winner`, `exclusive_retry_after_partial_construction_uses_the_persisted_identity`, and `create_config_admission.rs::identical_keyed_record_config_retry_is_admitted`.
 
 After admission, executor create and REST create await `Worker::await_initialization`, not
 `WorkerLoaded`. Subscribe before reading the authoritative constructor result index by its typed
@@ -1430,7 +1434,7 @@ holds that write until Create returns.
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
 (`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
-principal and its invocation context. Callers pass a `CreateIntent`. An explicit create
+caller and its invocation context. Callers pass a `CreateIntent`. An explicit create
 (`CreateIntent::Create`) records its key. An invocation that creates its target
 (`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
 the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
@@ -1438,16 +1442,27 @@ no key. An invocation session passes the owner key of its `request_key`, from wh
 an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
-target records `Fork`, no key and the forker's principal. A self fork also records the forking
+target records `Fork`, no key and the forking agent as its caller. A self fork also records the forking
 agent's current invocation context; a fork through the worker service records a fresh context.
 When a reload finds only `Create`, `prepare_worker_data` enqueues `AgentInitialization` with the
-recorded principal and context, not with the loading request's. The resident `unpublished_create`
+recorded caller and context, not with the loading request's. The resident `unpublished_create`
 flag only records that an attempt committed `Create` and the worker is not published yet; it
-carries no principal or context. Tests:
+carries no caller or context. Tests:
 `restart_initializes_a_partially_created_agent_as_its_recorded_creator` and
-`grpc_create_records_its_kind_key_and_principal` in `tests/worker_initialization.rs`, and
+`grpc_create_records_its_kind_key_and_caller` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
+
+`CreateParameters.never_live` is the never-live mark of a sandbox agent. Agent creation writes
+`false`, and nothing sets it yet. The status fold copies it into `AgentStatusRecord.never_live`
+and never changes it. `AgentStatusRecord::reported_status()` gives `Sandboxed` for a marked agent
+and the folded `status` otherwise; the folded `status` never holds `Sandboxed`, and control code
+decides by it, never by the reported status. Every outward view reads the reported status: the
+filter's `status` leaf, gRPC and REST metadata (with the folded status in `underlying_status`), the
+guest's metadata and enumeration (`AgentMetadataForGuests`), the running-agent fast path and the
+status metrics. Tests: `the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status`
+in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart` in
+`tests/observability.rs`.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet
@@ -2427,7 +2442,7 @@ Guests read their identity and caller through `golem:agent/invocation-context`
 invocation start recorded, so they are not durable calls. An entity Store answers for its
 enclosing invocation (`entity_context.rs::current_invocation_id`). Outside an invocation
 (initialization, snapshot save and load) `invocation-id()` is none. The export functions take no
-`principal` parameter. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
+`caller` parameter; the guest reads the caller from the host. Agent events (`StdOut`, `StdErr`, `Log`) carry the invocation UUID of the
 writing Store, and `InvocationStarted`/`InvocationFinished` carry the key's `to_uuid()`.
 
 ## Invocation attribution and per-invocation state
@@ -2466,7 +2481,7 @@ did not start a task group" (an armed key not consumed while the call runs). An 
 ends in its first poll, such as one Wasmtime refused to enter, ran no guest code and logs `debug!`.
 
 Per-invocation state lives in `InvocationExecutionState` entries of `Invocations`
-(`durable_host/execution_state.rs`): start index, invocation ID, principal, invocation context and
+(`durable_host/execution_state.rs`): start index, invocation ID, caller, invocation context and
 current span, read-only strictness, retry point, per-invocation call counters, a tail-work count,
 the guest-trap retry scopes, and the invocation's `InvocationAuthority`. The `AgentLevel` entry
 always exists. The loop runs one invocation at a time. `set_current_idempotency_key` calls
@@ -3712,7 +3727,7 @@ mappings. The target's `Create` entry records the fork request, not the source's
 request. Entity-invocation requests do not record the internal calling principal: live execution
 and replay derive it from the current owner, including every middleware and leaf invocation.
 Request matching still checks entity, operation, call mode, input and descendant plan position.
-The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
+The separate execution `caller`, authority snapshot, guest inputs, recorded environment and
 external effects remain unchanged. Inline request bytes are preserved; external payloads are copied
 from authoritative contents under the target without decoding or re-encoding them. Cached external
 values are not a substitute for copying durable bytes. Repeated forks derive the new owner without

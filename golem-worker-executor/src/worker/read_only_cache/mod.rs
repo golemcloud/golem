@@ -40,7 +40,8 @@
 
 use golem_common::model::AgentInvocation;
 use golem_common::model::AgentInvocationOutput;
-use golem_common::model::agent::{AgentTypeName, Principal};
+use golem_common::model::agent::AgentTypeName;
+use golem_common::model::caller::Caller;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::schema::SchemaValue;
@@ -115,15 +116,15 @@ impl PendingReadOnlyInvocation {
 /// `epoch` and `component_revision` are part of the key so mutations and
 /// component updates lazily invalidate cached entries.
 ///
-/// `principal_digest` is populated only when the method's
-/// [`AgentMethodSchema::read_only`] has `uses_principal == true`.
+/// `caller_digest` hashes the full caller of the invocation, so a result is never served to
+/// another caller. First-class tools own the rest of the key.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ReadOnlyCacheKey {
     pub method_name: String,
     pub component_revision: ComponentRevision,
     pub epoch: u64,
     pub input_digest: [u8; 32],
-    pub principal_digest: Option<[u8; 32]>,
+    pub caller_digest: [u8; 32],
 }
 
 /// A successfully cached read-only invocation output, plus the optional
@@ -227,10 +228,6 @@ pub fn canonicalize_schema_value(input: &SchemaValue) -> Vec<u8> {
     desert_rust::serialize_to_byte_vec(input).expect("SchemaValue serialization is infallible")
 }
 
-pub fn principal_bytes(principal: &Principal) -> Vec<u8> {
-    desert_rust::serialize_to_byte_vec(principal).expect("Principal serialization is infallible")
-}
-
 pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
@@ -239,19 +236,19 @@ pub fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
 pub fn build_read_only_cache_key(
     method_name: &str,
     input: &SchemaValue,
-    principal: Option<&Principal>,
+    caller: &Caller,
     component_revision: ComponentRevision,
     epoch: u64,
 ) -> ReadOnlyCacheKey {
     let input_bytes = canonicalize_schema_value(input);
     let input_digest = digest_bytes(&input_bytes);
-    let principal_digest = principal.map(|p| digest_bytes(&principal_bytes(p)));
+    let caller_digest = caller.digest();
     ReadOnlyCacheKey {
         method_name: method_name.to_string(),
         component_revision,
         epoch,
         input_digest,
-        principal_digest,
+        caller_digest,
     }
 }
 
@@ -272,7 +269,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let AgentInvocation::AgentMethod {
             method_name,
             input,
-            principal,
+            caller,
             scope_card,
             ..
         } = invocation
@@ -292,7 +289,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Some(ReadOnlyContext {
             method_name: method_name.clone(),
             input: input.clone(),
-            principal: principal.clone(),
+            caller: caller.clone(),
             cfg: cfg.clone(),
             component_revision,
             cacheable: scope_card.is_none(),
@@ -362,15 +359,10 @@ pub(in crate::worker) async fn populate_read_only_cache(
         return;
     }
 
-    let principal_ref = if ro.cfg.uses_principal {
-        Some(&ro.principal)
-    } else {
-        None
-    };
     let key = read_only_cache::build_read_only_cache_key(
         &ro.method_name,
         &ro.input,
-        principal_ref,
+        &ro.caller,
         ro.component_revision,
         epoch,
     );

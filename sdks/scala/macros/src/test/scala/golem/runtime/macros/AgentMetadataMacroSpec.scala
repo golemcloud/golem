@@ -288,7 +288,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     val invoked  = implType.methods
       .find(_.name == method)
       .get
-      .invoke(new UuidAgentImpl, input.encodeValue(Vector(value)), golem.Principal.Anonymous)
+      .invoke(new UuidAgentImpl, input.encodeValue(Vector(value)), golem.InvocationContext.anonymous)
     codec.decode(Await.result(invoked, 5.seconds).get)
   }
 
@@ -301,7 +301,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     val invoked  = implType.methods
       .find(_.name == method)
       .get
-      .invoke(new RawBodyAgentImpl, input.encodeValue(Vector(id)), golem.Principal.Anonymous)
+      .invoke(new RawBodyAgentImpl, input.encodeValue(Vector(id)), golem.InvocationContext.anonymous)
     Await.result(invoked, 5.seconds).get
   }
 
@@ -455,7 +455,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
         val invoked = implType.methods
           .find(_.name == "gallery")
           .get
-          .invoke(new MimeAllowListAgentImpl, input.encodeValue(Vector(gallery)), golem.Principal.Anonymous)
+          .invoke(new MimeAllowListAgentImpl, input.encodeValue(Vector(gallery)), golem.InvocationContext.anonymous)
         val output = Await.result(invoked, 5.seconds).get
         assertTrue(ConcreteCodec.derived[Gallery].decode(output) == gallery)
       },
@@ -499,7 +499,11 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           implType.methods
             .find(_.name == "bilingual")
             .get
-            .invoke(new LanguageAllowListAgentImpl, input.encodeValue(Vector(bilingual)), golem.Principal.Anonymous)
+            .invoke(
+              new LanguageAllowListAgentImpl,
+              input.encodeValue(Vector(bilingual)),
+              golem.InvocationContext.anonymous
+            )
         )
         val output = invoked.flatMap(f => scala.util.Try(Await.result(f, 5.seconds).get))
         assertTrue(output.map(codec.decode).toOption.contains(bilingual))

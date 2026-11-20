@@ -24,6 +24,7 @@ use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_service_base::model::component::Component;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::worker::CreateIntent;
+use golem_worker_executor_test_utils::callers;
 use test_r::{test, timeout};
 
 inherit_test_dep!(Tracing);
@@ -162,7 +163,7 @@ async fn identical_keyed_record_config_retry_is_admitted(
                     None,
                     None,
                     &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    callers::anonymous(),
                     InvocationFreshnessDisposition::MayExist,
                     CreateIntent::Create {
                         exclusive: true,

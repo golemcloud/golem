@@ -220,7 +220,7 @@ impl OwnerToolOperation {
         boundary: &SerializableToolAdmissionRefusal,
     ) -> Result<(), WorkerExecutorError> {
         let mut changes = self.subscribe();
-        let Some((expected, _)) = self.expected_admission_refusal() else {
+        let Some((expected, expected_index)) = self.expected_admission_refusal() else {
             return Ok(());
         };
         let disposal = self.expected_disposal_refusal().is_some();
@@ -238,6 +238,7 @@ impl OwnerToolOperation {
                 }
                 _ => {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected_index,
                         "recorded tool admission refusal",
                         "tool settled before its recorded refusal was observed",
                     ));

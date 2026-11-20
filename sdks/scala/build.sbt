@@ -139,6 +139,9 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
   .jvmSettings(
     Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
       "golem-service-base" / "tests" / "fixtures" / "http-handlers",
+    // The shared PrincipalRef text-form vectors.
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "test-data" / "caller-identity",
     Compile / unmanagedSourceDirectories ++= Seq(
       (ThisBuild / baseDirectory).value / "model" / ".jvm" / "src" / "main" / "scala"
     ),

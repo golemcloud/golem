@@ -203,6 +203,13 @@ pub trait GolemHostApi {
     fn continue_kept_oplog_search(&self, max_batches: u64) -> Result<Vec<u64>, String>;
     fn read_oplog_result(&self, agent_id: AgentId) -> Result<(), String>;
     fn search_oplog_result(&self, agent_id: AgentId, query: String) -> Result<(), String>;
+    /// Enriches a forged raw failed update at `entry_index` of the agent's own oplog, whose
+    /// divergence names `divergence_index` with an expected host call of unknown request.
+    fn enrich_forged_failed_update_result(
+        &self,
+        entry_index: u64,
+        divergence_index: Option<u64>,
+    ) -> Result<(), String>;
     fn get_config_value_result(&self, key: Vec<String>) -> Result<(), String>;
     fn create_webhook_result(&self, promise_id: PromiseId) -> Result<(), String>;
     fn get_agent_metadata_result(&self, agent_id: AgentId) -> Result<bool, String>;
@@ -933,6 +940,46 @@ impl GolemHostApi for GolemHostApiImpl {
             .get_next()
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn enrich_forged_failed_update_result(
+        &self,
+        entry_index: u64,
+        divergence_index: Option<u64>,
+    ) -> Result<(), String> {
+        use gated_host_bindings::golem::api::oplog;
+
+        let metadata = host_api::get_self_metadata().map_err(|error| format!("{error:?}"))?;
+        let divergence = divergence_index.map(|oplog_index| oplog::ReplayDivergence {
+            oplog_index,
+            expected: oplog::ReplayStep::HostCall(oplog::ReplayHostCall {
+                function_name: "golem::api::get_self_metadata".to_string(),
+                durable_function_type: oplog::WrappedFunctionType::ReadLocal,
+                parent_start_index: None,
+                invocation_id: None,
+                observational_owner: None,
+                carries_request: true,
+                request: None,
+            }),
+            actual: oplog::ReplayStep::EndOfHistory,
+            mismatched: vec![],
+        });
+        let entry = oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
+            timestamp: golem_rust::wasip3::clocks::system_clock::now(),
+            target_revision: metadata.component_revision,
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: oplog::UpdateFailureClass::Divergence,
+            divergence,
+        });
+        oplog::enrich_oplog_entries(
+            metadata.environment_id,
+            &metadata.agent_id,
+            vec![(entry_index, entry)],
+            metadata.component_revision,
+        )
+        .map(|_| ())
     }
 
     fn get_config_value_result(&self, key: Vec<String>) -> Result<(), String> {

@@ -16,7 +16,7 @@
 
 package golem.runtime
 
-import golem.{BaseAgent, FutureInterop, Principal}
+import golem.{BaseAgent, FutureInterop}
 import golem.runtime.annotations.{agentDefinition, agentImplementation}
 import golem.runtime.autowire.{AgentImplementation, SchemaPayload}
 import golem.runtime.guest.{Guest, MultipartSnapshotCodec}
@@ -74,7 +74,16 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
   private def wire(state: String, extra: String = ""): Array[Byte] =
     s"--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n$state\r\n$extra--b--\r\n"
       .getBytes("UTF-8")
-  private val envelope                                         = """{"version":1,"principal":{"tag":"anonymous"},"state":null}"""
+  private val envelope   = """{"version":1,"principal":{"tag":"anonymous"},"state":null}"""
+  private val envelopeV2 = """{"version":2,"state":null}"""
+
+  /** The text of the `state` part of an encoded envelope. */
+  private def restoredEnvelope(encoded: SnapshotPayload): Array[Byte] = {
+    val text  = new String(encoded.bytes, "UTF-8")
+    val start = text.indexOf("{\"version\"")
+    text.substring(start, text.indexOf("\r\n", start)).getBytes("UTF-8")
+  }
+
   private def jsSnapshot(payload: SnapshotPayload): JsSnapshot = {
     val bytes = new Uint8Array(payload.bytes.length)
     payload.bytes.indices.foreach(i => bytes(i) = payload.bytes(i))
@@ -99,7 +108,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
       }
       assertTrue(results.forall(identity))
     },
-    test("schema helpers, dynamic names, Unicode principal and binary bytes roundtrip") {
+    test("schema helpers, dynamic names, Unicode state and binary bytes roundtrip") {
       val bytes = (0 to 255).map(_.toByte).toArray ++ Array[Byte](13, 10)
       val saved = MultipartSnapshot
         .fromState(
@@ -112,13 +121,13 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         )
         .toOption
         .get
-      val principal             = Principal.Oidc("ユーザー", "issuer", "{}", email = Some("élise@test"))
-      val encoded               = MultipartSnapshotCodec.encode(saved, principal).toOption.get
-      val (recovered, restored) = MultipartSnapshotCodec.decode(encoded.bytes, encoded.mimeType).toOption.get
-      val empty                 =
-        MultipartSnapshotCodec.encode(MultipartSnapshot(Json.Null, Map.empty), Principal.Anonymous).toOption.get
+      val encoded  = MultipartSnapshotCodec.encode(saved).toOption.get
+      val restored = MultipartSnapshotCodec.decode(encoded.bytes, encoded.mimeType).toOption.get
+      val empty    = MultipartSnapshotCodec.encode(MultipartSnapshot(Json.Null, Map.empty)).toOption.get
+      val written  = Json.parse(restoredEnvelope(encoded)).toOption.get
       assertTrue(
-        recovered == principal,
+        written.get("version").one.toOption.map(_.print).contains("2"),
+        written.get("principal").one.isLeft,
         restored.decodeState[Saved] == Right(Saved(17, "árvíz 🦀")),
         restored.requirePart("index", "application/octet-stream").exists(_.toVector == bytes.toVector),
         restored.parts.keySet == saved.parts.keySet,
@@ -126,18 +135,29 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         restored.requirePart("index", "text/plain").isLeft,
         restored.requirePart("index", "text/plain; charset=utf-8").isLeft,
         empty.mimeType.startsWith("multipart/mixed"),
-        MultipartSnapshotCodec.decode(empty.bytes, empty.mimeType).exists(_._2.state == Json.Null)
+        MultipartSnapshotCodec.decode(empty.bytes, empty.mimeType).exists(_.state == Json.Null)
+      )
+    },
+    test("reads the 2.0 envelope and the 1.6 envelope; any other version is refused") {
+      def decode(text: String) = MultipartSnapshotCodec.decode(wire(text), "multipart/mixed; boundary=b")
+      assertTrue(
+        decode(envelopeV2).isRight,
+        decode(envelope).isRight,
+        decode(envelopeV2.replace("\"version\":2", "\"version\":3")).isLeft,
+        decode(envelopeV2.replace("\"version\":2", "\"version\":2.0")).isLeft,
+        decode(envelopeV2.replace("\"version\":2", "\"version\":2,\"version\":2")).isLeft,
+        decode("""{"version":1,"state":null}""").isLeft
       )
     },
     test("collision checks include body start and appended framing") {
       val bytes   = "--golem-snapshot-0\r\npayload\r\n--golem-snapshot-1--".getBytes("UTF-8")
       val saved   = MultipartSnapshot(Json.Null, Map("index" -> SnapshotPart(bytes, "application/octet-stream")))
-      val encoded = MultipartSnapshotCodec.encode(saved, Principal.Anonymous).toOption.get
+      val encoded = MultipartSnapshotCodec.encode(saved).toOption.get
       assertTrue(
         encoded.mimeType.endsWith("golem-snapshot-2"),
         MultipartSnapshotCodec
           .decode(encoded.bytes, encoded.mimeType)
-          .exists(_._2.parts("index").bytes.toVector == bytes.toVector)
+          .exists(_.parts("index").bytes.toVector == bytes.toVector)
       )
     },
     test("rejects malformed metadata, namespaces, MIME and framing without restricting application state") {
@@ -178,8 +198,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           .isRight,
         MultipartSnapshotCodec
           .encode(
-            MultipartSnapshot(Json.Null, Map("a/b" -> SnapshotPart(Array.emptyByteArray, "text/plain"))),
-            Principal.Anonymous
+            MultipartSnapshot(Json.Null, Map("a/b" -> SnapshotPart(Array.emptyByteArray, "text/plain")))
           )
           .isLeft,
         MultipartSnapshotCodec
@@ -187,8 +206,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
             MultipartSnapshot(
               Json.Null,
               Map("index" -> SnapshotPart(Array.emptyByteArray, "text/plain; charset=utf-8"))
-            ),
-            Principal.Anonymous
+            )
           )
           .isLeft
       )
@@ -198,7 +216,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
         "\r\n--a:b\r\nContent-Disposition: attachment; name=\"part:index\"\r\nContent-Type: text/plain\r\n\r\nx\r\n--a:b\r\nContent-Disposition: attachment; name=\"state\"\r\nContent-Type: application/json\r\n\r\n" + envelope + "\r\n--a:b--"
       val decoded = MultipartSnapshotCodec.decode(leading.getBytes("UTF-8"), "multipart/mixed; boundary=\"a:b\"")
       assertTrue(
-        decoded.exists(_._2.parts("index").bytes.toVector == Vector(120.toByte)),
+        decoded.exists(_.parts("index").bytes.toVector == Vector(120.toByte)),
         MultipartSnapshotCodec.decode(wire(envelope), "multipart/mixed; boundary=b; boundary=b").isLeft,
         MultipartSnapshotCodec.decode(leading.getBytes("UTF-8"), "multipart/mixed; boundary=a:b").isLeft,
         MultipartSnapshotCodec.decode(wire(envelope), "multipart/mixed; boundary=\"b").isLeft
@@ -230,7 +248,7 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           .fromState(Saved(17, "restore"), Map("index" -> SnapshotPart(bytes, "application/octet-stream")))
           .toOption
           .get
-        val context = SnapshotRestoreContext(Vector("init"), "multipart-index()", None, Principal.Anonymous, None)
+        val context = SnapshotRestoreContext(Vector("init"), "multipart-index()", None, None)
         for {
           wrong <- defn.snapshotHandlers.get
                      .load(SnapshotPayload(Array.emptyByteArray, "application/octet-stream"), context)
@@ -253,13 +271,13 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           failed             <- FutureInterop
                       .fromPromise(
                         Guest.LoadSnapshot
-                          .load(jsSnapshot(MultipartSnapshotCodec.encode(missing, Principal.Anonymous).toOption.get))
+                          .load(jsSnapshot(MultipartSnapshotCodec.encode(missing).toOption.get))
                       )
                       .failed
           stateAfterFailure = Guest.stateForTesting
           _                <- FutureInterop.fromPromise(
                  Guest.LoadSnapshot.load(
-                   jsSnapshot(MultipartSnapshotCodec.encode(saved, Principal.Anonymous).toOption.get)
+                   jsSnapshot(MultipartSnapshotCodec.encode(saved).toOption.get)
                  )
                )
           reencoded <- FutureInterop.fromPromise(Guest.SaveSnapshot.save())
@@ -268,7 +286,6 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
               .decode(Array.tabulate(reencoded.payload.length)(i => reencoded.payload(i).toByte), reencoded.mimeType)
               .toOption
               .get
-              ._2
           stateAfterSuccess = Guest.stateForTesting
           _                 = Guest.resetForTesting()
         } yield assertTrue(
@@ -276,8 +293,8 @@ object MultipartSnapshotSpec extends ZIOSpecDefault {
           callsAfterWrong == 0,
           callsAfterMalformed == 0,
           failed.getMessage.contains("Missing snapshot part"),
-          stateAfterFailure == (false, None),
-          stateAfterSuccess == (true, Some(Principal.Anonymous)),
+          !stateAfterFailure,
+          stateAfterSuccess,
           IndexImpl.initializations == 0,
           recovered.requirePart("index", "application/octet-stream").exists(_.toVector == bytes.toVector),
           defn.methodMetadata.size == 1

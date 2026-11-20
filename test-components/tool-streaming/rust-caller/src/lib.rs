@@ -5,8 +5,8 @@ use environment_probe_tool_guest_client::{
 };
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
-    AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
-    ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
+    AgentStream, Config, InputStream, InvocationContext, Principal, RpcError, Secret, ToolError,
+    ToolInvocation, ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
@@ -57,7 +57,7 @@ mod definition_owned_proxy {
             mode: String,
             stdin: InputStream,
             stdout: OutputStream,
-            principal: golem_rust::agentic::Principal,
+            context: golem_rust::agentic::InvocationContext,
         ) -> Result<StreamSummary, StreamingError>;
 
         async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
@@ -121,7 +121,7 @@ mod definition_owned_matrix_proxy {
             &self,
             request: MatrixRequest,
             multiplier: i64,
-            principal: golem_rust::agentic::Principal,
+            context: golem_rust::agentic::InvocationContext,
         ) -> Result<MatrixResult, MatrixError>;
     }
 }
@@ -792,7 +792,7 @@ pub trait ToolStreamingCaller {
     async fn hold_completed_reconstruction_before_incomplete_custom(&self);
     async fn hold_completed_reconstruction_overlapping_custom(&self);
     async fn single_store_http_atomic_probe(&self);
-    async fn principal_context(&self, principal: Principal) -> Vec<String>;
+    async fn principal_context(&self, context: InvocationContext) -> Vec<String>;
     async fn matrix_core_observation(&self) -> MatrixObservation;
 }
 
@@ -878,12 +878,7 @@ fn chunks(input: Vec<u8>, fragment_size: u32) -> Vec<Vec<u8>> {
 }
 
 fn principal_class(principal: &Principal) -> &'static str {
-    match principal {
-        Principal::Anonymous => "anonymous",
-        Principal::Oidc(_) => "oidc",
-        Principal::Agent(_) => "agent",
-        Principal::GolemUser(_) => "golem-user",
-    }
+    principal.kind().as_str()
 }
 
 fn evidence(
@@ -5457,8 +5452,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         }
     }
 
-    async fn principal_context(&self, principal: Principal) -> Vec<String> {
-        let caller_class = principal_class(&principal).to_string();
+    async fn principal_context(&self, context: InvocationContext) -> Vec<String> {
+        let caller_class = principal_class(context.caller().immediate()).to_string();
         let invocation = StreamingClient::default()
             .run("nested-principal".to_string(), input_stream(Vec::new()))
             .await

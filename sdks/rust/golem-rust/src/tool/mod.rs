@@ -13,11 +13,10 @@
 // limitations under the License.
 
 #[cfg(not(feature = "export_golem_agentic"))]
-pub use crate::bindings::golem::agent::common::Principal;
-#[cfg(not(feature = "export_golem_agentic"))]
 pub use crate::bindings::golem::tool::streams::ToolOutputWriter;
-#[cfg(feature = "export_golem_agentic")]
-pub use crate::golem_agentic::golem::agent::common::Principal;
+pub use crate::caller::{
+    Caller, InvocationContext, Principal, PrincipalKind, PrincipalRef, TokenProvenance,
+};
 #[cfg(feature = "export_golem_agentic")]
 pub use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 pub use crate::schema::tool::Tool;

@@ -8,7 +8,7 @@ impl RawAgent for RestoreTestAgent with fn invoke(
   _self,
   _method_name,
   _input,
-  _principal,
+  _context,
 ) {
   Ok(None)
 }
@@ -42,7 +42,7 @@ test "snapshot restoration installs only after success" {
   let registered = RegisteredAgent::{
     name: "RestoreTestAgent",
     agent_type: restore_test_agent_type(),
-    construct: async fn(_input, _principal) {
+    construct: async fn(_input, _context) {
       Err(@common.AgentError::InvalidInput("constructor must not run"))
     },
     load_snapshot: None,
@@ -54,23 +54,17 @@ test "snapshot restoration installs only after success" {
       @schema.into_wire_record(["identity", 42U]),
     ),
     phantom_id: None,
-    principal: @common.Principal::Anonymous,
   }
   let identity : String = context.identity(0)
   debug_inspect(identity, content="\"identity\"")
   let numeric_identity : UInt32 = context.identity(1)
   assert_eq(numeric_identity, 42U)
-  let failed = finish_restoration(
-    registered,
-    @common.Principal::Anonymous,
-    Err("restore failed"),
-  )
+  let failed = finish_restoration(registered, Err("restore failed"))
   debug_inspect(failed, content="Err(\"restore failed\")")
   debug_inspect(get_agent_instance() is None, content="true")
   let agent = RestoreTestAgent::{ value: b"restored", }
   let restored = finish_restoration(
     registered,
-    context.principal,
     Ok({
       raw: agent,
       snapshottable: Some(agent),
@@ -82,7 +76,6 @@ test "snapshot restoration installs only after success" {
   guard get_agent_instance() is Some(instance) else {
     fail("restored agent was not installed")
   }
-  debug_inspect(instance.principal, content="Anonymous")
   guard instance.snapshottable is Some(saver) else {
     fail("restored agent has no snapshot saver")
   }
@@ -107,12 +100,11 @@ test "failed snapshot restoration does not commit decoded identity resources" {
       agent_type: "FailedRestore",
       identity_fields: { reader, fields: [0], },
       phantom_id: None,
-      principal: @common.Principal::Anonymous,
     }
     register_agent({
       name: "FailedRestore",
       agent_type: restore_test_agent_type(),
-      construct: (_input, _principal) => {
+      construct: (_input, _context) => {
         Err(@common.AgentError::InvalidInput("constructor must not run"))
       },
       load_snapshot: Some((_bytes, context) => {
@@ -160,7 +152,7 @@ test "multipart failed restore is retryable skips constructor and installs fresh
     register_agent({
       name: "MultipartRestore",
       agent_type: restore_test_agent_type(),
-      construct: (_input, _principal) => {
+      construct: (_input, _context) => {
         initialized += 1
         Err(@common.AgentError::InvalidInput("constructor must not run"))
       },
@@ -189,7 +181,6 @@ test "multipart failed restore is retryable skips constructor and installs fresh
         agent_type: "MultipartRestore",
         identity_fields: decode_snapshot_identity(@schema.into_wire_record([])),
         phantom_id: None,
-        principal: @common.Principal::Anonymous,
       }
     }
     assert_true(

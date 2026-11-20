@@ -189,9 +189,9 @@ test "tool generated internals use runtime facades instead of consumer aliases" 
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
-  assert_true(generated.contains("@tool.Principal"))
+  assert_true(generated.contains("@tool.InvocationContext"))
   assert_true(generated.contains("Some(__golem_output) => __golem_output"))
-  assert_false(generated.contains("@common.Principal"))
+  assert_false(generated.contains("@common.InvocationContext"))
   assert_false(generated.contains("@stdout.get_stdout()"))
 }
 
@@ -290,19 +290,19 @@ test "generated invokers reject unexpected stdout attachments" {
 }
 
 ///|
-test "reexported tool Principal is injected as invocation context" {
+test "reexported tool InvocationContext is injected as invocation context" {
   let source =
     #|#derive.tool
     #|struct Whoami {}
-    #|pub fn Whoami::whoami(principal : @tool.Principal) -> Unit {
-    #|  ignore(principal)
+    #|pub fn Whoami::whoami(context : @tool.InvocationContext) -> Unit {
+    #|  ignore(context)
     #|}
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(
       @lib.parse_tools([("principal.mbt", source)]),
     ),
   )
-  assert_true(generated.contains("Whoami::whoami(__golem_principal)"))
+  assert_true(generated.contains("Whoami::whoami(__golem_context)"))
   assert_false(generated.contains("decode_canonical_field"))
 }
 
@@ -1290,10 +1290,10 @@ test "structural metadata is closed over each inferred argument surface" {
     (
       #|#derive.tool
       #|struct Runner {}
-      #|#derive.arg("principal", doc="caller")
-      #|pub fn Runner::run(principal : @agentCommon.Principal) -> Unit { () }
+      #|#derive.arg("context", doc="caller")
+      #|pub fn Runner::run(context : @tool.InvocationContext) -> Unit { () }
     ),
-    "Principal",
+    "InvocationContext parameter",
   )
 }
 
@@ -1899,7 +1899,7 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_eq(render.open_world, Some(false))
   assert_eq(render.params.map(param => param.0), [
     "profile", "request", "inputs", "format", "tag", "define", "color", "checksum",
-    "verbose", "stdin", "stdout", "stderr", "principal",
+    "verbose", "stdin", "stdout", "stderr", "context",
   ])
   assert_eq(render.params[0].1, @lib.ToolParamType::Public(Simple("Profile")))
   assert_eq(
@@ -1917,7 +1917,9 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_true(
     render.params.any(param => param.1 is @lib.OptionalHidden(ErrorStream)),
   )
-  assert_true(render.params.any(param => param.1 is @lib.Hidden(Principal)))
+  assert_true(
+    render.params.any(param => param.1 is @lib.Hidden(InvocationContext)),
+  )
   let inputs = render.args
     .iter()
     .find_first(arg => arg.source_param == "inputs")
@@ -2070,7 +2072,7 @@ test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
   assert_true(compact_registration.contains("summary:\"JSONstatus\""))
   assert_true(compact_registration.contains("ToolLiteral::List([])"))
   assert_true(compact_registration.contains("ToolLiteral::Map([])"))
-  assert_true(registration.contains("principal : @tool.Principal"))
+  assert_true(registration.contains("context : @tool.InvocationContext"))
   let value_impls = @formatter.impls_to_string(
     @lib.generate_value_type_impls(
       value_types,

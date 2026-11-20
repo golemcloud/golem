@@ -148,7 +148,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           None,
           BigInt(1024),
           BigInt(65536),
-          List(pluginDesc)
+          List(pluginDesc),
+          neverLive = true
         )
       ),
       OplogEntry.Suspend(ts),
