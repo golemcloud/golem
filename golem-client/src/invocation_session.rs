@@ -20,8 +20,9 @@ use golem_common::model::invocation_session_public::{
     MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole,
     PublicClientCancelReason, PublicClientMessage, PublicConfigEntry, PublicErrorCode,
     PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
-    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamMapping,
-    decode_binary_message, decode_server_text, encode_binary_message, encode_text,
+    PublicResumeOperation, PublicServerCancelReason, PublicServerMessage, PublicStreamDirection,
+    PublicStreamMapping, decode_binary_message, decode_server_text, encode_binary_message,
+    encode_text,
 };
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -127,6 +128,8 @@ pub enum SessionTransportError {
     },
     #[error("the server answered neither the start nor the resume")]
     NotAnswered,
+    #[error("the server rejected input stream item {sequence}: {message}")]
+    InvalidInputItem { sequence: u64, message: String },
     #[error("invocation session endpoint {endpoint} was unreachable for {window:?}: {last_cause}")]
     Unreachable {
         endpoint: String,
@@ -3732,7 +3735,11 @@ where
             Ok(false)
         }
         ServerFrame::Message(PublicServerMessage::StreamCancel {
-            channel, reason, ..
+            channel,
+            message,
+            reason,
+            sequence,
+            ..
         }) => {
             match session.delivery_tracker().direction_for_channel(*channel) {
                 Some(PublicStreamDirection::Output) => {
@@ -3785,6 +3792,16 @@ where
                         }
                         inputs.remove(&reference);
                         session.unregister_input(reference);
+                    }
+                    // The server ended this input because of an item the caller sent, so the
+                    // call fails with that item's error.
+                    if *reason == PublicServerCancelReason::InvalidItem {
+                        return Err(SessionTransportError::InvalidInputItem {
+                            sequence: sequence.map(|sequence| sequence.0).unwrap_or_default(),
+                            message: message
+                                .clone()
+                                .unwrap_or_else(|| "invalid stream item".to_string()),
+                        });
                     }
                 }
                 None => {
@@ -4277,7 +4294,6 @@ impl<T> Drop for AgentStream<T> {
 mod tests {
     use super::*;
     use base64::Engine;
-    use golem_common::model::invocation_session_public::PublicServerCancelReason;
     use serde::Deserialize;
 
     #[derive(Deserialize)]
@@ -4495,7 +4511,9 @@ mod tests {
             .send(Message::Text(
                 encode_text(&PublicServerMessage::StreamCancel {
                     channel,
+                    message: None,
                     reason,
+                    sequence: None,
                     version: 1,
                 })
                 .unwrap()
@@ -7685,6 +7703,112 @@ mod tests {
             .await
             .unwrap();
         assert!(failed.is_empty());
+        server.await.unwrap();
+    }
+
+    #[test]
+    async fn generated_call_fails_with_the_input_item_the_server_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempt_id = uuid::Uuid::new_v4();
+        let provisional_ref = uuid::Uuid::new_v4();
+        let initial = start_request(attempt_id);
+        let server_initial = initial.clone();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = accept_hdr_async(socket, |request: &Request, response: Response| {
+                Ok(select_session_subprotocol(request, response))
+            })
+            .await
+            .unwrap();
+            assert_eq!(receive_client_message(&mut socket).await, server_initial);
+            socket
+                .send(Message::Text(
+                    encode_text(&PublicServerMessage::InvocationAccepted {
+                        attempt_id,
+                        idempotency_key: "invocation-key".to_string(),
+                        mappings: vec![PublicStreamMapping {
+                            channel: 4,
+                            direction: PublicStreamDirection::Input,
+                            byte_role: None,
+                            input_high_water: Some(PublicInputHighWater {
+                                sequence: DecimalU64(0),
+                                terminal: false,
+                            }),
+                            provisional_ref: Some(provisional_ref),
+                            stream_token: "input-stream".to_string(),
+                        }],
+                        session_token: "session-token".to_string(),
+                        version: 1,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            while let Some(frame) = socket.next().await {
+                if matches!(frame.unwrap(), Message::Close(_)) {
+                    break;
+                }
+            }
+        });
+
+        let mut session = InvocationSession::open(
+            Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+            None,
+            ReconnectPolicy::Unlimited,
+            InvocationSessionStateSnapshot {
+                delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
+                pending_operation: Some(initial),
+                session_token: None,
+            },
+            false,
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+        let buffer = InputReplayBuffer::new(GENERATED_INPUT_BYTES, GENERATED_INPUT_ITEMS);
+        session
+            .register_input(provisional_ref, None, buffer.clone())
+            .unwrap();
+        session.receive().await.unwrap();
+
+        let server_frame = ServerFrame::Message(PublicServerMessage::StreamCancel {
+            channel: 4,
+            message: Some("stream item does not satisfy its element schema".to_string()),
+            reason: PublicServerCancelReason::InvalidItem,
+            sequence: Some(DecimalU64(2)),
+            version: 1,
+        });
+        let frame = ReceivedFrame {
+            delivery: session.delivery_tracker().delivery(&server_frame).unwrap(),
+            frame: server_frame,
+            _admission: permit(),
+        };
+        let mut decode: Option<Box<GeneratedResultDecoder<()>>> = None;
+        let mut result_tx = None;
+        let mut inputs = HashMap::from([(provisional_ref, buffer)]);
+        let mut input_tasks = HashMap::new();
+        let result = handle_generated_frame(
+            frame,
+            &mut session,
+            None,
+            None,
+            &mut decode,
+            &mut result_tx,
+            &mut inputs,
+            &mut input_tasks,
+            &mut HashMap::new(),
+            &mut HashSet::new(),
+        )
+        .await;
+        let Err(SessionTransportError::InvalidInputItem { sequence, message }) = result else {
+            panic!("expected the rejected input item error, got {result:?}")
+        };
+        assert_eq!(sequence, 2);
+        assert_eq!(message, "stream item does not satisfy its element schema");
+        session.close().await.unwrap();
         server.await.unwrap();
     }
 
