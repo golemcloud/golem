@@ -97,7 +97,7 @@ async fn installed_package_has_no_http_route_until_declared() -> anyhow::Result<
     assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
     let response = client.get(&route).send().await?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.json::<serde_json::Value>().await?, 0);
+    assert_eq!(response.json::<f64>().await?, 0.0);
     Ok(())
 }
 
