@@ -105,9 +105,13 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
                 metadata: Default::default(),
             },
         ]),
-        default_value: Some(
-            r#"{"label":"code","count":31,"literal":"{{ not_a_template }}"}"#.into(),
-        ),
+        default_value: Some(golem_common::schema::SchemaValue::Record {
+            fields: vec![
+                golem_common::schema::SchemaValue::String("code".into()),
+                golem_common::schema::SchemaValue::U32(31),
+                golem_common::schema::SchemaValue::String("{{ not_a_template }}".into()),
+            ],
+        }),
     }];
     let mut incomplete = agents[0].clone();
     incomplete.type_name = AgentTypeName("Incomplete".into());
@@ -131,7 +135,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
                 - source: Local
                   path: [global]
                   value_type: {{ kind: bool, value: {{}} }}
-                  default_value: "true"
+                  default_value: {{ kind: bool, value: true }}
         "#, version = versions::sdk::MANIFEST},
     )
     .unwrap();

@@ -161,7 +161,7 @@ describe("portable static config", () => {
           ).toBe(true)
           expect(leaf.source).toBe("local")
           expect(
-            leaf.defaultValue === undefined ? undefined : JSON.parse(leaf.defaultValue),
+            leaf.defaultValue === undefined ? undefined : SchemaRef.fromImmutableGraph(leaf.declarationGraph, leaf.declarationGraph.root).unpackJson(leaf.defaultValue),
           ).toEqual(
             declaration.default_value === undefined
               ? undefined
@@ -178,14 +178,14 @@ describe("portable static config", () => {
       )
       expect(compiled.declarations([0, 1]).map((declaration) => declaration.defaultValue)).toEqual([
         undefined,
-        "null",
+        schemaValueToWit(v.option(undefined)),
       ])
       const agent = guest
         .discoverAgentTypes()
         .find((agent) => agent.typeName === "EffectStaticDefaultsAgent")!
       const reference = yield* StaticDefaultsConfig.__compile()
-      expect(agent.config.map((declaration) => declaration.defaultValue)).toEqual(
-        corpus.schemas.reference.declarations.map((declaration: any) => declaration.default_value),
+      expect(agent.config.map((declaration) => declaration.defaultValue === undefined ? undefined : new SchemaRef(agent.schema, declaration.valueType).unpackJson(declaration.defaultValue))).toEqual(
+        corpus.schemas.reference.declarations.map((declaration: any) => declaration.default_value === undefined ? undefined : JSON.parse(declaration.default_value)),
       )
       for (const [index, declaration] of agent.config.entries()) {
         expect(declaration.path).toEqual(reference.leaves[index]!.path)
@@ -272,7 +272,7 @@ describe("portable static config", () => {
         ["delivery"],
         ["tree"],
       ])
-      expect(JSON.parse(compiled.leaves[1]!.defaultValue!)).toEqual({
+      expect(SchemaRef.fromImmutableGraph(compiled.leaves[1]!.declarationGraph, compiled.leaves[1]!.declarationGraph.root).unpackJson(compiled.leaves[1]!.defaultValue!)).toEqual({
         deliveryKind: "queue",
         queueName: "limits.support_default",
       })

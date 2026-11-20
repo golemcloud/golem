@@ -135,8 +135,8 @@ export interface ReflectedConfigDeclaration {
   readonly path: ReadonlyArray<string>
   readonly source: "local" | "secret"
   readonly schema: SchemaRef
-  /** Canonical schema JSON; `undefined` means no default, while `"null"` is an explicit default. */
-  readonly defaultValue?: string
+  /** Native static data; `undefined` differs from an option-none value. */
+  readonly defaultValue?: CoreTypes.SchemaValueTree
 }
 
 /** Durable reflected client factory. @since 1.6.0 @category models */

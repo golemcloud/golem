@@ -10,8 +10,8 @@ import { DurabilityModeClient } from "../src/host/DurabilityModeClient.js"
 import { RpcClient, type RpcConnection } from "../src/host/RpcClient.js"
 import { getAgentType, getAgentTypeByAgentId, getAllAgentTypes } from "../src/Reflection.js"
 import { SchemaRef } from "../src/SchemaRef.js"
-import { emptyMetadata, field, t, type SchemaGraph } from "../src/internal/schema-model/model.js"
-import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
+import { emptyMetadata, field, t, v, type SchemaGraph } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { createScopeCard } from "../src/internal/scopeCard.js"
 import { hostInvocationMetadata, sdkInvocationMetadata } from "./invocation-metadata.js"
 
@@ -229,11 +229,11 @@ describe("reflection", () => {
       body: { tag: "option-type", val: valueType },
       metadata,
     })
-    const defaultValue = '{"label":"configured","next":{"label":"last","next":null}}'
+    const defaultValue = v.record([v.string("configured"), v.option(v.record([v.string("last"), v.option(undefined)]))])
     raw.agentType.config = [
-      { path: ["service.config", "tree"], source: "local", valueType, defaultValue },
+      { path: ["service.config", "tree"], source: "local", valueType, defaultValue: schemaValueToWit(defaultValue) },
       { path: ["absent"], source: "local", valueType: optionalType },
-      { path: ["explicitNull"], source: "local", valueType: optionalType, defaultValue: "null" },
+      { path: ["explicitNull"], source: "local", valueType: optionalType, defaultValue: schemaValueToWit(v.option(undefined)) },
     ]
     return Effect.gen(function* () {
       const identity = yield* parse('Recursive("one")')
@@ -250,14 +250,13 @@ describe("reflection", () => {
             defaultValue,
           })),
         ).toEqual([
-          { path: ["service.config", "tree"], source: "local", defaultValue },
+          { path: ["service.config", "tree"], source: "local", defaultValue: schemaValueToWit(defaultValue) },
           { path: ["absent"], source: "local", defaultValue: undefined },
-          { path: ["explicitNull"], source: "local", defaultValue: "null" },
+          { path: ["explicitNull"], source: "local", defaultValue: schemaValueToWit(v.option(undefined)) },
         ])
         const declaration = reflected.config[0]!
         expect(declaration.schema.graph.defs).toBe(reflected.constructorInput.graph.defs)
-        const json = JSON.parse(declaration.defaultValue!)
-        expect(declaration.schema.unpackJson(declaration.schema.packJson(json))).toEqual(json)
+        expect(declaration.schema.unpackJson(declaration.defaultValue!)).toEqual({ label: "configured", next: { label: "last", next: null } })
         expect(Object.isFrozen(declaration)).toBe(true)
       }
     }).pipe(Effect.provide(hostLayer(raw)))

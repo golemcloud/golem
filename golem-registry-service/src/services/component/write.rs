@@ -2543,7 +2543,7 @@ mod tests {
     fn standalone_component_config_validates_code_defaults() {
         let mut schema = bool_component_schema(AgentConfigSource::Local);
         schema.declarations[0].path = vec!["enabled".into()];
-        schema.declarations[0].default_value = Some("false".into());
+        schema.declarations[0].default_value = Some(golem_common::schema::SchemaValue::Bool(false));
         validate_component_config_schema(&schema, &[]).unwrap();
         let captured = validate_and_transform_component_config_entries(&schema, vec![]).unwrap();
         assert_eq!(captured.len(), 1);
@@ -2565,13 +2565,15 @@ mod tests {
             explicit[0].value.value(),
             &golem_common::schema::SchemaValue::Bool(true)
         );
-        schema.declarations[0].default_value = Some("\"false\"".into());
+        schema.declarations[0].default_value =
+            Some(golem_common::schema::SchemaValue::String("false".into()));
         let error = validate_component_config_schema(&schema, &[]).unwrap_err();
         assert!(matches!(error, ComponentError::InvalidComponentConfig(_)));
 
         schema.declarations[0].source = AgentConfigSource::Secret;
         schema.declarations[0].value_type = SchemaType::secret(Default::default());
-        schema.declarations[0].default_value = Some("null".into());
+        schema.declarations[0].default_value =
+            Some(golem_common::schema::SchemaValue::Option { inner: None });
         let error = validate_component_config_schema(&schema, &[]).unwrap_err();
         assert!(error.to_string().contains("cannot declare code defaults"));
     }
@@ -2585,7 +2587,7 @@ mod tests {
 
         for agent_owner in [false, true] {
             let mut schema = bool_component_schema(AgentConfigSource::Local);
-            schema.declarations[0].default_value = Some("false".into());
+            schema.declarations[0].default_value = Some(SchemaValue::Bool(false));
             let mut supplied = schema.declarations[0].clone();
             supplied.path = vec!["feature".into(), "other".into()];
             supplied.default_value = None;
@@ -2635,7 +2637,7 @@ mod tests {
             assert_eq!(default.value.value(), &SchemaValue::Bool(false));
 
             // Explicitly resubmitted values take precedence over changed code defaults.
-            schema.declarations[0].default_value = Some("true".into());
+            schema.declarations[0].default_value = Some(SchemaValue::Bool(true));
             let retained = stage(
                 &schema,
                 captured
@@ -2677,7 +2679,7 @@ mod tests {
             assert_eq!(recaptured.len(), 1);
             assert_eq!(recaptured[0].value.value(), &SchemaValue::Bool(true));
 
-            schema.declarations[0].default_value = Some("\"not a bool\"".into());
+            schema.declarations[0].default_value = Some(SchemaValue::String("not a bool".into()));
             assert!(stage(&schema, vec![]).is_err());
         }
     }

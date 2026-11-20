@@ -110,7 +110,7 @@ export interface ConfigLeaf {
   readonly declarationGraph: SchemaGraph
   readonly required: boolean
   readonly static?: boolean
-  readonly defaultValue?: string
+  readonly defaultValue?: CoreTypes.SchemaValueTree
 }
 
 export interface CompiledConfig {
@@ -238,15 +238,11 @@ export const compileConfig = (
             "defaultValue" in field
               ? yield* Effect.try({
                   try: () =>
-                    JSON.stringify(
-                      ref.unpackJson(
-                        Effect.runSync(
-                          codec.encode(field.defaultValue) as Effect.Effect<
-                            CoreTypes.SchemaValueTree,
-                            Schema.SchemaError
-                          >,
-                        ),
-                      ),
+                    Effect.runSync(
+                      codec.encode(field.defaultValue) as Effect.Effect<
+                        CoreTypes.SchemaValueTree,
+                        Schema.SchemaError
+                      >,
                     ),
                   catch: () =>
                     new UnsupportedSchemaError(
