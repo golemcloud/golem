@@ -327,3 +327,103 @@ fn user_with_empty_effective_surface_cannot_authorize_account_permission() {
 
     assert!(ctx.authorize_permission(&permission).is_err());
 }
+
+mod authorizer {
+    use super::super::Authorizer;
+    use assert2::assert;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::authority::{
+        AgentTarget, AuthorizationRequest, CatalogOperation, Decision, Denial, DesignatedKind,
+        EnvironmentTarget, Operation, Resource, Scope, Target,
+    };
+    use golem_common::model::caller::Caller;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::{AgentFingerprint, AgentId};
+    use std::sync::Arc;
+    use test_r::test;
+    use uuid::Uuid;
+
+    /// Answers every decision the same way and shows only the targets it was given.
+    struct FixedAuthorizer {
+        decision: Decision,
+        visible: Vec<Target>,
+    }
+
+    #[async_trait::async_trait]
+    impl Authorizer for FixedAuthorizer {
+        async fn decide(&self, _request: &AuthorizationRequest) -> Decision {
+            self.decision.clone()
+        }
+
+        async fn filter(
+            &self,
+            _request: &AuthorizationRequest,
+            targets: Vec<Target>,
+        ) -> Vec<Target> {
+            targets
+                .into_iter()
+                .filter(|target| self.visible.contains(target))
+                .collect()
+        }
+
+        async fn scope(&self, _request: &AuthorizationRequest) -> Scope {
+            Scope {
+                whole_environment: false,
+                agent_types: vec![AgentTypeName("Report".to_string())],
+                tools: vec![],
+                agents: vec![],
+            }
+        }
+    }
+
+    fn agent(name: &str) -> Target {
+        Target::Agent(AgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(0xe0)),
+            agent_type: AgentTypeName("Report".to_string()),
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::from_u128(0xc0)),
+                agent_id: format!("Report(\"{name}\")"),
+            },
+            fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
+        })
+    }
+
+    #[test]
+    async fn an_authorizer_is_shared_as_a_trait_object_and_answers_decide_filter_and_scope() {
+        let denial = Decision::Deny(Denial::LooksUnknown {
+            kind: DesignatedKind::Agent,
+        });
+        let authorizer: Arc<dyn Authorizer> = Arc::new(FixedAuthorizer {
+            decision: denial.clone(),
+            visible: vec![agent("r1")],
+        });
+        let listing = AuthorizationRequest::new(
+            Caller::anonymous(),
+            Operation::single(
+                CatalogOperation::ListAgents,
+                Resource::None,
+                Target::Environment(EnvironmentTarget {
+                    account_id: AccountId(Uuid::from_u128(0xacc0)),
+                    application_id: ApplicationId(Uuid::from_u128(0xa0)),
+                    environment_id: EnvironmentId(Uuid::from_u128(0xe0)),
+                }),
+            )
+            .unwrap(),
+        );
+
+        assert!(authorizer.decide(&listing).await == denial);
+        assert!(
+            authorizer
+                .filter(&listing, vec![agent("r1"), agent("r2")])
+                .await
+                == vec![agent("r1")]
+        );
+        assert!(
+            authorizer.scope(&listing).await.agent_types
+                == vec![AgentTypeName("Report".to_string())]
+        );
+    }
+}

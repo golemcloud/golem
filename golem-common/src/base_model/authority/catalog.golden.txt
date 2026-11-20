@@ -1,0 +1,142 @@
+# Classes and their verbs, in encoding order.
+filesystem: read write list stat delete mount
+network: connect prove-identity
+oplog: read
+secret: hold reveal view create update delete
+principal-secret: hold reveal update
+agent: create invoke exec view delete interrupt resume update-revision fork revert activate-processor deactivate-processor simulate-crash limit replay close-webhook
+tool: invoke view limit interrupt resume close-webhook
+invocation: read cancel send
+promise: send
+webhook: send
+artifact: read unpublish view
+quota: reserve view create update delete restore
+kv: read write delete list
+blob: read write delete list
+rdbms: query mutate unanalyzed
+card: install revoke inspect
+plan: view create update
+account: view view-plan update delete set-plan create configure-sign-in view-account-counts-report view-account-summaries-report create-api-tokens view-api-tokens revoke-api-tokens set-override-expiry set-spend-mode limit view-installation
+account-usage: view update
+account.permission-share: view create update delete
+account.domain-registration: view create delete
+application: view create update delete assert-identity
+environment: view create update delete deploy rollback view-deployment view-deployment-plan view-agent-types view-tools write-deployment-record
+environment.domain-registration: view create delete
+environment.initial-files: view update delete list
+environment.kv-bucket: view create delete clear
+environment.blob-bucket: view create delete clear
+component: view create update delete
+package: publish read de-publish restore deprecate attach-card
+domain: publish
+protocol: publish
+
+# Operations, in encoding order. A part is `class : verb [resource] @ targets`, with the allowed owner kinds in parentheses.
+create-agent: agent : create [none] @ agent
+invoke-agent: agent : invoke [method] @ agent
+invoke-tool: tool : invoke [command] @ tool
+hosted-exec: agent : exec [none] @ agent ; tool : invoke [command] @ tool
+retry-agent-invocation: invocation : read [none] @ invocation (agent) ; agent : invoke [method] @ agent
+retry-tool-invocation: invocation : read [none] @ invocation (tool) ; tool : invoke [command] @ tool
+read-invocation: invocation : read [none] @ invocation
+cancel-invocation: invocation : cancel [none] @ invocation
+send-invocation-input: invocation : send [none] @ invocation
+list-invocations: invocation : read [none] @ agent | tool | environment
+read-task: invocation : read [none] @ task
+cancel-task: invocation : cancel [none] @ task
+send-task-input: invocation : send [none] @ task
+read-stream: invocation : read [none] @ stream
+append-stream: invocation : send [none] @ stream
+send-to-promise: promise : send [none] @ promise
+send-to-webhook: webhook : send [none] @ webhook
+read-artifact: artifact : read [none] @ artifact
+read-tool-files: tool : invoke [all] @ tool
+view-agent: agent : view [none] @ agent
+read-agent-oplog: oplog : read [none] @ agent
+read-tool-invocation-oplog: oplog : read [none] @ invocation (tool)
+list-agents: agent : view [none] @ environment
+delete-agent: agent : delete [none] @ agent
+interrupt-agent: agent : interrupt [none] @ agent
+resume-agent: agent : resume [none] @ agent
+update-agent-revision: agent : update-revision [none] @ agent
+fork-agent: agent : fork [none] @ agent
+revert-agent: agent : revert [none] @ agent
+activate-processor: agent : activate-processor [none] @ agent
+deactivate-processor: agent : deactivate-processor [none] @ agent
+simulate-crash: agent : simulate-crash [none] @ agent
+replay-agent: agent : replay [none] @ agent
+interrupt-tool-invocation: tool : interrupt [none] @ invocation (tool)
+resume-tool-invocation: tool : resume [none] @ invocation (tool)
+list-agent-webhooks: agent : view [none] @ agent
+list-tool-webhooks: tool : view [none] @ tool
+close-agent-webhook: agent : close-webhook [none] @ webhook (agent)
+close-tool-webhook: tool : close-webhook [none] @ webhook (tool)
+limit-agent: agent : limit [none] @ agent
+limit-tool: tool : limit [none] @ tool
+limit-account: account : limit [none] @ account
+add-volume: filesystem : mount [path] @ agent | tool
+remove-volume: filesystem : mount [path] @ agent | tool
+list-files: filesystem : list [path] @ agent | tool
+read-file: filesystem : read [path] @ agent | tool
+read-live-file: filesystem : read [path] @ agent | tool
+unpublish-artifact: artifact : unpublish [none] @ artifact
+list-artifacts: artifact : view [none] @ environment
+filesystem-read: filesystem : read [path] @ agent | tool
+filesystem-write: filesystem : write [path] @ agent | tool
+filesystem-list: filesystem : list [path] @ agent | tool
+filesystem-stat: filesystem : stat [path] @ agent | tool
+filesystem-delete: filesystem : delete [path] @ agent | tool
+network-connect: network : connect [destination] @ account
+prove-identity: network : prove-identity [destination] @ account
+hold-secret: secret : hold [path] @ environment
+reveal-secret: secret : reveal [path] @ environment
+hold-principal-secret: principal-secret : hold [path] @ agent | tool
+reveal-principal-secret: principal-secret : reveal [path] @ agent | tool
+reserve-quota: quota : reserve [name] @ environment
+kv-read: kv : read [store] @ environment
+kv-write: kv : write [store] @ environment
+kv-delete: kv : delete [store] @ environment
+kv-list: kv : list [store] @ environment
+blob-read: blob : read [store] @ environment
+blob-write: blob : write [store] @ environment
+blob-delete: blob : delete [store] @ environment
+blob-list: blob : list [store] @ environment
+rdbms-query: rdbms : query [database] @ environment
+rdbms-mutate: rdbms : mutate [database] @ environment
+rdbms-unanalyzed: rdbms : unanalyzed [database] @ environment
+view-secret: secret : view [path] @ environment
+create-secret: secret : create [path] @ environment
+update-secret: secret : update [path] @ environment
+delete-secret: secret : delete [path] @ environment
+update-principal-secret: principal-secret : update [path] @ agent | tool
+create-account: account : create [none] @ account
+update-account: account : update [none] @ account
+configure-sign-in: account : configure-sign-in [none] @ account
+view-account-counts-report: account : view-account-counts-report [none] @ account
+view-account-summaries-report: account : view-account-summaries-report [none] @ account
+create-api-tokens: account : create-api-tokens [none] @ account
+list-api-tokens: account : view-api-tokens [all] @ account
+view-api-token: account : view-api-tokens [api-token] @ account
+revoke-api-token: account : revoke-api-tokens [api-token] @ account
+set-override-expiry: account : set-override-expiry [none] @ account ; account-usage : update [none] @ account
+set-spend-mode: account : set-spend-mode [name] @ account
+view-installation: account : view-installation [none] @ account
+create-application: application : create [none] @ account
+create-environment: environment : create [none] @ application
+deploy-environment: environment : deploy [none] @ environment
+register-host: environment.domain-registration : create [name] @ environment
+register-wildcard-domain: account.domain-registration : create [name] @ account
+list-wildcard-domains: account.domain-registration : view [all] @ account
+delete-wildcard-domain: account.domain-registration : delete [name] @ account
+publish-domain: domain : publish [name] @ environment
+publish-protocol: protocol : publish [name] @ environment
+publish-package: package : publish [none] @ account
+read-package: package : read [none] @ package
+de-publish-package: package : de-publish [none] @ package
+restore-package: package : restore [none] @ package
+deprecate-package: package : deprecate [none] @ package
+attach-package-card: package : attach-card [none] @ package
+install-card: card : install [pair] @ environment | account | invocation | promise | webhook | artifact
+revoke-card: card : revoke [card] @ environment | account | invocation | promise | webhook | artifact
+inspect-card: card : inspect [card] @ environment | account | invocation | promise | webhook | artifact
+list-card-tokens: card : revoke [card] @ environment | account | invocation | promise | webhook | artifact

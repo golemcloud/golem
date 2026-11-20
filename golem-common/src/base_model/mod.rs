@@ -21,6 +21,7 @@ pub mod agent_secret;
 pub mod api;
 pub mod application;
 pub mod auth;
+pub mod authority;
 pub mod base64;
 pub mod caller;
 pub mod card;
