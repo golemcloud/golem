@@ -34,6 +34,7 @@ use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey, OwnedI
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
+use std::time::SystemTime;
 use tracing::warn;
 
 /// The filters and page of an invocation listing.
@@ -99,11 +100,13 @@ impl WorkerService {
             states: query
                 .states
                 .into_iter()
-                .map(|state| state_to_proto(state) as i32)
+                .map(|state| executor::InvocationLifecycleState::from(state) as i32)
                 .collect(),
-            kind: query.kind.map(|kind| kind_to_proto(kind) as i32),
-            since: query.since.map(timestamp_to_proto),
-            until: query.until.map(timestamp_to_proto),
+            kind: query
+                .kind
+                .map(|kind| executor::InvocationKind::from(kind) as i32),
+            since: query.since.map(|since| SystemTime::from(since).into()),
+            until: query.until.map(|until| SystemTime::from(until).into()),
             page_size: query.page_size.unwrap_or(0),
             cursor: query.cursor.map(|value| Cursor { value }),
             ..Default::default()
@@ -354,25 +357,12 @@ fn summary_from_proto(
         agent_id.clone(),
         golem_common::model::InvocationId(id.into()),
     );
-    let state = match executor::InvocationLifecycleState::try_from(summary.state) {
-        Ok(executor::InvocationLifecycleState::Pending) => InvocationState::Pending,
-        Ok(executor::InvocationLifecycleState::Scheduled) => InvocationState::Scheduled,
-        Ok(executor::InvocationLifecycleState::Running) => InvocationState::Running,
-        Ok(executor::InvocationLifecycleState::Waiting) => InvocationState::Waiting,
-        Ok(executor::InvocationLifecycleState::Retrying) => InvocationState::Retrying,
-        Ok(executor::InvocationLifecycleState::Interrupted) => InvocationState::Interrupted,
-        Ok(executor::InvocationLifecycleState::Completed) => InvocationState::Completed,
-        Ok(executor::InvocationLifecycleState::Failed) => InvocationState::Failed,
-        Ok(executor::InvocationLifecycleState::Cancelled) => InvocationState::Cancelled,
-        Ok(executor::InvocationLifecycleState::Unspecified) | Err(_) => {
-            return Err(invalid("state"));
-        }
-    };
-    let kind = match executor::InvocationKind::try_from(summary.kind) {
-        Ok(executor::InvocationKind::Method) => Some(InvocationKind::Method),
-        Ok(executor::InvocationKind::Constructor) => Some(InvocationKind::Constructor),
-        Ok(executor::InvocationKind::Tool) => Some(InvocationKind::Tool),
-        Ok(executor::InvocationKind::Unspecified) | Err(_) => None,
+    let state = InvocationState::try_from(summary.state).map_err(|_| invalid("state"))?;
+    let kind = InvocationKind::try_from(summary.kind).ok();
+    let timestamp = |timestamp: prost_types::Timestamp| {
+        SystemTime::try_from(timestamp)
+            .map(DateTime::<Utc>::from)
+            .map_err(|_| invalid("timestamp"))
     };
     Ok(InvocationSummary {
         invocation_id: invocation_id.to_string(),
@@ -381,46 +371,70 @@ fn summary_from_proto(
         state,
         kind,
         operation: summary.operation,
-        accepted_at: summary.accepted_at.map(timestamp_from_proto).transpose()?,
-        changed_at: timestamp_from_proto(
-            summary.changed_at.ok_or_else(|| invalid("change time"))?,
-        )?,
+        accepted_at: summary.accepted_at.map(timestamp).transpose()?,
+        changed_at: timestamp(summary.changed_at.ok_or_else(|| invalid("change time"))?)?,
     })
 }
 
-fn timestamp_from_proto(timestamp: prost_types::Timestamp) -> WorkerResult<DateTime<Utc>> {
-    u32::try_from(timestamp.nanos)
-        .ok()
-        .and_then(|nanos| DateTime::from_timestamp(timestamp.seconds, nanos))
-        .ok_or_else(|| WorkerServiceError::Internal("invalid invocation timestamp".to_string()))
-}
-
-fn timestamp_to_proto(timestamp: DateTime<Utc>) -> prost_types::Timestamp {
-    prost_types::Timestamp {
-        seconds: timestamp.timestamp(),
-        nanos: timestamp.timestamp_subsec_nanos() as i32,
+impl From<InvocationState> for executor::InvocationLifecycleState {
+    fn from(state: InvocationState) -> Self {
+        match state {
+            InvocationState::Pending => Self::Pending,
+            InvocationState::Scheduled => Self::Scheduled,
+            InvocationState::Running => Self::Running,
+            InvocationState::Waiting => Self::Waiting,
+            InvocationState::Retrying => Self::Retrying,
+            InvocationState::Interrupted => Self::Interrupted,
+            InvocationState::Completed => Self::Completed,
+            InvocationState::Failed => Self::Failed,
+            InvocationState::Cancelled => Self::Cancelled,
+        }
     }
 }
 
-fn state_to_proto(state: InvocationState) -> executor::InvocationLifecycleState {
-    match state {
-        InvocationState::Pending => executor::InvocationLifecycleState::Pending,
-        InvocationState::Scheduled => executor::InvocationLifecycleState::Scheduled,
-        InvocationState::Running => executor::InvocationLifecycleState::Running,
-        InvocationState::Waiting => executor::InvocationLifecycleState::Waiting,
-        InvocationState::Retrying => executor::InvocationLifecycleState::Retrying,
-        InvocationState::Interrupted => executor::InvocationLifecycleState::Interrupted,
-        InvocationState::Completed => executor::InvocationLifecycleState::Completed,
-        InvocationState::Failed => executor::InvocationLifecycleState::Failed,
-        InvocationState::Cancelled => executor::InvocationLifecycleState::Cancelled,
+impl TryFrom<i32> for InvocationState {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match executor::InvocationLifecycleState::try_from(value) {
+            Ok(executor::InvocationLifecycleState::Pending) => Ok(Self::Pending),
+            Ok(executor::InvocationLifecycleState::Scheduled) => Ok(Self::Scheduled),
+            Ok(executor::InvocationLifecycleState::Running) => Ok(Self::Running),
+            Ok(executor::InvocationLifecycleState::Waiting) => Ok(Self::Waiting),
+            Ok(executor::InvocationLifecycleState::Retrying) => Ok(Self::Retrying),
+            Ok(executor::InvocationLifecycleState::Interrupted) => Ok(Self::Interrupted),
+            Ok(executor::InvocationLifecycleState::Completed) => Ok(Self::Completed),
+            Ok(executor::InvocationLifecycleState::Failed) => Ok(Self::Failed),
+            Ok(executor::InvocationLifecycleState::Cancelled) => Ok(Self::Cancelled),
+            Ok(executor::InvocationLifecycleState::Unspecified) | Err(_) => {
+                Err(format!("invalid invocation state {value}"))
+            }
+        }
     }
 }
 
-fn kind_to_proto(kind: InvocationKind) -> executor::InvocationKind {
-    match kind {
-        InvocationKind::Method => executor::InvocationKind::Method,
-        InvocationKind::Constructor => executor::InvocationKind::Constructor,
-        InvocationKind::Tool => executor::InvocationKind::Tool,
+impl From<InvocationKind> for executor::InvocationKind {
+    fn from(kind: InvocationKind) -> Self {
+        match kind {
+            InvocationKind::Method => Self::Method,
+            InvocationKind::Constructor => Self::Constructor,
+            InvocationKind::Tool => Self::Tool,
+        }
+    }
+}
+
+impl TryFrom<i32> for InvocationKind {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match executor::InvocationKind::try_from(value) {
+            Ok(executor::InvocationKind::Method) => Ok(Self::Method),
+            Ok(executor::InvocationKind::Constructor) => Ok(Self::Constructor),
+            Ok(executor::InvocationKind::Tool) => Ok(Self::Tool),
+            Ok(executor::InvocationKind::Unspecified) | Err(_) => {
+                Err(format!("invalid invocation kind {value}"))
+            }
+        }
     }
 }
 
