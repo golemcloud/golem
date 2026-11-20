@@ -1245,6 +1245,9 @@ async fn p2_tcp_write_error_replays_and_is_not_sent_again(
         .expect("the failed write is recorded");
     // Linux reports the reset to the next write; macOS may report the stream closed instead,
     // which has no code.
+    if cfg!(target_os = "linux") {
+        assert_ne!(error, "closed", "Linux reports the reset");
+    }
     if error != "closed" {
         assert!(
             error.starts_with("last-operation-failed: "),
@@ -1269,7 +1272,8 @@ fn assert_records_reset_code(end: &str) {
 }
 
 /// A read error is recorded with the socket error code of the native stream. The peer resets
-/// the connection while the agent waits in a read; replay after a restart returns the same error.
+/// the connection while the agent waits in a read. A restart replays the recorded failure, so
+/// the next read of the lost stream reports it closed, as the native stream did.
 #[test]
 #[timeout("3m")]
 async fn p2_tcp_read_error_records_its_code_and_replays(
@@ -1306,17 +1310,20 @@ async fn p2_tcp_read_error_records_its_code_and_replays(
     let read: Result<Vec<u8>, String> = session
         .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
         .await?;
-    let ends = ends_of(
-        &session.oplog().await?,
-        "sockets::tcp::input_stream::blocking_read",
-    );
-    let failed = ends
-        .iter()
-        .find(|end| end.contains("Result(Err {"))
-        .expect("the failed read is recorded");
     // Linux reports the reset to the read; another OS may report the end of the stream, which
     // the component returns as the bytes read so far.
+    if cfg!(target_os = "linux") {
+        assert!(read.is_err(), "the read reports the reset: {read:?}");
+    }
     if read.is_err() {
+        let ends = ends_of(
+            &session.oplog().await?,
+            "sockets::tcp::input_stream::blocking_read",
+        );
+        let failed = ends
+            .iter()
+            .find(|end| end.contains("Result(Err {"))
+            .expect("the failed read is recorded");
         assert_records_reset_code(failed);
     }
 
@@ -1324,10 +1331,11 @@ async fn p2_tcp_read_error_records_its_code_and_replays(
     let replayed: Result<Vec<u8>, String> = session
         .call("p2_tcp_receive", data_value!("a".to_string(), 3u32))
         .await?;
+    // The component returns a closed stream as the bytes read so far.
     assert_eq!(
         replayed,
-        Err("last-operation-failed: connection reset".to_string()),
-        "after the restart the connection is lost"
+        Ok(Vec::new()),
+        "after the restart the replayed read failure leaves the lost stream closed"
     );
     session.finish().await
 }

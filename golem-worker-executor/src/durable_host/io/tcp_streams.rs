@@ -18,7 +18,8 @@
 //!
 //! Replay returns the recorded results and touches no stream: the connection of a replayed
 //! stream is lost, and its stream is a stand-in from `sockets::tcp`. An incomplete call runs on
-//! that stand-in again, which fails with `connection-reset` and sends nothing.
+//! that stand-in again, which fails with `connection-reset` and sends nothing. A replayed failure
+//! counts as the stand-in's first failure, so its next operation reports a closed stream.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
@@ -93,6 +94,32 @@ impl TcpStream {
                 .is::<LostTcpOutputStream>(),
         })
     }
+
+    /// Makes a lost stand-in fail its first operation, which a replayed failure stands for, so
+    /// its next operation reports a closed stream, as the native stream did after that failure.
+    fn report_replayed_failure<Ctx: WorkerCtx>(
+        self,
+        ctx: &mut DurableWorkerCtx<Ctx>,
+    ) -> wasmtime::Result<()> {
+        match self {
+            Self::Input(rep) => {
+                let _ = wasmtime_wasi::p2::InputStream::read(
+                    &mut **ctx
+                        .table()
+                        .get_mut(&Resource::<InputStream>::new_borrow(rep))?,
+                    0,
+                );
+            }
+            Self::Output(rep) => {
+                let _ = wasmtime_wasi::p2::OutputStream::check_write(
+                    &mut **ctx
+                        .table()
+                        .get_mut(&Resource::<OutputStream>::new_borrow(rep))?,
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 fn connection_lost() -> StreamError {
@@ -130,7 +157,13 @@ where
     } else {
         match call.replay(ctx).await? {
             CallReplayOutcome::Replayed(recorded) => {
-                return recorded.into_result().map_err(StreamError::from);
+                let result = recorded.into_result();
+                if result.is_err() && stream.is_lost(ctx).map_err(StreamError::Trap)? {
+                    stream
+                        .report_replayed_failure(ctx)
+                        .map_err(StreamError::Trap)?;
+                }
+                return result.map_err(StreamError::from);
             }
             CallReplayOutcome::Incomplete(call) => (call, false),
         }
