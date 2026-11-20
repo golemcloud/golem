@@ -52,6 +52,9 @@ use golem_common::schema::{
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
+#[path = "moonbit_recovery.rs"]
+mod recovery;
+
 /// Builds the structural multimodal schema type `list<variant<…> Role::Multimodal>`
 /// from `(case_name, payload)` modalities.
 fn multimodal(cases: Vec<(&str, SchemaType)>) -> SchemaType {
@@ -3320,7 +3323,6 @@ test "agent failures surface stderr and still reject unknown members" {
 #[test]
 #[test_r::timeout("300s")]
 async fn accepted_streaming_invocation_recovers_with_takeover() {
-    use std::io::BufRead;
     let pkg = GeneratedPackage::new(agent(
         "RecoveryAgent",
         "rust",
@@ -3383,25 +3385,12 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
             STABLE,
         ),
     ] {
-        let mut server = std::process::Command::new("python3")
-            .arg("-u")
-            .arg(
-                workspace_root()
-                    .unwrap()
-                    .join("cli/golem-cli/tests/bridge_gen/moonbit_recovery.py"),
-            )
-            .arg(mode)
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut port = String::new();
-        std::io::BufReader::new(server.stdout.take().unwrap())
-            .read_line(&mut port)
-            .unwrap();
+        eprintln!("MoonBit recovery mode: {mode}");
+        let server = recovery::RecoveryServer::start(mode);
         std::fs::write(
             pkg.module_dir().join("runtime/recovery_wbtest.mbt"),
             include_str!("moonbit_recovery.mbt")
-                .replace("__PORT__", port.trim())
+                .replace("__PORT__", &server.port.to_string())
                 .replace("__MODE__", mode)
                 .replace("__ERROR__", expected_error)
                 .replace("__RECONNECT__", reconnect)
@@ -3417,15 +3406,8 @@ async fn accepted_streaming_invocation_recovers_with_takeover() {
                 ),
         )
         .unwrap();
-        let result = std::panic::catch_unwind(|| pkg.test_native());
-        if result.is_err() {
-            let _ = server.kill();
-        }
-        let status = server.wait().unwrap();
-        if let Err(error) = result {
-            std::panic::resume_unwind(error);
-        }
-        assert!(status.success(), "WebSocket recovery assertions failed");
+        pkg.test_native();
+        server.finish();
     }
 }
 
