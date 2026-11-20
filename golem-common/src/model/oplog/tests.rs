@@ -53,7 +53,7 @@ use crate::model::oplog::{
     PublicSnapshotData, PublicSpanAttributes, PublicSpanData, PublicSpanFinished, PublicSpanKind,
     PublicSpanLink, PublicSpanOutcome, PublicSpanStarted, PublicToolInvocationOperation,
     PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription,
+    SnapshotBasedUpdateParameters, StringAttributeValue, UpdateDescription, UpdateFailureClass,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -872,6 +872,7 @@ fn create_serialization_poem_serde_equivalence() {
         }]),
         original_phantom_id: None,
         instance_id: Uuid::new_v4(),
+        never_live: true,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -907,6 +908,7 @@ fn create_serialization_poem_serde_equivalence() {
         assert!(super::OplogEnrichmentEntry::try_from(proto).is_err());
     }
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    assert_eq!(PublicOplogEntry::try_from(proto.clone()).unwrap(), entry);
     let projected = super::OplogEnrichmentEntry::try_from(proto).unwrap();
     assert_eq!(
         projected,
@@ -925,6 +927,7 @@ fn create_serialization_poem_serde_equivalence() {
     assert_eq!(timestamp, supplied.timestamp);
     assert_eq!(parameters.agent_id, supplied.agent_id);
     assert_eq!(parameters.instance_id, supplied.instance_id);
+    assert!(parameters.never_live);
     assert_eq!(parameters.component_revision, supplied.component_revision);
     assert_eq!(
         parameters.local_agent_config[0].path,
@@ -1012,6 +1015,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                     original_phantom_id: None,
                     instance_id: Uuid::new_v4(),
                     create_request: requests.next().unwrap(),
+                    never_live: agent_type_name.is_some(),
                 }),
             };
             let bytes = crate::serialization::serialize(&entry).unwrap();
@@ -1022,6 +1026,12 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             let mut proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
                 entry.clone().try_into().unwrap();
             assert_eq!(OplogEntry::try_from(proto.clone()).unwrap(), entry);
+            let OplogEnrichmentEntry::CreateProjection { parameters, .. } =
+                OplogEnrichmentEntry::from(entry.clone())
+            else {
+                unreachable!()
+            };
+            assert_eq!(parameters.never_live, agent_type_name.is_some());
             for owner_kind in [
                 OwnerKind::ComponentAgent,
                 OwnerKind::EphemeralExternalTool,
@@ -1945,6 +1955,11 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
             source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: OplogIndex::from_u64(3),
         }),
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: crate::model::oplog::protobuf::tests::replay_divergence_tests::divergences()
+            .into_iter()
+            .next()
+            .map(Box::new),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1961,10 +1976,36 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         details: None,
         update_attempt_index: None,
         snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Other,
+        divergence: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn failed_update_redacts_the_capabilities_in_the_divergence_requests() {
+    use crate::base_model::oplog::replay_divergence_test_values::{
+        assert_requests_redacted, divergence_with_nested_capabilities,
+    };
+
+    let mut entry = PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision::new(1).unwrap(),
+        details: None,
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: None,
+        failure_class: UpdateFailureClass::Divergence,
+        divergence: Some(Box::new(divergence_with_nested_capabilities())),
+    });
+
+    entry.redact_host_managed_values_for_external();
+
+    let PublicOplogEntry::FailedUpdate(params) = entry else {
+        unreachable!()
+    };
+    assert_requests_redacted(params.divergence.as_ref().unwrap());
 }
 
 #[test]

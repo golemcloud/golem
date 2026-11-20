@@ -19,7 +19,7 @@ use crate::base_model::caller::{
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::tool::ToolName;
-use crate::model::oplog::{AgentResourceId, OplogErrorKind};
+use crate::model::oplog::{AgentResourceId, OplogErrorKind, ReplayDivergence};
 use crate::model::regions::OplogRegion;
 use crate::model::{AgentResourceDescription, OplogIndex};
 use golem_schema::Empty;
@@ -955,6 +955,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for AgentMetad
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()?,
             status: value.status.try_into()?,
+            underlying_status: value
+                .underlying_status
+                .map(crate::model::AgentStatus::try_from)
+                .transpose()?,
             component_revision: value.component_revision.try_into()?,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -1033,6 +1037,7 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             status: value.status.into(),
+            underlying_status: value.underlying_status.map(Into::into),
             component_revision: value.component_revision.into(),
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
@@ -1090,10 +1095,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateRecord> for UpdateRecor
                 Ok(Self::FailedUpdate(FailedUpdate {
                     timestamp,
                     target_revision,
-                    details: { failed.details },
+                    details: failed.details,
                     pending_update_index,
                     mode,
                     snapshot_assisted_details,
+                    failure_class: crate::model::oplog::UpdateFailureClass::from_proto_number(
+                        failed.failure_class,
+                    )?,
+                    divergence: failed
+                        .divergence
+                        .map(|divergence| ReplayDivergence::try_from(divergence).map(Box::new))
+                        .transpose()?,
                 }))
             }
             golem_api_grpc::proto::golem::worker::update_record::Update::Pending(_) => {
@@ -1128,12 +1140,19 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
                 pending_update_index,
                 mode,
                 snapshot_assisted_details,
+                failure_class,
+                divergence,
             }) => Self {
                 timestamp: Some(timestamp.into()),
                 target_revision: target_revision.into(),
                 update: Some(
                     golem_api_grpc::proto::golem::worker::update_record::Update::Failed(
-                        golem_api_grpc::proto::golem::worker::FailedUpdate { details },
+                        golem_api_grpc::proto::golem::worker::FailedUpdate {
+                            details,
+                            failure_class: failure_class.proto_number(),
+                            divergence: divergence
+                                .map(|divergence| (*divergence).into_proto_keeping_structure()),
+                        },
                     ),
                 ),
                 pending_update_index: pending_update_index.map(Into::into),

@@ -1357,6 +1357,7 @@ pub(in crate::durable_host) fn expired_wallet_card_ids_at<'a>(
 }
 
 pub(crate) fn apply_invocation_wallet_pin(
+    oplog_index: OplogIndex,
     wallet: &mut WalletCards,
     wallet_id_hash: [u8; 32],
     generation: &mut u64,
@@ -1364,6 +1365,7 @@ pub(crate) fn apply_invocation_wallet_pin(
 ) -> Result<bool, WorkerExecutorError> {
     if wallet_pin.wallet_token.wallet_id_hash != wallet_id_hash {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
+            oplog_index,
             "invocation wallet pin for the local wallet",
             "wallet identity hash does not match the replaying agent",
         ));
@@ -1374,12 +1376,14 @@ pub(crate) fn apply_invocation_wallet_pin(
         .any(|card_ids| card_ids[0] >= card_ids[1])
     {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
+            oplog_index,
             "canonically ordered invocation wallet pin",
             "pinned card ids are not strictly increasing",
         ));
     }
     if wallet_pin.wallet_token.generation < *generation {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
+            oplog_index,
             "non-decreasing invocation wallet generation",
             format!(
                 "pinned generation {} is behind replayed generation {}",
@@ -1401,6 +1405,7 @@ pub(crate) fn apply_invocation_wallet_pin(
     for card_id in &wallet_pin.pinned_card_ids {
         if !wallet.contains_key(card_id) {
             return Err(WorkerExecutorError::unexpected_oplog_entry(
+                oplog_index,
                 "invocation wallet pin backed by replayed card definitions",
                 format!("pinned card {card_id} is missing from the replayed wallet"),
             ));
@@ -1420,11 +1425,13 @@ pub(crate) fn apply_invocation_wallet_pin(
 }
 
 pub(crate) fn adopt_recorded_wallet_generation(
+    oplog_index: OplogIndex,
     generation: &mut u64,
     recorded_generation: u64,
 ) -> Result<(), WorkerExecutorError> {
     if recorded_generation < *generation {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
+            oplog_index,
             "non-decreasing wallet generation",
             format!(
                 "recorded generation {recorded_generation} is behind replayed generation {}",

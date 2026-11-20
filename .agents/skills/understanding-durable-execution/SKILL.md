@@ -32,7 +32,11 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
    to other owners; see "Entry ownership". Operator-reverted entries are excluded). The axiom is about
    replaying the *same* execution contract; replaying old history against a changed component
    during an `Automatic` update may legitimately diverge, and that is reported as `FailedUpdate`,
-   not tolerated.
+   not tolerated. The error is `UnexpectedOplogEntry` with a `ReplayDivergence`: the oplog index
+   of the first divergence, the expected and the actual step, and the identity fields of a host
+   call that differ. Every producer names the entry it compared. `FailedUpdate` keeps the
+   divergence and a required `failure_class`, which `start_outcome` sets from the problem and the
+   `FailureProvenance` of the failure (see `worker/start_outcome/mod.rs::failure_class`).
 
 2. **The resident runtime is disposable.** The Wasmtime `Store`, the worker task, the executor
    process, sockets, channels and subscriptions can vanish while work is pending. Suspension,
@@ -1448,6 +1452,17 @@ carries no caller or context. Tests:
 `grpc_create_records_its_kind_key_and_caller` in `tests/worker_initialization.rs`, and
 `durable_rpc_activation_repeats_its_key_after_restart` in
 `tests/rpc/held_response_restart.rs`.
+
+`CreateParameters.never_live` is the never-live mark of a sandbox agent. Agent creation writes
+`false`, and nothing sets it yet. The status fold copies it into `AgentStatusRecord.never_live`
+and never changes it. `AgentStatusRecord::reported_status()` gives `Sandboxed` for a marked agent
+and the folded `status` otherwise; the folded `status` never holds `Sandboxed`, and control code
+decides by it, never by the reported status. Every outward view reads the reported status: the
+filter's `status` leaf, gRPC and REST metadata (with the folded status in `underlying_status`), the
+guest's metadata and enumeration (`AgentMetadataForGuests`), the running-agent fast path and the
+status metrics. Tests: `the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status`
+in `worker/status/tests.rs` and `ordinary_agent_is_not_never_live_after_restart` in
+`tests/observability.rs`.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, plugin changes, file reads and listings, wallet

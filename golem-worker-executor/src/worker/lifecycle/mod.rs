@@ -64,7 +64,8 @@ fn interrupt_decision(status: &AgentStatus, recover_immediately: bool) -> Interr
         AgentStatus::Exited
         | AgentStatus::Idle
         | AgentStatus::Failed
-        | AgentStatus::Interrupted => InterruptDecision::Ignore,
+        | AgentStatus::Interrupted
+        | AgentStatus::Sandboxed => InterruptDecision::Ignore,
         AgentStatus::Running | AgentStatus::Suspended | AgentStatus::Retrying
             if recover_immediately =>
         {
@@ -87,6 +88,7 @@ fn resume_decision(
         }
         AgentStatus::Failed => ResumeDecision::PreviousFailed,
         AgentStatus::Exited => ResumeDecision::PreviousExited,
+        AgentStatus::Sandboxed => ResumeDecision::Reject,
         AgentStatus::Suspended
         | AgentStatus::Interrupted
         | AgentStatus::Idle
@@ -99,7 +101,7 @@ fn resume_decision(
 fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool) -> UpdateDecision {
     match mode {
         UpdateMode::Automatic => match status {
-            AgentStatus::Exited => UpdateDecision::Ignore,
+            AgentStatus::Exited | AgentStatus::Sandboxed => UpdateDecision::Ignore,
             AgentStatus::Interrupted
             | AgentStatus::Suspended
             | AgentStatus::Retrying
@@ -209,6 +211,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 AgentStatus::Interrupted => {
                     warn!("Attempted interrupting worker which is already interrupted")
                 }
+                AgentStatus::Sandboxed => warn!("Attempted interrupting a sandboxed worker"),
                 _ => unreachable!(),
             }
             return Ok(());
@@ -598,7 +601,7 @@ mod tests {
     };
     use test_r::test;
 
-    const STATUSES: [AgentStatus; 7] = [
+    const STATUSES: [AgentStatus; 8] = [
         AgentStatus::Running,
         AgentStatus::Idle,
         AgentStatus::Suspended,
@@ -606,6 +609,7 @@ mod tests {
         AgentStatus::Retrying,
         AgentStatus::Failed,
         AgentStatus::Exited,
+        AgentStatus::Sandboxed,
     ];
 
     #[test]
@@ -650,6 +654,7 @@ mod tests {
             InterruptDecision::Interrupt,
             InterruptDecision::Ignore,
             InterruptDecision::Ignore,
+            InterruptDecision::Ignore,
         ];
         let expected_recovering = [
             InterruptDecision::Restart,
@@ -657,6 +662,7 @@ mod tests {
             InterruptDecision::Restart,
             InterruptDecision::Ignore,
             InterruptDecision::Restart,
+            InterruptDecision::Ignore,
             InterruptDecision::Ignore,
             InterruptDecision::Ignore,
         ];
@@ -679,6 +685,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
+            ResumeDecision::Reject,
         ];
         let expected_forced = [
             ResumeDecision::ForceStart,
@@ -688,6 +695,7 @@ mod tests {
             ResumeDecision::Start,
             ResumeDecision::PreviousFailed,
             ResumeDecision::PreviousExited,
+            ResumeDecision::Reject,
         ];
 
         for ((status, expected), expected_forced) in
@@ -713,6 +721,7 @@ mod tests {
             UpdateDecision::QueueAndStart,
             UpdateDecision::QueueAndStart,
             UpdateDecision::Ignore,
+            UpdateDecision::Ignore,
         ];
         let automatic_without_wakeup = [
             UpdateDecision::QueueAndRestart,
@@ -721,6 +730,7 @@ mod tests {
             UpdateDecision::Queue,
             UpdateDecision::Queue,
             UpdateDecision::Queue,
+            UpdateDecision::Ignore,
             UpdateDecision::Ignore,
         ];
 

@@ -758,6 +758,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         OwnerKind::EphemeralExternalTool,
         OwnerKind::OplogProcessor,
     ] {
+        let never_live = owner_kind == OwnerKind::ComponentAgent;
         let entry = OplogEntry::Create {
             timestamp: Timestamp::from(1_700_000_123_456),
             parameters: Box::new(CreateParameters {
@@ -785,6 +786,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),
+                never_live,
             }),
         };
         let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap()
@@ -829,6 +831,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         );
         assert_eq!(encoded.component_size, 317);
         assert_eq!(encoded.initial_total_linear_memory_size, 941);
+        assert_eq!(encoded.never_live, never_live);
         assert_eq!(
             Uuid::from_u64_pair(encoded.instance_id.high_bits, encoded.instance_id.low_bits),
             instance_id
@@ -867,5 +870,172 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(parameters.created_by, created_by);
         assert_eq!(parameters.original_phantom_id, Some(phantom_id));
         assert_eq!(parameters.instance_id, instance_id);
+        assert_eq!(parameters.never_live, never_live);
+    }
+}
+
+struct TableCapabilityDropper {
+    table: wasmtime::component::ResourceTable,
+}
+
+impl golem_schema::schema::wit::QuotaTokenHandleDropper for TableCapabilityDropper {
+    fn drop_quota_token_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::wit::QuotaTokenHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+impl golem_schema::schema::wit::SecretHandleDropper for TableCapabilityDropper {
+    fn drop_secret_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::wit::SecretHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+impl golem_schema::schema::wit::PermissionCardHandleDropper for TableCapabilityDropper {
+    fn drop_permission_card_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::wit::PermissionCardHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+impl golem_schema::schema::wit::SchemaValueStreamResolver for TableCapabilityDropper {
+    type Error = String;
+
+    fn handle_from_stream(
+        &mut self,
+        _stream: golem_schema::schema::SchemaValueStream,
+    ) -> Result<
+        wasmtime::component::Resource<golem_schema::schema::SchemaValueStreamHandleRep>,
+        Self::Error,
+    > {
+        Err("the dropper does not create streams".to_string())
+    }
+
+    fn stream_from_handle(
+        &mut self,
+        _handle: wasmtime::component::Resource<golem_schema::schema::SchemaValueStreamHandleRep>,
+    ) -> Result<golem_schema::schema::SchemaValueStream, Self::Error> {
+        Err("the dropper does not read streams".to_string())
+    }
+
+    fn drop_stream_handle(
+        &mut self,
+        handle: wasmtime::component::Resource<golem_schema::schema::SchemaValueStreamHandleRep>,
+    ) {
+        let _ = self.table.delete(handle);
+    }
+}
+
+/// A guest supplies raw entries to `enrich-oplog-entries`, so the requests of the divergence of a
+/// raw `failed-update` can hold owned capability handles and owned streams. They are deleted from
+/// the resource table, in the expected and in the actual step and also when no node reaches them,
+/// and the batch is rejected. A stream alone rejects the batch too.
+#[test]
+fn failed_update_divergence_requests_drop_their_owned_handles() {
+    use golem_schema::schema::wit::{QuotaTokenHandleRep, SecretHandleRep, wire};
+    use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
+    use wasmtime::component::Resource;
+
+    let mut dropper = TableCapabilityDropper {
+        table: wasmtime::component::ResourceTable::new(),
+    };
+    let quota = dropper.table.push(QuotaTokenHandleRep::new(())).unwrap();
+    let secret = dropper.table.push(SecretHandleRep::new(())).unwrap();
+    let stream = |dropper: &mut TableCapabilityDropper| {
+        dropper
+            .table
+            .push(SchemaValueStreamHandleRep::new(
+                SchemaValueStream::from_host_endpoint(()),
+            ))
+            .unwrap()
+    };
+    let unreachable_stream = stream(&mut dropper);
+    let only_stream = stream(&mut dropper);
+    let quota_rep = quota.rep();
+    let secret_rep = secret.rep();
+    let unreachable_stream_rep = unreachable_stream.rep();
+    let only_stream_rep = only_stream.rep();
+    let host_call = |value_nodes: Vec<wire::SchemaValueNode>| {
+        oplog::ReplayStep::HostCall(oplog::ReplayHostCall {
+            function_name: "golem::api::oplog::get-oplog".to_string(),
+            durable_function_type: oplog::WrappedFunctionType::ReadRemote,
+            parent_start_index: None,
+            invocation_id: None,
+            observational_owner: None,
+            carries_request: true,
+            request: Some(wire::TypedSchemaValue {
+                graph: wire::SchemaGraph {
+                    type_nodes: vec![],
+                    defs: vec![],
+                    root: 0,
+                },
+                value: wire::SchemaValueTree {
+                    value_nodes,
+                    root: 0,
+                },
+            }),
+        })
+    };
+    let failed_update = |expected, actual| {
+        oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
+            timestamp: Timestamp::from(1_000).into(),
+            target_revision: 2,
+            details: None,
+            snapshot_assisted_details: None,
+            update_attempt_index: None,
+            failure_class: oplog::UpdateFailureClass::Divergence,
+            divergence: Some(oplog::ReplayDivergence {
+                oplog_index: 1,
+                expected,
+                actual,
+                mismatched: vec![],
+            }),
+        })
+    };
+    let entry = failed_update(
+        host_call(vec![
+            wire::SchemaValueNode::QuotaTokenHandle(quota),
+            wire::SchemaValueNode::StreamValue(unreachable_stream),
+        ]),
+        host_call(vec![wire::SchemaValueNode::SecretValue(secret)]),
+    );
+    let only_stream_entry = failed_update(
+        oplog::ReplayStep::EndOfHistory,
+        host_call(vec![wire::SchemaValueNode::StreamValue(only_stream)]),
+    );
+
+    assert!(super::reject_quota_handles_in_oplog_entries(vec![(9, entry)], &mut dropper).is_err());
+    assert!(
+        super::reject_quota_handles_in_oplog_entries(vec![(10, only_stream_entry)], &mut dropper)
+            .is_err()
+    );
+    assert!(
+        dropper
+            .table
+            .get(&Resource::<QuotaTokenHandleRep>::new_borrow(quota_rep))
+            .is_err()
+    );
+    assert!(
+        dropper
+            .table
+            .get(&Resource::<SecretHandleRep>::new_borrow(secret_rep))
+            .is_err()
+    );
+    for stream_rep in [unreachable_stream_rep, only_stream_rep] {
+        assert!(
+            dropper
+                .table
+                .get(&Resource::<SchemaValueStreamHandleRep>::new_borrow(
+                    stream_rep
+                ))
+                .is_err()
+        );
     }
 }

@@ -42,7 +42,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // in the same order.
         .btree_map(".golem.worker.LocalInvocationSpan.attributes")
         .btree_map(".golem.worker.SpanStarted.attributes")
-        .btree_map(".golem.worker.SpanAttributes.attributes");
+        .btree_map(".golem.worker.SpanAttributes.attributes")
+        // The steps of a replay divergence hold whole host calls. Boxed, they keep every message
+        // that carries a divergence, such as an execution error, small.
+        .boxed(".golem.worker.ReplayDivergence.expected")
+        .boxed(".golem.worker.ReplayDivergence.actual");
 
     for file in &schema_file_descriptors.file {
         let package = file.package();

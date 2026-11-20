@@ -207,6 +207,7 @@ object HostApi {
     val Retrying: AgentStatus    = AgentHostApi.AgentStatus.Retrying
     val Failed: AgentStatus      = AgentHostApi.AgentStatus.Failed
     val Exited: AgentStatus      = AgentHostApi.AgentStatus.Exited
+    val Sandboxed: AgentStatus   = AgentHostApi.AgentStatus.Sandboxed
   }
 
   object UpdateMode {

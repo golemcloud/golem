@@ -224,6 +224,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Box::pin(async move {
                 if rejected {
                     return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        replay_state.last_replayed_index(),
                         expected,
                         format!(
                             "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",

@@ -6,6 +6,30 @@ use golem_rust::bindings::golem::api::context::start_span;
 use golem_rust::quota::QuotaToken;
 use golem_rust::{agent_definition, agent_implementation, generate_idempotency_key};
 
+#[derive(golem_rust::ConfigSchema)]
+#[allow(dead_code)] // The CLI exercises these declarations without invoking the agent.
+struct PackageFileConfig {
+    file: golem_rust::schema::File,
+    text: String,
+}
+
+#[agent_definition]
+trait PackageFileAgent {
+    fn new(#[agent_config] config: golem_rust::agentic::Config<PackageFileConfig>) -> Self;
+    fn ping(&self);
+}
+
+struct PackageFileAgentImpl;
+
+#[agent_implementation]
+impl PackageFileAgent for PackageFileAgentImpl {
+    fn new(#[agent_config] _config: golem_rust::agentic::Config<PackageFileConfig>) -> Self {
+        Self
+    }
+
+    fn ping(&self) {}
+}
+
 /// Resource name the chaos suite's quota stream reserves against. Must match the
 /// resource the chaos prep creates on the environment — see
 /// `integration_tests::chaos::prep`.
