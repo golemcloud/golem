@@ -53,8 +53,10 @@ Path|Method|Protected
 `/v1/runtime/envs/{environment_id}/invocations/lookup`|GET|Yes
 
 The key is matched in the caller's own idempotency scope, against every method and tool
-command the agent ran, including those a later revision removed. A caller without a
-scope, and a key used through an HTTP route, find nothing. No match is `404`.
+command the agent ran, including those a later revision removed. A removed method is
+found only while one of its invocations has the method name outside an external payload;
+otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
+route, find nothing. No match is `404`.
 
 **Query Parameters**
 
