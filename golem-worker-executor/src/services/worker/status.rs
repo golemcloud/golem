@@ -418,55 +418,67 @@ pub(super) fn reassemble_cached_status(
     Some(status)
 }
 
-/// The status that a read gives after a write of `status` to an empty split status hash.
-#[cfg(test)]
-pub(crate) fn stored_split_status(status: AgentStatusRecord) -> Option<AgentStatusRecord> {
-    let agent_mode = status.agent_mode;
-    let mut core = status;
-    let parts = split_status(&mut core);
-    let (sets, _) = compute_status_field_writes(None, &[], &core, &parts).ok()?;
-    reassemble_cached_status(
-        sets.into_iter()
-            .map(|(field, bytes)| (field, bytes::Bytes::from(bytes))),
-    )
-    .map(|status| AgentStatusRecord {
-        agent_mode,
-        ..status
-    })
+/// One split status hash of an agent incarnation. Each hash is one per-agent hash whose fields
+/// are `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
+/// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum SplitStatusHash<'a> {
+    /// The live status cache. The background flusher moves it forward.
+    Cache {
+        agent_id: &'a AgentId,
+        fingerprint: AgentFingerprint,
+    },
+    /// The durable status baseline (the *clean* status checkpoint). Only three writers write it,
+    /// each at a structurally clean boundary: the snapshot save, the throttled idle boundary, and
+    /// the throttled `checkpoint_status_mid_invocation` during a long invocation. The background
+    /// flusher never moves it forward. Thus it is a fold baseline before any later jump region.
+    Baseline {
+        agent_id: &'a AgentId,
+        fingerprint: AgentFingerprint,
+    },
 }
 
-/// The kind of a split status hash.
+/// Where a split status hash is stored.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct SplitStatusKind {
+pub(super) struct SplitStatusTarget {
+    /// The namespace of the hash. Its [`KeyValueStorageNamespace::expiry`] is the expiry that a
+    /// write gives the hash.
+    pub(super) namespace: KeyValueStorageNamespace,
     /// The `cache` label of the metrics of the hash.
     pub(super) label: &'static str,
-    /// The expiry that a write gives the hash. `None` means that the hash does not expire.
-    pub(super) expiry: Option<std::time::Duration>,
 }
 
-/// The kind of the split status hash in `namespace`. The live status cache expires after
-/// [`DERIVED_CACHE_EXPIRY`]. The status baseline in
-/// [`KeyValueStorageNamespace::AgentStatusCheckpoint`] does not expire: it lives as long as the
-/// agent, and only the deletion of the agent removes it.
-pub(super) fn split_status_kind(namespace: &KeyValueStorageNamespace) -> SplitStatusKind {
-    match namespace {
-        KeyValueStorageNamespace::AgentStatus { .. } => SplitStatusKind {
+/// The namespace and the metrics label of `hash`.
+pub(super) fn split_status_target(hash: SplitStatusHash<'_>) -> SplitStatusTarget {
+    match hash {
+        SplitStatusHash::Cache {
+            agent_id,
+            fingerprint,
+        } => SplitStatusTarget {
+            namespace: KeyValueStorageNamespace::AgentStatus {
+                agent_id: Arc::new(agent_id.clone()),
+                fingerprint,
+            },
             label: "status",
-            expiry: Some(DERIVED_CACHE_EXPIRY),
         },
-        KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => SplitStatusKind {
+        SplitStatusHash::Baseline {
+            agent_id,
+            fingerprint,
+        } => SplitStatusTarget {
+            namespace: KeyValueStorageNamespace::AgentStatusCheckpoint {
+                agent_id: Arc::new(agent_id.clone()),
+                fingerprint,
+            },
             label: "checkpoint",
-            expiry: None,
         },
-        _ => unreachable!("split status must use a status cache namespace"),
     }
 }
 
 impl DefaultWorkerService {
     /// Compares the `core` field of the split status hash in `namespace` with `expected_core`,
     /// and on a match applies `sets` and `deletions` in one atomic write. The write gives the
-    /// hash the expiry of its [`split_status_kind`]. When that kind has no expiry, the write sets
-    /// no expiry.
+    /// hash the [`KeyValueStorageNamespace::expiry`] of `namespace`. When the namespace has no
+    /// expiry, the write sets no expiry.
     async fn compare_and_publish_split_status(
         &self,
         api_name: &'static str,
@@ -478,7 +490,7 @@ impl DefaultWorkerService {
         let storage = self
             .key_value_storage
             .with_entity("worker", api_name, "agent_status");
-        match split_status_kind(&namespace).expiry {
+        match namespace.expiry() {
             Some(expiry) => {
                 storage
                     .compare_and_mutate_many_raw(
@@ -505,36 +517,6 @@ impl DefaultWorkerService {
         }
     }
 
-    /// Namespace holding the agent's split cached status (one per-agent hash whose fields are
-    /// `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
-    /// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes).
-    pub(super) fn status_namespace(
-        agent_id: &AgentId,
-        fingerprint: AgentFingerprint,
-    ) -> KeyValueStorageNamespace {
-        KeyValueStorageNamespace::AgentStatus {
-            agent_id: Arc::new(agent_id.clone()),
-            fingerprint,
-        }
-    }
-
-    /// Namespace holding the durable status baseline of the agent (the *clean* status
-    /// checkpoint). It has the same physical split layout as [`Self::status_namespace`]. Only
-    /// three writers write it, each at a structurally clean boundary: the snapshot save, the
-    /// throttled idle boundary, and the throttled `checkpoint_status_mid_invocation` during a long
-    /// invocation. The background flusher never moves it forward. Thus it is a fold baseline
-    /// before any later jump region. It does not expire, and only the deletion of the agent
-    /// removes it.
-    pub(super) fn checkpoint_namespace(
-        agent_id: &AgentId,
-        fingerprint: AgentFingerprint,
-    ) -> KeyValueStorageNamespace {
-        KeyValueStorageNamespace::AgentStatusCheckpoint {
-            agent_id: Arc::new(agent_id.clone()),
-            fingerprint,
-        }
-    }
-
     /// Reads the cached `AgentStatusRecord` for `owned_agent_id`, if any, reassembling it from the
     /// split hash fields (`core`, `membership`, `regions`, `updates`, `tr:{transfer_id}`,
     /// `ts:{transfer_id}`). Returns `None` if the `core` field is missing (cache miss) or any
@@ -549,12 +531,15 @@ impl DefaultWorkerService {
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         self.read_split_status(
             owned_agent_id,
-            Self::status_namespace(&owned_agent_id.agent_id, fingerprint),
+            SplitStatusHash::Cache {
+                agent_id: &owned_agent_id.agent_id,
+                fingerprint,
+            },
         )
         .await
     }
 
-    /// Reads a split status record (live cache or checkpoint) from `namespace`, reassembling it
+    /// Reads the split status record of `hash`, reassembling it
     /// from the `core` / `membership` / `regions` / `updates` / `tr:{transfer_id}` /
     /// `ts:{transfer_id}` fields. Returns `None` if `core` is missing (cache miss / torn write) or
     /// any field cannot be deserialized in the current format.
@@ -564,7 +549,7 @@ impl DefaultWorkerService {
     pub(super) async fn read_split_status(
         &self,
         owned_agent_id: &OwnedAgentId,
-        namespace: KeyValueStorageNamespace,
+        hash: SplitStatusHash<'_>,
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
         // Single atomic read of every field of the per-agent status hash (`core`, `membership`,
         // `regions`, `updates`, `tr:{transfer_id}`, `ts:{transfer_id}`). This is one round-trip
@@ -578,7 +563,7 @@ impl DefaultWorkerService {
         let fields = self
             .key_value_storage
             .with_entity("worker", "read_cached_status", "agent_status")
-            .get_all_raw(namespace)
+            .get_all_raw(split_status_target(hash).namespace)
             .await
             .map_err(|err| {
                 WorkerExecutorError::runtime(format!(
@@ -597,27 +582,27 @@ impl DefaultWorkerService {
     /// Writes the split status fields for an agent, sending only the parts that changed.
     ///
     /// `core` is always written (it carries the `oplog_idx` marker that versions the whole record).
-    /// `membership`/`regions`/`updates` are written only when they differ from `previous_status`,
-    /// and received and source card transfers are written per key (only newly added/changed keys).
+    /// `membership`/`regions`/`updates` are written only when they differ from `delta_base`, and
+    /// received and source card transfers are written per key (only newly added/changed keys).
     ///
-    /// Publication compares the exact serialized baseline `core` and atomically applies all sets,
-    /// stale-field deletions, and the expiry of the live cache. The status baseline has no
-    /// expiry (see [`split_status_kind`]). A mismatch reloads one complete hash snapshot and
-    /// retries with a full reconciliation guarded by that snapshot's raw core. Thus an expired
-    /// hash or a concurrent publisher can never leave auxiliary fields from a different core
-    /// generation.
+    /// Publication compares the exact serialized `core` of the delta base and atomically applies
+    /// all sets, stale-field deletions, and the expiry of the namespace of `target`. The status
+    /// baseline has no expiry (see [`KeyValueStorageNamespace::expiry`]). A mismatch reloads one
+    /// complete hash snapshot and retries with a full reconciliation guarded by that snapshot's
+    /// raw core. Thus an expired hash or a concurrent publisher can never leave auxiliary fields
+    /// from a different core generation.
     async fn write_status_fields(
         &self,
         owned_agent_id: &OwnedAgentId,
-        namespace: KeyValueStorageNamespace,
-        previous_status: Option<&AgentStatusRecord>,
+        target: &SplitStatusTarget,
+        delta_base: Option<&AgentStatusRecord>,
         core: &AgentStatusRecord,
         parts: &SplitStatusParts,
     ) -> Result<(), String> {
-        let cache_kind = split_status_kind(&namespace).label;
+        let namespace = &target.namespace;
         let (mut expected_core, mut existing_fields, mut use_delta) =
-            if let Some(previous) = previous_status {
-                let expected = serialize(&status_core(previous)).map_err(|err| {
+            if let Some(delta_base) = delta_base {
+                let expected = serialize(&status_core(delta_base)).map_err(|err| {
                     format!("failed to serialize agent status for {owned_agent_id}: {err}")
                 })?;
                 (Some(expected), Vec::new(), true)
@@ -639,8 +624,8 @@ impl DefaultWorkerService {
             };
 
         loop {
-            let baseline = use_delta.then_some(previous_status).flatten();
-            let (sets, dels) = compute_status_field_writes(baseline, &existing_fields, core, parts)
+            let delta = use_delta.then_some(delta_base).flatten();
+            let (sets, dels) = compute_status_field_writes(delta, &existing_fields, core, parts)
                 .map_err(|err| {
                     format!("failed to serialize agent status for {owned_agent_id}: {err}")
                 })?;
@@ -660,12 +645,12 @@ impl DefaultWorkerService {
                 )
                 .await
                 .map_err(|err| {
-                    record_derived_cache_publication_failed(cache_kind);
+                    record_derived_cache_publication_failed(target.label);
                     format!("failed to set agent status in KV storage: {err}")
                 })?;
             if published {
                 record_status_cache_publication(
-                    cache_kind,
+                    target.label,
                     if use_delta {
                         "delta_match"
                     } else {
@@ -676,10 +661,10 @@ impl DefaultWorkerService {
             }
 
             if use_delta {
-                record_status_cache_publication(cache_kind, "reconciliation_fallback");
+                record_status_cache_publication(target.label, "reconciliation_fallback");
             }
 
-            // The remembered baseline is stale or the hash expired. Reconcile a complete record
+            // The remembered delta base is stale or the hash expired. Reconcile a complete record
             // against one atomic snapshot and guard that snapshot's exact core on publication.
             let snapshot = self
                 .key_value_storage
@@ -698,15 +683,15 @@ impl DefaultWorkerService {
         }
     }
 
-    /// Splits `status_value` and writes it to `namespace` (live cache or checkpoint), sending only
-    /// the changed parts (delta against `previous_status` when provided). Returns the reassembled
-    /// record so the caller can use it as the baseline for the next delta. No-op for ephemeral
-    /// workers (their status is never persisted), returning the value unchanged.
+    /// Splits `status_value` and writes it to `hash`, sending only the changed parts (delta
+    /// against `delta_base` when provided). Returns the reassembled record, the delta base of the
+    /// next write. No-op for ephemeral workers (their status is never persisted), returning the
+    /// value unchanged.
     pub(super) async fn write_split_status(
         &self,
         owned_agent_id: &OwnedAgentId,
-        namespace: KeyValueStorageNamespace,
-        previous_status: Option<&AgentStatusRecord>,
+        hash: SplitStatusHash<'_>,
+        delta_base: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, String> {
         if status_value.agent_mode == AgentMode::Ephemeral {
@@ -718,11 +703,17 @@ impl DefaultWorkerService {
         let mut core = status_value;
         let parts = split_status(&mut core);
 
-        self.write_status_fields(owned_agent_id, namespace, previous_status, &core, &parts)
-            .await?;
+        self.write_status_fields(
+            owned_agent_id,
+            &split_status_target(hash),
+            delta_base,
+            &core,
+            &parts,
+        )
+        .await?;
 
         // Reassemble the record (moving the parts back into `core`, no clone) so the caller gets
-        // back a complete baseline for computing the next delta.
+        // back a complete delta base for the next write.
         let mut reassembled = core;
         reassembled.invocation_results = parts.invocation_results;
         reassembled.skipped_regions = parts.skipped_regions;
@@ -740,8 +731,9 @@ impl DefaultWorkerService {
     pub(super) async fn remove_split_status(
         &self,
         owned_agent_id: &OwnedAgentId,
-        namespace: KeyValueStorageNamespace,
+        hash: SplitStatusHash<'_>,
     ) -> Result<(), WorkerExecutorError> {
+        let namespace = split_status_target(hash).namespace;
         loop {
             let snapshot = self
                 .key_value_storage

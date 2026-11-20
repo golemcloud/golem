@@ -20,9 +20,9 @@ use crate::metrics::workers::record_derived_cache_publication_failed;
 use crate::services::activity::spawn_with_activity;
 use crate::services::oplog::{OplogService, OplogServiceOps};
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
-use crate::services::worker::DERIVED_CACHE_EXPIRY;
 use crate::services::worker::DurableStreamRecoveryMetadata;
 use crate::services::worker_fork::lineage::StreamForkLineage;
+use crate::storage::keyvalue::DERIVED_CACHE_EXPIRY;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,

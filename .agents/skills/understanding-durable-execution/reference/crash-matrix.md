@@ -99,7 +99,7 @@ owns the one replay/tool-generation reset. Acceptance and typed notification are
 | Crash window | Oplog shape | Reconstruction behaviour | Durable fact |
 |---|---|---|---|
 | Before `PendingAgentInvocation` commits | nothing | Caller was never told "accepted"; retrying with the same key enqueues once | Acceptance returns only after commit |
-| After `PendingAgentInvocation`, before `AgentInvocationStarted` | pending hint | Status fold sees the pending invocation; the invocation loop runs it | Status is folded from the oplog (`worker/status.rs`) |
+| After `PendingAgentInvocation`, before `AgentInvocationStarted` | pending hint | Status fold sees the pending invocation; the invocation loop runs it | Status is folded from the durable status baseline and the oplog after it (`worker/status.rs`) |
 | Mid-invocation | `Started` + prefix of calls | Prefix replays, guest continues live from the tail | Every host input in the prefix is recorded |
 | After `AgentInvocationFinished` commits, before waiters are notified | `Finished` | `lookup_invocation_result(invocation_id)` returns the recorded result; the guest does not run | `CommitLevel::Always` before notification |
 | Durable method returned an outer error, before its terminal commits | `Started` + prefix of calls | Replay reconstructs partial state from recorded observations and settles at the natural live tail; completed effects do not repeat | No method outcome is published before its commit |

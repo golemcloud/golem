@@ -67,10 +67,10 @@ impl CheckpointReason {
     }
 }
 
-/// Baseline state guarded by the checkpoint lock.
+/// The delta base state guarded by the checkpoint lock.
 struct CheckpointState {
-    /// The last status successfully written to the checkpoint, used both as the delta baseline for
-    /// the next write and as the throttle reference (its `oplog_idx`). `None` until the first
+    /// The last status successfully written to the checkpoint, used both as the delta base of the
+    /// next write and as the throttle reference (its `oplog_idx`). `None` until the first
     /// successful write of this worker incarnation, forcing a full reconcile write.
     last_written: Option<AgentStatusRecord>,
 }
