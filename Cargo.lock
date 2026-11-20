@@ -6080,6 +6080,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "url",
+ "urlencoding",
  "uuid",
 ]
 

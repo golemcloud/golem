@@ -21,11 +21,12 @@ use super::{
     extract_caller, extract_owned_agent_id, from_proto_invocation_context, golem,
 };
 use crate::services::{HasAgentTypesService, HasComponentService};
-use crate::worker::CreateIntent;
+use crate::worker::{CancelInvocationOutcome, CreateIntent};
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentKey, ScheduleId};
 use golem_common::model::caller::Caller;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{CreateRequest, CreateRequestKind};
+use std::sync::Arc;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -424,7 +425,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_agent_id.agent_id(),
             ))?;
-
         let expected_fingerprint = request
             .expected_fingerprint
             .map(|fingerprint| AgentFingerprint(fingerprint.into()));
@@ -433,73 +433,57 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ));
         }
-        let status = &metadata.last_known_status;
-        if status
-            .pending_invocations
-            .iter()
-            .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
-        {
-            let worker = self
-                .get_existing_for_management(&owned_agent_id, caller, "cancel")
-                .await?;
-            worker
-                .ensure_management_fingerprint(expected_fingerprint)
-                .await?;
-            Self::not_found_if_deleting(&worker, worker.cancel_invocation(idempotency_key).await)
-                .await?;
-            Ok(true)
-        } else if status.invocation_results.contains_key(&idempotency_key) {
-            Ok(false)
-        } else if status.current_idempotency_key.as_ref() == Some(&idempotency_key)
-            || status.invocation_results.is_exact_complete()
-            || !status.invocation_results.might_contain(&idempotency_key)
-        {
-            Err(WorkerExecutorError::invalid_request("Invocation not found"))
-        } else {
-            let worker = self
-                .get_existing_for_management(&owned_agent_id, caller, "cancel")
-                .await?;
-            // A deletion, even one that failed later and left the generation cached, can have
-            // stopped its state actor. The lookup then fails, and the deletion answers instead.
-            let lookup = match worker.try_lookup_invocation_result(&idempotency_key).await {
-                Err(_)
-                    if !worker.retired_for_lost_shard()
-                        && worker.deletion_owns_retirement().await =>
-                {
-                    Err(WorkerExecutorError::invalid_request(
-                        "Worker is being deleted",
-                    ))
-                }
-                lookup => lookup,
-            };
-            let lookup = Self::not_found_if_deleting(&worker, lookup).await?;
-            match lookup {
-                LookupResult::Complete(_) | LookupResult::Interrupted => Ok(false),
-                LookupResult::Pending => {
-                    let status = Self::not_found_if_deleting(
-                        &worker,
-                        worker.try_get_last_known_status().await,
-                    )
-                    .await?;
-                    if status
-                        .pending_invocations
-                        .iter()
-                        .any(|invocation| invocation.idempotency_key() == Some(&idempotency_key))
-                    {
-                        Self::not_found_if_deleting(
-                            &worker,
-                            worker.cancel_invocation(idempotency_key).await,
-                        )
-                        .await?;
-                        Ok(true)
-                    } else {
-                        Err(WorkerExecutorError::invalid_request("Invocation not found"))
-                    }
-                }
-                LookupResult::New => {
-                    Err(WorkerExecutorError::invalid_request("Invocation not found"))
-                }
+
+        // The worker decides under its instance lock first: a recent result can belong to an
+        // invocation that still runs (a retry marker) or is still queued (a fail-fast error after
+        // an earlier invocation trapped), and neither is terminal.
+        let worker = self
+            .get_existing_for_management(&owned_agent_id, caller, "cancel")
+            .await?;
+        worker
+            .ensure_management_fingerprint(expected_fingerprint)
+            .await?;
+        if let Some(decided) = Self::cancel_decided(&worker, idempotency_key).await? {
+            return Ok(decided);
+        }
+        // A deletion, even one that failed later and left the generation cached, can have
+        // stopped its state actor. The lookup then fails, and the deletion answers instead.
+        let lookup = match worker.try_lookup_invocation_result(&idempotency_key).await {
+            Err(_)
+                if !worker.retired_for_lost_shard() && worker.deletion_owns_retirement().await =>
+            {
+                Err(WorkerExecutorError::invalid_request(
+                    "Worker is being deleted",
+                ))
             }
+            lookup => lookup,
+        };
+        match Self::not_found_if_deleting(&worker, lookup).await? {
+            LookupResult::Complete(_) => Ok(false),
+            LookupResult::New => Err(WorkerExecutorError::invalid_request("Invocation not found")),
+            // Accepted after the first decision.
+            LookupResult::Pending | LookupResult::Interrupted => {
+                Ok(Self::cancel_decided(&worker, idempotency_key)
+                    .await?
+                    .unwrap_or(false))
+            }
+        }
+    }
+
+    /// Asks the worker to cancel under its instance lock: `true` when withdrawn, a typed error
+    /// when it is running, and `None` when it is neither pending nor running.
+    async fn cancel_decided(
+        worker: &Arc<Worker<Ctx>>,
+        idempotency_key: golem_common::model::InvocationId,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        match Self::not_found_if_deleting(worker, worker.cancel_invocation(idempotency_key).await)
+            .await?
+        {
+            CancelInvocationOutcome::Withdrawn => Ok(Some(true)),
+            CancelInvocationOutcome::Running => {
+                Err(WorkerExecutorError::CannotCancelRunningInvocation)
+            }
+            CancelInvocationOutcome::NotPending => Ok(None),
         }
     }
 

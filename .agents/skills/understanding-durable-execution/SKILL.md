@@ -2428,7 +2428,7 @@ A key that is already accepted with a different request is an `IdempotencyConfli
 `AgentInvocationPayload::same_caller_request`, including the attached scope card (`scope_card`). Streaming
 sessions compare their stream descriptor instead (`worker/streaming/mod.rs`). The stored request
 is read from one entry, never searched for: a pending invocation's `PendingAgentInvocation`, the
-running invocation's `AgentInvocationStarted` (`AgentStatusRecord::current_invocation_started_at`),
+running invocation's `AgentInvocationStarted` (`AgentStatusRecord::running`, a `RunningInvocation`),
 or the request position kept with every result (`InvocationResultPosition::request`, in the
 in-memory membership and in the persisted result index). The status fold sets it to the
 `AgentInvocationStarted` entry of a started invocation and to the `PendingAgentInvocation` entry of
@@ -2551,6 +2551,52 @@ result and waits for the commit receipt before waiters are notified. Durable age
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
 reads queued on the same state actor wait behind it. Actual traps and constructor errors go through
 `on_invocation_failure`; decoded outer method errors take the separate path below.
+
+### Cancelled invocations and the invocation listing
+
+A withdrawn pending or scheduled invocation ends with the typed outcome `cancelled`
+(`InvocationResult::Cancelled`, `WorkerExecutorError::InvocationCancelled`), not with a failure.
+`Worker::cancel_invocation` (`worker/lifecycle/mod.rs`) decides under the instance lock and answers
+a `CancelInvocationOutcome`: `Withdrawn`, `Running` (REST 409; a running invocation cannot be
+cancelled yet) or `NotPending` (finished or unknown). `withdraw_pending_invocation` commits
+`CancelPendingInvocation`, then publishes the completion, so callers that wait on the key wake with
+`cancelled`. A reused key, invoke-and-await, lookup mode (`InvocationStatus::Cancelled`) and RPC all
+answer the same outcome; RPC maps it to a permanent error with the detail `invocation-cancelled`,
+so a caller never retries a cancelled callee.
+
+Each result position (`InvocationResultPosition`) also records how the invocation ended
+(`InvocationEnd`), its operation (the method name or `tool:<tool>/<command path>`, at most
+`MAX_INVOCATION_OPERATION_BYTES`), its kind, and when it was accepted and last changed.
+`PendingInvocationRef` and `RunningInvocation` carry the same listing data, so listing reads no
+payload for them. The fold takes the operation from the one decode it already does; catch-up never
+decodes a payload and takes operations the status already knows
+(`fields.rs::known_request_operations`). An external payload leaves the operation `None`, and the
+listing reads it from the request entry.
+
+The persisted invocation-result index is a cache of the oplog. `remove_cached_status` and a cold
+status write clear it in one storage call (`clear_invocation_result_index`); missing metadata reads
+as `Incomplete`, never as `New`, so dedupe stays correct, and catch-up rebuilds the index from the
+oplog. A field that does not decode resets it.
+
+`Worker::list_invocations`, `get_invocation` and `lookup_invocations` (`worker/invocations.rs`)
+merge the recent results, the persisted index (or, while it is incomplete, a fold of the oplog),
+the pending invocations and the running one, and keep the entry with the latest change per key.
+They order by (last-change oplog index, ID), newest first: inside one agent the index is the
+recorded order of status changes, while displayed timestamps can go backwards across executor
+moves. A listing costs O(history). The state comes from the same rules as
+`lookup_result_from_cached_result`: `scheduled` until `not_before`, `pending`, `running`, `waiting`
+for the running invocation of a suspended agent, `retrying`, `interrupted`, `completed`
+(including a declared method error), `failed` and `cancelled`. Lookup derives the invocation ID of
+a raw key under the caller's scope for every operation the agent has run, so a key used on a
+method that a later revision removed is still found. These reads never start the agent; an
+ephemeral agent whose instance is gone is reconstructed for observation, and its older results are
+read from the oplog, since it has no persisted index. The executor RPCs `GetInvocation`,
+`ListInvocations` and `LookupInvocations` (`grpc/invocations.rs`) expose them; the list cursor is
+bound to the agent and its fingerprint.
+
+The agent lookup mode of an invocation session returns the stored output of a completed
+invocation (the method value or the tool result, with the component revision that produced it),
+not only its status. A lookup that names neither a method nor a tool accepts either result kind.
 
 ### Invocation-local method errors
 
