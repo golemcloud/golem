@@ -1,0 +1,27 @@
+[package]
+name = "golem-python-assembler"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Builds Golem components from prepared Python assets"
+
+[lib]
+harness = false
+
+[dependencies]
+anyhow = { workspace = true }
+componentize-py = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+test-r = { workspace = true }
+tokio = { workspace = true }
+
+[[test]]
+name = "assemble"
+harness = false
