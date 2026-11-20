@@ -933,14 +933,181 @@ impl golem_schema::schema::wit::SchemaValueStreamResolver for TableCapabilityDro
     }
 }
 
+fn raw_typed_value(
+    value_nodes: Vec<golem_schema::schema::wit::wire::SchemaValueNode>,
+) -> golem_schema::schema::wit::wire::TypedSchemaValue {
+    use golem_schema::schema::wit::wire;
+
+    wire::TypedSchemaValue {
+        graph: wire::SchemaGraph {
+            type_nodes: vec![],
+            defs: vec![],
+            root: 0,
+        },
+        value: wire::SchemaValueTree {
+            value_nodes,
+            root: 0,
+        },
+    }
+}
+
+#[test]
+fn attachment_observation_rejection_drops_owned_secret() {
+    use golem_schema::schema::wit::{SecretHandleRep, wire};
+    use wasmtime::component::{Resource, ResourceTable};
+
+    let mut dropper = TableCapabilityDropper {
+        table: ResourceTable::new(),
+    };
+    let secret = dropper.table.push(SecretHandleRep::new(())).unwrap();
+    let probe = Resource::<SecretHandleRep>::new_borrow(secret.rep());
+    let entry = oplog::OplogEntry::ToolAttachmentRead(oplog::RawToolAttachmentReadParameters {
+        timestamp: Timestamp::from(1_000).into(),
+        entity_parent_start_index: None,
+        observation: raw_typed_value(vec![
+            wire::SchemaValueNode::BoolValue(false),
+            wire::SchemaValueNode::SecretValue(secret),
+        ]),
+        payload: None,
+    });
+
+    assert!(super::reject_quota_handles_in_oplog_entries(vec![(9, entry)], &mut dropper).is_err());
+    assert!(dropper.table.get(&probe).is_err());
+}
+
+#[test]
+fn attachment_rejection_still_drains_transition_and_later_entries() {
+    use golem_schema::schema::wit::{
+        PermissionCardHandleRep, QuotaTokenHandleRep, SecretHandleRep, wire,
+    };
+    use wasmtime::component::{Resource, ResourceTable};
+
+    let mut dropper = TableCapabilityDropper {
+        table: ResourceTable::new(),
+    };
+    let card = dropper
+        .table
+        .push(PermissionCardHandleRep::new(()))
+        .unwrap();
+    let quota = dropper.table.push(QuotaTokenHandleRep::new(())).unwrap();
+    let secret = dropper.table.push(SecretHandleRep::new(())).unwrap();
+    let card_probe = Resource::<PermissionCardHandleRep>::new_borrow(card.rep());
+    let quota_probe = Resource::<QuotaTokenHandleRep>::new_borrow(quota.rep());
+    let secret_probe = Resource::<SecretHandleRep>::new_borrow(secret.rep());
+    let entry =
+        oplog::OplogEntry::ToolAttachmentControl(oplog::RawToolAttachmentControlParameters {
+            timestamp: Timestamp::from(1_000).into(),
+            entity_parent_start_index: None,
+            attachment: raw_typed_value(vec![wire::SchemaValueNode::PermissionCardHandle(card)]),
+            transition: raw_typed_value(vec![wire::SchemaValueNode::QuotaTokenHandle(quota)]),
+        });
+    let later = oplog::OplogEntry::ToolAttachmentRead(oplog::RawToolAttachmentReadParameters {
+        timestamp: Timestamp::from(1_000).into(),
+        entity_parent_start_index: None,
+        observation: raw_typed_value(vec![wire::SchemaValueNode::SecretValue(secret)]),
+        payload: None,
+    });
+
+    let result =
+        super::reject_quota_handles_in_oplog_entries(vec![(9, entry), (10, later)], &mut dropper);
+    assert!(
+        matches!(result, Err(error) if error.starts_with("an attachment must not contain an owned handle"))
+    );
+    assert!(dropper.table.get(&card_probe).is_err());
+    assert!(dropper.table.get(&quota_probe).is_err());
+    assert!(dropper.table.get(&secret_probe).is_err());
+}
+
+#[test]
+fn attachment_transition_rejection_drops_owned_stream() {
+    use golem_schema::schema::wit::wire;
+    use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
+    use wasmtime::component::{Resource, ResourceTable};
+
+    let mut dropper = TableCapabilityDropper {
+        table: ResourceTable::new(),
+    };
+    let stream = dropper
+        .table
+        .push(SchemaValueStreamHandleRep::new(
+            SchemaValueStream::from_host_endpoint(()),
+        ))
+        .unwrap();
+    let probe = Resource::<SchemaValueStreamHandleRep>::new_borrow(stream.rep());
+    let entry =
+        oplog::OplogEntry::ToolAttachmentControl(oplog::RawToolAttachmentControlParameters {
+            timestamp: Timestamp::from(1_000).into(),
+            entity_parent_start_index: None,
+            attachment: raw_typed_value(vec![wire::SchemaValueNode::BoolValue(false)]),
+            transition: raw_typed_value(vec![wire::SchemaValueNode::StreamValue(stream)]),
+        });
+
+    assert!(super::reject_quota_handles_in_oplog_entries(vec![(9, entry)], &mut dropper).is_err());
+    assert!(dropper.table.get(&probe).is_err());
+}
+
+#[test]
+fn handle_free_attachment_entries_survive_sanitization() {
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+    use golem_common::model::oplog::OplogEnrichmentEntry;
+    use golem_common::model::oplog::attachment::{
+        ToolAttachmentControl, ToolAttachmentId, ToolAttachmentReadObservation,
+        ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
+
+    let attachment = ToolAttachmentId {
+        creation_start: OplogIndex::from_u64(3),
+        slot: ToolAttachmentSlot::Stdout,
+    };
+    let read = OplogEntry::ToolAttachmentRead {
+        timestamp: Timestamp::from(1_000),
+        entity_parent_start_index: None,
+        observation: Box::new(ToolAttachmentReadObservation {
+            attachment,
+            logical_invocation: Uuid::from_u128(4).into(),
+            observation: StreamConsumerObservation::Host,
+            ordinal: 5,
+            read_attempt_ordinal: 7,
+            outcome: ToolAttachmentReadOutcome::Eof {
+                terminal_index: OplogIndex::from_u64(8),
+            },
+            reobserves: None,
+        }),
+        payload: None,
+    };
+    let control = OplogEntry::ToolAttachmentControl {
+        timestamp: Timestamp::from(2_000),
+        entity_parent_start_index: None,
+        attachment,
+        transition: ToolAttachmentControl::ReaderDiscarded,
+    };
+    let entries = vec![
+        (9, oplog::OplogEntry::try_from(read.clone()).unwrap()),
+        (10, oplog::OplogEntry::try_from(control.clone()).unwrap()),
+    ];
+    let mut dropper = TableCapabilityDropper {
+        table: wasmtime::component::ResourceTable::new(),
+    };
+
+    let sanitized = super::reject_quota_handles_in_oplog_entries(entries, &mut dropper).unwrap();
+    let decoded: Vec<_> = sanitized
+        .into_iter()
+        .map(|(index, entry)| (index, OplogEnrichmentEntry::try_from(entry).unwrap()))
+        .collect();
+    assert_eq!(decoded, vec![(9, read.into()), (10, control.into())]);
+}
+
 /// A guest supplies raw entries to `enrich-oplog-entries`, so the requests of the divergence of a
 /// raw `failed-update` can hold owned capability handles and owned streams. They are deleted from
 /// the resource table, in the expected and in the actual step and also when no node reaches them,
 /// and the batch is rejected. A stream alone rejects the batch too.
 #[test]
 fn failed_update_divergence_requests_drop_their_owned_handles() {
-    use golem_schema::schema::wit::{QuotaTokenHandleRep, SecretHandleRep, wire};
-    use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
+    use golem_common::model::oplog::OplogEnrichmentEntry;
+    use golem_schema::schema::wit::{QuotaTokenHandleRep, SecretHandleRep, encode_typed, wire};
+    use golem_schema::schema::{
+        IntoTypedSchemaValue, SchemaValueStream, SchemaValueStreamHandleRep,
+    };
     use wasmtime::component::Resource;
 
     let mut dropper = TableCapabilityDropper {
@@ -962,7 +1129,7 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
     let secret_rep = secret.rep();
     let unreachable_stream_rep = unreachable_stream.rep();
     let only_stream_rep = only_stream.rep();
-    let host_call = |value_nodes: Vec<wire::SchemaValueNode>| {
+    let host_call = |request| {
         oplog::ReplayStep::HostCall(oplog::ReplayHostCall {
             function_name: "golem::api::oplog::get-oplog".to_string(),
             durable_function_type: oplog::WrappedFunctionType::ReadRemote,
@@ -970,17 +1137,7 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
             invocation_id: None,
             observational_owner: None,
             carries_request: true,
-            request: Some(wire::TypedSchemaValue {
-                graph: wire::SchemaGraph {
-                    type_nodes: vec![],
-                    defs: vec![],
-                    root: 0,
-                },
-                value: wire::SchemaValueTree {
-                    value_nodes,
-                    root: 0,
-                },
-            }),
+            request: Some(request),
         })
     };
     let failed_update = |expected, actual| {
@@ -1000,15 +1157,19 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
         })
     };
     let entry = failed_update(
-        host_call(vec![
+        host_call(raw_typed_value(vec![
             wire::SchemaValueNode::QuotaTokenHandle(quota),
             wire::SchemaValueNode::StreamValue(unreachable_stream),
-        ]),
-        host_call(vec![wire::SchemaValueNode::SecretValue(secret)]),
+        ])),
+        host_call(raw_typed_value(vec![wire::SchemaValueNode::SecretValue(
+            secret,
+        )])),
     );
     let only_stream_entry = failed_update(
         oplog::ReplayStep::EndOfHistory,
-        host_call(vec![wire::SchemaValueNode::StreamValue(only_stream)]),
+        host_call(raw_typed_value(vec![wire::SchemaValueNode::StreamValue(
+            only_stream,
+        )])),
     );
 
     assert!(super::reject_quota_handles_in_oplog_entries(vec![(9, entry)], &mut dropper).is_err());
@@ -1038,4 +1199,20 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
                 .is_err()
         );
     }
+
+    let handle_free = || {
+        failed_update(
+            oplog::ReplayStep::EndOfHistory,
+            host_call(encode_typed(&true.into_typed_schema_value().unwrap()).unwrap()),
+        )
+    };
+    let sanitized =
+        super::reject_quota_handles_in_oplog_entries(vec![(11, handle_free())], &mut dropper)
+            .unwrap();
+    let [(index, entry)] = sanitized.try_into().ok().unwrap();
+    assert_eq!(index, 11);
+    assert_eq!(
+        OplogEnrichmentEntry::try_from(entry).unwrap(),
+        OplogEnrichmentEntry::try_from(handle_free()).unwrap()
+    );
 }
