@@ -939,9 +939,13 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PublicUserPrincipal> for P
     ) -> Result<Self, Self::Error> {
         let claims = value
             .claims
-            .map(PublicClaims::from_json)
-            .transpose()
-            .map_err(|error| format!("Invalid field: claims: {error}"))?;
+            .map(|text| {
+                // The text must be one valid claim set. The check does not parse numbers.
+                Claims::from_json(text)
+                    .map(|claims| PublicClaims::from(&claims))
+                    .map_err(|error| format!("Invalid field: claims: {error}"))
+            })
+            .transpose()?;
         Ok(Self {
             pair: value.pair.ok_or_else(|| missing("pair"))?.into(),
             authenticated_at: authenticated_at_from_protobuf(

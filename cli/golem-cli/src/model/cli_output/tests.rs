@@ -1878,6 +1878,24 @@ fn rest_json_of_oplog_entries_equals_their_serde_json() {
     );
 }
 
+/// The structured output holds a `serde_json::Value`, so it holds the claims as a `Value` object.
+/// A number that rounds still gives an object. A number beyond `f64` is an error, never a
+/// string.
+#[test]
+fn structured_output_holds_claims_with_long_numbers_as_an_object() {
+    use golem_common::model::caller::PublicClaims;
+    let claims = PublicClaims::from_json(
+        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
+            .to_string(),
+    )
+    .unwrap();
+    assert!(serde_json::to_value(&claims).unwrap().is_object());
+
+    let beyond = PublicClaims::from_json(r#"{"sub":"bob","n":1e400}"#.to_string()).unwrap();
+    assert!(serde_json::to_value(&beyond).is_err());
+    assert_eq!(serde_json::to_string(&beyond).unwrap(), beyond.as_json());
+}
+
 #[test]
 fn cli_output_schema_rejects_invalid_tool_definition() {
     let validator = &*COMMAND_OUTPUT_SCHEMA_VALIDATOR;
@@ -2652,7 +2670,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 authenticated_at: timestamp(),
                 claims: Some(
                     golem_common::model::caller::PublicClaims::from_json(
-                        r#"{"sub":"bob","groups":["auditors"]}"#.to_string(),
+                        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123,"groups":["auditors"]}"#.to_string(),
                     )
                     .unwrap(),
                 ),

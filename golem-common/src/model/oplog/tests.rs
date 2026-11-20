@@ -17,7 +17,7 @@ use crate::base_model::caller::test_support::{
 };
 use crate::base_model::caller::{
     Caller, ClaimVisibility, Claims, Pair, Principal, PublicCaller, PublicClaims, PublicPrincipal,
-    UserPrincipal,
+    PublicUserPrincipal, UserPrincipal,
 };
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::card::{
@@ -3947,6 +3947,9 @@ fn claim_sets_beyond_serde_json_value() -> Vec<String> {
             "]".repeat(130)
         ),
         r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
+            .to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob"}"#.to_string(),
     ]
 }
 
@@ -4028,6 +4031,36 @@ fn public_entry_with_claims_decodes_from_json_text() {
     let json = serde_json::to_string(&entry).unwrap();
     let decoded: PublicOplogEntry = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded, entry);
+}
+
+/// The protobuf decoder refuses claims text that is not one valid JSON object.
+#[test]
+fn protobuf_refuses_claims_text_that_is_not_a_json_object() {
+    let user = Principal::User(UserPrincipal {
+        pair: Pair::new("https://idp.example/", "user-1"),
+        claims: Claims::from_json(r#"{"sub":"bob"}"#.to_string()).unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    });
+    let caller = PublicCaller::new(&Caller::entry(user), ClaimVisibility::Shown);
+    let PublicPrincipal::User(public_user) = caller.original else {
+        panic!("expected a user");
+    };
+    let valid = golem_api_grpc::proto::golem::component::PublicUserPrincipal::from(public_user);
+    assert!(PublicUserPrincipal::try_from(valid.clone()).is_ok());
+    for text in [
+        "\"{}\"",
+        "\"x\"",
+        "[1]",
+        "1",
+        "null",
+        "{",
+        "",
+        r#"{"a":1,"a":2}"#,
+    ] {
+        let mut bad = valid.clone();
+        bad.claims = Some(text.to_string());
+        assert!(PublicUserPrincipal::try_from(bad).is_err(), "{text}");
+    }
 }
 
 /// Claims on the wire must be one JSON object.

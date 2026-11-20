@@ -204,6 +204,9 @@ mod tests {
                 "]".repeat(130)
             ),
             r#"{"sub":"bob","n":18446744073709551617}"#.to_string(),
+        r#"{"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#
+            .to_string(),
+        r#"{"zeta":1,"alpha":2,"sub":"bob"}"#.to_string(),
         ]
     }
 
