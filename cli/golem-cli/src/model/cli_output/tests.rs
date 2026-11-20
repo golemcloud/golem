@@ -1878,6 +1878,146 @@ fn rest_json_of_oplog_entries_equals_their_serde_json() {
     );
 }
 
+/// Every sample oplog entry reads back from its JSON text as the same entry, bare, in a page
+/// entry, and in a line of an `agent.oplog` document. The tagged enums of the public oplog read
+/// their values without a buffer, so this checks that they accept the JSON of every variant.
+#[test]
+fn oplog_entries_read_back_from_their_json_text() {
+    use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::oplog::{
+        OmittedOplogEntry, PublicOplogEntry, PublicOplogEntryAttribution,
+        PublicOplogEntryWithIndex, PublicOplogPageEntry,
+    };
+
+    for (index, entry) in sample_public_oplog_entries().into_iter().enumerate() {
+        let entry_type = entry.entry_type();
+        let text = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogEntry>(&text).unwrap(),
+            entry,
+            "{entry_type} entry"
+        );
+
+        // A `serde_json::Value` gives the JSON text of its own numbers, so the entry that it
+        // gives writes the same `Value` again.
+        let value = serde_json::to_value(&entry).unwrap();
+        let from_value = serde_json::from_value::<PublicOplogEntry>(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&from_value).unwrap(),
+            value,
+            "{entry_type} entry from a value"
+        );
+
+        let page_entry = PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+            oplog_index: golem_common::model::oplog::OplogIndex::from_u64(index as u64 + 1),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: entry.clone(),
+        });
+        let text = serde_json::to_string(&page_entry).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PublicOplogPageEntry>(&text).unwrap(),
+            page_entry,
+            "{entry_type} page entry"
+        );
+
+        let line = serde_json::to_string(&AgentOplogEntryView {
+            index: index as u64 + 1,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        })
+        .unwrap();
+        let view = serde_json::from_str::<AgentOplogEntryView>(&line).unwrap();
+        assert_eq!(
+            serde_json::to_string(&view).unwrap(),
+            line,
+            "{entry_type} document line"
+        );
+    }
+
+    let omitted = PublicOplogPageEntry::Omitted(OmittedOplogEntry {
+        oplog_index: golem_common::model::oplog::OplogIndex::from_u64(9),
+        attribution: PublicOplogEntryAttribution::agent(),
+        timestamp: golem_common::model::Timestamp::from(1_700_000_000_123u64),
+        entry_type: "Start".to_string(),
+        size: 123,
+        component_revision: golem_common::model::component::ComponentRevision::new(3).unwrap(),
+    });
+    let text = serde_json::to_string(&omitted).unwrap();
+    assert_eq!(
+        serde_json::from_str::<PublicOplogPageEntry>(&text).unwrap(),
+        omitted
+    );
+}
+
+/// The claims of a caller keep their exact JSON text when the CLI reads a REST oplog page: a
+/// number that no `f64` holds, a number that an `f64` rounds, and the order of the members.
+#[test]
+fn oplog_page_entry_keeps_the_exact_claims_text_of_its_callers() {
+    use crate::model::agent::oplog::{AgentOplogEntryContent, AgentOplogEntryView};
+    use golem_common::model::caller::{PublicClaims, PublicPrincipal};
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryAttribution,
+        PublicOplogEntryWithIndex, PublicOplogPageEntry,
+    };
+
+    fn claims_of_original(entry: &PublicOplogEntry) -> Option<&str> {
+        if let PublicOplogEntry::AgentInvocationStarted(params) = entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &params.invocation
+            && let PublicPrincipal::User(user) = &invocation.caller.original
+        {
+            user.claims.as_ref().map(PublicClaims::as_json)
+        } else {
+            None
+        }
+    }
+
+    let sample = sample_public_oplog_entries()
+        .into_iter()
+        .find(|entry| claims_of_original(entry).is_some())
+        .expect("a sample entry whose caller is a user with claims");
+
+    for claims in [
+        r#"{"sub":"bob","n":1e400}"#,
+        r#"{"sub":"bob","n":18446744073709551617}"#,
+        r#"{"zeta":1,"alpha":2,"sub":"bob","org_id":123456789012345678901234567890,"score":0.12345678901234567890123}"#,
+    ] {
+        let mut entry = sample.clone();
+        if let PublicOplogEntry::AgentInvocationStarted(params) = &mut entry
+            && let PublicAgentInvocation::AgentMethodInvocation(invocation) = &mut params.invocation
+            && let PublicPrincipal::User(user) = &mut invocation.caller.original
+        {
+            user.claims = Some(PublicClaims::from_json(claims.to_string()).unwrap());
+        }
+
+        let page_entry = PublicOplogPageEntry::Included(PublicOplogEntryWithIndex {
+            oplog_index: golem_common::model::oplog::OplogIndex::from_u64(7),
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: entry.clone(),
+        });
+        let text = serde_json::to_string(&page_entry).unwrap();
+        assert!(text.contains(claims), "{text}");
+        let PublicOplogPageEntry::Included(read) =
+            serde_json::from_str::<PublicOplogPageEntry>(&text).unwrap()
+        else {
+            panic!("the page entry is not included");
+        };
+        assert_eq!(claims_of_original(&read.entry), Some(claims));
+
+        let line = serde_json::to_string(&AgentOplogEntryView {
+            index: 7,
+            attribution: PublicOplogEntryAttribution::agent(),
+            entry: AgentOplogEntryContent::Full(entry),
+        })
+        .unwrap();
+        let view = serde_json::from_str::<AgentOplogEntryView>(&line).unwrap();
+        let AgentOplogEntryContent::Full(read) = &view.entry else {
+            panic!("the document line holds no full entry");
+        };
+        assert_eq!(claims_of_original(read), Some(claims));
+        assert_eq!(serde_json::to_string(&view).unwrap(), line);
+    }
+}
+
 /// The structured output holds a `serde_json::Value`, so it holds the claims as a `Value` object.
 /// A number that rounds still gives an object. A number beyond `f64` is an error, never a
 /// string.

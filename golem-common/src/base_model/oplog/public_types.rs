@@ -483,15 +483,25 @@ declare_structs! {
     }
 }
 
-declare_unions! {
-    /// An item of an oplog page: a full oplog entry, or an entry that the page leaves out
-    /// because it is too large.
-    #[allow(clippy::large_enum_variant)]
-    pub enum PublicOplogPageEntry {
-        Included(PublicOplogEntryWithIndex),
-        Omitted(OmittedOplogEntry),
-    }
+/// An item of an oplog page: a full oplog entry, or an entry that the page leaves out because it
+/// is too large.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
+pub enum PublicOplogPageEntry {
+    Included(PublicOplogEntryWithIndex),
+    Omitted(OmittedOplogEntry),
+}
 
+// Read without a buffer, so the claims of the callers keep their exact JSON text. See `raw_json`.
+crate::deserialize_internally_tagged!(PublicOplogPageEntry, "type", {
+    "Included" => Included,
+    "Omitted" => Omitted,
+});
+
+declare_unions! {
     pub enum PublicOplogEntryAttribution {
         Agent(Empty),
         Entity(PublicEntityInvocationContext),
@@ -873,7 +883,7 @@ pub enum OplogInclude {
     Claims,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -886,6 +896,17 @@ pub enum PublicAgentInvocation {
     ProcessOplogEntries(ProcessOplogEntriesParameters),
     ManualUpdate(ManualUpdateParameters),
 }
+
+// Read without a buffer, so the claims of the callers keep their exact JSON text. See `raw_json`.
+crate::deserialize_internally_tagged!(PublicAgentInvocation, "type", {
+    "AgentInitialization" => AgentInitialization,
+    "AgentMethodInvocation" => AgentMethodInvocation,
+    "ExternalTool" => ExternalTool,
+    "SaveSnapshot" => SaveSnapshot,
+    "LoadSnapshot" => LoadSnapshot,
+    "ProcessOplogEntries" => ProcessOplogEntries,
+    "ManualUpdate" => ManualUpdate,
+});
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]

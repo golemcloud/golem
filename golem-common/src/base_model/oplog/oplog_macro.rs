@@ -115,7 +115,7 @@ macro_rules! oplog_entry {
             })*
         }
 
-        #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, Debug, PartialEq, serde::Serialize)]
         #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
         #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
         #[serde(tag = "type")]
@@ -128,6 +128,23 @@ macro_rules! oplog_entry {
                     public_oplog_entry::$params_name
                 }
             )),*
+        }
+
+        // Read without a buffer, so the claims of the callers keep their exact JSON text. See
+        // `raw_json`.
+        impl<'de> serde::Deserialize<'de> for PublicOplogEntry {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let raw = $crate::base_model::raw_json::raw_value(deserializer)?;
+                let tag: String = $crate::base_model::raw_json::tag_of::<D::Error>(&raw, "type")?;
+                match tag.as_str() {
+                    $(stringify!($case) => $crate::base_model::raw_json::parse::<_, D::Error>(&raw)
+                        .map(Self::$case),)*
+                    other => Err(<D::Error as serde::de::Error>::unknown_variant(
+                        other,
+                        &[$(stringify!($case)),*],
+                    )),
+                }
+            }
         }
 
         impl PublicOplogEntry {

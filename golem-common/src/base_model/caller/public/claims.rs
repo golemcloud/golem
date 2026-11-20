@@ -24,9 +24,10 @@ use serde_json::value::RawValue;
 /// `serde_json::to_string` or `to_writer`. `serde_json::to_value` parses the text again and so
 /// loses these exact bytes, or fails.
 ///
-/// A `serde_json` reader that reads the claims directly keeps the exact text. A reader that
-/// buffers the value first, as an internally tagged enum does, has parsed the value already, so
-/// the text is then the one of the parsed value.
+/// A `serde_json` reader keeps the exact text. A reader must give the JSON text: a `serde_json`
+/// reader or a `serde_json::Value`. A container that buffers the value first, such as a derived
+/// internally tagged enum, cannot, and the read fails. The tagged enums of the public oplog and
+/// of the public caller read their values without a buffer for this reason (see `raw_json`).
 #[derive(Debug, Clone)]
 pub struct PublicClaims(Box<RawValue>);
 
@@ -93,69 +94,10 @@ impl Serialize for PublicClaims {
     }
 }
 
-/// The name that `serde_json` gives the raw-value newtype. A `serde_json` deserializer answers
-/// a request for this name with the exact JSON text of the next value.
-const RAW_VALUE_TOKEN: &str = "$serde_json::private::RawValue";
-
-/// The only member name of the map that `serde_json` uses to hand over the raw JSON text.
-struct RawKey;
-
-impl<'de> Deserialize<'de> for RawKey {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct KeyVisitor;
-
-        impl serde::de::Visitor<'_> for KeyVisitor {
-            type Value = ();
-
-            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("the raw value token")
-            }
-
-            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<(), E> {
-                if text == RAW_VALUE_TOKEN {
-                    Ok(())
-                } else {
-                    Err(E::custom("unexpected raw value key"))
-                }
-            }
-        }
-
-        deserializer.deserialize_identifier(KeyVisitor)?;
-        Ok(RawKey)
-    }
-}
-
-struct ClaimsVisitor;
-
-impl<'de> serde::de::Visitor<'de> for ClaimsVisitor {
-    type Value = PublicClaims;
-
-    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a JSON object")
-    }
-
-    /// A `serde_json` deserializer gives the exact JSON text of the value.
-    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<PublicClaims, A::Error> {
-        map.next_key::<RawKey>()?
-            .ok_or_else(|| serde::de::Error::custom("expected the raw value token"))?;
-        let text = map.next_value::<String>()?;
-        PublicClaims::from_json(text).map_err(serde::de::Error::custom)
-    }
-
-    /// Any other deserializer, for example the buffer of an internally tagged enum, has parsed
-    /// the value already. The text is then the JSON text of that parsed value.
-    fn visit_newtype_struct<D: Deserializer<'de>>(
-        self,
-        deserializer: D,
-    ) -> Result<PublicClaims, D::Error> {
-        let value = serde_json::Value::deserialize(deserializer)?;
-        PublicClaims::from_value(&value).map_err(serde::de::Error::custom)
-    }
-}
-
 impl<'de> Deserialize<'de> for PublicClaims {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_newtype_struct(RAW_VALUE_TOKEN, ClaimsVisitor)
+        let raw = crate::base_model::raw_json::raw_value(deserializer)?;
+        Self::from_raw(raw).map_err(serde::de::Error::custom)
     }
 }
 

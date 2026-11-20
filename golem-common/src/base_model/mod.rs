@@ -53,6 +53,7 @@ pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod quota;
+pub mod raw_json;
 pub mod regions;
 pub mod reports;
 pub mod retry_policy;

@@ -56,12 +56,27 @@ pub struct AgentOplogEntryView {
 /// The entry of an `agent.oplog` document: the full oplog entry, or the description of an entry
 /// that the oplog page omitted because it is too large, when `--omit-payloads` is set or the
 /// full entry could not be read.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 pub enum AgentOplogEntryContent {
     Full(PublicOplogEntry),
     Omitted(OmittedOplogEntryContent),
+}
+
+// Read without a buffer, so the claims of the callers keep their exact JSON text. The `type`
+// member tells the two forms apart: an omitted entry has the type `Omitted`, and no oplog entry
+// has that type.
+impl<'de> Deserialize<'de> for AgentOplogEntryContent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use golem_common::base_model::raw_json::{parse, raw_value, tag_of};
+        let raw = raw_value(deserializer)?;
+        if tag_of::<D::Error>(&raw, "type")? == "Omitted" {
+            parse::<_, D::Error>(&raw).map(Self::Omitted)
+        } else {
+            parse::<_, D::Error>(&raw).map(Self::Full)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
