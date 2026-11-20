@@ -6,6 +6,22 @@ import { program } from "./conformance.ts"
 import { Golden, hash } from "./model.ts"
 import { here } from "./platform.ts"
 
+function successfulProcess(stdout: string): CommandExecutor.Process {
+  return {
+    [CommandExecutor.ProcessTypeId]: CommandExecutor.ProcessTypeId,
+    pid: CommandExecutor.ProcessId(1),
+    exitCode: Effect.succeed(CommandExecutor.ExitCode(0)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    stdout: Stream.make(Buffer.from(stdout)),
+    stderr: Stream.empty,
+    stdin: Sink.drain,
+    toJSON: () => ({}),
+    toString: () => "conformance test process",
+    [Inspectable.NodeInspectSymbol]: () => ({})
+  }
+}
+
 async function recordInMemory(
   name: string,
   answers: readonly [string, string] = ["ok\n", "ok\n"],
@@ -45,19 +61,7 @@ async function recordInMemory(
         if (answer === undefined) throw new Error("unexpected oracle call in recorder test")
         stdout = answer
       }
-      return {
-        [CommandExecutor.ProcessTypeId]: CommandExecutor.ProcessTypeId,
-        pid: CommandExecutor.ProcessId(1),
-        exitCode: Effect.succeed(CommandExecutor.ExitCode(0)),
-        isRunning: Effect.succeed(false),
-        kill: () => Effect.void,
-        stdout: Stream.make(Buffer.from(stdout)),
-        stderr: Stream.empty,
-        stdin: Sink.drain,
-        toJSON: () => ({}),
-        toString: () => "recorder test process",
-        [Inspectable.NodeInspectSymbol]: () => ({})
-      } satisfies CommandExecutor.Process
+      return successfulProcess(stdout)
     })
   )
   const ok = await Effect.runPromise(
@@ -110,4 +114,35 @@ test("re-recording an unchanged case preserves the golden bytes including unsele
   const result = await recordInMemory("selected", ["ok\n", "ok\n"], original)
   expect(result.ok).toBe(true)
   expect(result.text).toBe(original)
+})
+
+test("live compares against the running oracle without needing goldens or a recorded fingerprint", async () => {
+  const fs = FileSystem.makeNoop({
+    readDirectory: () => Effect.succeed(["live.json"]),
+    makeTempDirectoryScoped: () => Effect.succeed("/test"),
+    makeDirectory: () => Effect.void,
+    readFileString: (path) => {
+      if (path === join(here, "cases", "live.json")) {
+        return Effect.succeed(JSON.stringify({
+          description: "live comparison without recorded data",
+          tier: "pr",
+          cases: [{ name: "live", script: "echo ok", tags: [], options: {} }]
+        }))
+      }
+      if (path === "/test/status") return Effect.succeed("0")
+      return Effect.die(`unexpected file read: ${path}`)
+    }
+  })
+  const executor = CommandExecutor.makeExecutor((command) => {
+    if (command._tag !== "StandardCommand") return Effect.die("unexpected piped command")
+    const isCase = command.args.includes("bash") || command.args.includes("--status-file")
+    return Effect.succeed(successfulProcess(isCase ? "ok\n" : ""))
+  })
+  const ok = await Effect.runPromise(
+    program(["live", "--wasm", "shell.wasm", "--jobs", "1"]).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(CommandExecutor.CommandExecutor, executor)
+    )
+  )
+  expect(ok).toBe(true)
 })

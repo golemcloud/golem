@@ -1,6 +1,6 @@
 import { NodeContext } from "@effect/platform-node"
 import { expect, test } from "bun:test"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { join } from "node:path"
 import { failing } from "./compat/baseline.ts"
 import { argumentsFor, loadCases, oracleFingerprint } from "./conformance.ts"
@@ -19,9 +19,10 @@ import {
   type Outcome,
   redundantFixture,
   splitCalls,
+  ValidationError,
   wasmStatus
 } from "./model.ts"
-import { here, readJson } from "./platform.ts"
+import { attempt, here, readJson } from "./platform.ts"
 
 const c: Case = {
   name: "c",
@@ -171,6 +172,37 @@ test("feature detectors credit syntax and nested command starts, and reject unkn
       "compound.function"
     )
   ).toBe(true)
+  for (const name of ["café", "函数", "αριθμός"]) {
+    const credit = credited({ ...c, script: `function ${name} { :; }; echo \${${name}#x}` })
+    expect(credit.found.has("compound.function")).toBe(true)
+    expect(credit.found.has("expansion.parameter.trim")).toBe(true)
+  }
+  for (const script of ["éwhile", "whileé", "函数while", "while函数"]) {
+    expect(credited({ ...c, script }).found.has("compound.while")).toBe(false)
+  }
+  expect(credited({ ...c, script: "while true; do :; done" }).found.has("compound.while")).toBe(true)
+})
+
+test("validation errors remain recoverable, but unexpected exceptions remain defects", () => {
+  expect(Effect.runSync(attempt(() => 17))).toBe(17)
+  const invalid = new ValidationError({ message: "invalid fixture" })
+  expect(Effect.runSync(
+    attempt(() => {
+      throw invalid
+    }).pipe(Effect.flip)
+  )).toBe(invalid)
+  for (const bug of [new TypeError("implementation bug"), "unexpected thrown value"]) {
+    const exit = Effect.runSyncExit(
+      attempt(() => {
+        throw bug
+      }).pipe(Effect.either)
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect([...Cause.defects(exit.cause)]).toEqual([bug])
+      expect([...Cause.failures(exit.cause)]).toEqual([])
+    }
+  }
 })
 
 test("failure baselines reject new failures and fixes but ignore unselected known cases", () => {
@@ -206,6 +238,12 @@ test("jobs honor the executor budget and explicit override", () => {
   } finally {
     if (old === undefined) delete process.env.BASH_CONFORMANCE_JOBS
     else process.env.BASH_CONFORMANCE_JOBS = old
+  }
+})
+
+test("argument parser mistakes are validation errors rather than implementation defects", () => {
+  for (const argv of [["--unknown"], ["--wasm"], ["--jobs=2", "--runs"]]) {
+    expect(() => argumentsFor(argv)).toThrow(ValidationError)
   }
 })
 

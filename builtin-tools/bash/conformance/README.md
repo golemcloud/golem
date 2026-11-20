@@ -29,7 +29,7 @@ bun builtin-tools/bash/conformance/conformance.ts record --prefix '<text>'
 
 The package's `check` script runs strict TypeScript checks, oxlint and dprint. The cargo-make preparation task runs the same checks. `bun run --cwd builtin-tools/bash/conformance format` formats the TypeScript and package configuration, not the corpora or goldens. The pinned native oxlint rules follow Effect's conventions and reject explicit `any`; they do not require the unpublished `@effect/oxc` plugin. Formatting uses two spaces, double quotes, no semicolons or trailing commas, and a 120-column target.
 
-The CLI supports `check` (the default), `coverage`, `record`, `live` and `stale`. `live` compares with the oracle directly. `stale` re-runs it to find answers that no longer match the goldens. Only `record` writes goldens. `check` and `coverage` need no Docker.
+The CLI supports `check` (the default), `coverage`, `record`, `live` and `stale`. `live` compares with the oracle directly, without reading goldens or a recorded fingerprint. `stale` re-runs it to find answers that no longer match the goldens. Only `record` writes goldens. `check` and `coverage` need no Docker.
 
 The harness compiles the shell once before parallel execution, outside the per-case timeout, with a 120-second compilation timeout. Each case has a fresh filesystem and a 15-second execution timeout unless its `options.timeout` overrides it. Both output streams drain concurrently. Effect scopes release temporary directories and subprocesses, including on timeout or interruption. Oracle containers are scoped to workers and reset before each case.
 
@@ -44,6 +44,8 @@ Each corpus has a `description`, `tier` (`pr` or `sweep`) and `cases` array. Eac
 A line `#--call-- /some/directory` splits a script into separate calls. Each call starts a fresh shell. Our example carries the previous call's final cwd, as a caller passing back the tool's returned cwd does. The oracle starts the next call in the directory named by the marker (`/` if omitted). Outputs concatenate and the last call supplies the status. State other than cwd does not carry between shells.
 
 `features.json` lists language features, builtins, commands, explicit not-applicable reasons, qualifier tags and Unicode-aware ECMAScript syntax detectors. A case earns credit from its tags, syntax and command positions, and its command-prefixed name. `coverage` rejects unknown tags, uncovered applicable features, and differences between the checklist and the shell's actual `compgen` builtin/command registration. `printf` is a command that replaces a Bash builtin; `probe-tool` and `legacy-stdin` are example-only fixtures.
+
+Detectors are coverage heuristics, not a shell parser. They use native ECMAScript `\s` for whitespace and `[\p{L}\p{N}_]` for Unicode names and keyword boundaries. Keep those boundaries Unicode-aware: `café()` is a function, but `whileé` is not the `while` keyword. These expressions do not emulate Python's regular-expression semantics.
 
 ## Oracle and goldens
 

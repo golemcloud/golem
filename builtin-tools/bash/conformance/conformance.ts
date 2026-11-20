@@ -46,29 +46,7 @@ const wasmtimeOptions = [
 const dockerfile = join(here, "oracle.Dockerfile")
 const CommandName = Schema.Literal("check", "record", "live", "stale", "coverage")
 export function argumentsFor(argv: string[]) {
-  const { values: v, positionals } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    options: {
-      wasm: { type: "string" },
-      wasmtime: { type: "string", default: "wasmtime" },
-      "oracle-image": {
-        type: "string",
-        default: "golem-cooperative-bash5-oracle:local"
-      },
-      case: { type: "string", multiple: true, default: [] },
-      prefix: { type: "string", multiple: true, default: [] },
-      jobs: {
-        type: "string",
-        default: process.env.BASH_CONFORMANCE_JOBS ?? String(availableParallelism())
-      },
-      report: { type: "string" },
-      tier: { type: "string", default: "pr" },
-      "known-failures": { type: "string" },
-      "update-known-failures": { type: "boolean", default: false },
-      runs: { type: "string", default: "2" }
-    }
-  })
+  const { values: v, positionals } = parseArguments(argv)
   const command = positionals[0] ?? "check"
   if (
     positionals.length > 1 ||
@@ -97,6 +75,38 @@ export function argumentsFor(argv: string[]) {
     return { ...v, jobs, runs, command, wasm: v.wasm }
   }
   return { ...v, jobs, runs, command }
+}
+function parseArguments(argv: string[]) {
+  try {
+    return parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        wasm: { type: "string" },
+        wasmtime: { type: "string", default: "wasmtime" },
+        "oracle-image": {
+          type: "string",
+          default: "golem-cooperative-bash5-oracle:local"
+        },
+        case: { type: "string", multiple: true, default: [] },
+        prefix: { type: "string", multiple: true, default: [] },
+        jobs: {
+          type: "string",
+          default: process.env.BASH_CONFORMANCE_JOBS ?? String(availableParallelism())
+        },
+        report: { type: "string" },
+        tier: { type: "string", default: "pr" },
+        "known-failures": { type: "string" },
+        "update-known-failures": { type: "boolean", default: false },
+        runs: { type: "string", default: "2" }
+      }
+    })
+  } catch (error) {
+    if (error instanceof TypeError && "code" in error && String(error.code).startsWith("ERR_PARSE_ARGS_")) {
+      throw new ValidationError({ message: error.message })
+    }
+    throw error
+  }
 }
 type Args = ReturnType<typeof argumentsFor>
 type WasmArgs = Extract<Args, { wasm: string }>
@@ -163,15 +173,14 @@ const readGolden = Effect.fn("conformance.readGolden")(function*(corpus: string)
     ? yield* readJson(path, Golden)
     : ({ oracle: null, cases: new Map() } satisfies Golden)
 })
-type RecordedCase = Case & { readonly golden: Golden }
-const goldensFor = (cases: readonly Case[]) =>
+const loadGoldenCorpora = (cases: readonly Case[]) =>
   Effect.forEach(
     [...new Set(cases.map((c) => c.corpus))],
     (corpus) =>
       readGolden(corpus).pipe(
-        Effect.map((golden) => cases.filter((c) => c.corpus === corpus).map((c) => ({ ...c, golden })))
+        Effect.map((golden) => ({ corpus, golden, cases: cases.filter((c) => c.corpus === corpus) }))
       )
-  ).pipe(Effect.map((groups) => groups.flat()))
+  )
 const compile = (args: WasmArgs, base: string) =>
   runChecked(
     [
@@ -375,8 +384,8 @@ const checkBaseline = Effect.fn("conformance.checkBaseline")(function*(
 
 const compare = (
   args: WasmArgs,
-  cases: readonly RecordedCase[],
-  expectation: (c: RecordedCase) => Outcome
+  cases: readonly Case[],
+  expectation: (c: Case) => Outcome
 ) =>
   Effect.scoped(
     Effect.gen(function*() {
@@ -537,23 +546,26 @@ export const program = Effect.fn("conformance.program")(function*(argv: string[]
     return yield* Effect.fail(new ValidationError({ message: "no cases selected" }))
   }
   if (args.command === "coverage") return yield* coverage(args, selected)
-  const fingerprint = yield* oracleFingerprint
-  const cases = yield* goldensFor(selected)
   if (args.command === "check") {
-    return yield* compare(args, cases, (c) => {
-      const golden = goldenFor(c, c.golden, fingerprint)
-      const redundant = redundantFixture(c, golden)
+    const fingerprint = yield* oracleFingerprint
+    const corpora = yield* loadGoldenCorpora(selected)
+    const goldens = new Map(corpora.map(({ corpus, golden }) => [corpus, golden]))
+    return yield* compare(args, selected, (c) => {
+      const data = goldens.get(c.corpus)
+      if (data === undefined) throw new Error(`missing golden group for ${c.corpus}`)
+      const outcome = goldenFor(c, data, fingerprint)
+      const redundant = redundantFixture(c, outcome)
       if (redundant) throw new ValidationError({ message: redundant })
-      return expectedFor(c, golden)
+      return expectedFor(c, outcome)
     })
   }
   yield* buildOracle(args["oracle-image"])
   if (args.command === "live") {
     const results = yield* runOracle(
-      cases.filter((c) => !c.expected),
+      selected.filter((c) => !c.expected),
       args
     )
-    return yield* compare(args, cases, (c) => {
+    return yield* compare(args, selected, (c) => {
       if (c.expected) return expectedFor(c, c.expected)
       const result = results.get(c.name)
       if (!result || Either.isLeft(result)) {
@@ -562,42 +574,47 @@ export const program = Effect.fn("conformance.program")(function*(argv: string[]
       return expectedFor(c, result.right)
     })
   }
+  const fingerprint = yield* oracleFingerprint
+  const corpora = yield* loadGoldenCorpora(selected)
   if (args.command === "stale") {
-    const needed = cases.filter((c) => !c.expected && !c.oracleRace)
+    const needed = selected.filter((c) => !c.expected && !c.oracleRace)
     const results = yield* runOracle(needed, args)
     let stale = 0
-    for (const c of needed) {
-      const result = results.get(c.name)
-      const comparison = yield* attempt(() => {
-        const golden = goldenFor(c, c.golden, fingerprint)
-        if (!result || Either.isLeft(result)) {
-          throw new ValidationError({ message: result ? result.left : "oracle did not run" })
+    for (const { golden: data, cases } of corpora) {
+      for (const c of cases) {
+        if (c.expected || c.oracleRace) continue
+        const result = results.get(c.name)
+        const comparison = yield* attempt(() => {
+          const golden = goldenFor(c, data, fingerprint)
+          if (!result || Either.isLeft(result)) {
+            throw new ValidationError({ message: result ? result.left : "oracle did not run" })
+          }
+          const field = differingField(golden, result.right)
+          if (field) {
+            throw new ValidationError({ message: `oracle now answers ${JSON.stringify(result.right)} (${field})` })
+          }
+        }).pipe(Effect.either)
+        if (comparison._tag === "Left") {
+          stale++
+          yield* Console.log(`STALE ${c.name}: ${comparison.left}`)
         }
-        const field = differingField(golden, result.right)
-        if (field) {
-          throw new ValidationError({ message: `oracle now answers ${JSON.stringify(result.right)} (${field})` })
-        }
-      }).pipe(Effect.either)
-      if (comparison._tag === "Left") {
-        stale++
-        yield* Console.log(`STALE ${c.name}: ${comparison.left}`)
       }
     }
     yield* Console.log(`${stale} stale of ${needed.length} goldens`)
     return stale === 0
   }
-  const runs = yield* Effect.forEach(Array.from({ length: args.runs }), () => runOracle(cases, args))
+  const runs = yield* Effect.forEach(Array.from({ length: args.runs }), () => runOracle(selected, args))
   let failures = 0
   let recorded = 0
   const names = new Set(all.map((c) => c.name))
-  for (const [corpus, old] of new Map(cases.map((c) => [c.corpus, c.golden]))) {
+  for (const { corpus, golden: old, cases } of corpora) {
     const entries = new Map<string, Outcome & { script: string }>(
       old.oracle?.dockerfile === fingerprint.dockerfile &&
         old.oracle?.profile === fingerprint.profile
         ? old.cases
         : []
     )
-    for (const c of cases.filter((c) => c.corpus === corpus)) {
+    for (const c of cases) {
       const values = runs.map((run) => run.get(c.name))
       const outcomes = values.flatMap((v) => v && Either.isRight(v) ? [v.right] : [])
       const first = outcomes[0]
@@ -631,7 +648,7 @@ export const program = Effect.fn("conformance.program")(function*(argv: string[]
     }
     yield* writeJson(join(here, "goldens", `${corpus}.json`), data)
   }
-  yield* Console.log(`recorded ${recorded} of ${cases.length} cases`)
+  yield* Console.log(`recorded ${recorded} of ${selected.length} cases`)
   return failures === 0
 })
 if (import.meta.main) main(program(process.argv.slice(2)))

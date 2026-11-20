@@ -14,8 +14,8 @@ export const here = fileURLToPath(new URL(".", import.meta.url))
 export const attempt = <A>(f: () => A) =>
   Effect.try({
     try: f,
-    catch: (error) => error instanceof ValidationError ? error : new ValidationError({ message: String(error) })
-  })
+    catch: (error) => error
+  }).pipe(Effect.catchAll((error) => error instanceof ValidationError ? Effect.fail(error) : Effect.die(error)))
 export const readJson = Effect.fn("conformance.readJson")(function*<A, I>(path: string, schema: Schema.Schema<A, I>) {
   const fs = yield* FileSystem.FileSystem
   return yield* Schema.decodeUnknown(Schema.parseJson(schema), {
