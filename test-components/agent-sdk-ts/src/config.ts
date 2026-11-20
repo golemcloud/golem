@@ -7,6 +7,7 @@ import {
   createPromise,
   Uuid,
   isRemoteCallError,
+  type AgentId,
 } from '@golemcloud/golem-ts-sdk';
 import type { PromiseId } from 'golem:api/host@1.5.0';
 
@@ -54,6 +55,7 @@ export const StaticDefaultsAgentImpl = StaticDefaultsAgent.implement({
   init: ({ config }) => {
     const choice = config.choice;
     return {
+      nativeIds: new Map<string, AgentId>(),
       initial: {
         settings: config.settings,
         choice: { [choice.startsWith('selected:') ? 'Text' : 'Other']: choice },
@@ -76,9 +78,20 @@ export const StaticDefaultsAgentImpl = StaticDefaultsAgent.implement({
       });
     },
     async readNativeOverrides({ name, label, limit }) {
-      return NativeConfigAgent.client
-        .get({ name }, { max_chars: limit, display_record: { display_name: label } })
-        .read();
+      const existing = this.nativeIds.get(name);
+      const client = existing
+        ? await NativeConfigAgent.client.getById(existing)
+        : await NativeConfigAgent.client.create(
+            { name },
+            {
+              config: {
+                max_chars: limit,
+                display_record: { display_name: label },
+              },
+            },
+          );
+      this.nativeIds.set(name, await client.agentId());
+      return client.read();
     },
   },
 });
@@ -403,7 +416,9 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
       const config = this.config;
       // Override `foo`, and `nested.a` only when it is actually set (omitting an
       // undefined leaf leaves the callee's manifest value in place).
-      const overrides: { foo: number; nested?: { a: boolean } } = { foo: config.foo };
+      const overrides: { foo: number; nested?: { a: boolean } } = {
+        foo: config.foo,
+      };
       if (config.nested_a !== undefined) {
         overrides.nested = { a: config.nested_a };
       }

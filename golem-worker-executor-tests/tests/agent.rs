@@ -1181,7 +1181,7 @@ async fn check_static_config_reconstruction(
         .with_agent_config(agent_type, entries("deployment"))
         .store()
         .await?;
-    let agent_id = agent_id!(agent_type, "captured-defaults");
+    let agent_id = agent_key!(agent_type, "captured-defaults");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -1190,7 +1190,7 @@ async fn check_static_config_reconstruction(
             entries("creation"),
         )
         .await?;
-    let deployed_agent_id = agent_id!(agent_type, "deployment-defaults");
+    let deployed_agent_id = agent_key!(agent_type, "deployment-defaults");
     let reads = [
         (&deployed_agent_id, &reference["expectedDeploymentRead"]),
         (&agent_id, &reference["expectedRead"]),

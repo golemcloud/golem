@@ -513,6 +513,7 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
             metadata: Blob::new(metadata),
             object_store_key: String::new(),
             binary_hash: SqlBlake3Hash::empty(),
+            package_metadata: None,
         },
         vec![],
     )
@@ -535,6 +536,7 @@ async fn component_config_defaults_are_recaptured_only_when_config_is_supplied()
         tool_middlewares: None,
         tool_middleware_provision_config_updates: None,
         allow_incompatible_config: false,
+        package_metadata: None,
     };
     let retained = services
         .component_write_service
