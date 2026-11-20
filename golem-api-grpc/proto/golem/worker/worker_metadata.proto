@@ -54,6 +54,8 @@ message AgentMetadata {
   // The canonical constructor parameter text of a component agent, without its type name.
   // Agents without a key have it too.
   optional string constructor_parameters = 26;
+  // The folded status underneath `status`. Set only when `status` is SANDBOXED.
+  optional AgentStatus underlying_status = 27;
 }
 
 message UpdateRecord {

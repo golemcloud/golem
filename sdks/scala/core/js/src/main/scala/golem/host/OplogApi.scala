@@ -72,7 +72,8 @@ object OplogApi {
     parent: Option[AgentId],
     componentSize: BigInt,
     initialTotalLinearMemorySize: BigInt,
-    initialActivePlugins: List[PluginInstallationDescription]
+    initialActivePlugins: List[PluginInstallationDescription],
+    neverLive: Boolean
   )
 
   final case class HostCallParameters(
@@ -706,7 +707,8 @@ object OplogApi {
       parent = raw.parent.toOption.map(parseAgentId),
       componentSize = BigInt(raw.componentSize.toString),
       initialTotalLinearMemorySize = BigInt(raw.initialTotalLinearMemorySize.toString),
-      initialActivePlugins = raw.initialActivePlugins.toList.map(parsePluginInstallationDescription)
+      initialActivePlugins = raw.initialActivePlugins.toList.map(parsePluginInstallationDescription),
+      neverLive = raw.neverLive
     )
 
   private def parseHostCallParameters(raw: JsHostCallParameters): HostCallParameters =

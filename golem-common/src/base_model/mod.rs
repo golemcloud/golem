@@ -588,6 +588,9 @@ pub enum AgentStatus {
     Failed,
     /// The worker exited after a successful invocation and can no longer be invoked
     Exited,
+    /// The worker is a never-live sandbox: it replays its history and never runs live.
+    /// The folded status underneath is kept as the underlying status.
+    Sandboxed,
 }
 
 impl PartialOrd for AgentStatus {
@@ -616,6 +619,7 @@ impl FromStr for AgentStatus {
             "retrying" => Ok(AgentStatus::Retrying),
             "failed" => Ok(AgentStatus::Failed),
             "exited" => Ok(AgentStatus::Exited),
+            "sandboxed" => Ok(AgentStatus::Sandboxed),
             _ => Err(format!("Unknown worker status: {s}")),
         }
     }
@@ -631,6 +635,7 @@ impl Display for AgentStatus {
             AgentStatus::Retrying => write!(f, "Retrying"),
             AgentStatus::Failed => write!(f, "Failed"),
             AgentStatus::Exited => write!(f, "Exited"),
+            AgentStatus::Sandboxed => write!(f, "Sandboxed"),
         }
     }
 }
@@ -647,6 +652,7 @@ impl TryFrom<i32> for AgentStatus {
             4 => Ok(AgentStatus::Retrying),
             5 => Ok(AgentStatus::Failed),
             6 => Ok(AgentStatus::Exited),
+            7 => Ok(AgentStatus::Sandboxed),
             _ => Err(format!("Unknown worker status: {value}")),
         }
     }
@@ -662,6 +668,7 @@ impl From<AgentStatus> for i32 {
             AgentStatus::Retrying => 4,
             AgentStatus::Failed => 5,
             AgentStatus::Exited => 6,
+            AgentStatus::Sandboxed => 7,
         }
     }
 }

@@ -38,7 +38,7 @@ Example:
 }
 ```
 
-`$type` values are stable output type identifiers. They often resemble CLI command/action paths, but they are not guaranteed to be literal command paths. Use schema metadata such as `x-golem-command` and, when present, `x-golem-commands` to understand which CLI command or commands can emit a type.
+`$type` values are stable output type identifiers. They often resemble CLI command/action paths, but they are not guaranteed to be literal command paths. Use schema metadata such as `x-golem-command` and, when present, `x-golem-commands` to understand which CLI command or commands can emit a type. A type that no CLI command emits names the `golem mcp serve` tool that returns it in `x-golem-mcp-tool` instead, such as `agent.oplog-export` of the tool `agent_oplog_export`.
 
 Naming examples:
 

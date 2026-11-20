@@ -107,6 +107,8 @@ const (
 	AgentStatusFailed uint8 = 5
 	// The agent exited after a successful invocation and can no longer be invoked
 	AgentStatusExited uint8 = 6
+	// The agent is a never-live sandbox: it replays its history and never runs live
+	AgentStatusSandboxed uint8 = 7
 )
 
 // The current status of an agent

@@ -96,6 +96,7 @@ before (value) { let mut value = value; value.redact_host_managed_values_for_ext
         })
         .collect::<Result<Vec<_>, String>>()?,
         instance_id: instance_id.into(),
+        never_live: never_live,
     } }
     Start { record StartParams => StartParameters {
         timestamp: timestamp.into(),

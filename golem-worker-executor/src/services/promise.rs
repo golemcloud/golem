@@ -711,7 +711,10 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             | AgentStatus::Running
             | AgentStatus::Suspended
             | AgentStatus::Retrying => true,
-            AgentStatus::Exited | AgentStatus::Failed | AgentStatus::Idle => false,
+            AgentStatus::Exited
+            | AgentStatus::Failed
+            | AgentStatus::Idle
+            | AgentStatus::Sandboxed => false,
         };
 
         if should_activate {

@@ -346,6 +346,7 @@ impl ForwardingOplogState {
         // be copied into every delivery checkpoint.
         let delivery_status = AgentStatusRecord {
             status: status.status,
+            never_live: status.never_live,
             component_revision: status.component_revision,
             current_retry_state: status
                 .current_retry_state

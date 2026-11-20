@@ -842,6 +842,7 @@ impl Walker<'_, '_> {
                 initial_active_plugins,
                 local_agent_config,
                 instance_id,
+                never_live,
             }) => Fields::new()
                 .add("agentId", self.agent(agent_id))
                 .opt(
@@ -893,6 +894,7 @@ impl Walker<'_, '_> {
                     ),
                 )
                 .add("instanceId", text(instance_id.to_string()))
+                .add("neverLive", self.boolean(*never_live))
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,

@@ -1320,6 +1320,7 @@ mod tests {
             initial_active_plugins: Vec::new(),
             local_agent_config: Vec::new(),
             instance_id: uuid(instance),
+            never_live: false,
         })
     }
 

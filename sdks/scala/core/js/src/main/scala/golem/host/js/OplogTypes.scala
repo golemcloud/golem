@@ -69,6 +69,7 @@ sealed trait JsCreateParameters extends js.Object {
   def initialTotalLinearMemorySize: js.BigInt                         = js.native
   def initialActivePlugins: js.Array[JsPluginInstallationDescription] = js.native
   def localAgentConfig: js.Array[JsLocalAgentConfigEntry]             = js.native
+  def neverLive: Boolean                                              = js.native
 }
 
 // --- HostCallParameters ---

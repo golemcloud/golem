@@ -747,6 +747,7 @@ async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
                 deleted_regions: vec![],
                 last_oplog_index: OplogIndex::from_u64(17),
                 fingerprint,
+                underlying_status: None,
             },
         );
         ids.push(id);

@@ -223,9 +223,13 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     created_by: Some(worker_metadata.created_by.into()),
                     component_revision: latest_status.component_revision.into(),
                     status: Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(
-                        latest_status.status,
+                        latest_status.reported_status(),
                     )
                     .into(),
+                    underlying_status: latest_status.underlying_status().map(|status| {
+                        Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(status)
+                            .into()
+                    }),
                     retry_count: latest_status
                         .current_retry_state
                         .iter()

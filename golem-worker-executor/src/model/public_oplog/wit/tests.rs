@@ -751,6 +751,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         OwnerKind::EphemeralExternalTool,
         OwnerKind::OplogProcessor,
     ] {
+        let never_live = owner_kind == OwnerKind::ComponentAgent;
         let entry = OplogEntry::Create {
             timestamp: Timestamp::from(1_700_000_123_456),
             parameters: Box::new(CreateParameters {
@@ -778,6 +779,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),
+                never_live,
             }),
         };
         let oplog::OplogEntry::Create(mut encoded) = oplog::OplogEntry::try_from(entry).unwrap()
@@ -822,6 +824,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         );
         assert_eq!(encoded.component_size, 317);
         assert_eq!(encoded.initial_total_linear_memory_size, 941);
+        assert_eq!(encoded.never_live, never_live);
         assert_eq!(
             Uuid::from_u64_pair(encoded.instance_id.high_bits, encoded.instance_id.low_bits),
             instance_id
@@ -854,6 +857,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         assert_eq!(parameters.environment_id, environment_id);
         assert_eq!(parameters.created_by, created_by);
         assert_eq!(parameters.instance_id, instance_id);
+        assert_eq!(parameters.never_live, never_live);
     }
 }
 

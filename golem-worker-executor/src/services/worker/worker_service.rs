@@ -124,6 +124,7 @@ impl WorkerService for DefaultWorkerService {
                     local_agent_config,
                     instance_id,
                     create_request,
+                    never_live,
                 } = *parameters;
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 debug_assert_eq!(AgentFingerprint(instance_id), resolved_fingerprint);
@@ -185,6 +186,7 @@ impl WorkerService for DefaultWorkerService {
                             ..Default::default()
                         },
                         agent_mode,
+                        never_live,
                         ..AgentStatusRecord::default()
                     },
                     fingerprint: AgentFingerprint(instance_id),

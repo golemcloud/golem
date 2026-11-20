@@ -986,7 +986,18 @@ async fn management_statuses(
             "get_oplog",
             status(
                 &client
-                    .get_oplog(&environment, &agent, Some(0), 10, None, None, None)
+                    .get_oplog(
+                        &environment,
+                        &agent,
+                        Some(0),
+                        10,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                     .await,
             ),
         ),

@@ -109,7 +109,10 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
         local-agent-config: list<local-agent-config-entry>,
-        instance-id: uuid
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
     }
 
     enum owner-kind {
@@ -841,7 +844,10 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<environment-plugin-grant-id>,
         local-agent-config: list<raw-local-agent-config-entry>,
-        instance-id: uuid
+        instance-id: uuid,
+        /// Whether the agent is a never-live sandbox. A marked agent reports the
+        /// `sandboxed` status.
+        never-live: bool
     }
 
     record raw-start-parameters {

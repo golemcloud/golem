@@ -197,6 +197,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
                     &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(
                     ),
                 ),
+                never_live: false,
             },
         )))
         .await

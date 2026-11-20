@@ -1333,6 +1333,7 @@ fn agent_filter_strategy() -> impl proptest::strategy::Strategy<Value = AgentFil
         Just(AgentStatus::Retrying),
         Just(AgentStatus::Failed),
         Just(AgentStatus::Exited),
+        Just(AgentStatus::Sandboxed),
     ];
     let mode = prop_oneof![Just(AgentMode::Durable), Just(AgentMode::Ephemeral)];
 
@@ -1692,6 +1693,155 @@ fn worker_filter_matches() {
         );
     }
     assert!(!AgentFilter::new_or(vec![]).matches(&worker_metadata));
+}
+
+fn sandbox_metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
+    let component_id = ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3"));
+    AgentMetadata {
+        component_id,
+        agent_type_name: None,
+        canonical_key: None,
+        constructor_parameters: None,
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
+        agent_id: AgentId::from_parts(1, 1),
+        env: vec![],
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
+        created_by_email: AccountEmail::new("test@golem"),
+        config: vec![],
+        created_at: Timestamp::now_utc(),
+        parent: None,
+        last_known_status: AgentStatusRecord {
+            status,
+            never_live,
+            ..AgentStatusRecord::default()
+        },
+        fingerprint: AgentFingerprint(Uuid::now_v7()),
+        agent_mode: AgentMode::Durable,
+        create_request: crate::model::oplog::CreateRequest::new(
+            crate::model::oplog::CreateRequestKind::Fork,
+            None,
+            crate::base_model::caller::Caller::anonymous(),
+            &crate::model::invocation_context::InvocationContextStack::fresh_rounded(),
+        ),
+    }
+}
+
+#[test]
+fn sandboxed_status_parses_displays_converts_and_sorts_last() {
+    assert_eq!(
+        AgentFilter::from_str("status = sandboxed").unwrap(),
+        AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Sandboxed)
+    );
+    assert_eq!(
+        AgentStatus::from_str("Sandboxed"),
+        Ok(AgentStatus::Sandboxed)
+    );
+    assert_eq!(AgentStatus::Sandboxed.to_string(), "Sandboxed");
+    assert_eq!(i32::from(AgentStatus::Sandboxed), 7);
+    assert_eq!(AgentStatus::try_from(7), Ok(AgentStatus::Sandboxed));
+    assert_eq!(
+        golem_api_grpc::proto::golem::worker::AgentStatus::from(AgentStatus::Sandboxed) as i32,
+        golem_api_grpc::proto::golem::worker::AgentStatus::Sandboxed as i32
+    );
+    assert!(AgentStatus::Sandboxed > AgentStatus::Exited);
+    assert_eq!(
+        serde_json::to_string(&AgentStatus::Sandboxed).unwrap(),
+        "\"Sandboxed\""
+    );
+    let bytes = crate::serialization::serialize(&AgentStatus::Sandboxed).unwrap();
+    assert_eq!(
+        crate::serialization::deserialize::<AgentStatus>(&bytes).unwrap(),
+        AgentStatus::Sandboxed
+    );
+}
+
+/// The filter's status leaf matches the reported status. A marked agent whose folded status is
+/// `Running` is `Sandboxed`, not `Running`, and an unmarked agent is matched by its folded status.
+#[test]
+fn status_filter_matches_the_reported_status_of_a_sandbox() {
+    let sandbox = sandbox_metadata(true, AgentStatus::Running);
+    let sandboxed = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Sandboxed);
+    let running = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Running);
+    assert!(sandboxed.matches(&sandbox));
+    assert!(!running.matches(&sandbox));
+    assert!(
+        AgentFilter::new_status(FilterComparator::Greater, AgentStatus::Exited).matches(&sandbox)
+    );
+    assert!(
+        !AgentFilter::new_status(FilterComparator::LessEqual, AgentStatus::Exited)
+            .matches(&sandbox)
+    );
+
+    let live = sandbox_metadata(false, AgentStatus::Running);
+    assert!(running.matches(&live));
+    assert!(!sandboxed.matches(&live));
+}
+
+/// Guest metadata and guest enumeration both go through this projection: a guest sees
+/// `Sandboxed` for a marked agent, while the internal folded status stays `Running`.
+#[test]
+fn guest_metadata_reports_sandboxed_for_a_marked_agent() {
+    use crate::model::oplog::types::AgentMetadataForGuests;
+
+    let sandbox = sandbox_metadata(true, AgentStatus::Running);
+    let guest = AgentMetadataForGuests::from(sandbox.clone());
+    assert_eq!(guest.status, AgentStatus::Sandboxed);
+    assert_eq!(sandbox.last_known_status.status, AgentStatus::Running);
+
+    let live = AgentMetadataForGuests::from(sandbox_metadata(false, AgentStatus::Suspended));
+    assert_eq!(live.status, AgentStatus::Suspended);
+}
+
+#[test]
+fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
+    use crate::model::agent::AgentMetadataDto;
+    use golem_api_grpc::proto::golem::worker::AgentMetadata as ProtoAgentMetadata;
+
+    let dto = |status: AgentStatus, underlying_status: Option<AgentStatus>| AgentMetadataDto {
+        agent_id: AgentId::from_parts(1, 1),
+        agent_type_name: None,
+        canonical_key: None,
+        constructor_parameters: None,
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId::new(),
+        env: HashMap::new(),
+        config: vec![],
+        status,
+        underlying_status,
+        component_revision: ComponentRevision::new(1).unwrap(),
+        retry_count: 0,
+        pending_invocation_count: 0,
+        updates: vec![],
+        created_at: Timestamp::now_utc().rounded(),
+        last_error: None,
+        last_error_kind: None,
+        component_size: 0,
+        total_linear_memory_size: 0,
+        exported_resource_instances: vec![],
+        active_plugins: Default::default(),
+        skipped_regions: vec![],
+        deleted_regions: vec![],
+        last_oplog_index: OplogIndex::from_u64(4),
+        fingerprint: AgentFingerprint(Uuid::new_v4()),
+    };
+
+    let sandbox = dto(AgentStatus::Sandboxed, Some(AgentStatus::Interrupted));
+    let proto = ProtoAgentMetadata::try_from(sandbox.clone()).unwrap();
+    assert_eq!(
+        proto.underlying_status,
+        Some(golem_api_grpc::proto::golem::worker::AgentStatus::Interrupted as i32)
+    );
+    assert_eq!(AgentMetadataDto::try_from(proto).unwrap(), sandbox);
+    let json = serde_json::to_value(&sandbox).unwrap();
+    assert_eq!(json["status"], "Sandboxed");
+    assert_eq!(json["underlyingStatus"], "Interrupted");
+
+    let live = dto(AgentStatus::Idle, None);
+    let proto = ProtoAgentMetadata::try_from(live.clone()).unwrap();
+    assert_eq!(proto.underlying_status, None);
+    assert_eq!(AgentMetadataDto::try_from(proto).unwrap(), live);
 }
 
 #[test]

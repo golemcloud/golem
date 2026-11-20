@@ -1716,9 +1716,38 @@ async fn outstanding_delivery_reuses_full_snapshot_after_reconstruction() {
             test_forwarding_oplog(HashSet::from([grant_id]), grant_id, 1).await;
         processor.failed_sends_remaining.store(1, Ordering::Relaxed);
         processor.target_is_local.store(local, Ordering::Relaxed);
+        // A never-live source whose folded status is `Running` must reach the processor as
+        // `Sandboxed`, on the first delivery and on the retry of its recorded snapshot.
+        let mut marked = status_writer.load_full().as_ref().clone();
+        marked.never_live = true;
+        marked.status = golem_common::model::AgentStatus::Running;
+        status_writer.store(Arc::new(marked));
+        let assert_sandboxed = |metadata: &AgentMetadata| {
+            assert!(metadata.last_known_status.never_live);
+            assert_eq!(
+                metadata.last_known_status.status,
+                golem_common::model::AgentStatus::Running
+            );
+            assert_eq!(
+                metadata.last_known_status.reported_status(),
+                golem_common::model::AgentStatus::Sandboxed
+            );
+            assert_eq!(
+                metadata.last_known_status.underlying_status(),
+                Some(golem_common::model::AgentStatus::Running)
+            );
+            assert_eq!(
+                golem_common::model::oplog::payload::types::AgentMetadataForGuests::from(
+                    metadata.clone()
+                )
+                .status,
+                golem_common::model::AgentStatus::Sandboxed
+            );
+        };
         oplog.add(grow_memory(17)).await.unwrap();
         let committed = oplog.commit(CommitLevel::Always).await.unwrap();
         let original = processor.sends().await.remove(0);
+        assert_sandboxed(&original.metadata);
         let original_source_revision = original.metadata.last_known_status.component_revision;
         assert!(committed.values().any(|entry| matches!(entry,
             OplogEntry::OplogProcessorCheckpoint {
@@ -1773,6 +1802,7 @@ async fn outstanding_delivery_reuses_full_snapshot_after_reconstruction() {
         assert_eq!(original.initial_oplog_index, retried.initial_oplog_index);
         assert_eq!(original.entries, retried.entries);
         assert_eq!(original.plugin, retried.plugin);
+        assert_sandboxed(&retried.metadata);
         assert_eq!(
             golem_common::model::oplog::payload::types::AgentMetadataForGuests::from(
                 original.metadata

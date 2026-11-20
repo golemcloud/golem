@@ -96,7 +96,8 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
             local_agent_config: Vec<PublicTypedAgentConfigEntry>,
-            instance_id: Uuid
+            instance_id: Uuid,
+            never_live: bool
         }
     },
     /// Marks the start of a durable host call (or scope such as a batched-write).

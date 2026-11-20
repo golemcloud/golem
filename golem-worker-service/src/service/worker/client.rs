@@ -14,7 +14,7 @@
 
 use super::WorkerResult;
 use super::{
-    AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
+    AgentCall, AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
     ResponseMapResult, RoutedTarget, RoutingLogic, WorkerServiceError, WorkerStream,
 };
 use crate::service::auth::AuthServiceError;
@@ -59,8 +59,10 @@ use golem_common::model::filesystem::{
     FILE_READ_CHUNK_SIZE, FileByteSelection, FileReadError, FileReadExtent, FileReadHead,
     validate_file_read_path,
 };
-use golem_common::model::oplog::OplogCursor;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex, PublicOplogPageEntry};
+use golem_common::model::oplog::{
+    OplogCursor, OplogIndex, OplogScan, OplogScanAllowance, PublicOplogEntryWithIndex,
+    PublicOplogPageEntry,
+};
 use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
@@ -92,6 +94,16 @@ fn freshness_disposition_for_dispatch(
     } else {
         InvocationFreshnessDisposition::MayExist
     }
+}
+
+/// The range and the scan allowance of an oplog range read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OplogRangeRead {
+    /// The last oplog index of the range, inclusive.
+    pub to: OplogIndex,
+    /// The allowance that the read may still spend; without it, the executor applies its
+    /// configured allowance.
+    pub allowance: Option<OplogScanAllowance>,
 }
 
 fn decode_file_read_error(value: i32) -> FileReadError {
@@ -588,12 +600,16 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex>;
 
+    /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
+    /// `range.to`, and the response accounts its scan.
+    #[allow(clippy::too_many_arguments)]
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
+        range: Option<OplogRangeRead>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
@@ -1506,25 +1522,32 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
+        range: Option<OplogRangeRead>,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let agent_id = *agent_id;
-        self.call_worker_executor(
+        // A range read is sent at most once: an attempt that failed after it was sent can have
+        // spent scan allowance that no response reports, and a replay would spend it again.
+        let target = AgentCall {
             agent_id,
+            replayable: range.is_none(),
+        };
+        self.call_worker_executor(
+            target,
             "get_oplog",
             move |worker_executor_client| {
-                let agent_id = agent_id;
-                Box::pin(
-                    worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
-                        agent_id: Some(agent_id.into()),
-                        from_oplog_index: from_oplog_index.into(),
-                        cursor: cursor.clone().map(|c| c.into()),
-                        count,
-                        environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into()),
-                    }),
-                )
+                let request = workerexecutor::v1::GetOplogRequest {
+                    agent_id: Some(agent_id.into()),
+                    from_oplog_index: from_oplog_index.into(),
+                    cursor: cursor.clone().map(|c| c.into()),
+                    count,
+                    environment_id: Some(environment_id.into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                    to_oplog_index: range.map(|range| range.to.into()),
+                    scan_allowance: range.and_then(|range| range.allowance).map(Into::into),
+                };
+                Box::pin(worker_executor_client.get_oplog(request))
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::GetOplogResponse {
@@ -1535,6 +1558,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                 next,
                                 first_index_in_chunk,
                                 last_index,
+                                scan,
                             },
                         )),
                 } => {
@@ -1547,11 +1571,22 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                 "Unexpected oplog entries in error: {err}"
                             ))
                         })?;
+                    let scan = scan
+                        .map(OplogScan::try_from)
+                        .transpose()
+                        .map_err(WorkerExecutorError::unknown)?;
+                    if range.is_some() && scan.is_none() {
+                        return Err(WorkerExecutorError::unknown(
+                            "The oplog range read has no scan accounting",
+                        )
+                        .into());
+                    }
                     Ok(GetOplogResponse {
                         entries,
                         next: next.map(|c| c.into()),
                         first_index_in_chunk,
                         last_index,
+                        scan,
                     })
                 }
                 workerexecutor::v1::GetOplogResponse {
@@ -1676,6 +1711,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         next: next.map(|c| c.into()),
                         first_index_in_chunk,
                         last_index,
+                        scan: None,
                     })
                 }
                 SearchOplogResponse {

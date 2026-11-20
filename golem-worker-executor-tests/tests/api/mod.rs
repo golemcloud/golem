@@ -12748,6 +12748,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
                 environment_id: Some(component.environment_id.into()),
                 ignore_already_existing: true,
                 auth_ctx: Some(executor.auth_ctx().into()),
+                caller: Some(callers::anonymous().into()),
                 ..Default::default()
             })
             .await?

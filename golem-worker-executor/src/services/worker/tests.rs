@@ -483,6 +483,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }),
     };
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -888,6 +889,7 @@ fn sample_status() -> AgentStatusRecord {
         status: AgentStatus::Running,
         oplog_idx: OplogIndex::from_u64(42),
         component_revision: ComponentRevision::new(3).unwrap(),
+        never_live: true,
         ..AgentStatusRecord::default()
     };
     status
@@ -2171,6 +2173,8 @@ struct FakeOplogService {
     unreadable: Vec<OwnedAgentId>,
     /// Agents whose oplog reads once, and then does not read.
     unreadable_after_first_read: Vec<OwnedAgentId>,
+    /// Agents whose `Create` entry reads, and whose later entries are corrupt.
+    corrupt_after_create: Vec<OwnedAgentId>,
     reads: AtomicUsize,
     initial_entries: HashMap<(OwnedAgentId, AgentMode), OplogEntry>,
     fail_delete_once: AtomicBool,
@@ -2247,10 +2251,11 @@ impl OplogService for FakeOplogService {
 
     async fn get_last_index(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog> {
-        unreachable!()
+        assert!(self.corrupt_after_create.contains(owned_agent_id));
+        Ok(OplogIndex::from_u64(2))
     }
 
     async fn assert_owning_epoch(
@@ -2281,11 +2286,20 @@ impl OplogService for FakeOplogService {
 
     async fn read_exact(
         &self,
-        _owned_agent_id: &OwnedAgentId,
+        owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
         _idx: OplogIndex,
         _n: u64,
     ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        if self.corrupt_after_create.contains(owned_agent_id) {
+            return Err(UnreadableOplog {
+                agent_id: owned_agent_id.agent_id(),
+                error: crate::services::oplog::OplogReadError::corruption(
+                    crate::services::oplog::OplogReadSource::Archive(1),
+                    "failed to decode the payload at 2",
+                ),
+            });
+        }
         Ok(BTreeMap::new())
     }
 
@@ -2676,6 +2690,7 @@ fn test_create_entry(
             golem_common::model::caller::Caller::anonymous(),
             &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
         ),
+        never_live: false,
     }))
 }
 
@@ -2692,6 +2707,95 @@ fn test_worker_service(
         Arc::new(UnusedComponentService),
         Arc::new(GolemConfig::default()),
     )
+}
+
+/// A never-live agent whose `Create` reads but whose later entries are corrupt has no rebuilt
+/// status. Both listings start from the metadata built from `Create`, so the agent keeps its mark:
+/// it is listed as `Sandboxed`, `status = sandboxed` finds it, and `status != sandboxed` does not.
+/// Precise listing still marks the folded status underneath as `Failed`.
+#[test]
+async fn enumeration_keeps_the_mark_of_an_agent_whose_status_cannot_be_rebuilt() {
+    use crate::services::worker_enumeration::{
+        DefaultWorkerEnumerationService, WorkerEnumerationService,
+    };
+    use golem_common::base_model::worker_filter::FilterComparator;
+    use golem_common::model::AgentFilter;
+
+    let agent = test_owned_agent_id("sandbox-with-corrupt-tail");
+    let mut create =
+        test_create_entry(&agent, AgentMode::Durable, AgentFingerprint(Uuid::new_v4()));
+    let OplogEntry::Create { parameters, .. } = &mut create else {
+        unreachable!()
+    };
+    parameters.never_live = true;
+    let oplog: Arc<dyn OplogService> = Arc::new(FakeOplogService {
+        initial_entries: HashMap::from([((agent.clone(), AgentMode::Durable), create)]),
+        corrupt_after_create: vec![agent.clone()],
+        scan_batches: std::sync::Mutex::new(
+            vec![
+                ScanPage {
+                    cursor: ScanCursor::default(),
+                    agent_ids: vec![agent.clone()],
+                    examined_keys: 1,
+                };
+                6
+            ]
+            .into(),
+        ),
+        ..FakeOplogService::default()
+    });
+    let shard_service = Arc::new(ShardServiceDefault::new());
+    shard_service.install_unexpiring(1, &HashMap::from([(ShardId::new(0), ShardEpoch(0))]));
+    let config = Arc::new(GolemConfig::default());
+    let worker_service = Arc::new(DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        shard_service,
+        oplog.clone(),
+        Arc::new(IndexTestComponentService),
+        config.clone(),
+    ));
+    let enumeration = DefaultWorkerEnumerationService::new(
+        worker_service,
+        oplog,
+        Arc::new(IndexTestComponentService),
+        config,
+    );
+    let list = |filter: Option<AgentFilter>, precise: bool| {
+        let enumeration = &enumeration;
+        let agent = &agent;
+        async move {
+            enumeration
+                .get(
+                    &agent.environment_id,
+                    agent.agent_id.type_id().unwrap(),
+                    filter,
+                    ScanCursor::default(),
+                    10,
+                    precise,
+                )
+                .await
+                .unwrap()
+                .1
+        }
+    };
+
+    for (precise, underlying) in [
+        (false, AgentStatusRecord::default().status),
+        (true, AgentStatus::Failed),
+    ] {
+        let listed = list(None, precise).await;
+        assert_eq!(listed.len(), 1, "precise: {precise}");
+        let status = &listed[0].last_known_status;
+        assert!(status.never_live, "precise: {precise}");
+        assert_eq!(status.reported_status(), AgentStatus::Sandboxed);
+        assert_eq!(status.underlying_status(), Some(underlying));
+
+        let sandboxed = AgentFilter::new_status(FilterComparator::Equal, AgentStatus::Sandboxed);
+        assert_eq!(list(Some(sandboxed), precise).await.len(), 1);
+        let not_sandboxed =
+            AgentFilter::new_status(FilterComparator::NotEqual, AgentStatus::Sandboxed);
+        assert!(list(Some(not_sandboxed), precise).await.is_empty());
+    }
 }
 
 #[test]

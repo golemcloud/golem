@@ -255,6 +255,9 @@ type CreateParameters struct {
 	InitialActivePlugins         []PluginInstallationDescription
 	LocalAgentConfig             []LocalAgentConfigEntry
 	InstanceId                   golem_core_types.Uuid
+	// Whether the agent is a never-live sandbox. A marked agent reports the
+	// `sandboxed` status.
+	NeverLive bool
 }
 
 // Identifies a durable call by its place in a call order.
@@ -1408,6 +1411,9 @@ type RawCreateParameters struct {
 	InitialActivePlugins         []EnvironmentPluginGrantId
 	LocalAgentConfig             []RawLocalAgentConfigEntry
 	InstanceId                   golem_core_types.Uuid
+	// Whether the agent is a never-live sandbox. A marked agent reports the
+	// `sandboxed` status.
+	NeverLive bool
 }
 
 type RawStartParameters struct {
@@ -3889,6 +3895,13 @@ func wasm_lower_1_t378(pinner *runtime.Pinner, value RawCreateParameters, dst un
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (112 + 9*4))) = uint32(length7)
 	*(*uint32)(unsafe.Add(unsafe.Pointer(dst), (112 + 8*4))) = uint32(uintptr(uintptr(result6)))
 	wasm_lower_1_t4(nil, (value).InstanceId, unsafe.Add(unsafe.Pointer(dst), (112+10*4)))
+	var result8 int32
+	if (value).NeverLive {
+		result8 = 1
+	} else {
+		result8 = 0
+	}
+	*(*int8)(unsafe.Add(unsafe.Pointer(dst), (128 + 10*4))) = int8(result8)
 
 }
 
@@ -4853,7 +4866,7 @@ func wasm_lift_1_t254(src unsafe.Pointer) CreateParameters {
 
 	result13 := wasm_lift_1_t4(unsafe.Add(unsafe.Pointer(src), (112 + 10*4)))
 
-	return CreateParameters{Timestamp: result, AgentId: result0, AgentTypeName: option, OwnerKind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (32 + 3*4))))), AgentMode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (33 + 3*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 4*4)))), Env: result4, CreatedBy: result5, EnvironmentId: result6, Parent: option8, ComponentSize: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (96 + 6*4)))), InitialTotalLinearMemorySize: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (104 + 6*4)))), InitialActivePlugins: result10, LocalAgentConfig: result12, InstanceId: result13}
+	return CreateParameters{Timestamp: result, AgentId: result0, AgentTypeName: option, OwnerKind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (32 + 3*4))))), AgentMode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (33 + 3*4))))), ComponentRevision: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (32 + 4*4)))), Env: result4, CreatedBy: result5, EnvironmentId: result6, Parent: option8, ComponentSize: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (96 + 6*4)))), InitialTotalLinearMemorySize: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(src), (104 + 6*4)))), InitialActivePlugins: result10, LocalAgentConfig: result12, InstanceId: result13, NeverLive: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (128 + 10*4)))) != 0)}
 }
 
 //go:noinline

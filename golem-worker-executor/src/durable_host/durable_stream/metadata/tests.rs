@@ -148,6 +148,7 @@ impl Fixture {
                 golem_common::model::caller::Caller::anonymous(),
                 &golem_common::model::invocation_context::InvocationContextStack::fresh_rounded(),
             ),
+            never_live: false,
         }));
         let service = Arc::new(DefaultWorkerService::new(
             storage,

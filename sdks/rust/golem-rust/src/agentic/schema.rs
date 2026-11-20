@@ -309,6 +309,7 @@ mod host_api_schema {
         Retrying,
         Failed,
         Exited,
+        Sandboxed,
     }
 
     impl From<host::AgentStatus> for AgentStatusModel {
@@ -321,6 +322,7 @@ mod host_api_schema {
                 host::AgentStatus::Retrying => Self::Retrying,
                 host::AgentStatus::Failed => Self::Failed,
                 host::AgentStatus::Exited => Self::Exited,
+                host::AgentStatus::Sandboxed => Self::Sandboxed,
             }
         }
     }
@@ -335,6 +337,7 @@ mod host_api_schema {
                 AgentStatusModel::Retrying => Self::Retrying,
                 AgentStatusModel::Failed => Self::Failed,
                 AgentStatusModel::Exited => Self::Exited,
+                AgentStatusModel::Sandboxed => Self::Sandboxed,
             }
         }
     }

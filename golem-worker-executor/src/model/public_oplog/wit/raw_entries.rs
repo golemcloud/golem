@@ -75,6 +75,7 @@ before (value) {}
                 params.instance_id.high_bits,
                 params.instance_id.low_bits,
             ),
+            never_live: params.never_live,
         }),
     }) }
     Start { record (params) {
@@ -553,6 +554,7 @@ before (value) {}
                         local_agent_config,
                         instance_id,
                         create_request: _,
+                        never_live,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
                         timestamp: timestamp.into(),
@@ -598,6 +600,7 @@ before (value) {}
                             })
                             .collect::<Result<_, String>>()?,
                         instance_id: instance_id.into(),
+                        never_live,
                     }))
                 } }
     Start { record () => RawStartParameters {

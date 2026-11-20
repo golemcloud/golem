@@ -528,6 +528,189 @@ fn restart_sets_ephemeral_execution_begun_permanently() {
     assert!(later.ephemeral_execution_begun);
 }
 
+fn create_with_mark(never_live: bool) -> OplogEntry {
+    let component_id = ComponentId::new();
+    OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        agent_id: AgentId::from_parts(7, 1),
+        component_id,
+        agent_type_name: None,
+        canonical_key: None,
+        owner_kind: OwnerKind::ComponentAgent,
+        agent_mode: AgentMode::Durable,
+        component_revision: ComponentRevision::INITIAL,
+        env: vec![],
+        environment_id: EnvironmentId::new(),
+        created_by: AccountId::new(),
+        parent: None,
+        component_size: 100,
+        initial_total_linear_memory_size: 200,
+        initial_active_plugins: HashSet::new(),
+        local_agent_config: Vec::new(),
+        constructor_parameters: None,
+        instance_id: uuid::Uuid::new_v4(),
+        create_request: golem_common::model::oplog::CreateRequest::new(
+            golem_common::model::oplog::CreateRequestKind::Fork,
+            None,
+            Caller::anonymous(),
+            &InvocationContextStack::fresh(),
+        ),
+        never_live,
+    }))
+}
+
+/// The fold takes the mark from `Create` and keeps it through later folds, a revert and an
+/// update. A marked agent reports `Sandboxed`, while its folded `status` keeps the replayed state
+/// and never holds `Sandboxed`.
+#[test]
+fn the_never_live_mark_survives_folds_and_reports_sandboxed_over_the_folded_status() {
+    let retry = RetryConfig::default();
+    let fold = |status: AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
+        update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            entries
+                .into_iter()
+                .map(|(index, entry)| (OplogIndex::from_u64(index), entry))
+                .collect(),
+            &retry,
+        )
+        .unwrap()
+    };
+
+    let unmarked = fold(
+        AgentStatusRecord::default(),
+        vec![(1, create_with_mark(false)), (2, OplogEntry::resumed())],
+    );
+    assert!(!unmarked.never_live);
+    assert_eq!(unmarked.status, AgentStatus::Running);
+    assert_eq!(unmarked.reported_status(), AgentStatus::Running);
+    assert_eq!(unmarked.underlying_status(), None);
+
+    let running = fold(
+        AgentStatusRecord::default(),
+        vec![(1, create_with_mark(true)), (2, OplogEntry::resumed())],
+    );
+    assert!(running.never_live);
+    assert_eq!(running.status, AgentStatus::Running);
+    assert_eq!(running.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(running.underlying_status(), Some(AgentStatus::Running));
+
+    let update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let updated = fold(
+        running.clone(),
+        vec![
+            (3, OplogEntry::pending_update(update, None)),
+            (
+                4,
+                OplogEntry::successful_update(
+                    ComponentRevision::new(2).unwrap(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                    None,
+                ),
+            ),
+        ],
+    );
+    assert!(updated.never_live);
+    assert_eq!(
+        updated.component_revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(updated.status, AgentStatus::Running);
+    assert_eq!(updated.reported_status(), AgentStatus::Sandboxed);
+
+    let interrupted = fold(updated, vec![(5, OplogEntry::interrupted())]);
+    assert!(interrupted.never_live);
+    assert_eq!(interrupted.status, AgentStatus::Interrupted);
+    assert_eq!(interrupted.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(
+        interrupted.underlying_status(),
+        Some(AgentStatus::Interrupted)
+    );
+
+    let reverted = fold(
+        AgentStatusRecord::default(),
+        vec![
+            (1, create_with_mark(true)),
+            (2, OplogEntry::resumed()),
+            (3, OplogEntry::interrupted()),
+            (4, OplogEntry::revert(OplogRegion::from_range(3..=3))),
+        ],
+    );
+    assert!(reverted.never_live);
+    assert_eq!(reverted.reported_status(), AgentStatus::Sandboxed);
+    assert_ne!(reverted.status, AgentStatus::Sandboxed);
+
+    let exited = fold(running, vec![(3, OplogEntry::exited())]);
+    assert!(exited.never_live);
+    assert_eq!(exited.status, AgentStatus::Exited);
+    assert_eq!(exited.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(exited.underlying_status(), Some(AgentStatus::Exited));
+}
+
+fn fold_marked_method_failure(recovery_error: Option<OplogEntry>) -> AgentStatusRecord {
+    let invocation_id = InvocationId(Uuid::new_v4());
+    let mut entries = vec![create_with_mark(true), started_invocation(&invocation_id)];
+    entries.extend(recovery_error);
+    entries.push(OplogEntry::agent_invocation_failed(
+        None,
+        invocation_id,
+        AgentError::InternalError("method gave up".into()),
+        OplogIndex::from_u64(2),
+    ));
+    update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(position, entry)| (OplogIndex::from_u64(position as u64 + 1), entry))
+            .collect(),
+        &RetryConfig::default(),
+    )
+    .unwrap()
+}
+
+/// A method failure stays local to its invocation and leaves the agent idle. On a marked agent
+/// the reported status stays `Sandboxed`, and the idle state is only the underlying status.
+#[test]
+fn a_marked_agent_stays_sandboxed_after_a_method_failure() {
+    let failed = fold_marked_method_failure(None);
+
+    assert!(failed.never_live);
+    assert_eq!(failed.status, AgentStatus::Idle);
+    assert_eq!(failed.last_error_kind, None);
+    assert_eq!(failed.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(failed.underlying_status(), Some(AgentStatus::Idle));
+}
+
+/// A method failure does not hide an unresolved recovery: the folded status stays `Retrying`
+/// until the recovery succeeds. On a marked agent that state is the underlying status, and the
+/// reported status stays `Sandboxed`.
+#[test]
+fn a_marked_agent_stays_sandboxed_after_a_method_failure_during_unresolved_recovery() {
+    let failed = fold_marked_method_failure(Some(OplogEntry::error(
+        None,
+        OplogErrorKind::Recovery,
+        None,
+        AgentError::InternalError("replay diverged".to_string()),
+        OplogIndex::from_u64(2),
+        None,
+        None,
+        None,
+    )));
+
+    assert!(failed.never_live);
+    assert_eq!(failed.status, AgentStatus::Retrying);
+    assert_eq!(failed.last_error_kind, Some(OplogErrorKind::Recovery));
+    assert_eq!(failed.reported_status(), AgentStatus::Sandboxed);
+    assert_eq!(failed.underlying_status(), Some(AgentStatus::Retrying));
+}
+
 fn export_owner_fingerprint() -> AgentFingerprint {
     AgentFingerprint(uuid::Uuid::from_u128(1))
 }
@@ -4836,6 +5019,7 @@ impl TestCaseBuilder {
                             &golem_common::model::invocation_context::InvocationContextStack::fresh(
                             ),
                         ),
+                        never_live: false,
                     },
                 )),
                 expected_status: status.clone(),

@@ -83,9 +83,12 @@ const (
 	AgentStatusFailed
 	// AgentStatusExited: the agent exited and can no longer be invoked.
 	AgentStatusExited
+	// AgentStatusSandboxed: the agent is a never-live sandbox that only replays
+	// its history.
+	AgentStatusSandboxed
 )
 
-var agentStatusNames = [...]string{"running", "idle", "suspended", "interrupted", "retrying", "failed", "exited"}
+var agentStatusNames = [...]string{"running", "idle", "suspended", "interrupted", "retrying", "failed", "exited", "sandboxed"}
 
 func (s AgentStatus) String() string {
 	if int(s) < len(agentStatusNames) {

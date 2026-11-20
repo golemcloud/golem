@@ -128,6 +128,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .instance_id
                     .map(|id| id.into())
                     .ok_or("Missing instance_id in Create entry")?,
+                never_live: create.never_live,
             })),
             oplog_entry::Entry::Start(start) => Ok(PublicOplogEntry::Start(StartParams {
                 timestamp: start.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -836,6 +837,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .collect(),
                         agent_type_name: create.agent_type_name.map(|name| name.0),
                         instance_id: Some(create.instance_id.into()),
+                        never_live: create.never_live,
                     },
                 )),
             },
@@ -1937,6 +1939,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .map(|p| p.environment_plugin_grant_id)
                         .collect(),
                     instance_id: create.instance_id,
+                    never_live: create.never_live,
                 }),
             }),
             PublicOplogEntry::Start(start) => {

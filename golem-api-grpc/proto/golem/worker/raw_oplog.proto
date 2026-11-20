@@ -182,6 +182,7 @@ message RawCreateParameters {
   optional string canonical_key = 17;
   RawCreateRequest create_request = 18;
   optional string constructor_parameters = 19;
+  bool never_live = 20;
 }
 
 enum RawCreateRequestKind {

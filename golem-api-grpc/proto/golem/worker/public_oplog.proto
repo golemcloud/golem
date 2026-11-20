@@ -132,6 +132,7 @@ message CreateParameters {
   golem.component.AgentMode agent_mode = 15;
   OwnerKind owner_kind = 16;
   optional string agent_type_name = 17;
+  bool never_live = 18;
 }
 
 // Identifies a durable call by the oplog index of the record that numbers it and its place among

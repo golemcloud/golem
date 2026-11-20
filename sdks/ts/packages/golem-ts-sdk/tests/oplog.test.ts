@@ -39,4 +39,40 @@ describe('oplog checkpoint enrichment', () => {
     expect(entry.val.sendingUpTo).toBe(15n);
     expect(entry.val.lastBatchStart).toBe(12n);
   });
+
+  it('keeps the never-live mark of a create entry', () => {
+    const environmentId = { uuid: { highBits: 0n, lowBits: 1n } };
+    const agentId = {
+      componentId: { uuid: { highBits: 0n, lowBits: 2n } },
+      agentId: 'sandbox',
+    };
+    const create = (neverLive: boolean): RawPublicOplogEntry => ({
+      tag: 'create',
+      val: {
+        timestamp: { seconds: 1700000000n, nanoseconds: 0 },
+        agentId,
+        ownerKind: 'component-agent',
+        agentMode: 'durable',
+        componentRevision: 3n,
+        env: [],
+        createdBy: { uuid: { highBits: 0n, lowBits: 4n } },
+        environmentId,
+        componentSize: 1024n,
+        initialTotalLinearMemorySize: 65536n,
+        initialActivePlugins: [],
+        localAgentConfig: [],
+        instanceId: { highBits: 0n, lowBits: 5n },
+        neverLive,
+      },
+    });
+    vi.mocked(rawEnrichOplogEntries).mockReturnValue([create(true), create(false)]);
+
+    const [marked, unmarked] = enrichOplogEntries(environmentId, agentId, [], 99n);
+    if (marked?.tag !== 'create' || unmarked?.tag !== 'create') {
+      throw new Error('Expected create entries');
+    }
+    expect(marked.val.neverLive).toBe(true);
+    expect(unmarked.val.neverLive).toBe(false);
+    expect(marked.val.agentId.agentId).toBe('sandbox');
+  });
 });

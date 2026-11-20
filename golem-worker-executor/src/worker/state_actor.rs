@@ -1561,7 +1561,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         let new_status = Arc::new(new_status);
         let previous_status = self.last_known_status.swap(new_status.clone());
         self.metrics_status
-            .update(previous_metrics_status, new_status.status);
+            .update(previous_metrics_status, new_status.reported_status());
         self.status_flusher
             .on_status_changed(&previous_status, &new_status)
             .await;

@@ -884,6 +884,8 @@ impl TestDsl for TestWorkerExecutor {
                     cursor,
                     count: 100,
                     auth_ctx: Some(self.auth_ctx().into()),
+                    to_oplog_index: None,
+                    scan_allowance: None,
                 })
                 .await?
                 .into_inner();
@@ -928,6 +930,8 @@ impl TestDsl for TestWorkerExecutor {
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
+                to_oplog_index: None,
+                scan_allowance: None,
             })
             .await?
             .into_inner();

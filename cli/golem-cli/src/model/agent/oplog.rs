@@ -332,6 +332,9 @@ impl TextOutput for PublicOplogEntry {
                 if let Some(parent) = params.parent.as_ref() {
                     logln(format!("{pad}parent:            {}", format_id(parent)));
                 }
+                if params.never_live {
+                    logln(format!("{pad}never live:         {}", format_id(&true)));
+                }
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
                     logln(format!(
@@ -1604,6 +1607,7 @@ mod tests {
             config: Vec::new(),
             default_config: Vec::new(),
             status: AgentStatus::Running,
+            underlying_status: None,
             component_revision: ComponentRevision::new(1).expect("valid revision"),
             retry_count: 0,
             pending_invocation_count: 0,
@@ -1662,6 +1666,37 @@ mod tests {
         assert!(fields.iter().any(|(name, value)| {
             name == "Last error" && value.contains("snapshot payload is unavailable")
         }));
+    }
+
+    #[test]
+    fn sandboxed_agent_shows_its_replayed_state_in_agent_get_and_list() {
+        let mut agent = agent_metadata(r#"Counter("sandbox")"#);
+        agent.status = AgentStatus::Sandboxed;
+        agent.underlying_status = Some(AgentStatus::Running);
+
+        let table = AgentsMetadataResponseView::format_table_wide(
+            std::slice::from_ref(&agent),
+            120,
+            false,
+            false,
+        );
+        assert!(table.contains("Sandboxed"), "{table}");
+        assert!(!table.contains("Running"), "{table}");
+
+        let fields = AgentGetView::from_metadata(agent, true).fields();
+        assert!(
+            fields.iter().any(|(name, value)| name == "Status"
+                && strip_ansi_escapes::strip_str(value) == "Sandboxed (replayed state: Running)"),
+            "{fields:?}"
+        );
+
+        let fields =
+            AgentGetView::from_metadata(agent_metadata(r#"Counter("live")"#), true).fields();
+        assert!(
+            fields.iter().any(|(name, value)| name == "Status"
+                && strip_ansi_escapes::strip_str(value) == "Running"),
+            "{fields:?}"
+        );
     }
 
     /// Agent id cells carry their own coloring, which only lines up if
