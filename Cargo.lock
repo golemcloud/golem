@@ -4540,8 +4540,12 @@ name = "golem-python-assembler"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async_zip",
+ "base64 0.22.1",
  "componentize-py",
  "golem-common",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "test-r",
  "tokio",

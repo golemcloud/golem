@@ -4,10 +4,21 @@
 //! The prepared assets are a build output; `cargo make python-sdk-prepare`
 //! writes them to `sdks/python/target/prepared`.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
-use golem_python_assembler::{Application, build, read_prepared};
+use async_zip::{
+    Compression, ZipEntryBuilder,
+    tokio::{read::fs::ZipFileReader, write::ZipFileWriter},
+};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use golem_python_assembler::{
+    Application, COMPONENTIZE_PY_REVISION, SDK_VERSION, build, read_prepared, read_sdk_wheel,
+};
+use sha2::{Digest, Sha256};
 use test_r::test;
 use wasmtime::{
     Engine, Store,
@@ -782,5 +793,307 @@ class Plain:
         );
     }
     assert!(!message.contains("Plain"), "{message}");
+    Ok(())
+}
+
+/// The wheel that `cargo make python-sdk-wheel` builds.
+fn sdk_wheel() -> PathBuf {
+    python_sdk().join(format!(
+        "target/wheel/golem_py_sdk-{SDK_VERSION}-py3-none-any.whl"
+    ))
+}
+
+async fn wheel_files(wheel: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let reader = ZipFileReader::new(wheel).await.with_context(|| {
+        format!(
+            "run `cargo make python-sdk-wheel` to build {}",
+            wheel.display()
+        )
+    })?;
+    let mut files = Vec::new();
+    for index in 0..reader.file().entries().len() {
+        let name = reader.file().entries()[index]
+            .filename()
+            .as_str()?
+            .to_string();
+        let mut bytes = Vec::new();
+        reader
+            .reader_with_entry(index)
+            .await?
+            .read_to_end_checked(&mut bytes)
+            .await?;
+        files.push((name, bytes));
+    }
+    Ok(files)
+}
+
+async fn write_wheel(path: &Path, files: &[(String, Vec<u8>)]) -> Result<()> {
+    let mut writer = ZipFileWriter::with_tokio(tokio::fs::File::create(path).await?);
+    for (name, bytes) in files {
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new(name.clone().into(), Compression::Deflate),
+                bytes,
+            )
+            .await?;
+    }
+    writer.close().await?;
+    Ok(())
+}
+
+/// Rewrites `RECORD` so that it lists the files as they are.
+fn fix_record(files: &mut [(String, Vec<u8>)]) {
+    let record = files
+        .iter()
+        .position(|(name, _)| name.ends_with(".dist-info/RECORD"))
+        .expect("RECORD");
+    let mut text = String::new();
+    for (name, bytes) in files.iter() {
+        if name.ends_with(".dist-info/RECORD") {
+            text.push_str(&format!("{name},,\n"));
+        } else {
+            text.push_str(&format!(
+                "{name},sha256={},{}\n",
+                URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)),
+                bytes.len()
+            ));
+        }
+    }
+    files[record].1 = text.into_bytes();
+}
+
+fn manifest_json(files: &mut [(String, Vec<u8>)]) -> serde_json::Value {
+    serde_json::from_slice(file(files, "golem/_prepared/manifest.json")).unwrap()
+}
+
+/// Replaces the one occurrence of `from` in the prepared manifest.
+fn edit_manifest(files: &mut [(String, Vec<u8>)], from: &str, to: &str) {
+    let manifest = file(files, "golem/_prepared/manifest.json");
+    let text = String::from_utf8(manifest.clone()).unwrap();
+    assert_eq!(text.matches(from).count(), 1, "{from}");
+    *manifest = text.replacen(from, to, 1).into_bytes();
+}
+
+fn remove_blob(files: &mut Vec<(String, Vec<u8>)>, blob: &str) {
+    let name = format!("golem/_prepared/blobs/{blob}");
+    let count = files.len();
+    files.retain(|(file, _)| *file != name);
+    assert_eq!(files.len(), count - 1, "{name}");
+}
+
+fn file<'a>(files: &'a mut [(String, Vec<u8>)], suffix: &str) -> &'a mut Vec<u8> {
+    &mut files
+        .iter_mut()
+        .find(|(name, _)| name.ends_with(suffix))
+        .unwrap_or_else(|| panic!("no {suffix}"))
+        .1
+}
+
+#[test]
+async fn builds_from_the_sdk_wheel() -> Result<()> {
+    let sdk = read_sdk_wheel(&sdk_wheel()).await?;
+    assert_eq!(sdk.prepared().identity(), prepared()?.identity());
+
+    let dir = tempfile::tempdir()?;
+    write_app(dir.path(), "counter", COUNTER)?;
+    let from_wheel = build(
+        sdk.prepared(),
+        &Application {
+            sdk_dir: sdk.sdk_dir(),
+            source_dir: dir.path(),
+            entry_modules: &["counter"],
+        },
+    )
+    .await?;
+    // The wheel holds the same SDK sources and prepared assets as the source
+    // tree, so the component is the same.
+    assert!(
+        from_wheel == build_counter().await?,
+        "the wheel and the source tree give different components"
+    );
+
+    let discovered = discover_agent_types(&from_wheel).await?;
+    let Val::Result(Ok(Some(types))) = &discovered else {
+        panic!("{discovered:?}");
+    };
+    let [counter] = list(types) else {
+        panic!("{types:?}");
+    };
+    assert_eq!(field(counter, "type-name"), &Val::String("Counter".into()));
+    Ok(())
+}
+
+#[test]
+async fn rejects_mismatched_and_corrupt_wheels() -> Result<()> {
+    let original = wheel_files(&sdk_wheel()).await?;
+    type Edit = fn(&mut Vec<(String, Vec<u8>)>);
+    let cases: [(&str, Edit, String); 8] = [
+        (
+            "corrupt SDK source",
+            |files| file(files, "golem/_registry.py").push(b'#'),
+            "`golem/_registry.py` does not match RECORD".to_string(),
+        ),
+        (
+            "corrupt prepared blob, RECORD rewritten",
+            |files| {
+                let blob = files
+                    .iter_mut()
+                    .find(|(name, _)| name.contains("golem/_prepared/blobs/"))
+                    .unwrap();
+                blob.1[0] ^= 1;
+                fix_record(files);
+            },
+            "prepared assets".to_string(),
+        ),
+        (
+            "other SDK version",
+            |files| {
+                let metadata = file(files, ".dist-info/METADATA");
+                let text = String::from_utf8(metadata.clone()).unwrap().replacen(
+                    &format!("Version: {SDK_VERSION}"),
+                    "Version: 9.9.9",
+                    1,
+                );
+                *metadata = text.into_bytes();
+                fix_record(files);
+            },
+            format!(
+                "the wheel is golem-py-sdk 9.9.9, but this Golem CLI builds with golem-py-sdk {SDK_VERSION}"
+            ),
+        ),
+        (
+            "other componentize-py revision",
+            |files| {
+                *file(files, "golem/_compatibility.json") =
+                    format!("{{\"componentize-py\": \"{}\"}}\n", "0".repeat(40)).into_bytes();
+                fix_record(files);
+            },
+            format!(
+                "comes from componentize-py {}, but this Golem CLI links componentize-py {COMPONENTIZE_PY_REVISION}",
+                "0".repeat(40)
+            ),
+        ),
+        (
+            "no compatibility file",
+            |files| {
+                files.retain(|(name, _)| name != "golem/_compatibility.json");
+                fix_record(files);
+            },
+            "the wheel has no `golem/_compatibility.json`".to_string(),
+        ),
+        (
+            "file missing from RECORD",
+            |files| files.push(("golem/extra.py".into(), b"X = 1\n".to_vec())),
+            "RECORD does not list `golem/extra.py`".to_string(),
+        ),
+        (
+            "file listed in RECORD but missing",
+            |files| files.retain(|(name, _)| name != "golem/_dispatch.py"),
+            "RECORD lists `golem/_dispatch.py`, which the wheel does not contain".to_string(),
+        ),
+        (
+            "unsafe path",
+            |files| {
+                files.push(("golem/../../escape.py".into(), b"X = 1\n".to_vec()));
+                fix_record(files);
+            },
+            "the wheel contains the unsafe path `golem/../../escape.py`".to_string(),
+        ),
+    ];
+    let dir = tempfile::tempdir()?;
+    for (case, edit, expected) in cases {
+        let mut files = original.clone();
+        edit(&mut files);
+        let wheel = dir
+            .path()
+            .join(format!("golem_py_sdk-{SDK_VERSION}-py3-none-any.whl"));
+        write_wheel(&wheel, &files).await?;
+        let message = match read_sdk_wheel(&wheel).await {
+            Ok(_) => panic!("{case}: the wheel was accepted"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(message.contains(&expected), "{case}: {message}");
+        assert!(
+            message.contains(&wheel.display().to_string()),
+            "{case}: {message}"
+        );
+    }
+    assert!(
+        !dir.path().join("escape.py").exists()
+            && !dir.path().parent().unwrap().join("escape.py").exists()
+    );
+
+    // Prepared assets from the same componentize-py revision, but without the
+    // generated world bindings or with one runtime library fewer, are
+    // internally valid. They are not the assets that the assembler builds
+    // with, so both the wheel and the prepared directory are rejected.
+    let expected = prepared()?.identity();
+    let profiles: [(&str, Edit); 2] = [
+        ("no world bindings", |files| {
+            let world = manifest_json(files)["world"].as_str().unwrap().to_string();
+            edit_manifest(files, &format!("\"world\": \"{world}\""), "\"world\": null");
+            remove_blob(files, &world);
+        }),
+        ("one runtime library fewer", |files| {
+            let library = "libwasi-emulated-getpid.so";
+            let blob = manifest_json(files)["libraries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == library)
+                .unwrap()["blob"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            edit_manifest(
+                files,
+                &format!(
+                    "    {{\n      \"name\": \"{library}\",\n      \"dl-openable\": false,\n      \"blob\": \"{blob}\"\n    }},\n"
+                ),
+                "",
+            );
+            remove_blob(files, &blob);
+        }),
+    ];
+    for (index, (case, edit)) in profiles.into_iter().enumerate() {
+        let mut files = original.clone();
+        edit(&mut files);
+        fix_record(&mut files);
+
+        let prepared_dir = dir.path().join(format!("prepared-{index}"));
+        for (name, bytes) in &files {
+            if let Some(relative) = name.strip_prefix("golem/_prepared/") {
+                let path = prepared_dir.join(relative);
+                fs::create_dir_all(path.parent().unwrap())?;
+                fs::write(path, bytes)?;
+            }
+        }
+        let found = componentize_py::prepared::Prepared::read(&prepared_dir)
+            .with_context(|| format!("{case}: the edited assets are not valid"))?
+            .identity();
+        assert_ne!(found, expected, "{case}");
+        let mismatch =
+            format!("the prepared assets are {found}, but this Golem CLI builds with {expected}");
+
+        let wheel = dir
+            .path()
+            .join(format!("golem_py_sdk-{SDK_VERSION}-py3-none-any.whl"));
+        write_wheel(&wheel, &files).await?;
+        let message = match read_sdk_wheel(&wheel).await {
+            Ok(_) => panic!("{case}: the wheel was accepted"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(message.contains(&mismatch), "{case}: {message}");
+        let message = match read_prepared(&prepared_dir) {
+            Ok(_) => panic!("{case}: the prepared directory was accepted"),
+            Err(error) => format!("{error:#}"),
+        };
+        assert!(message.contains(&mismatch), "{case}: {message}");
+    }
+
+    // The unmodified files, rewritten the same way, are accepted.
+    let wheel = dir.path().join("control.whl");
+    write_wheel(&wheel, &original).await?;
+    read_sdk_wheel(&wheel).await?;
     Ok(())
 }
