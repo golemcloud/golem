@@ -1223,6 +1223,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     // The agents are idle, so the archive moves their oplogs to the blob layer.
     wait_until_archived(&ctx, LONG_PROBE).await;
     wait_until_archived(&ctx, PROBE).await;
+    wait_until_archived(&ctx, LARGE_PROBE).await;
 
     // The long probe has more entries than one page of the HTTP batch size (50).
     let plain = plain_dump(&ctx, LONG_PROBE).await;

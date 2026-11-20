@@ -24,8 +24,8 @@ use strum_macros::EnumIter;
 #[clap(rename_all = "kebab-case")]
 pub enum Format {
     Json,
-    /// JSON Lines: one compact JSON document on each line, as `json` prints. `agent oplog
-    /// --output` needs this format, so that the format of the file is explicit.
+    // JSON Lines: one compact JSON document on each line, as `json` prints. `agent oplog
+    // --output` needs this format, so that the format of the file is explicit.
     Jsonl,
     #[serde(alias = "pretty")]
     #[clap(alias = "pretty")]

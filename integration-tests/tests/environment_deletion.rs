@@ -570,6 +570,14 @@ async fn oplog_range_reads_of_an_archived_agent(
     let matches = user.search_oplog(&agent_id, "G1002").await?;
     assert_eq!(matches.len(), 2, "G1002");
     let last = user.get_oplog_last_index(&agent_id).await?;
+    // The read of the whole oplog holds every index from 1 to the last index, so the range reads
+    // below can take their entries from it by position.
+    assert_eq!(
+        full.iter()
+            .map(|entry| entry.oplog_index.as_u64())
+            .collect::<Vec<_>>(),
+        (1..=last).collect::<Vec<_>>()
+    );
     wait_until_archived_to_the_blob_layer(env.id, &agent_id, last).await?;
 
     let index = OplogIndex::from_u64;
