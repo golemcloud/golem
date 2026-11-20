@@ -80,7 +80,7 @@ type configDecl struct {
 	path         []string
 	typ          reflect.Type
 	restrict     *engine.Restriction
-	defaultValue witTypes.Option[string]
+	defaultValue witTypes.Option[types.SchemaValueTree]
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It

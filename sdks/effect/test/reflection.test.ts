@@ -268,17 +268,14 @@ describe("reflection", () => {
       body: { tag: "option-type", val: valueType },
       metadata,
     })
-    const defaultValue = v.record([
-      v.string("configured"),
-      v.option(v.record([v.string("last"), v.option(undefined)])),
-    ])
+    const defaultValue = schemaValueToWit(
+      v.record([
+        v.string("configured"),
+        v.option(v.record([v.string("last"), v.option(undefined)])),
+      ]),
+    )
     raw.agentType.config = [
-      {
-        path: ["service.config", "tree"],
-        source: "local",
-        valueType,
-        defaultValue: schemaValueToWit(defaultValue),
-      },
+      { path: ["service.config", "tree"], source: "local", valueType, defaultValue },
       { path: ["absent"], source: "local", valueType: optionalType },
       {
         path: ["explicitNull"],
@@ -288,7 +285,7 @@ describe("reflection", () => {
       },
     ]
     return Effect.gen(function* () {
-      const identity = agentIdFor("recursive-one")
+      const identity = agentIdFor("recursive")
       const discoveries = [
         (yield* getAgentType("Recursive"))!,
         (yield* getAgentTypeByAgentId(identity))!,
@@ -302,11 +299,7 @@ describe("reflection", () => {
             defaultValue,
           })),
         ).toEqual([
-          {
-            path: ["service.config", "tree"],
-            source: "local",
-            defaultValue: schemaValueToWit(defaultValue),
-          },
+          { path: ["service.config", "tree"], source: "local", defaultValue },
           { path: ["absent"], source: "local", defaultValue: undefined },
           {
             path: ["explicitNull"],
@@ -321,6 +314,8 @@ describe("reflection", () => {
           next: { label: "last", next: null },
         })
         expect(Object.isFrozen(declaration)).toBe(true)
+        declaration.defaultValue!.valueNodes.pop()
+        expect(declaration.defaultValue).toEqual(defaultValue)
       }
     }).pipe(Effect.provide(hostLayer(raw)))
   })

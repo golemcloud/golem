@@ -367,7 +367,7 @@ mod tests {
             path: vec!["settings".into(), name.into()],
             value_type: SchemaType::option(SchemaType::ref_to(id.clone())),
             default_value: default.map(|json| {
-                golem_common::schema::render::from_untrusted_json_value(
+                from_untrusted_json_value(
                     &graph,
                     &SchemaType::option(SchemaType::ref_to(id.clone())),
                     &serde_json::from_str(json).unwrap(),

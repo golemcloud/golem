@@ -289,7 +289,11 @@ const wrap = (registration: AgentHost.RegisteredAgentType): AgentType => {
         path: Object.freeze([...declaration.path]),
         source: declaration.source,
         schema: SchemaRef.fromImmutableGraph(sharedGraph, rootAt(declaration.valueType)),
-        defaultValue: declaration.defaultValue,
+        get defaultValue() {
+          return declaration.defaultValue === undefined
+            ? undefined
+            : structuredClone(declaration.defaultValue)
+        },
       }),
     ),
   )
