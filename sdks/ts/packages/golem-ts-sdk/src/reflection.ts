@@ -37,6 +37,7 @@ import type {
   OutputSchema as HostOutputSchema,
 } from 'golem:agent/common@2.0.0';
 import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
+import { schemaValueFromWit } from './internal/schema-model';
 import {
   RemoteOutputError,
   resolveRemoteAgentFallibly,
@@ -115,8 +116,8 @@ export class AgentType {
     readonly path: readonly string[];
     readonly source: 'local' | 'secret';
     readonly schema: SchemaRef;
-    /** Canonical schema JSON; undefined means no default, distinct from "null". */
-    readonly defaultValue?: string;
+    /** Native static data; undefined differs from an option-none value. */
+    readonly defaultValue?: SchemaValue;
   }[];
   readonly client: ReflectedAgentClientFactory;
 
@@ -136,7 +137,7 @@ export class AgentType {
           path: Object.freeze([...decl.path]),
           source: decl.source,
           schema: SchemaRef.fromImmutableGraph(graph.graph, reflectedTypeAt(graph, decl.valueType)),
-          defaultValue: decl.defaultValue,
+          defaultValue: decl.defaultValue === undefined ? undefined : schemaValueFromWit(decl.defaultValue),
         }),
       ),
     );

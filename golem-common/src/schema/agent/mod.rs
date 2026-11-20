@@ -582,10 +582,10 @@ pub struct AgentConfigDeclarationSchema {
     pub source: AgentConfigSource,
     pub path: Vec<String>,
     pub value_type: SchemaType,
-    /// Canonical schema JSON for a static code default. `Some("null")` is an
+    /// Static data in `value_type`. `Some(SchemaValue::Option { inner: None })` is an
     /// explicit optional default; `None` means that no default was declared.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_value: Option<String>,
+    pub default_value: Option<SchemaValue>,
 }
 
 /// Component-owned configuration declarations. Unlike an agent schema this contract can be

@@ -323,7 +323,7 @@ describe('agent reflection', () => {
     expect(client.method('echo').definition.name).toBe('echo');
   });
 
-  it.each([undefined, 'null', '"null"', '"hello\\nworld"'])(
+  it.each([undefined, v.option(undefined), v.option(v.string('null')), v.option(v.string('hello\nworld'))])(
     'preserves the raw config default %s through reflection',
     (defaultValue) => {
       const registered = registeredType();
@@ -333,7 +333,7 @@ describe('agent reflection', () => {
       const secretType = encoder.encodeType(t.secret(t.string()));
       registered.agentType.schema = encoder.finish();
       registered.agentType.config = [
-        { source: 'local', path: ['service', 'label'], valueType: localType, defaultValue },
+        { source: 'local', path: ['service', 'label'], valueType: localType, defaultValue: defaultValue === undefined ? undefined : schemaValueToWit(defaultValue) },
         { source: 'secret', path: ['service', 'token'], valueType: secretType },
       ];
       vi.mocked(hostGetAgentType).mockReturnValueOnce(registered);

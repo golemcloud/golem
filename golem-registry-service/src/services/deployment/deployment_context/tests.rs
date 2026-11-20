@@ -124,7 +124,7 @@ fn static_config_readiness_validates_each_owner_and_missing_values() {
                 source: AgentConfigSource::Local,
                 path,
                 value_type: ty,
-                default_value: default.map(str::to_owned),
+                default_value: default.map(|value| SchemaValue::U32(value.parse().unwrap())),
             };
             let captures = capture
                 .into_iter()

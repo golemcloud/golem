@@ -12,7 +12,7 @@ import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentClassName } from '../src/agentClassName';
-import { schemaValueToWit } from '../src/internal/schema-model';
+import { schemaValueToWit, schemaValueFromWit, schemaGraphFromWit } from '../src/internal/schema-model';
 import '../src/schema/valibot';
 import '../src/schema/arktype';
 
@@ -50,7 +50,7 @@ describe('static config', () => {
       agent.config.map((entry) => ({
         path: entry.path,
         source: entry.source,
-        default: entry.defaultValue && JSON.parse(entry.defaultValue),
+        default: entry.defaultValue && new SchemaRef(schemaGraphFromWit({ ...agent.schema, root: entry.valueType })).unpackJson(schemaValueFromWit(entry.defaultValue)),
       })),
     ).toEqual(
       expected.declarations.map((entry: any) => ({
@@ -121,13 +121,11 @@ describe('static config', () => {
         }),
       });
       expect(declaration.path).toEqual(corpus.schemas.canonicalName.declarations[0].path);
-      expect(JSON.parse(declaration.defaultValue!)).toEqual({
+      expect(new SchemaRef(declaration.graph).unpackJson(declaration.defaultValue!)).toEqual({
         maxChars: 13,
         labels: ['labels.Support_default', null, ''],
       });
-      const value = new SchemaRef(declaration.graph).packJson(
-        JSON.parse(declaration.defaultValue!),
-      );
+      const value = declaration.defaultValue!;
       expect(declaration.codec.fromValue(value)).toEqual({
         max_chars: 13,
         labels: ['labels.Support_default', undefined, ''],
@@ -229,7 +227,7 @@ describe('static config', () => {
       absent: valibot.nullable(valibot.string(), null),
       object: type({ count: 'number = 31', label: 'string = "code-default"' }),
     });
-    expect(declarations.map((declaration) => JSON.parse(declaration.defaultValue!))).toEqual([
+    expect(declarations.map((declaration) => new SchemaRef(declaration.graph).unpackJson(declaration.defaultValue!))).toEqual([
       false,
       '',
       null,

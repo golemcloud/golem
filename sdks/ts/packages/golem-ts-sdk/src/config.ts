@@ -62,8 +62,8 @@ export interface ConfigDeclaration {
   readonly codec: SchemaCodec;
   /** Declaration graph: inner for local, `secret<inner>` for secret. */
   readonly graph: SchemaGraph;
-  /** Canonical schema JSON; undefined means no default, distinct from "null". */
-  readonly defaultValue?: string;
+  /** Native static data; undefined differs from an option-none value. */
+  readonly defaultValue?: SchemaValue;
   /**
    * Whether this leaf is REQUIRED within its immediate parent group — i.e. it is
    * NOT itself `.optional()`. A required leaf that is unset makes its enclosing
@@ -162,7 +162,7 @@ function buildLeafDeclaration(
   // reads as `option none` (=> undefined) instead of trapping the guest.
   const declCodec = underOptional && !leafIsOptional ? liftCodecToOption(codec) : codec;
   const graph = canonicalConfigGraph(declCodec.graph);
-  let defaultValue: string | undefined;
+  let defaultValue: SchemaValue | undefined;
   if (codec.configDefault !== undefined) {
     const ref = new SchemaRef(graph);
     const packed = ref.packJson(codec.configDefault);
@@ -172,7 +172,7 @@ function buildLeafDeclaration(
     if (JSON.stringify(ref.unpackJson(declCodec.toValue(decoded))) !== JSON.stringify(json)) {
       throw new TypeError(`Static config default changes during encoding at '${path.join('.')}'`);
     }
-    defaultValue = JSON.stringify(json);
+    defaultValue = packed;
   }
   return {
     name,
