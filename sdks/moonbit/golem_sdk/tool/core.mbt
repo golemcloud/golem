@@ -1,6 +1,6 @@
 ///|
 pub using @toolCore {
-  type Principal,
+  type InvocationContext,
   type NoToolError,
   type ToolBuildError,
   type ToolDef,

@@ -204,21 +204,31 @@ pub const COMPLETION: &str = "Examples:
 
 // Agent commands -----------------------------------------------------------------------------------
 
-pub const AGENT_NEW: &str = "Examples:
-  # Create an instance of an agent with no parameters
-  golem-cli agent new 'MyAgent()'
+pub const AGENT_CREATE: &str = "Examples:
+  # Create a new agent without a key; prints its agent ID and fingerprint
+  golem-cli agent create 'MyAgent()'
 
-  # Create an instance with a string parameter (note the shell quoting)
-  golem-cli agent new 'ChatRoom(\"general\")'
+  # Create the keyed agent of a string parameter (note the shell quoting); fails when it exists
+  golem-cli agent create --keyed 'ChatRoom(\"general\")'
+
+  # Retry a create safely: the same idempotency key returns the same agent
+  golem-cli agent create -i create-42 'MyAgent()'
 
   # Provide environment variables visible to the agent
-  golem-cli agent new 'MyAgent(\"u-123\")' --env API_URL=https://api.example.com --env LOG_LEVEL=debug
+  golem-cli agent create 'MyAgent(\"u-123\")' --env API_URL=https://api.example.com --env LOG_LEVEL=debug
 
   # Provide configuration values declared by the agent
-  golem-cli agent new 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
+  golem-cli agent create 'MyAgent()' --config max_retries=5 --config timeout_seconds=30
 
-  # Address an agent in a specific environment
-  golem-cli agent new 'staging/MyAgent(\"u-123\")'";
+  # Create the agent in a specific environment
+  golem-cli agent create 'staging/MyAgent(\"u-123\")'";
+
+pub const AGENT_UPSERT: &str = "Examples:
+  # Get the keyed agent of the parameters, and create it when it does not exist
+  golem-cli agent upsert 'ChatRoom(\"general\")'
+
+  # In a specific environment
+  golem-cli agent upsert 'staging/ChatRoom(\"general\")'";
 
 pub const AGENT_INVOKE: &str = "Examples:
   # Invoke a function with no arguments
@@ -275,7 +285,7 @@ pub const AGENT_LIST: &str = "Examples:
   golem-cli agent list --component-name my-component
 
   # Filter on metadata; multiple --filter flags are AND-combined
-  golem-cli agent list --filter 'status == Running' --filter 'name like %counter%'
+  golem-cli agent list --filter 'status == Running' --filter 'key like counter'
   golem-cli agent list --filter 'env.region == us-east'
 
   # Include ephemeral agents (or only ephemeral ones)
@@ -284,7 +294,7 @@ pub const AGENT_LIST: &str = "Examples:
 
   # Pagination
   golem-cli agent list --max-count 10
-  golem-cli agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
+  golem-cli agent list CounterAgent --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
   # One page across all selected components; pass the page's `cursor` back for the next one
   golem-cli --format json agent list --page --max-count 10

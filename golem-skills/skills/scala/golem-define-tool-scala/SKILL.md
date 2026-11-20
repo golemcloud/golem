@@ -26,3 +26,23 @@ Use `@arg`, `@command`, `@constraint`, `@result`, and `@annotations` when the co
 needs explicit metadata. Custom values require `zio.blocks.schema.Schema`. Keep
 `scalacOptions += "-experimental"` enabled for macro annotations and never edit generated client
 or registration sources.
+
+## Declare HTTP routes
+
+```scala
+import golem.runtime.annotations.{endpoint, toolDefinition}
+
+@toolDefinition(mount = "/reports")
+trait Report {
+  @endpoint(method = "GET", path = "/status/{id}")
+  def status(id: String): String
+}
+```
+
+This declares `GET /reports/status/{id}`. Use `@endpoint(prefix = "/admin")` on a subtree method to supply a prefix without emitting a route. Every nonroot ancestor needs an endpoint or prefix. Names and aliases do not supply path segments; parent endpoints supply their suffix to children too. Grafting uses the parent mount, discards the child's standalone mount, and retains the child-root declaration unless the graft site overrides it.
+
+Endpoint options include `routeId`, `mode` and `responseHeaders = Array(("X-Result", "ready"))`. Query templates such as `?format={format}` bind declared inputs; `@header("X-Token")` binds a parameter from a header. Use `@durableStreamSlot(source = "input", slot = "stdin", name = "upload", contentType = "text/plain")` or `source = "output"` with `stdout`/`stderr`, and `@durableStreams(maxConcurrentReadersPerStream = 7, maxAppendRequestsPerSecondPerStream = 11)` for shared stream options.
+
+Path captures require scalar inputs; query/header sources reject body-only complex values. GET, HEAD and DELETE implicitly bind remaining eligible inputs from query parameters. Mount/prefix captures must name globals in scope. Plain stdin routes cannot leave required inputs in the JSON body. Tool HTTP declarations reject agent auth/CORS/system variables and platform-managed response headers. Agents reject the tool-only `prefix`, `routeId` and `responseHeaders` options.
+
+Omitted mode resolves to `durableStreams` for a non-idempotent command with any declared standard stream, otherwise `plain`. Only the command's own idempotent annotation controls this default; explicit mode wins. Default route IDs are dot-separated canonical command paths. These declarations do not change invocation compatibility or implement serving.

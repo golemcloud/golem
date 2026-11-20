@@ -17,6 +17,7 @@ use super::*;
 pub(in crate::durable_host::p3::http) async fn make_p3_http_retry_task_context<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
     retry_point: OplogIndex,
+    retrying_start_index: OplogIndex,
     mut retry_properties: RetryProperties,
 ) -> TaskRetryContext<Ctx>
 where
@@ -57,6 +58,7 @@ where
 
     TaskRetryContext {
         retry_point,
+        retrying_start_index: Some(retrying_start_index),
         entity_parent_start_index,
         invocation_id,
         environment_state_service,
@@ -65,6 +67,10 @@ where
         agent_config_retry_policies,
         runtime_retry_policy_mutations,
         max_in_function_retry_delay,
+        durable_wait: crate::durable_host::durability::retry_backoff_waits_durably(
+            store,
+            crate::durable_host::p3::durable_worker_ctx::<Ctx, U>,
+        ),
         current_retry_policy_state,
         retry_properties,
         worker,

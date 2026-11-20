@@ -52,7 +52,7 @@ final class DurableStreamsExampleImpl(url: String, producerId: String) extends D
   }
 
   override def forward(targetUrl: String, targetProducer: String, offset: String): Future[Vector[Long]] =
-    readJson(offset).flatMap(stream => DurableStreamsExampleClient.get(targetUrl, targetProducer).consume(stream))
+    readJson(offset).flatMap(stream => DurableStreamsExampleClient.upsert(targetUrl, targetProducer).consume(stream))
 
   override def appendJson(values: Vector[Long], close: Boolean): Future[Option[String]] =
     jsonWriter.append(values, close).map(_.nextOffset)

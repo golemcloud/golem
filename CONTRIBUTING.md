@@ -50,7 +50,7 @@ cargo install --force cargo-make
 `cargo make build` also builds the built-in tools, which needs:
 
 - [WASI SDK](https://github.com/WebAssembly/wasi-sdk/releases) at the version CI pins
-  (`WASI_SDK_VERSION` in `.github/workflows/ci.yaml`), with `WASI_SDK_PATH` pointing at it.
+  (the `wasi-sdk-version` default in `.github/actions/setup-wasm-component-tools/action.yml`), with `WASI_SDK_PATH` pointing at it.
   Without it, C dependencies fail to compile for `wasm32-wasip2` with `'stdio.h' file not found`.
 - An **official** Node.js 24 build (for example via [fnm](https://github.com/Schniz/fnm) or
   [nvm](https://github.com/nvm-sh/nvm)) and [pnpm](https://pnpm.io). Do not use Homebrew's Node:
@@ -184,7 +184,7 @@ cargo clippy -p <crate> --all-targets --no-deps -- -D warnings
 cargo test -p <crate> --lib -- --report-time
 ```
 
-Pull requests to `main` do not run the full CI suite. The continuous `Main validation` workflow selects the latest main commit and publishes its result on that exact commit. Skill-harness changes also run inexpensive path-filtered PR checks. Pull requests and pushes to maintenance branches keep full CI. The release gate requires validation of the exact release source; a green ancestor is not sufficient.
+Pull requests to `main` run no tests. The continuous `Main validation` workflow selects the latest main commit and publishes its result on that exact commit. It includes the skill-harness checks. Existing maintenance branches retain their own full CI workflows; main no longer contains the legacy workflows. The release gate requires validation of the exact release source; a green ancestor is not sufficient.
 
 ## Release process
 

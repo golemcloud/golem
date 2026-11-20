@@ -29,8 +29,8 @@ use golem_common::model::oplog::{
     HostPayloadPair, HostRequestGolemAgentGetConfigValue, HostRequestGolemApiForkAgent,
     HostRequestGolemRpcBindSelf, HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation,
     HostRequestRandomBytes, HostResponseGolemAgentAgentType, HostResponseGolemAgentAgentTypes,
-    HostResponseGolemApiPromiseId, HostResponseGolemRpcCreate, HostResponseGolemRpcInvokeAndAwait,
-    HostResponseGolemRpcPrepareInvocation,
+    HostResponseGolemApiPromiseId, HostResponseGolemRpcCreate, HostResponseGolemRpcCreated,
+    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcPrepareInvocation,
 };
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaValue, TypeId, TypedSchemaValue,
@@ -281,6 +281,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsIpNameLookupResolveAddresses => {
             pair::<host_functions::P3SocketsIpNameLookupResolveAddresses>(Bare::Neither)
         }
+        HostFunctionName::GolemNetworkDnsResolve => {
+            pair::<host_functions::GolemNetworkDnsResolve>(Bare::Neither)
+        }
         HostFunctionName::GolemAgentGetAllAgentTypes => {
             pair::<host_functions::GolemAgentGetAllAgentTypes>(Bare::Neither)
         }
@@ -335,9 +338,6 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::GolemApiResolveComponentId => {
             pair::<host_functions::GolemApiResolveComponentId>(Bare::Neither)
         }
-        HostFunctionName::GolemApiResolveAgentIdStrict => {
-            pair::<host_functions::GolemApiResolveAgentIdStrict>(Bare::Neither)
-        }
         HostFunctionName::GolemApiFork => pair::<host_functions::GolemApiFork>(Bare::Neither),
         HostFunctionName::WebsocketClientConnect => {
             pair::<host_functions::WebsocketClientConnect>(Bare::Neither)
@@ -375,8 +375,14 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::GolemApiRetryNextRetryDelay => {
             pair::<host_functions::GolemApiRetryNextRetryDelay>(Bare::Neither)
         }
-        HostFunctionName::GolemRpcWasmRpcNew => {
-            pair::<host_functions::GolemRpcWasmRpcNew>(Bare::Neither)
+        HostFunctionName::GolemRpcWasmRpcUpsert => {
+            pair::<host_functions::GolemRpcWasmRpcUpsert>(Bare::Neither)
+        }
+        HostFunctionName::GolemRpcWasmRpcGetById => {
+            pair::<host_functions::GolemRpcWasmRpcGetById>(Bare::Neither)
+        }
+        HostFunctionName::GolemRpcWasmRpcCreate => {
+            pair::<host_functions::GolemRpcWasmRpcCreate>(Bare::Neither)
         }
         HostFunctionName::GolemRpcWasmRpcAsyncInvokeRejection => {
             pair::<host_functions::GolemRpcWasmRpcAsyncInvokeRejection>(Bare::Neither)
@@ -464,6 +470,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         }
         HostFunctionName::P3SocketsTypesTcpSocketReceiveAcquire => {
             pair::<host_functions::P3SocketsTypesTcpSocketReceiveAcquire>(Bare::Neither)
+        }
+        HostFunctionName::P3SocketsTypesTcpSocketSendChunk => {
+            pair::<host_functions::P3SocketsTypesTcpSocketSendChunk>(Bare::Neither)
         }
         HostFunctionName::P3SocketsTypesUdpSocketSend => {
             pair::<host_functions::P3SocketsTypesUdpSocketSend>(Bare::Neither)
@@ -574,6 +583,12 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::P3SocketsTypesUdpSocketConnect => {
             pair::<host_functions::P3SocketsTypesUdpSocketConnect>(Bare::Neither)
         }
+        HostFunctionName::P3SocketsTypesUdpSocketBind => {
+            pair::<host_functions::P3SocketsTypesUdpSocketBind>(Bare::Neither)
+        }
+        HostFunctionName::P3SocketsTypesUdpSocketDisconnect => {
+            pair::<host_functions::P3SocketsTypesUdpSocketDisconnect>(Bare::Neither)
+        }
         HostFunctionName::GolemToolRpcInvokeAndAwait => {
             pair::<host_functions::GolemToolRpcInvokeAndAwait>(Bare::Neither)
         }
@@ -612,6 +627,9 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::GolemAgentGetAgentTypeByAgentId => {
             pair::<host_functions::GolemAgentGetAgentTypeByAgentId>(Bare::Neither)
         }
+        HostFunctionName::GolemAgentLookupAgentId => {
+            pair::<host_functions::GolemAgentLookupAgentId>(Bare::Neither)
+        }
         HostFunctionName::GolemToolCreateStdin => {
             pair::<host_functions::GolemToolCreateStdin>(Bare::Neither)
         }
@@ -648,6 +666,19 @@ fn pair_graphs(name: &HostFunctionName) -> Option<PairGraphs> {
         HostFunctionName::SocketsUdpPermissionCheck => {
             pair::<host_functions::SocketsUdpPermissionCheck>(Bare::Neither)
         }
+        HostFunctionName::SocketsUdpStartBind => {
+            pair::<host_functions::SocketsUdpStartBind>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpStream => {
+            pair::<host_functions::SocketsUdpStream>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpReceive => {
+            pair::<host_functions::SocketsUdpReceive>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpCheckSend => {
+            pair::<host_functions::SocketsUdpCheckSend>(Bare::Neither)
+        }
+        HostFunctionName::SocketsUdpSend => pair::<host_functions::SocketsUdpSend>(Bare::Neither),
         HostFunctionName::GolemPermissionsSelfWallet => {
             pair::<host_functions::GolemPermissionsSelfWallet>(Bare::Neither)
         }
@@ -689,6 +720,7 @@ struct RuleIds {
     created_promise: TypeId,
     rpc_bind_self: TypeId,
     rpc_create: TypeId,
+    rpc_created: TypeId,
     rpc_prepare_invocation: TypeId,
 }
 
@@ -704,6 +736,7 @@ static RULE_IDS: LazyLock<RuleIds> = LazyLock::new(|| RuleIds {
     created_promise: <HostResponseGolemApiPromiseId as IntoSchema>::type_id(),
     rpc_bind_self: <HostRequestGolemRpcBindSelf as IntoSchema>::type_id(),
     rpc_create: <HostResponseGolemRpcCreate as IntoSchema>::type_id(),
+    rpc_created: <HostResponseGolemRpcCreated as IntoSchema>::type_id(),
     rpc_prepare_invocation: <HostResponseGolemRpcPrepareInvocation as IntoSchema>::type_id(),
 });
 
@@ -799,6 +832,10 @@ impl Walker<'_, '_> {
                     self.kept_result(graph, body, value, |walker, graph, ty, ok| {
                         walker.kept_fingerprint(graph, ty, ok)
                     })
+                } else if is(&ids.rpc_created) && name == "result" {
+                    self.kept_result(graph, body, value, |walker, graph, ty, ok| {
+                        walker.created_agent(graph, ty, ok)
+                    })
                 } else if name == "result" && is_result(graph, body) {
                     self.kept_result(graph, body, value, |walker, graph, ty, ok| {
                         walker.typed(graph, ty, ok, Region::Trusted)
@@ -854,6 +891,32 @@ impl Walker<'_, '_> {
             })
             .collect();
         record(resolved.type_name, fields)
+    }
+
+    /// The ok payload of the `create` response of wasm-rpc: the ID of the new agent, which stays
+    /// an agent reference, and its fingerprint, which is kept.
+    fn created_agent(
+        &mut self,
+        graph: &SchemaGraph,
+        ty: &SchemaType,
+        value: &SchemaValue,
+    ) -> ReportNode {
+        let Some(resolved) = resolve(graph, ty) else {
+            return self.typed(graph, ty, value, Region::Trusted);
+        };
+        match (resolved.body, value) {
+            (SchemaType::Tuple { elements, .. }, SchemaValue::Tuple { elements: values })
+                if elements.len() == 2 && values.len() == 2 =>
+            {
+                ReportNode::Tuple(TupleNode {
+                    elements: vec![
+                        self.typed(graph, &elements[0], &values[0], Region::Trusted),
+                        self.kept_fingerprint(graph, &elements[1], &values[1]),
+                    ],
+                })
+            }
+            _ => self.typed(graph, ty, value, Region::Trusted),
+        }
     }
 
     /// A fingerprint that Golem writes: the incarnation of an agent, with no customer data.

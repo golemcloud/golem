@@ -59,6 +59,7 @@ fn sample_tool() -> ToolType raise {
   let definition : @toolCommon.Tool = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: {
       nodes: [
         {
@@ -68,6 +69,7 @@ fn sample_tool() -> ToolType raise {
           globals: { options: [], flags: [], },
           subcommands: [1],
           body: None,
+          http: None,
         },
         {
           name: "run",
@@ -76,6 +78,7 @@ fn sample_tool() -> ToolType raise {
           globals: { options: [], flags: [], },
           subcommands: [],
           body: Some(body),
+          http: None,
         },
       ],
     },
@@ -582,6 +585,7 @@ fn bash_tool(repeatables~ : Bool = false) -> ToolType raise {
   let definition : @toolCommon.Tool = {
     version: "1",
     requires_filesystem: false,
+    http_mount: None,
     commands: {
       nodes: [
         {
@@ -591,6 +595,7 @@ fn bash_tool(repeatables~ : Bool = false) -> ToolType raise {
           globals: { options: [], flags: [], },
           subcommands: [],
           body: Some(body),
+          http: None,
         },
       ],
     },

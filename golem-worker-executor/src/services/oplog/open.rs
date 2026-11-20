@@ -104,7 +104,7 @@ impl OpenOplogs {
     pub async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         let slot = self.slot(agent_id).await.lock_owned().await;
         OplogLifecycleGuard {
-            agent_id: agent_id.clone(),
+            agent_id: *agent_id,
             slot: Some(slot),
             owner: self.clone(),
         }
@@ -170,7 +170,7 @@ impl OpenOplogs {
             }
         }
         let owner = self.clone();
-        let close_agent_id = agent_id.clone();
+        let close_agent_id = *agent_id;
         let close_slot = slot.clone();
         let close = Box::new(move || owner.release_if_unused(&close_agent_id, &close_slot));
         // A failed open caches nothing: the slot keeps what it held, and the next open tries again.
@@ -189,7 +189,7 @@ impl OpenOplogs {
         // Retain the cache slot until asynchronous last-handle cleanup finishes, even when
         // nobody reopens it. A cold open that wins this race awaits the same completion above.
         let owner = self.clone();
-        let agent_id = agent_id.clone();
+        let agent_id = *agent_id;
         let cleanup_slot = slot.clone();
         tokio::spawn(async move {
             let _ = closed.await;

@@ -20,6 +20,7 @@
 //     wasi:config@0.2.0-draft
 //     wasi:logging
 //     golem:websocket@1.5.0
+//     golem:network@0.1.0
 //     wasi:http@0.3.0
 //     golem:agent-guest
 //     wasi:io@0.2.6
@@ -57,11 +58,11 @@ func InspectCard(c *golem_core_types.PermissionCard) witTypes.Result[golem_permi
 	var result1 witTypes.Result[golem_permissions_types.CardView, golem_permissions_types.PermissionError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
-		result := wasm_lift_1_t947(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result := wasm_lift_1_t982(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Ok[golem_permissions_types.CardView, golem_permissions_types.PermissionError](result)
 	case 1:
-		result0 := wasm_lift_1_t950(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t985(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[golem_permissions_types.CardView, golem_permissions_types.PermissionError](result0)
 	default:
@@ -73,11 +74,11 @@ func InspectCard(c *golem_core_types.PermissionCard) witTypes.Result[golem_permi
 }
 
 //go:noinline
-func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.CardView {
+func wasm_lift_1_t982(src unsafe.Pointer) golem_permissions_types.CardView {
 	result0 := make([]golem_permissions_types.PatternGrant, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0)))), index*(10*4))
-		result := wasm_lift_1_t945(unsafe.Add(unsafe.Pointer(base), 0))
+		result := wasm_lift_1_t980(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result0 = append(result0, result)
 	}
@@ -85,7 +86,7 @@ func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.CardView {
 	result2 := make([]golem_permissions_types.PatternGrant, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4))))), index*(10*4))
-		result1 := wasm_lift_1_t945(unsafe.Add(unsafe.Pointer(base), 0))
+		result1 := wasm_lift_1_t980(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result2 = append(result2, result1)
 	}
@@ -93,7 +94,7 @@ func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.CardView {
 	result4 := make([]golem_permissions_types.PatternGrant, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4))))), index*(10*4))
-		result3 := wasm_lift_1_t945(unsafe.Add(unsafe.Pointer(base), 0))
+		result3 := wasm_lift_1_t980(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result4 = append(result4, result3)
 	}
@@ -101,7 +102,7 @@ func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.CardView {
 	result6 := make([]golem_permissions_types.PatternGrant, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4))))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (7 * 4)))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (6 * 4))))), index*(10*4))
-		result5 := wasm_lift_1_t945(unsafe.Add(unsafe.Pointer(base), 0))
+		result5 := wasm_lift_1_t980(unsafe.Add(unsafe.Pointer(base), 0))
 
 		result6 = append(result6, result5)
 	}
@@ -110,7 +111,7 @@ func wasm_lift_1_t947(src unsafe.Pointer) golem_permissions_types.CardView {
 }
 
 //go:noinline
-func wasm_lift_1_t950(src unsafe.Pointer) golem_permissions_types.PermissionError {
+func wasm_lift_1_t985(src unsafe.Pointer) golem_permissions_types.PermissionError {
 	var variant golem_permissions_types.PermissionError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -181,7 +182,7 @@ func wasm_lift_1_t950(src unsafe.Pointer) golem_permissions_types.PermissionErro
 }
 
 //go:noinline
-func wasm_lift_1_t945(src unsafe.Pointer) golem_permissions_types.PatternGrant {
+func wasm_lift_1_t980(src unsafe.Pointer) golem_permissions_types.PatternGrant {
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), 4)))
 	value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (3 * 4))))
 	value2 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (5 * 4))))

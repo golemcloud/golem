@@ -1,0 +1,31 @@
+package build
+
+import mill.*
+import mill.meta.MillBuildRootModule
+import mill.scalalib.*
+
+// Compiles the in-tree Golem Mill plugin into this build, as sdks/scala/mill/mill-build does.
+// The Mill plugin is not published; GOLEM_SCALA_SDK_DIR points to sdks/scala in the repository.
+object `package` extends MillBuildRootModule {
+  private def golemScalaSdk = os.Path(sys.env("GOLEM_SCALA_SDK_DIR"))
+
+  private def golemPluginSources = Task.Sources(
+    golemScalaSdk / "mill" / "src",
+    golemScalaSdk / "codegen" / "src" / "main" / "scala"
+  )
+
+  private def golemPluginResources = Task.Sources(golemScalaSdk / "mill" / "resources")
+
+  override def sources = Task(super.sources() ++ golemPluginSources())
+
+  override def resources = Task(super.resources() ++ golemPluginResources())
+
+  def mvnDeps = Seq(
+    mvn"com.lihaoyi::mill-libs:1.1.8",
+    mvn"com.lihaoyi::mill-libs-scalajslib-config-1:1.1.8",
+    mvn"org.scala-js:scalajs-linker_2.13:1.22.0",
+    mvn"org.scala-js:scalajs-js-envs_2.13:1.4.0",
+    mvn"org.scalameta::scalameta:4.14.7",
+    mvn"com.lihaoyi::ujson:3.1.0"
+  )
+}

@@ -26,7 +26,6 @@ use async_trait::async_trait;
 use golem_common::model::AgentFingerprint;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -199,10 +198,10 @@ impl OplogArchiveService for SingletonArchiveService {
     async fn exists(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<bool> {
         Ok(self.0.length().await? != 0)
     }
-    async fn scan_for_component(
+    async fn scan_for_type(
         &self,
         _: &EnvironmentId,
-        _: &ComponentId,
+        _: golem_common::model::type_id::TypeId,
         _: Option<AgentMode>,
         cursor: ScanCursor,
         _: u64,
@@ -241,13 +240,7 @@ pub async fn fixture(threshold: u64) -> Fixture {
         Arc::new(SingletonArchiveService(archive.clone()));
     let service =
         MultiLayerOplogService::new(primary.clone(), nev![archive_service], 100, threshold);
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "ephemeral-actor-test".into(),
-        },
-    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
     let lower: Arc<dyn OplogArchive + Send + Sync> = archive.clone();
     let lower = nev![lower];
     let (transfer_tx, transfer_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -306,13 +299,7 @@ async fn two_layer_oplog(
         100,
         100,
     );
-    let owned_agent_id = OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: "ephemeral-two-layers".into(),
-        },
-    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 2));
     let first: Arc<dyn OplogArchive + Send + Sync> = first;
     let deeper: Arc<dyn OplogArchive + Send + Sync> = deeper;
     let lower = nev![first, deeper];
@@ -443,7 +430,7 @@ async fn read_exact_combines_persisted_handed_off_and_buffer_without_reading_buf
 
     let session_key = golem_common::model::durable_stream::StreamInvocationId {
         callee_environment_id: fixture.oplog.owned_agent_id.environment_id,
-        callee: fixture.oplog.owned_agent_id.agent_id.clone(),
+        callee: fixture.oplog.owned_agent_id.agent_id,
         callee_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
         idempotency_key: InvocationId(Uuid::new_v4()),
     };
@@ -564,10 +551,10 @@ async fn stale_executor_shutdown_fence_does_not_stop_newer_transfer() {
     let fixture = fixture(10).await;
     let shutdown = fixture.oplog.executor_shutdown_handle();
     let service = fixture.oplog.multi_layer_oplog_service.clone();
-    let agent_id = fixture.oplog.owned_agent_id.agent_id.clone();
+    let agent_id = fixture.oplog.owned_agent_id.agent_id;
     let old = fixture.oplog.transfer_fiber.clone();
     let newer = new_transfer_fiber();
-    service.register_transfer(agent_id.clone(), &newer);
+    service.register_transfer(agent_id, &newer);
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let transfer = tokio::spawn(async move {
@@ -643,7 +630,7 @@ async fn failed_writer_is_joined_and_reported_by_close() {
 
 fn refusal(fixture: &Fixture) -> OplogFence {
     OplogFence {
-        agent_id: fixture.oplog.owned_agent_id.agent_id.clone(),
+        agent_id: fixture.oplog.owned_agent_id.agent_id,
         expected_epoch: ShardEpoch(5),
         actual_epoch: Some(ShardEpoch(6)),
     }

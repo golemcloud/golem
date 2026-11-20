@@ -109,7 +109,8 @@ message EntityInvocationScope {
   EntityInvocationId invocation_id = 1;
   uint64 parent_start_index = 2;
   EntityActivation activation = 3;
-  golem.component.Principal calling_principal = 4;
+  reserved 4;
+  golem.component.Principal calling_principal = 10;
   InvocationExecutionMode mode = 5;
   golem.common.UUID idempotency_key = 6;
   bool logical_key_positions = 8;

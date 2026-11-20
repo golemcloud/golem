@@ -16,11 +16,11 @@ use super::TestContext;
 use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
-use golem_client::api::WorkerError;
+use golem_client::api::AgentError;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::component::AgentTypeProvisionConfigUpdate;
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
@@ -88,7 +88,7 @@ async fn agent_with_only_component_agent_config(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
     user.start_agent(&component.id, agent_id.clone()).await?;
 
     let response = user
@@ -140,7 +140,7 @@ async fn agent_with_only_worker_agent_config(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -235,7 +235,7 @@ async fn agent_with_mixed_agent_config(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
@@ -326,7 +326,7 @@ async fn agent_with_mixed_agent_config_update(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
 
     let worker_id = user
         .start_agent_with(
@@ -434,7 +434,7 @@ async fn missing_agent_config_key(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
 
     let result = user
         .try_start_agent_with(
@@ -467,7 +467,7 @@ async fn missing_agent_config_key(
 
     assert_matches!(
         result,
-        Err(golem_client::Error::Item(WorkerError::Error400(_)))
+        Err(golem_client::Error::Item(AgentError::Error400(_)))
     );
 
     Ok(())
@@ -489,7 +489,7 @@ async fn mistyped_agent_config_key(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
 
     let result = user
         .try_start_agent_with(
@@ -526,7 +526,7 @@ async fn mistyped_agent_config_key(
 
     assert_matches!(
         result,
-        Err(golem_client::Error::Item(WorkerError::Error400(_)))
+        Err(golem_client::Error::Item(AgentError::Error400(_)))
     );
 
     Ok(())
@@ -548,7 +548,7 @@ async fn optional_agent_config_does_not_need_to_be_provided(
         .store()
         .await?;
 
-    let agent_id = agent_id!("LocalConfigAgent", "test-agent");
+    let agent_id = agent_key!("LocalConfigAgent", "test-agent");
     user.start_agent_with(
         &component.id,
         agent_id.clone(),

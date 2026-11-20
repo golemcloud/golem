@@ -1669,7 +1669,8 @@ export class ScenarioExecutor {
   ): Promise<void> {
     log.stepAction(stepLabel, `creating agent "${spec.name}"`);
     const projectDir = await this.findGolemProjectDir();
-    const args = ["agent", "new", spec.name];
+    // The keyed agent, so later steps reach it by the same `Type(params)` key.
+    const args = ["agent", "create", "--keyed", spec.name];
     if (spec.env) {
       for (const [k, v] of Object.entries(spec.env)) {
         args.push("-e", `${k}=${v}`);
@@ -1681,7 +1682,7 @@ export class ScenarioExecutor {
       }
     }
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
-    log.cliOutput(stepLabel, "golem agent new", result.output);
+    log.cliOutput(stepLabel, "golem agent create", result.output);
     if (!result.success) fail(`CREATE_AGENT_FAILED: ${result.output}`);
   }
 

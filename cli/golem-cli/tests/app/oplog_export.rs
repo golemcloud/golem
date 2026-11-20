@@ -97,7 +97,7 @@ const PROBE_SOURCE: &str = indoc! { r#"
         }
 
         async fn call_helper(&self, text: String) -> u64 {
-            ExportHelperClient::get("helper".to_string()).measure(text).await
+            ExportHelperClient::upsert("helper".to_string()).measure(text).await
         }
 
         fn read_env(&self) -> u64 {
@@ -140,8 +140,8 @@ const PROBE_SOURCE: &str = indoc! { r#"
 "# };
 
 /// Forwards every request unchanged to the router and records its method, path and query.
-struct RecordingProxy {
-    url: String,
+pub(super) struct RecordingProxy {
+    pub(super) url: String,
     router: String,
     requests: Arc<Mutex<Vec<String>>>,
     hold: Arc<Mutex<Option<Hold>>>,
@@ -154,10 +154,11 @@ struct Hold {
     skip: usize,
     held: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
+    after_response: bool,
 }
 
 impl RecordingProxy {
-    async fn start(target: String) -> Self {
+    pub(super) async fn start(target: String) -> Self {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let hold = Arc::new(Mutex::new(None::<Hold>));
         let recorded = requests.clone();
@@ -179,16 +180,19 @@ impl RecordingProxy {
                             rule.skip -= 1;
                             None
                         }
-                        Some(rule) if (rule.matches)(&line) => holds.take().map(|rule| {
-                            let _ = rule.held.send(());
-                            rule.release
-                        }),
+                        Some(rule) if (rule.matches)(&line) => holds.take(),
                         _ => None,
                     }
                 };
                 recorded.lock().unwrap().push(line);
-                if let Some(release) = release {
-                    let _ = release.await;
+                let (before, after) = match release {
+                    Some(rule) if rule.after_response => (None, Some(rule)),
+                    Some(rule) => (Some(rule), None),
+                    None => (None, None),
+                };
+                if let Some(rule) = before {
+                    let _ = rule.held.send(());
+                    let _ = rule.release.await;
                 }
                 let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
                 let mut headers = parts.headers.clone();
@@ -210,6 +214,10 @@ impl RecordingProxy {
                     headers.remove(name);
                 }
                 let body = response.bytes().await.unwrap();
+                if let Some(rule) = after {
+                    let _ = rule.held.send(());
+                    let _ = rule.release.await;
+                }
                 let mut response = axum::response::Response::new(axum::body::Body::from(body));
                 *response.status_mut() = status;
                 *response.headers_mut() = headers;
@@ -241,17 +249,28 @@ impl RecordingProxy {
             skip,
             held,
             release: on_release,
+            after_response: false,
         });
         (on_held, release)
     }
 
+    /// Holds the response after the upstream read has completed.
+    pub(super) fn hold_response(
+        &self,
+        matches: fn(&str) -> bool,
+    ) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let result = self.hold(matches, 0);
+        self.hold.lock().unwrap().as_mut().unwrap().after_response = true;
+        result
+    }
+
     /// The environment of a CLI call that goes to the router directly. An invocation needs it:
     /// its session is a WebSocket, which the proxy does not forward.
-    fn bypass(&self) -> [(&str, &str); 1] {
+    pub(super) fn bypass(&self) -> [(&str, &str); 1] {
         [("GOLEM_BUILTIN_LOCAL_URL", self.router.as_str())]
     }
 
-    fn take(&self) -> Vec<String> {
+    pub(super) fn take(&self) -> Vec<String> {
         std::mem::take(&mut *self.requests.lock().unwrap())
     }
 }
@@ -323,7 +342,15 @@ async fn setup_probe_app(ctx: &mut TestContext) -> RecordingProxy {
 
     let config = format!("mark=\"{MARKER}-config\"");
     let outputs = ctx
-        .cli([flag::YES, cmd::AGENT, cmd::NEW, PROBE, "--config", &config])
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::CREATE,
+            PROBE,
+            "--keyed",
+            "--config",
+            &config,
+        ])
         .await;
     assert!(outputs.success_or_dump());
 
@@ -570,6 +597,35 @@ fn served_url(serving_line: &str) -> String {
 async fn oplog_export_hides_customer_data() {
     let mut ctx = TestContext::new();
     let proxy = setup_probe_app(&mut ctx).await;
+
+    for address in [
+        format!("\"{MARKER}"),
+        format!("Missing{MARKER}(\"{MARKER}\")"),
+        "00000000-0000-0000-0000-000000000001".to_string(),
+        format!("ExportProbe(\"{MARKER}\", \"extra\")"),
+    ] {
+        let plain = ctx.cli([cmd::AGENT, "oplog", &address]).await;
+        assert!(!plain.success(), "invalid address must fail: {address}");
+        let hidden = ctx
+            .cli([cmd::AGENT, "oplog", &address, "--obfuscate"])
+            .await;
+        assert!(!hidden.success(), "invalid address must fail: {address}");
+        assert!(
+            hidden.stderr_text().contains("A read of the agent failed"),
+            "{}",
+            hidden.stderr_text()
+        );
+        assert_no_leak(
+            &hidden.stdout_text(),
+            &[MARKER.to_string()],
+            "invalid address stdout",
+        );
+        assert_no_leak(
+            &hidden.stderr_text(),
+            &[MARKER.to_string()],
+            "invalid address stderr",
+        );
+    }
 
     // Control: the marker is in the oplog, also in the agent config and in the URL of the failed
     // HTTP call, and the query matches entries.

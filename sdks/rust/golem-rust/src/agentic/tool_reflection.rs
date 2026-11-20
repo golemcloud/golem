@@ -1274,12 +1274,14 @@ mod tests {
             definition: Arc::new(Tool {
                 version: "1".to_string(),
                 requires_filesystem: false,
+                http_mount: None,
                 commands: CommandTree {
                     nodes: vec![
                         CommandNode {
                             name: "sample".to_string(),
                             aliases: Vec::new(),
                             doc: doc.clone(),
+                            http: None,
                             globals: Globals::default(),
                             subcommands: vec![CommandIndex(1)],
                             body: None,
@@ -1288,6 +1290,7 @@ mod tests {
                             name: "run".to_string(),
                             aliases: vec!["r".to_string()],
                             doc,
+                            http: None,
                             globals: Globals::default(),
                             subcommands: Vec::new(),
                             body: Some(body),

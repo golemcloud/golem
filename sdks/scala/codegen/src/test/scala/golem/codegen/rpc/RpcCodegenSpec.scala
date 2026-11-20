@@ -267,7 +267,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("_root_.scala.Vector[_root_.scala.Any](key, value)"), s"missing packed args in:\n$content")
   }
 
-  test("principal params are filtered out from remote methods") {
+  test("context params are filtered out from remote methods") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -277,7 +277,7 @@ class RpcCodegenSpec extends munit.FunSuite {
           methods = List(
             MethodSurface(
               "process",
-              List(ParamSurface("caller", "Principal"), ParamSurface("data", "String")),
+              List(ParamSurface("caller", "InvocationContext"), ParamSurface("data", "String")),
               "Future[String]",
               List(true, false)
             )
@@ -289,14 +289,14 @@ class RpcCodegenSpec extends munit.FunSuite {
 
     val content = result.files.head.content
     assert(content.contains("def apply(data: String)"), s"missing filtered apply in:\n$content")
-    assert(!content.contains("caller: Principal"), s"principal param should be filtered out:\n$content")
+    assert(!content.contains("caller: InvocationContext"), s"context param should be filtered out:\n$content")
     assert(
       content.contains("AbstractWireRemoteMethod[_root_.example.MyAgent, String, String]"),
       s"wrong method type in:\n$content"
     )
   }
 
-  test("all-principal method generates no-arg apply") {
+  test("all-context method generates no-arg apply") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -304,7 +304,7 @@ class RpcCodegenSpec extends munit.FunSuite {
           "example",
           "MyAgent",
           methods = List(
-            MethodSurface("whoami", List(ParamSurface("caller", "Principal")), "Future[String]", List(true))
+            MethodSurface("whoami", List(ParamSurface("caller", "InvocationContext")), "Future[String]", List(true))
           )
         )
       ),
@@ -493,7 +493,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
     assert(handwrittenClient.errors.isEmpty, handwrittenClient.errors.toString)
     assertEquals(handwrittenClient.warnings.size, 1)
-    // A method without valid principal flags gets no wrapper, so its names are free.
+    // A method without valid context flags gets no wrapper, so its names are free.
     val skippedMethod = RpcCodegen.generate(
       agents = List(
         agent(
@@ -512,14 +512,17 @@ class RpcCodegenSpec extends munit.FunSuite {
     assertEquals(skippedMethod.files.size, 1)
   }
 
-  test("agent methods cannot use the names of the generated scope-card members") {
+  test("agent methods cannot use the names of the generated client members") {
     RpcCodegen.ReservedRemoteMemberNames.foreach { reserved =>
       val result = generatedClient("durable", "process", reserved)
       assert(result.files.isEmpty, s"no client may be generated for a reserved method name $reserved")
       assertEquals(result.errors.size, 1)
       assert(result.errors.head.message.contains(reserved), result.errors.head.message)
     }
-    assertEquals(RpcCodegen.ReservedRemoteMemberNames, Set("withDefaultScopeCard", "withoutDefaultScopeCard"))
+    assertEquals(
+      RpcCodegen.ReservedRemoteMemberNames,
+      Set("withDefaultScopeCard", "withoutDefaultScopeCard", "agentId")
+    )
   }
 
   test("no remote trait generated when methods list is empty") {
@@ -533,7 +536,7 @@ class RpcCodegenSpec extends munit.FunSuite {
     assert(!content.contains("bindRemote"), s"should not contain bindRemote when no methods:\n$content")
   }
 
-  test("method with mismatched principalParams length is skipped") {
+  test("method with mismatched contextParams length is skipped") {
     val result = RpcCodegen.generate(
       agents = List(
         agent(
@@ -576,187 +579,128 @@ class RpcCodegenSpec extends munit.FunSuite {
 
   // ── Mode-aware constructor tests ──────────────────────────────────────────
 
-  test("durable agent without config generates get and phantom but no WithConfig") {
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.MyAgent",
-          "example",
-          "MyAgent",
-          mode = "durable",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil))
-        )
-      ),
-      existingObjects = Seq.empty
-    )
+  private def durableClient(
+    params: List[ParamSurface] = Nil,
+    configFields: List[ConfigFieldSurface] = Nil,
+    mode: String = "durable"
+  ): String =
+    RpcCodegen
+      .generate(
+        agents = List(
+          agent(
+            "example.Counter",
+            "example",
+            "Counter",
+            params = params,
+            mode = mode,
+            methods = List(MethodSurface("inc", Nil, "Future[Int]", Nil)),
+            configFields = configFields
+          )
+        ),
+        existingObjects = Seq.empty
+      )
+      .files
+      .head
+      .content
 
-    val content = result.files.head.content
-    assert(content.contains("def get("), s"missing get in:\n$content")
-    assert(content.contains("MyAgentRemote"), s"get should return MyAgentRemote:\n$content")
-    assert(!content.contains("def getWithConfig("), s"should not have getWithConfig without config fields:\n$content")
-    assert(content.contains("def getPhantom("), s"durable agent should also have getPhantom:\n$content")
-    assert(content.contains("def newPhantom("), s"durable agent should also have newPhantom:\n$content")
+  private val removedConstructors =
+    List("get", "getWithConfig", "getPhantom", "newPhantom", "getPhantomWithConfig", "newPhantomWithConfig")
+
+  test("durable agent generates upsert, create and getById and no removed constructors") {
+    val content = durableClient(params = List(ParamSurface("name", "String")))
+    assert(content.contains("def upsert(name: String): CounterRemote"), s"missing upsert in:\n$content")
     assert(
-      !content.contains("def getPhantomWithConfig("),
-      s"should not have getPhantomWithConfig without config fields:\n$content"
+      content.contains(
+        "def create(name: String, keyed: _root_.scala.Boolean = false, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[CounterRemote]"
+      ),
+      s"missing create in:\n$content"
     )
     assert(
-      !content.contains("def newPhantomWithConfig("),
-      s"should not have newPhantomWithConfig without config fields:\n$content"
+      content.contains("def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[CounterRemote]"),
+      s"missing getById in:\n$content"
     )
+    removedConstructors.foreach { name =>
+      assert(!content.contains(s"def $name("), s"removed constructor $name is generated:\n$content")
+    }
+    assert(!content.contains("java.util.UUID"), s"no constructor takes a raw UUID:\n$content")
+    assert(!content.contains("generateIdempotencyKey"), s"no client derives an ID offline:\n$content")
   }
 
-  test("durable agent with config fields generates typed WithConfig constructors") {
-    val cfgFields = List(
-      ConfigFieldSurface(List("appName"), "String"),
-      ConfigFieldSurface(List("db", "host"), "String"),
-      ConfigFieldSurface(List("db", "port"), "Int")
-    )
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.CfgAgent",
-          "example",
-          "CfgAgent",
-          mode = "durable",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil)),
-          configFields = cfgFields
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(content.contains("def getWithConfig("), s"missing getWithConfig in:\n$content")
+  test("constructors map to the upsert, create and get-by-id host functions") {
+    val content = durableClient(params = List(ParamSurface("name", "String")))
     assert(
-      content.contains("appName: _root_.scala.Option[String] = _root_.scala.None"),
-      s"missing appName param in:\n$content"
+      content.contains("AgentClientRuntime.upsertWire[_root_.example.Counter, Id](agentType, name)"),
+      s"upsert must call upsertWire:\n$content"
+    )
+    assert(content.contains(".createWire[_root_.example.Counter, Id]("), s"create must call createWire:\n$content")
+    assert(
+      content.contains("_root_.golem.runtime.rpc.CreateOptions(keyed, _root_.scala.Nil, env)"),
+      s"create must pass keyed and env without config overrides:\n$content"
     )
     assert(
-      content.contains("dbHost: _root_.scala.Option[String] = _root_.scala.None"),
-      s"missing dbHost param in:\n$content"
+      content.contains("AgentClientRuntime.getByIdWire[_root_.example.Counter](agentType, agentId)"),
+      s"getById must call getByIdWire:\n$content"
     )
     assert(
-      content.contains("dbPort: _root_.scala.Option[Int] = _root_.scala.None"),
-      s"missing dbPort param in:\n$content"
+      content.contains("throw _root_.golem.runtime.rpc.AgentRpcException(err)"),
+      s"upsert must unwrap the host result into the typed error:\n$content"
     )
-    assert(content.contains("def getPhantomWithConfig("), s"missing getPhantomWithConfig in:\n$content")
-    assert(content.contains("def newPhantomWithConfig("), s"missing newPhantomWithConfig in:\n$content")
-    assert(
-      !content.contains("configOverrides: _root_.scala.List"),
-      s"should not use raw ConfigOverride list:\n$content"
-    )
+    assert(!content.contains("AgentClientRuntime.resolve"), s"no removed resolve path:\n$content")
   }
 
-  test("WithConfig constructors build ConfigOverride list internally") {
-    val cfgFields = List(
-      ConfigFieldSurface(List("host"), "String")
+  test("create takes typed config overrides and builds the ConfigOverride list internally") {
+    val content = durableClient(
+      params = List(ParamSurface("name", "String")),
+      configFields = List(
+        ConfigFieldSurface(List("appName"), "String"),
+        ConfigFieldSurface(List("db", "host"), "String"),
+        ConfigFieldSurface(List("db", "port"), "Int")
+      )
     )
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.CfgAgent",
-          "example",
-          "CfgAgent",
-          mode = "durable",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil)),
-          configFields = cfgFields
-        )
+    assert(
+      content.contains(
+        "def create(name: String, keyed: _root_.scala.Boolean = false, appName: _root_.scala.Option[String] = _root_.scala.None, dbHost: _root_.scala.Option[String] = _root_.scala.None, dbPort: _root_.scala.Option[Int] = _root_.scala.None, env:"
       ),
-      existingObjects = Seq.empty
+      s"create must take the config fields after keyed:\n$content"
     )
-
-    val content = result.files.head.content
-    assert(content.contains("ConfigOverride[String]"), s"should build ConfigOverride internally:\n$content")
-    assert(content.contains(""""host""""), s"should use path literal:\n$content")
+    assert(content.contains("ConfigOverride[String](_root_.scala.List(\"db\", \"host\"), v)"), content)
+    assert(content.contains("ConfigOverride[Int](_root_.scala.List(\"db\", \"port\"), v)"), content)
+    assert(content.contains(").flatten, env)"), s"create must pass the overrides and env:\n$content")
+    assert(content.contains("def upsert(name: String): CounterRemote"), s"upsert takes no overrides:\n$content")
+    assert(!content.contains("configOverrides: _root_.scala.List"), s"no raw ConfigOverride list:\n$content")
   }
 
-  test("ephemeral agent without config generates a local metadata-bearing proxy") {
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.EphAgent",
-          "example",
-          "EphAgent",
-          mode = "ephemeral",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil))
-        )
-      ),
-      existingObjects = Seq.empty
+  test("ephemeral agent generates only upsert with metadata-bearing calls") {
+    val content = durableClient(
+      params = List(ParamSurface("name", "String"), ParamSurface("id", "Int")),
+      configFields = List(ConfigFieldSurface(List("key"), "String")),
+      mode = "ephemeral"
     )
-
-    val content = result.files.head.content
-    assert(content.contains("def getPhantom("), s"ephemeral agent should support known phantoms:\n$content")
-    assert(content.contains("def newPhantom("), s"missing newPhantom in:\n$content")
-    assert(!content.contains("generateIdempotencyKey"), s"ephemeral proxy should not generate UUID:\n$content")
+    assert(content.contains("def upsert(name: String, id: Int): CounterRemote"), s"missing upsert in:\n$content")
+    assert(!content.contains("def create("), s"ephemeral agent types cannot be created:\n$content")
+    assert(!content.contains("def getById("), s"ephemeral agent should not have getById:\n$content")
+    assert(!content.contains("def bindSelf()"), s"ephemeral agent should not have bindSelf:\n$content")
+    removedConstructors.foreach { name =>
+      assert(!content.contains(s"def $name("), s"removed constructor $name is generated:\n$content")
+    }
     assert(content.contains("awaitWithMetadata"), s"await should return metadata:\n$content")
     assert(content.contains("triggerWithMetadata"), s"trigger should return metadata:\n$content")
-    assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
-    assert(!content.contains("def getWithConfig("), s"ephemeral agent should not have getWithConfig:\n$content")
+  }
+
+  test("durable agent with unit constructor generates no-param upsert") {
+    val content = durableClient()
+    assert(content.contains("def upsert(): CounterRemote"), s"missing no-param upsert in:\n$content")
+    assert(content.contains("upsertWire[_root_.example.Counter, Id](agentType, ())"), content)
     assert(
-      !content.contains("def getPhantomWithConfig("),
-      s"should not have getPhantomWithConfig without config fields:\n$content"
-    )
-    assert(
-      !content.contains("def newPhantomWithConfig("),
-      s"should not have newPhantomWithConfig without config fields:\n$content"
+      content.contains("def create(keyed: _root_.scala.Boolean = false, env:"),
+      s"missing no-param create in:\n$content"
     )
   }
 
-  test("ephemeral agent with config fields generates only the local WithConfig variant") {
-    val cfgFields = List(
-      ConfigFieldSurface(List("key"), "String")
-    )
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.EphAgent",
-          "example",
-          "EphAgent",
-          mode = "ephemeral",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil)),
-          configFields = cfgFields
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(
-      content.contains("def getPhantomWithConfig("),
-      s"ephemeral agent should support known phantoms with config:\n$content"
-    )
-    assert(content.contains("def newPhantomWithConfig("), s"missing newPhantomWithConfig in:\n$content")
-    assert(content.contains("key: _root_.scala.Option[String] = _root_.scala.None"), s"missing key param in:\n$content")
-    assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
-    assert(!content.contains("def getWithConfig("), s"ephemeral agent should not have getWithConfig:\n$content")
-  }
-
-  test("durable agent with constructor params generates get and phantom with unpacked params") {
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.Counter",
-          "example",
-          "Counter",
-          params = List(ParamSurface("name", "String")),
-          mode = "durable",
-          methods = List(MethodSurface("inc", Nil, "Future[Int]", Nil))
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(content.contains("def get(name: String): CounterRemote"), s"missing get with params in:\n$content")
-    assert(
-      content.contains("def getPhantom(name: String, phantom: _root_.java.util.UUID): CounterRemote"),
-      s"missing getPhantom with params in:\n$content"
-    )
-    assert(
-      content.contains("def newPhantom(name: String): CounterRemote"),
-      s"missing newPhantom with params in:\n$content"
-    )
+  test("remote clients expose the typed agent ID") {
+    val content = durableClient()
+    assert(content.contains("def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId]\n"), content)
+    assert(content.contains("resolved.agentId()"), content)
   }
 
   test("multi-param constructor packs args as Vector matching the runtime InputRecordCodec") {
@@ -791,142 +735,13 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
   }
 
-  test("durable agent with constructor params and config fields generates WithConfig with both") {
-    val cfgFields = List(
-      ConfigFieldSurface(List("host"), "String")
-    )
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.Counter",
-          "example",
-          "Counter",
-          params = List(ParamSurface("name", "String")),
-          mode = "durable",
-          methods = List(MethodSurface("inc", Nil, "Future[Int]", Nil)),
-          configFields = cfgFields
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(
-      content.contains("def getWithConfig(name: String, host:"),
-      s"missing getWithConfig with params in:\n$content"
-    )
-    assert(
-      content.contains("def getPhantomWithConfig(name: String, phantom: _root_.java.util.UUID, host:"),
-      s"missing getPhantomWithConfig with params in:\n$content"
-    )
-    assert(
-      content.contains("def newPhantomWithConfig(name: String, host:"),
-      s"missing newPhantomWithConfig with params in:\n$content"
-    )
-  }
-
-  test("ephemeral agent with constructor params generates fresh and known phantom factories") {
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.EphAgent",
-          "example",
-          "EphAgent",
-          params = List(ParamSurface("name", "String"), ParamSurface("id", "Int")),
-          mode = "ephemeral",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil))
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(
-      content.contains("def getPhantom(name: String, id: Int, phantom: _root_.java.util.UUID)"),
-      s"ephemeral agent should accept an explicit phantom ID:\n$content"
-    )
-    assert(
-      content.contains("def newPhantom(name: String, id: Int): EphAgentRemote"),
-      s"missing newPhantom with params in:\n$content"
-    )
-  }
-
-  test("durable agent with unit constructor generates no-param get and phantom constructors") {
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.Simple",
-          "example",
-          "Simple",
-          mode = "durable",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil))
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(content.contains("def get(): SimpleRemote"), s"missing no-param get in:\n$content")
-    assert(
-      content.contains("def getPhantom(phantom: _root_.java.util.UUID): SimpleRemote"),
-      s"missing no-param getPhantom in:\n$content"
-    )
-    assert(content.contains("def newPhantom(): SimpleRemote"), s"missing no-param newPhantom in:\n$content")
-  }
-
-  test("mode-aware constructors use correct resolve methods") {
-    val cfgFields = List(
-      ConfigFieldSurface(List("key"), "String")
-    )
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.MyAgent",
-          "example",
-          "MyAgent",
-          mode = "durable",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil)),
-          configFields = cfgFields
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
+  test("durable mode-aware constructors bind self through bindSelfWire") {
+    val content = durableClient(configFields = List(ConfigFieldSurface(List("key"), "String")))
     assert(content.contains("def bindSelf()"))
     assert(content.contains("AgentClientRuntime.bindSelfWire"))
-    assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
     assert(
-      !content.contains("AgentClientRuntime.resolve["),
-      s"generated clients must avoid reflective resolve:\n$content"
-    )
-  }
-
-  test("ephemeral mode-aware constructors use correct resolve methods") {
-    val cfgFields = List(
-      ConfigFieldSurface(List("key"), "String")
-    )
-    val result = RpcCodegen.generate(
-      agents = List(
-        agent(
-          "example.EphAgent",
-          "example",
-          "EphAgent",
-          mode = "ephemeral",
-          methods = List(MethodSurface("hello", Nil, "Future[String]", Nil)),
-          configFields = cfgFields
-        )
-      ),
-      existingObjects = Seq.empty
-    )
-
-    val content = result.files.head.content
-    assert(!content.contains("def bindSelf()"))
-    assert(!content.contains("AgentClientRuntime.bindSelfWire"))
-    assertEquals(content.split("AgentClientRuntime.resolveWire", -1).length - 1, 4)
-    assert(
-      !content.contains("AgentClientRuntime.resolve["),
-      s"generated clients must avoid reflective resolve:\n$content"
+      !content.contains("AgentClientRuntime.upsert["),
+      s"generated clients must avoid the reflective upsert:\n$content"
     )
   }
 
@@ -937,12 +752,8 @@ class RpcCodegenSpec extends munit.FunSuite {
     )
 
     val content = result.files.head.content
-    assert(!content.contains("def get("), s"should not have mode-aware constructors without methods:\n$content")
-    assert(
-      !content.contains("def getWithConfig("),
-      s"should not have mode-aware constructors without methods:\n$content"
-    )
-    assert(!content.contains("def getPhantom("), s"should not have phantom constructors without methods:\n$content")
-    assert(!content.contains("def newPhantom("), s"should not have phantom constructors without methods:\n$content")
+    List("upsert", "create", "getById").foreach { name =>
+      assert(!content.contains(s"def $name("), s"should not have $name without methods:\n$content")
+    }
   }
 }

@@ -37,7 +37,7 @@ object ToolProjectionIR {
     aliases: List[String],
     scope: Option[String],
     kind: Option[String],
-    isPrincipal: Boolean,
+    isInvocationContext: Boolean,
     isStdin: Boolean,
     isStdout: Boolean,
     isStderr: Boolean
@@ -179,7 +179,7 @@ object ToolProjectionIR {
           aliases = arg.map(_.aliases).getOrElse(Nil),
           scope = arg.flatMap(_.scope),
           kind = arg.flatMap(_.kind),
-          isPrincipal = resolvesTo(tool, param.typeExpr, "golem.Principal"),
+          isInvocationContext = resolvesTo(tool, param.typeExpr, "golem.InvocationContext"),
           isStdin = resolvesTo(tool, param.typeExpr, "golem.tool.ToolInputStream"),
           isStdout = isOutput && channel == "stdout",
           isStderr = isOutput && channel == "stderr"
@@ -205,7 +205,7 @@ object ToolProjectionIR {
       tool.methods.exists { method =>
         method.params
           .filterNot(param =>
-            resolvesTo(tool, param.typeExpr, "golem.Principal") ||
+            resolvesTo(tool, param.typeExpr, "golem.InvocationContext") ||
               resolvesTo(tool, param.typeExpr, "golem.tool.ToolInputStream") ||
               resolvesTo(tool, param.typeExpr, "golem.tool.ToolOutputStream")
           )
@@ -308,7 +308,7 @@ object ToolProjectionIR {
       )
 
   private val knownExternalTypes = Set(
-    "golem.Principal",
+    "golem.InvocationContext",
     "golem.tool.ToolInputStream",
     "golem.tool.ToolOutputStream"
   )
@@ -544,7 +544,7 @@ object ToolProjectionIR {
               ownerFqn = tool.fqn,
               commandPath = path,
               params = params,
-              underlyingParams = params.filterNot(_.param.isPrincipal),
+              underlyingParams = params.filterNot(_.param.isInvocationContext),
               codec = leaf
             )
         }
@@ -758,7 +758,7 @@ object ToolProjectionIR {
       .foreach(param => paramSurfaces(param).foreach(out.add))
     method.params
       .filterNot(param =>
-        param.isPrincipal || isStreamParam(param) || omittedMatches(tool, method, param, inheritedOmitted)
+        param.isInvocationContext || isStreamParam(param) || omittedMatches(tool, method, param, inheritedOmitted)
       )
       .foreach { param =>
         out.add(canonicalValueName(tool, method, param))
@@ -769,7 +769,7 @@ object ToolProjectionIR {
 
   private[codegen] def keptLeafParams(tool: Tool, method: Method, omitted: List[String]): List[Param] =
     (inheritedRootParams(tool, method) ++ method.params).filter { param =>
-      !param.isPrincipal && !param.isStdout && !param.isStderr && !omittedMatches(tool, method, param, omitted)
+      !param.isInvocationContext && !param.isStdout && !param.isStderr && !omittedMatches(tool, method, param, omitted)
     }
 
   private def keptMiddlewareLeafParams(tool: Tool, method: Method, omitted: List[String]): List[Param] =
@@ -779,7 +779,7 @@ object ToolProjectionIR {
 
   private[codegen] def keptSubtreeParams(tool: Tool, method: Method, omitted: List[String]): List[Param] =
     (inheritedRootParams(tool, method) ++ method.params).filter { param =>
-      !param.isPrincipal && !omittedMatches(tool, method, param, omitted)
+      !param.isInvocationContext && !omittedMatches(tool, method, param, omitted)
     }
 
   private[codegen] def projected(tool: Tool, method: Method, param: Param): ProjectedParam =

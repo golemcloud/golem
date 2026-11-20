@@ -13,6 +13,7 @@
 // limitations under the License.
 
 mod account;
+mod agent_keys;
 mod agents;
 
 #[allow(clippy::module_inception)]
@@ -56,6 +57,7 @@ mod rust_tool_middleware_refined_args;
 mod scala_gol40_reflection_acceptance;
 mod scala_guest_streams;
 mod scala_http_router;
+mod scala_sbt_mill;
 mod scala_tool_middleware;
 mod scala_tool_sources;
 mod secrets;
@@ -106,6 +108,7 @@ inherit_test_dep!(Tracing);
 // The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
+tag_suite!(agent_keys, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
 // `deploy`.
 // The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
@@ -170,6 +173,7 @@ tag_suite!(scala_guest_streams, agents_guest_bridge);
 tag_suite!(scala_gol40_reflection_acceptance, agents_guest_bridge);
 tag_suite!(scala_http_router, agents_guest_bridge);
 tag_suite!(scala_tool_sources, agents_guest_bridge);
+tag_suite!(scala_sbt_mill, deploy);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(secrets, deploy);
 tag_suite!(self_identity, deploy);
@@ -236,6 +240,7 @@ mod cmd {
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
+    pub static CREATE: &str = "create";
     pub static DEPLOY: &str = "deploy";
     pub static GENERATE_BRIDGE: &str = "generate-bridge";
     pub static GET: &str = "get";
@@ -250,6 +255,7 @@ mod cmd {
     pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
     pub static TOOL: &str = "tool";
+    pub static UPSERT: &str = "upsert";
 }
 
 mod flag {

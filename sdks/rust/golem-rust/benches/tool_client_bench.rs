@@ -35,10 +35,8 @@ struct CommitResult {
 }
 
 fn schema_graph_for<T: AgenticSchema>() -> SchemaGraph {
-    match <T as AgenticSchema>::get_type() {
-        StructuredSchema::Default(graph) => graph,
-        StructuredSchema::AutoInject(_) => panic!("tool benchmark type must have a value schema"),
-    }
+    let StructuredSchema::Default(graph) = <T as AgenticSchema>::get_type();
+    graph
 }
 
 fn encode_output<T>(value: T) -> golem_rust::schema::wit::wire::TypedSchemaValue

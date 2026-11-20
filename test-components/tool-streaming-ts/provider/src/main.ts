@@ -5,6 +5,7 @@ import {
   getSelfMetadata,
   ok,
   type PermissionCard,
+  type Caller,
   type Principal,
   s,
   toolDefinition,
@@ -44,7 +45,7 @@ const MatrixRejection = z.object({
 });
 
 function principalName(principal: Principal): string {
-  return principal.tag === 'oidc' ? `oidc:${principal.sub}` : principal.tag;
+  return principal.toString();
 }
 
 const SecretExchange = z.object({
@@ -90,11 +91,11 @@ function revealString(secret: Secret): string {
   return value.val;
 }
 
-function resourceEvidence(context: { principal: Principal }) {
+function resourceEvidence(context: { caller: Caller }) {
   return {
     provider: 'typescript',
     principal: principalName(context.principal),
-    ownerAgentId: getSelfMetadata().agentId.agentId,
+    ownerAgentId: getSelfMetadata().agentId.toString(),
   };
 }
 
@@ -204,7 +205,7 @@ toolDefinition('matrix-core')
             BigInt(request.labels.length),
           labelSummary: [...request.labels].reverse().join('|'),
           principal: principalName(context.principal),
-          ownerAgentId: getSelfMetadata().agentId.agentId,
+          ownerAgentId: getSelfMetadata().agentId.toString(),
         });
       },
     }),

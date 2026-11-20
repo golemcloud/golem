@@ -1264,7 +1264,7 @@ pub(super) fn attachment_slot(
         key.attachment_id,
         key.stream_id,
         key.consumer_environment_id,
-        key.consumer.clone(),
+        key.consumer,
     )
 }
 

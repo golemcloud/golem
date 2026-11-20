@@ -24,103 +24,6 @@ import scala.scalajs.js.annotation.JSName
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Principal  –  tagged union
-// ---------------------------------------------------------------------------
-
-@js.native
-sealed trait JsOidcPrincipal extends js.Object {
-  def sub: String                           = js.native
-  def issuer: String                        = js.native
-  def email: js.UndefOr[String]             = js.native
-  def name: js.UndefOr[String]              = js.native
-  def emailVerified: js.UndefOr[Boolean]    = js.native
-  def givenName: js.UndefOr[String]         = js.native
-  def familyName: js.UndefOr[String]        = js.native
-  def picture: js.UndefOr[String]           = js.native
-  def preferredUsername: js.UndefOr[String] = js.native
-  def claims: String                        = js.native
-}
-
-object JsOidcPrincipal {
-  def apply(
-    sub: String,
-    issuer: String,
-    claims: String,
-    email: js.UndefOr[String] = js.undefined,
-    name: js.UndefOr[String] = js.undefined,
-    emailVerified: js.UndefOr[Boolean] = js.undefined,
-    givenName: js.UndefOr[String] = js.undefined,
-    familyName: js.UndefOr[String] = js.undefined,
-    picture: js.UndefOr[String] = js.undefined,
-    preferredUsername: js.UndefOr[String] = js.undefined
-  ): JsOidcPrincipal = {
-    val obj = js.Dynamic.literal("sub" -> sub, "issuer" -> issuer, "claims" -> claims)
-    email.foreach(v => obj.updateDynamic("email")(v))
-    name.foreach(v => obj.updateDynamic("name")(v))
-    emailVerified.foreach(v => obj.updateDynamic("emailVerified")(v))
-    givenName.foreach(v => obj.updateDynamic("givenName")(v))
-    familyName.foreach(v => obj.updateDynamic("familyName")(v))
-    picture.foreach(v => obj.updateDynamic("picture")(v))
-    preferredUsername.foreach(v => obj.updateDynamic("preferredUsername")(v))
-    obj.asInstanceOf[JsOidcPrincipal]
-  }
-}
-
-@js.native
-sealed trait JsAgentPrincipal extends js.Object {
-  def agentId: JsAgentId = js.native
-}
-
-object JsAgentPrincipal {
-  def apply(agentId: JsAgentId): JsAgentPrincipal =
-    js.Dynamic.literal("agentId" -> agentId).asInstanceOf[JsAgentPrincipal]
-}
-
-@js.native
-sealed trait JsGolemUserPrincipal extends js.Object {
-  def accountId: JsAccountId = js.native
-}
-
-object JsGolemUserPrincipal {
-  def apply(accountId: JsAccountId): JsGolemUserPrincipal =
-    js.Dynamic.literal("accountId" -> accountId).asInstanceOf[JsGolemUserPrincipal]
-}
-
-@js.native
-sealed trait JsPrincipal extends js.Object {
-  def tag: String = js.native
-}
-
-@js.native
-sealed trait JsPrincipalOidc extends JsPrincipal {
-  @JSName("val") def value: JsOidcPrincipal = js.native
-}
-
-@js.native
-sealed trait JsPrincipalAgent extends JsPrincipal {
-  @JSName("val") def value: JsAgentPrincipal = js.native
-}
-
-@js.native
-sealed trait JsPrincipalGolemUser extends JsPrincipal {
-  @JSName("val") def value: JsGolemUserPrincipal = js.native
-}
-
-object JsPrincipal {
-  def oidc(value: JsOidcPrincipal): JsPrincipal =
-    JsShape.tagged[JsPrincipal]("oidc", value)
-
-  def agent(value: JsAgentPrincipal): JsPrincipal =
-    JsShape.tagged[JsPrincipal]("agent", value)
-
-  def golemUser(value: JsGolemUserPrincipal): JsPrincipal =
-    JsShape.tagged[JsPrincipal]("golem-user", value)
-
-  def anonymous: JsPrincipal =
-    JsShape.tagOnly[JsPrincipal]("anonymous")
-}
-
-// ---------------------------------------------------------------------------
 // HTTP types
 // ---------------------------------------------------------------------------
 
@@ -350,13 +253,20 @@ sealed trait JsHttpEndpointDetails extends js.Object {
 }
 
 @js.native
-sealed trait JsDurableStreamSlotSource extends js.Object
+sealed trait JsDurableStreamSlotSource extends js.Object {
+  def tag: String                  = js.native
+  @JSName("val") def value: String = js.native
+}
 object JsDurableStreamSlotSource {
   def input(slot: String): JsDurableStreamSlotSource  = JsShape.tagged("input", slot.asInstanceOf[js.Any])
   def output(slot: String): JsDurableStreamSlotSource = JsShape.tagged("output", slot.asInstanceOf[js.Any])
 }
 @js.native
-sealed trait JsDurableStreamSlotOptions extends js.Object
+sealed trait JsDurableStreamSlotOptions extends js.Object {
+  def source: JsDurableStreamSlotSource = js.native
+  def name: js.UndefOr[String]          = js.native
+  def contentType: js.UndefOr[String]   = js.native
+}
 object JsDurableStreamSlotOptions {
   def apply(
     source: JsDurableStreamSlotSource,
@@ -369,7 +279,10 @@ object JsDurableStreamSlotOptions {
   }
 }
 @js.native
-sealed trait JsDurableStreamRouteLoadOptions extends js.Object
+sealed trait JsDurableStreamRouteLoadOptions extends js.Object {
+  def maxConcurrentReadersPerStream: js.UndefOr[Int]       = js.native
+  def maxAppendRequestsPerSecondPerStream: js.UndefOr[Int] = js.native
+}
 object JsDurableStreamRouteLoadOptions {
   def apply(readers: js.UndefOr[Int], appends: js.UndefOr[Int]): JsDurableStreamRouteLoadOptions = {
     val obj = js.Dynamic.literal(); readers.foreach(v => obj.updateDynamic("maxConcurrentReadersPerStream")(v))
@@ -378,7 +291,10 @@ object JsDurableStreamRouteLoadOptions {
   }
 }
 @js.native
-sealed trait JsDurableStreamRouteOptions extends js.Object
+sealed trait JsDurableStreamRouteOptions extends js.Object {
+  def slots: js.Array[JsDurableStreamSlotOptions]       = js.native
+  def load: js.UndefOr[JsDurableStreamRouteLoadOptions] = js.native
+}
 object JsDurableStreamRouteOptions {
   def apply(
     slots: js.Array[JsDurableStreamSlotOptions],
@@ -443,13 +359,12 @@ object JsCachePolicy {
 @js.native
 sealed trait JsReadOnlyConfig extends js.Object {
   def cachePolicy: JsCachePolicy = js.native
-  def usesPrincipal: Boolean     = js.native
 }
 
 object JsReadOnlyConfig {
-  def apply(cachePolicy: JsCachePolicy, usesPrincipal: Boolean): JsReadOnlyConfig =
+  def apply(cachePolicy: JsCachePolicy): JsReadOnlyConfig =
     js.Dynamic
-      .literal("cachePolicy" -> cachePolicy, "usesPrincipal" -> usesPrincipal)
+      .literal("cachePolicy" -> cachePolicy)
       .asInstanceOf[JsReadOnlyConfig]
 }
 

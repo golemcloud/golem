@@ -67,13 +67,10 @@ import { WitTypes } from "@golemcloud/effect-golem";
 
 const PromiseIdSchema = Schema.Struct({
   agentId: Schema.Struct({
-    componentId: Schema.Struct({
-      uuid: Schema.Struct({
-        highBits: WitTypes.Uint64,
-        lowBits: WitTypes.Uint64,
-      }),
+    uuid: Schema.Struct({
+      highBits: WitTypes.Uint64,
+      lowBits: WitTypes.Uint64,
     }),
-    agentId: Schema.String,
   }),
   fingerprint: Schema.Struct({
     highBits: WitTypes.Uint64,
@@ -110,13 +107,10 @@ import {
 
 const PromiseIdSchema = Schema.Struct({
   agentId: Schema.Struct({
-    componentId: Schema.Struct({
-      uuid: Schema.Struct({
-        highBits: WitTypes.Uint64,
-        lowBits: WitTypes.Uint64,
-      }),
+    uuid: Schema.Struct({
+      highBits: WitTypes.Uint64,
+      lowBits: WitTypes.Uint64,
     }),
-    agentId: Schema.String,
   }),
   fingerprint: Schema.Struct({
     highBits: WitTypes.Uint64,
@@ -198,7 +192,7 @@ export const ApprovalAgent = defineAgent({
       request: () =>
         Effect.gen(function* () {
           const promiseId = yield* Agents.Promises.create;
-          const decider = yield* DeciderAgent.client.get({ name });
+          const decider = yield* DeciderAgent.client.upsert({ name });
 
           // Await this short handoff so the decider has stored the ID before we suspend.
           yield* decider.receive({ promiseId });
@@ -251,7 +245,7 @@ If acknowledgement is unnecessary, fire-and-forget handoff is also available:
 yield * decider.receive.trigger({ promiseId });
 ```
 
-Both `client.get(...)` and the remote call are lazy Effects and must be yielded. Avoid synchronous
+Both `client.upsert(...)` and the remote call are lazy Effects and must be yielded. Avoid synchronous
 RPC cycles: the completing agent must not call back and await a method on the already-suspended
 creator.
 

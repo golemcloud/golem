@@ -3,47 +3,50 @@ import { Effect, Result } from "effect"
 import * as InvocationId from "../src/InvocationId.js"
 import type { Uuid } from "../src/Ids.js"
 import { invocationMetadataFromHost } from "../src/internal/rpc.js"
-import { hostInvocationMetadata } from "./invocation-metadata.js"
+import { agentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
 
 const uuid = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0" as Uuid
+const agent = "00000001-0000-8000-8000-0000000000aa" as Uuid
 
 describe("InvocationId", () => {
-  it.effect("round-trips an agent ID that contains '.', '/' and quotes", () =>
+  it.effect("round-trips the `<agent-id>.<uuid>` text form", () =>
     Effect.gen(function* () {
-      const id: InvocationId.InvocationId = {
-        agentId: `Worker("a.b/c", 'd.e', "x\\"y").v2`,
-        uuid,
-      }
+      const id: InvocationId.InvocationId = { agentId: { uuid: agent }, uuid }
       const text = InvocationId.format(id)
-      expect(text).toBe(`Worker("a.b/c", 'd.e', "x\\"y").v2.${uuid}`)
+      expect(text).toBe(`${agent}.${uuid}`)
       const parsed = yield* InvocationId.parse(text)
       expect(parsed).toEqual(id)
       expect(String(parsed)).toBe(text)
+      expect(String(parsed.agentId)).toBe(agent)
       expect(Object.isFrozen(parsed)).toBe(true)
     }),
   )
 
-  it.effect("accepts an upper-case UUID and normalizes it to lower case", () =>
+  it.effect("accepts upper-case UUIDs and normalizes them to lower case", () =>
     Effect.gen(function* () {
-      const parsed = yield* InvocationId.parse(`Worker().${uuid.toUpperCase()}`)
-      expect(parsed).toEqual({ agentId: "Worker()", uuid })
-      expect(parsed.toString()).toBe(`Worker().${uuid}`)
+      const parsed = yield* InvocationId.parse(`${agent.toUpperCase()}.${uuid.toUpperCase()}`)
+      expect(parsed).toEqual({ agentId: { uuid: agent }, uuid })
+      expect(parsed.toString()).toBe(`${agent}.${uuid}`)
     }),
   )
 
   it("formats host invocation metadata with toString", () => {
-    const { invocationId } = invocationMetadataFromHost(hostInvocationMetadata('Worker("a.b")'))
-    expect(`${invocationId}`).toBe(`Worker("a.b").00000000-0000-0001-0000-000000000002`)
+    const { agentId, invocationId } = invocationMetadataFromHost(hostInvocationMetadata("worker"))
+    expect(agentId).toEqual(agentIdFor("worker"))
+    expect(`${invocationId}`).toBe(
+      `${agentIdFor("worker").uuid}.00000000-0000-0001-0000-000000000002`,
+    )
     expect(String(invocationId)).toBe(InvocationId.format(invocationId))
   })
 
   it.effect.each([
-    ["a missing dot", `Worker()${uuid}x`],
-    ["a text shorter than the UUID suffix", "Worker().1234"],
-    ["an invalid UUID", "Worker().0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1fz"],
-    ["a non-hyphenated UUID", `Worker().${uuid.replaceAll("-", "")}`],
-    ["misplaced hyphens", "Worker().0f1e2d3c4-b5a-4968-8776-a5b4c3d2e1f0"],
+    ["a missing dot", `${agent}${uuid}`],
+    ["a readable agent ID", `Worker().${uuid}`],
+    ["an invalid UUID", `${agent}.0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1fz`],
+    ["a non-hyphenated UUID", `${agent}.${uuid.replaceAll("-", "")}`],
+    ["misplaced hyphens", `${agent}.0f1e2d3c4-b5a-4968-8776-a5b4c3d2e1f0`],
     ["an empty agent ID", `.${uuid}`],
+    ["a second dot", `${agent}.${uuid}.x`],
     ["an empty text", ""],
   ])("rejects %s", ([, text]) =>
     Effect.gen(function* () {

@@ -18,7 +18,7 @@ use crate::model::component::{AgentFilePath, InitialAgentFile};
 use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
     AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter,
-    AgentFingerprint, AgentId, AgentModeFilter, AgentNameFilter, AgentNotFilter,
+    AgentFingerprint, AgentIdFilter, AgentKeyFilter, AgentModeFilter, AgentNotFilter,
     AgentRevisionFilter, AgentStatus, AgentStatusFilter, FilterComparator, IdempotencyKey,
     IdempotencyScope, InvocationId, InvocationRequestKey, LogLevel, NumberOfShards, Pod, PromiseId,
     RoutingTable, RoutingTableEntry, ScanCursor, ShardEpoch, ShardId, StringFilterComparator,
@@ -83,29 +83,6 @@ impl TryFrom<golem::common::Hash> for diff::Hash {
             .map_err(|e| format!("Invalid content hash bytes: {e}"))?;
 
         Ok(diff::Hash::from(hash))
-    }
-}
-
-impl From<AgentId> for golem::worker::AgentId {
-    fn from(value: AgentId) -> Self {
-        Self {
-            component_id: Some(value.component_id.into()),
-            name: value.agent_id,
-        }
-    }
-}
-
-impl TryFrom<golem::worker::AgentId> for AgentId {
-    type Error = String;
-
-    fn try_from(value: golem::worker::AgentId) -> Result<Self, Self::Error> {
-        Ok(Self {
-            component_id: value
-                .component_id
-                .ok_or("Missing AgentId.component_id")?
-                .try_into()?,
-            agent_id: value.name,
-        })
     }
 }
 
@@ -459,6 +436,7 @@ impl From<AgentStatus> for golem::worker::AgentStatus {
             AgentStatus::Retrying => golem::worker::AgentStatus::Retrying,
             AgentStatus::Failed => golem::worker::AgentStatus::Failed,
             AgentStatus::Exited => golem::worker::AgentStatus::Exited,
+            AgentStatus::Sandboxed => golem::worker::AgentStatus::Sandboxed,
         }
     }
 }
@@ -469,9 +447,16 @@ impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
     fn try_from(value: golem::worker::AgentFilter) -> Result<Self, Self::Error> {
         match value.filter {
             Some(filter) => match filter {
-                golem::worker::agent_filter::Filter::Name(filter) => Ok(AgentFilter::new_name(
+                golem::worker::agent_filter::Filter::Key(filter) => Ok(AgentFilter::new_key(
                     filter.comparator.try_into()?,
                     filter.value,
+                )),
+                golem::worker::agent_filter::Filter::Id(filter) => Ok(AgentFilter::new_id(
+                    filter.comparator.try_into()?,
+                    filter
+                        .value
+                        .ok_or_else(|| "Missing agent ID".to_string())?
+                        .try_into()?,
                 )),
                 golem::worker::agent_filter::Filter::Revision(filter) => {
                     Ok(AgentFilter::new_revision(
@@ -548,10 +533,16 @@ impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
 impl From<AgentFilter> for golem::worker::AgentFilter {
     fn from(value: AgentFilter) -> Self {
         let filter = match value {
-            AgentFilter::Name(AgentNameFilter { comparator, value }) => {
-                golem::worker::agent_filter::Filter::Name(golem::worker::AgentNameFilter {
+            AgentFilter::Key(AgentKeyFilter { comparator, value }) => {
+                golem::worker::agent_filter::Filter::Key(golem::worker::AgentKeyFilter {
                     comparator: comparator.into(),
                     value,
+                })
+            }
+            AgentFilter::Id(AgentIdFilter { comparator, value }) => {
+                golem::worker::agent_filter::Filter::Id(golem::worker::AgentIdFilter {
+                    comparator: comparator.into(),
+                    value: Some(value.into()),
                 })
             }
             AgentFilter::Revision(AgentRevisionFilter { comparator, value }) => {
@@ -999,6 +990,37 @@ pub fn from_protobuf_resource_description(
     Ok((key, value))
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::registry::v1::TypeIdKind>
+    for crate::model::type_id::TypeIdKind
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::registry::v1::TypeIdKind,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::registry::v1::TypeIdKind as Proto;
+
+        match value {
+            Proto::Unspecified => Err("Unspecified type ID kind".to_string()),
+            Proto::AgentType => Ok(Self::AgentType),
+            Proto::Tool => Ok(Self::Tool),
+        }
+    }
+}
+
+impl From<crate::model::type_id::TypeIdKind>
+    for golem_api_grpc::proto::golem::registry::v1::TypeIdKind
+{
+    fn from(value: crate::model::type_id::TypeIdKind) -> Self {
+        use crate::model::type_id::TypeIdKind;
+
+        match value {
+            TypeIdKind::AgentType => Self::AgentType,
+            TypeIdKind::Tool => Self::Tool,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1013,15 +1035,11 @@ mod tests {
     fn invocation_request_key_protobuf_preserves_provenance_and_retry_identity() {
         use crate::model::AgentFingerprint;
         use crate::model::account::AccountId;
-        use crate::model::component::ComponentId;
         use uuid::Uuid;
 
         let account = AccountId(Uuid::from_u128(11));
         let target = AccountId(Uuid::from_u128(12));
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::from_u128(13)),
-            agent_id: "counter(\"a.b/雪\")".to_string(),
-        };
+        let agent_id = crate::base_model::AgentId::from_parts(7, 13);
         let fingerprint = AgentFingerprint(Uuid::from_u128(14));
         let key = IdempotencyKey::from("same-key");
         let mut requests = vec![
@@ -1047,16 +1065,13 @@ mod tests {
         }
 
         for request in requests {
-            let expected = request.finalize(agent_id.clone(), fingerprint, "method");
+            let expected = request.finalize(agent_id, fingerprint, "method");
             let owner_key = request.owner_key("method");
             let wire: golem::worker::InvocationRequestKey = request.clone().into();
             let decoded = InvocationRequestKey::try_from(wire).unwrap();
             assert_eq!(decoded, request);
             assert_eq!(decoded.owner_key("method"), owner_key);
-            assert_eq!(
-                decoded.finalize(agent_id.clone(), fingerprint, "method"),
-                expected
-            );
+            assert_eq!(decoded.finalize(agent_id, fingerprint, "method"), expected);
         }
     }
 

@@ -23,6 +23,7 @@ use super::pkce::{
 };
 use super::session_store::SessionStore;
 use super::{IdentityProvider, OIDC_SESSION_EXPIRY};
+use crate::custom_api::cache_headers::{CacheRouteKind, apply_response_cache_headers};
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::model::OidcSession;
 use crate::custom_api::oidc::model::SessionId;
@@ -138,6 +139,7 @@ impl OidcHandler {
             http::header::LOCATION,
             HeaderValue::from_str(&pending_login.original_uri).map_err(anyhow::Error::from)?,
         );
+        apply_response_cache_headers(CacheRouteKind::Protocol, &mut headers, false, false, true);
 
         Ok(RouteExecutionResult {
             status: StatusCode::FOUND,
@@ -275,7 +277,15 @@ impl OidcHandler {
             .query_pairs_mut()
             .append_pair("code", authorization_code.secret())
             .append_pair("state", &pending_login.frontend_state);
-        redirect(frontend_redirect.as_str())
+        let mut response = redirect(frontend_redirect.as_str())?;
+        apply_response_cache_headers(
+            CacheRouteKind::Protocol,
+            &mut response.headers,
+            false,
+            false,
+            true,
+        );
+        Ok(response)
     }
 
     pub async fn handle_pkce_token(
@@ -352,7 +362,7 @@ impl OidcHandler {
             bearer_token.secret().to_string(),
             BEARER_TOKEN_LIFETIME.num_seconds() as u64,
         );
-        let mut headers = token_cache_headers();
+        let mut headers = token_cache_headers(true);
         headers.insert(
             http::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
@@ -619,17 +629,24 @@ fn token_protocol_error(
     error: ProtocolErrorResponse,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let mut response = protocol_error_unchecked(status, error);
-    response.headers.extend(token_cache_headers());
+    response.headers.extend(token_cache_headers(false));
     Ok(response)
 }
 
-fn token_cache_headers() -> HeaderMap {
+fn token_cache_headers(credential_issued: bool) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         http::header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),
     );
     headers.insert(http::header::PRAGMA, HeaderValue::from_static("no-cache"));
+    apply_response_cache_headers(
+        CacheRouteKind::Protocol,
+        &mut headers,
+        false,
+        false,
+        credential_issued,
+    );
     headers
 }
 

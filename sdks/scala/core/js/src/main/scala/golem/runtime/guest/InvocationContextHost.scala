@@ -16,8 +16,8 @@
 
 package golem.runtime.guest
 
-import golem.Principal
-import golem.host.js.PrincipalConverter
+import golem.{Caller, InvocationContext}
+import golem.host.js.CallerConverter
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
@@ -37,7 +37,12 @@ private[runtime] object InvocationContextHost {
     def caller(): JsCaller = js.native
   }
 
-  /** The principal that made the running invocation. */
-  def immediatePrincipal(): Principal =
-    PrincipalConverter.fromJs(InvocationContextModule.caller().immediate)
+  /** The caller of the running invocation, read from the host now. */
+  def caller(): Caller =
+    CallerConverter.callerFromJs(InvocationContextModule.caller().asInstanceOf[js.Dynamic])
+
+  /**
+   * The context of the running invocation: the host is asked on first use only.
+   */
+  def current(): InvocationContext = InvocationContext.lazily(caller())
 }

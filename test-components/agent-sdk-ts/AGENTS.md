@@ -183,7 +183,7 @@ s.result(okSchema, errSchema)    // a typed result<ok, err> return (see Typed Er
 
 ## State
 
-State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, principal, phantomId, config }`); handlers' `this` also carries SDK helpers `getId()`, `getPhantomId()`, `getPrincipal()`, and `config`.
+State lives entirely in the object returned by `init()` and is read/written through `this` in the handlers — there are no class fields. `init` receives an `InitContext` (`{ id, caller, phantomId, config }`); handlers receive the decoded input and an `InvocationContext` (`(input, ctx) => ...`, with the caller in `ctx.caller`), and their `this` also carries SDK helpers `getId()`, `getPhantomId()`, and `config`.
 
 ```typescript
 export const HttpAgentImpl = HttpAgent.implement({
@@ -279,18 +279,17 @@ Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{
 
 Host helpers, importable from `@golemcloud/golem-ts-sdk`:
 
-- `durable(spec, request, body)` — run a non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy.
+- `durable(spec, request, body)` — run a synchronous non-deterministic side effect once, persist its typed result, and replay (not re-run) it on recovery. Uses `FunctionType` for the commit/replay policy. `durableAsync(spec, request, body)` does the same for a body that awaits.
 - Sagas — `compensable(run, compensate)` steps composed with `fallibleSaga(...)` / `infallibleSaga(...)` for transactional compensation.
 - Promises (human-in-the-loop) — `createPromise()`, `await awaitPromise(id)`, `completePromise(id, bytes)`.
 
-**Custom durability is sequential-only.** `durable` supports properly nested calls and an async
-body that awaits host calls when no unrelated guest work runs during the wait. Do not overlap it
-with other promises or callbacks, including ordinary host calls: sibling effects can acquire the
-wrong scope and cause incorrect replay or invocation failure. Misuse is not reliably detected.
-Await each nested operation; do not detach work. Stop and join outstanding work before the body
-exits, including on failure. `Promise.all` rejection does not join surviving siblings, and joining
-at the end does not make concurrent custom operations supported. Ordinary built-in durability is
-not subject to this restriction when no custom operation is active.
+**Custom durable operations.** A `durable` body is synchronous; a body that returns a promise
+throws a `TypeError`. `durableAsync` runs its body in its own scope: host calls after an `await`,
+and in timers and callbacks that the body registers, belong to the operation, and concurrent
+operations (for example in `Promise.all`) stay apart. An operation finishes only after the
+operations that started inside it have settled. Await or join the work that the body starts:
+detached work that runs after the operation finished belongs to the enclosing operation or to the
+invocation, not to the finished operation.
 
 ## Available Libraries
 

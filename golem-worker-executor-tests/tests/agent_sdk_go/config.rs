@@ -19,7 +19,7 @@ use crate::Tracing;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentTypeName};
 use golem_common::model::component::AgentTypeProvisionConfigUpdate;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -68,7 +68,7 @@ async fn go_agent_config_read(
         .store()
         .await?;
 
-    let agent_id = agent_id!("ConfigAgent", "go-config-1");
+    let agent_id = agent_key!("ConfigAgent", "go-config-1");
     executor
         .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
         .await?;
@@ -120,7 +120,7 @@ async fn go_static_config_defaults_survive_reconstruction(
         .with_agent_config(agent_type, entries("deployment"))
         .store()
         .await?;
-    let agent_id = agent_id!(agent_type, "captured-defaults");
+    let agent_id = agent_key!(agent_type, "captured-defaults");
     let worker_id = executor
         .start_agent_with(
             &component.id,
@@ -129,7 +129,7 @@ async fn go_static_config_defaults_survive_reconstruction(
             entries("creation"),
         )
         .await?;
-    let deployed_agent_id = agent_id!(agent_type, "deployment-defaults");
+    let deployed_agent_id = agent_key!(agent_type, "deployment-defaults");
     let deployed_worker_id = executor
         .start_agent(&component.id, deployed_agent_id.clone())
         .await?;

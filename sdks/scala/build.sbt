@@ -139,6 +139,9 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
   .jvmSettings(
     Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
       "golem-service-base" / "tests" / "fixtures" / "http-handlers",
+    // The shared PrincipalRef text-form vectors.
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "test-data" / "caller-identity",
     Compile / unmanagedSourceDirectories ++= Seq(
       (ThisBuild / baseDirectory).value / "model" / ".jvm" / "src" / "main" / "scala"
     ),
@@ -316,6 +319,27 @@ lazy val middlewareGuestLinkFixture = project
       _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
     }
   )
+
+// --- build plugin fixtures shared with the Mill build (JS, not published) --
+// scripts/test-build-plugins.sh builds these sources with both plugins and compares the bundles.
+
+def buildPluginFixture(id: String, dir: String) =
+  Project(id, file(s"test-build-plugins/$dir"))
+    .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+    .settings(
+      scalaVersion                    := "3.3.7",
+      crossScalaVersions              := Seq("3.3.7"),
+      publish / skip                  := true,
+      scalaJSUseMainModuleInitializer := true,
+      scalaJSLinkerConfig ~= { config =>
+        config
+          .withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
+          .withOutputPatterns(config.outputPatterns.withSourceMapFile("%s.sourcemap"))
+      }
+    )
+
+lazy val singleModuleFixture  = buildPluginFixture("singleModuleFixture", "single-module")
+lazy val dynamicImportFixture = buildPluginFixture("dynamicImportFixture", "dynamic-import")
 
 // --- integration-tests (JVM, not published) --------------------------------
 

@@ -41,6 +41,10 @@ pub enum ComponentError {
     ComponentVersionAlreadyExists(String),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
+    #[error("Package layer digest does not match the uploaded Wasm for component '{0}'")]
+    PackageLayerDigestMismatch(ComponentName),
+    #[error("Package metadata requires a Wasm upload for component '{0}'")]
+    PackageMetadataWithoutWasm(ComponentName),
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
     #[error(
@@ -205,6 +209,9 @@ impl SafeDisplay for ComponentError {
             Self::ComponentWithNameAlreadyExists(_) => self.to_string(),
             Self::ComponentVersionAlreadyExists(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
+            Self::PackageLayerDigestMismatch(_) | Self::PackageMetadataWithoutWasm(_) => {
+                self.to_string()
+            }
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::AgentFileNotFoundInArchive { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),

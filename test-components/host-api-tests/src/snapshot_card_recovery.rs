@@ -5,9 +5,9 @@ use golem_rust::permissions::{
     PolymorphicPermissionCard, ScopeCard, Timestamp, WalletCard,
 };
 use golem_rust::{
-    AgentId, ComponentId, FromSchema, GolemReflectError, IntoSchema, ParsedAgentId, PromiseId,
-    SchemaValue, agent_client, agent_definition, agent_implementation, await_promise,
-    create_promise, decode_schema_value, encode_schema_value,
+    AgentId, FromSchema, GolemReflectError, IntoSchema, PromiseId, SchemaValue, agent_client,
+    agent_definition, agent_implementation, await_promise, create_promise, decode_schema_value,
+    encode_schema_value,
 };
 use std::cell::RefCell;
 use std::time::Duration;
@@ -27,9 +27,9 @@ mod raw {
     pub use crate::golem_host_api::gated_host_bindings::golem::permissions::{
         derive, inspect, revoke, types, wallet,
     };
+    use golem_rust::Uuid;
     use golem_rust::golem_schema::CardId;
     use golem_rust::schema::wit::wire;
-    use golem_rust::{ComponentId, Uuid};
 
     pub use golem_rust::schema::wit::wire::PermissionCard as Card;
     pub use types::{PatternGrant, PermissionError, WalletCard};
@@ -135,18 +135,8 @@ mod raw {
         )
     }
 
-    pub fn install(
-        card: Card,
-        component_id: ComponentId,
-        agent_id: String,
-    ) -> Result<(), PermissionError> {
-        let agent_id = wire::AgentId {
-            component_id: wire::ComponentId {
-                uuid: component_id.uuid.into(),
-            },
-            agent_id,
-        };
-        wallet::install_card(card, &types::Holder::Agent(agent_id))
+    pub fn install(card: Card, agent_id: golem_rust::AgentId) -> Result<(), PermissionError> {
+        wallet::install_card(card, types::Holder::Agent((&agent_id).into()))
     }
 
     pub fn revoke(card: Card) -> Result<u32, PermissionError> {
@@ -280,8 +270,8 @@ fn wallet_card(card_id: &permissions::CardId) -> Option<WalletCard> {
         .find(|card| &card.id() == card_id)
 }
 
-fn agent_holder(component_id: ComponentId, agent_id: String) -> Holder {
-    Holder::Agent(AgentId::new(component_id, agent_id))
+fn agent_holder(agent_id: AgentId) -> Holder {
+    Holder::Agent(agent_id)
 }
 
 /// Observes the scope card `scope_card_id` in this agent's wallet: whether
@@ -319,12 +309,8 @@ fn lent_scope_card_observation(root_card_id: &CardId) -> (bool, bool, Option<Car
 }
 
 fn scope_card_rpc(target: String) -> WasmRpc {
-    WasmRpc::new(
-        "ScopeCardAgent",
-        encode_parameters(vec![target.to_value()]),
-        None,
-        Vec::new(),
-    )
+    WasmRpc::upsert("ScopeCardAgent", encode_parameters(vec![target.to_value()]))
+        .expect("failed to create the RPC client")
 }
 
 fn decode_scope_observation(
@@ -383,15 +369,13 @@ pub trait ScopeCardAgent {
 
     fn derive_and_install_chain(
         &self,
-        component_id: ComponentId,
-        caller_agent_id: String,
-        target_agent_id: String,
+        caller_agent_id: AgentId,
+        target_agent_id: AgentId,
     ) -> (CardId, CardId);
 
     async fn derive_and_install_after_promise(
         &self,
-        component_id: ComponentId,
-        target_agent_id: String,
+        target_agent_id: AgentId,
         release: PromiseId,
     ) -> CardId;
 
@@ -423,13 +407,11 @@ pub trait ScopeCardAgent {
     /// Makes the card operation `operation` twice and keeps the outcome of each call in agent
     /// state: `ok`, or the kind of the permission error. Between the two calls the agent only logs
     /// `CARD_DECISION_GAP_MARKER`, so no recorded entry separates the two calls. `install-card`
-    /// inspects and then installs cards restricted to a foreign recipient on `target_agent_id` of
-    /// `component_id`.
+    /// inspects and then installs cards restricted to a foreign recipient on `target_agent_id`.
     fn remember_card_decisions_around_gap(
         &self,
         operation: String,
-        component_id: ComponentId,
-        target_agent_id: String,
+        target_agent_id: AgentId,
     ) -> Vec<String>;
 
     /// The outcomes kept by the last `remember_card_decisions_around_gap` call.
@@ -453,9 +435,8 @@ pub trait ScopeCardAgent {
     /// returns each named check with its outcome.
     async fn typed_card_scenario(
         &self,
-        component_id: ComponentId,
-        caller_agent_id: String,
-        target_agent_id: String,
+        caller_agent_id: AgentId,
+        target_agent_id: AgentId,
         target_name: String,
         mismatched_recipient: String,
     ) -> Vec<(String, bool)>;
@@ -529,7 +510,7 @@ pub trait ScopeCardAgent {
     fn use_kept_child(&self) -> Vec<String>;
 
     /// Installs the kept child on `target_agent_id` and returns the outcome.
-    fn install_kept_child(&self, component_id: ComponentId, target_agent_id: String) -> String;
+    fn install_kept_child(&self, target_agent_id: AgentId) -> String;
 
     /// The id of the kept child, read through the `id` accessor.
     fn kept_child_id(&self) -> CardId;
@@ -551,8 +532,7 @@ pub trait ScopeCardAgent {
 
     fn derive_and_install_template(
         &self,
-        component_id: ComponentId,
-        target_agent_id: String,
+        target_agent_id: AgentId,
         source: String,
     ) -> (CardId, CardId, Vec<(String, bool)>);
 
@@ -730,7 +710,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         repetitions: u32,
     ) -> bool {
         let scope_card = derive_scope_card();
-        let mut client = ScopeCardAgentClient::get(target);
+        let mut client = ScopeCardAgentClient::upsert(target);
         client.set_default_scope_card(&scope_card);
         client.inspect_repeatedly(repetitions).await
     }
@@ -830,30 +810,27 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     fn derive_and_install_chain(
         &self,
-        component_id: ComponentId,
-        caller_agent_id: String,
-        target_agent_id: String,
+        caller_agent_id: AgentId,
+        target_agent_id: AgentId,
     ) -> (CardId, CardId) {
         let parent = raw::derive_from_wallet();
         let child = raw::derive_child(&parent);
         let parent_id = raw::id(&parent);
         let child_id = raw::id(&child);
-        raw::install(child, component_id.clone(), target_agent_id)
-            .expect("failed to install derived card");
-        raw::install(parent, component_id, caller_agent_id).expect("failed to install parent card");
+        raw::install(child, target_agent_id).expect("failed to install derived card");
+        raw::install(parent, caller_agent_id).expect("failed to install parent card");
         (parent_id, child_id)
     }
 
     async fn derive_and_install_after_promise(
         &self,
-        component_id: ComponentId,
-        target_agent_id: String,
+        target_agent_id: AgentId,
         release: PromiseId,
     ) -> CardId {
         let card = raw::derive_from_wallet();
         let id = raw::id(&card);
         await_promise(&release).await;
-        raw::install(card, component_id, target_agent_id).expect("failed to install replayed card");
+        raw::install(card, target_agent_id).expect("failed to install replayed card");
         id
     }
 
@@ -936,8 +913,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     fn remember_card_decisions_around_gap(
         &self,
         operation: String,
-        component_id: ComponentId,
-        target_agent_id: String,
+        target_agent_id: AgentId,
     ) -> Vec<String> {
         let mut decide: Box<dyn FnMut() -> String> = match operation.as_str() {
             "derive-scope" => {
@@ -973,11 +949,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
                     // The inspection applies a pending card event at its authority boundary,
                     // before any recorded entry of this call.
                     raw::view(&card).expect("failed to inspect the card to install");
-                    raw::outcome(&raw::install(
-                        card,
-                        component_id.clone(),
-                        target_agent_id.clone(),
-                    ))
+                    raw::outcome(&raw::install(card, target_agent_id.clone()))
                 })
             }
             operation => panic!("unknown card operation {operation}"),
@@ -1033,8 +1005,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     fn derive_and_install_template(
         &self,
-        component_id: ComponentId,
-        target_agent_id: String,
+        target_agent_id: AgentId,
         source: String,
     ) -> (CardId, CardId, Vec<(String, bool)>) {
         let grant = |owner: &str, resource: &str| raw::PatternGrant {
@@ -1116,7 +1087,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
                 Err(raw::PermissionError::LowerBoundTooBroad(_))
             ),
         ));
-        raw::install(child, component_id, target_agent_id).expect("template installation failed");
+        raw::install(child, target_agent_id).expect("template installation failed");
         (parent_id, child_id, checks)
     }
 
@@ -1141,9 +1112,8 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     async fn typed_card_scenario(
         &self,
-        component_id: ComponentId,
-        caller_agent_id: String,
-        target_agent_id: String,
+        caller_agent_id: AgentId,
+        target_agent_id: AgentId,
         target_name: String,
         mismatched_recipient: String,
     ) -> Vec<(String, bool)> {
@@ -1151,7 +1121,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         let mut check = |name: &str, passed: bool| checks.push((name.to_string(), passed));
         let template = parent_card();
         let grant = retained_inspect_grant(&template);
-        let target = ScopeCardAgentClient::get(target_name);
+        let target = ScopeCardAgentClient::upsert(target_name);
 
         let card = permissions::derive_from_wallet(&lower_positive(grant.clone()), None)
             .expect("wallet derivation failed");
@@ -1217,13 +1187,13 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
         let target_cards = target.wallet_card_count().await;
         child
-            .install(&agent_holder(component_id.clone(), target_agent_id.clone()))
+            .install(&agent_holder(target_agent_id.clone()))
             .expect("install failed");
         check(
             "the target holds the installed card",
             target.wallet_card_count().await == target_cards + 1,
         );
-        card.install(&agent_holder(component_id.clone(), caller_agent_id))
+        card.install(&agent_holder(caller_agent_id))
             .expect("self install failed");
         let Some(WalletCard::Concrete(installed)) = wallet_card(&card_id) else {
             panic!("the installed card is missing from the wallet or is not concrete");
@@ -1258,7 +1228,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             None,
         )
         .expect("mismatched-recipient derivation failed");
-        let mismatch = mismatched.install(&agent_holder(component_id, target_agent_id));
+        let mismatch = mismatched.install(&agent_holder(target_agent_id));
         check(
             "installing on a non-recipient agent is a recipient mismatch",
             matches!(mismatch, Err(PermissionError::InstallRecipientMismatch(_))),
@@ -1270,8 +1240,11 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
     async fn keep_scope_card(&self, target: String) -> bool {
         let scope_card = derive_scope_card();
         let root_card_id = raw::id(&raw::template());
-        let target_id = ScopeCardAgentClient::get(target).get_agent_id();
-        let mut client = ScopeCardInspectorClient::bind(&ParsedAgentId::new(target_id))
+        let target_id = ScopeCardAgentClient::upsert(target)
+            .agent_id()
+            .await
+            .expect("failed to get the scope-card agent ID");
+        let mut client = ScopeCardInspectorClient::get_by_id(&target_id)
             .expect("failed to bind the scope-card inspector");
         client.set_default_scope_card(&scope_card);
         let observed = client
@@ -1392,12 +1365,12 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
             .expect("scope-card derivation failed");
         let root_card_id = raw::id(&raw::template());
         let (listed, value) = if sealed {
-            SealedScopeAgentClient::get(target)
+            SealedScopeAgentClient::upsert(target)
                 .with_scope_card(&scope_card)
                 .lent_scope_observation(root_card_id.clone())
                 .await
         } else {
-            ScopeCardAgentClient::get(target)
+            ScopeCardAgentClient::upsert(target)
                 .with_scope_card(&scope_card)
                 .lent_scope_observation(root_card_id.clone())
                 .await
@@ -1411,7 +1384,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     async fn lend_scope_to_observer(&self, target: String) -> (bool, bool) {
         let scope_card = derive_scope_card();
-        SealedScopeAgentClient::get(target)
+        SealedScopeAgentClient::upsert(target)
             .with_scope_card(&scope_card)
             .observe_lent_scope(raw::id(&raw::template()))
             .await
@@ -1423,7 +1396,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     async fn lend_scope_to_wallet_lister(&self, target: String) -> LabelledWallet {
         let scope_card = derive_scope_card();
-        ScopeCardAgentClient::get(target)
+        ScopeCardAgentClient::upsert(target)
             .with_scope_card(&scope_card)
             .labelled_wallet()
             .await
@@ -1458,7 +1431,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         parents.push((&template).into());
         let scope_card = permissions::derive_scope(&parents, &lower_positive(grant))
             .expect("scope-card derivation failed");
-        let lent = ScopeCardAgentClient::get(target)
+        let lent = ScopeCardAgentClient::upsert(target)
             .with_scope_card(&scope_card)
             .lent_scope_expiry()
             .await;
@@ -1519,14 +1492,14 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
         raw::outcome(&raw::try_derive_empty_child(&parent))
     }
 
-    fn install_kept_child(&self, component_id: ComponentId, target_agent_id: String) -> String {
+    fn install_kept_child(&self, target_agent_id: AgentId) -> String {
         let child = self
             .kept_cards
             .borrow_mut()
             .child
             .take()
             .expect("no kept child card");
-        raw::outcome(&raw::install(child, component_id, target_agent_id))
+        raw::outcome(&raw::install(child, target_agent_id))
     }
 
     fn kept_child_id(&self) -> CardId {
@@ -1536,7 +1509,7 @@ impl ScopeCardAgent for ScopeCardAgentImpl {
 
     async fn send_derived_card(&self, target: String) -> Vec<String> {
         let card = derive_persistent_card_from_wallet();
-        ScopeCardAgentClient::get(target)
+        ScopeCardAgentClient::upsert(target)
             .use_received_card(card)
             .await
     }

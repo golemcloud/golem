@@ -31,9 +31,8 @@ use serde::{Deserialize, Serialize};
 )]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
 )]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
 
@@ -277,16 +276,24 @@ impl From<CardId> for Uuid {
     )
 )]
 pub struct AgentId {
-    pub component_id: ComponentId,
-    pub agent_id: String,
+    pub uuid: Uuid,
 }
 
 impl AgentId {
-    pub fn new(component_id: ComponentId, agent_id: String) -> Self {
-        Self {
-            component_id,
-            agent_id,
-        }
+    pub fn new(uuid: Uuid) -> Self {
+        Self { uuid }
+    }
+}
+
+impl From<Uuid> for AgentId {
+    fn from(uuid: Uuid) -> Self {
+        Self::new(uuid)
+    }
+}
+
+impl From<AgentId> for Uuid {
+    fn from(value: AgentId) -> Self {
+        value.uuid
     }
 }
 

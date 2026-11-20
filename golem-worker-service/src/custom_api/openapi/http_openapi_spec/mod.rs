@@ -23,7 +23,8 @@ use super::response_schema::{
 };
 use super::route_schema::{RequestBodyModel, RouteSchema, build_document_schema};
 use super::schema_mapping::{
-    arbitrary_binary_schema, render_input_schema, string_enum_schema, string_schema,
+    arbitrary_binary_schema, render_input_schema, render_query_schema, string_enum_schema,
+    string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use base64::Engine;
@@ -317,7 +318,7 @@ fn add_route_parameters(
                     parameters.push(path_parameter(&param.name, schema));
                 }
                 for param in &call_agent.query_params {
-                    let schema = render_input_schema(graph, &param.schema, components)?;
+                    let schema = render_query_schema(graph, &param.schema, components)?;
                     parameters.push(query_parameter(&param.name, param.required, schema));
                 }
                 for param in &call_agent.header_params {
@@ -534,14 +535,19 @@ fn path_parameter(name: &str, schema: Value) -> Value {
 }
 
 fn query_parameter(name: &str, required: bool, schema: Value) -> Value {
+    let style = if schema["type"] == "object" {
+        "deepObject"
+    } else {
+        "form"
+    };
     json!({
         "in": "query",
         "name": name,
         "description": format!("Query parameter: {name}"),
         "required": required,
         "schema": schema,
-        "explode": false,
-        "style": "form",
+        "explode": true,
+        "style": style,
         "allowEmptyValue": false,
     })
 }

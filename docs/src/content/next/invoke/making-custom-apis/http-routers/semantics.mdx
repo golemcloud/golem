@@ -130,15 +130,16 @@ No Last-Modified header is emitted.
 
 ## Live durable-agent files
 
-Declare file mappings on an ordinary, durable,
-non-phantom agent's HTTP mount. Every constructor parameter must occur exactly once
-as a path capture. Header, query, body, or caller identity cannot choose the agent ID.
+Declare file mappings on an ordinary, durable agent's HTTP mount without
+`phantomAgent` or an agent ID selector. Every constructor parameter must occur exactly once
+as a path capture: the file is served by the keyed agent of the captured constructor
+parameters. Header, query, body, or caller identity cannot choose the agent.
 For example, `/documents/{owner}` can select the agent whose constructor takes `owner`.
 
-A GET/HEAD served by a file mapping never creates that agent. When no agent exists
+A GET/HEAD served by a file mapping never creates that agent. When no keyed agent exists
 for the captured constructor parameters, or it was deleted, every mapping misses and
-the response is the same 404 as for an unknown file. Create the agent through an
-invocation or an explicit create first. Constructor-created files are serveable once
+the response is the same 404 as for an unknown file. Create the keyed agent through an
+invocation by its key or an explicit keyed create first. Constructor-created files are serveable once
 the agent exists; a nonresident agent is restored, and a created agent whose
 constructor has not run yet is initialized first. File serving invokes no exported
 method, but initialization and replay can execute guest code. Concurrent first

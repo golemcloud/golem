@@ -27,7 +27,7 @@ use axum::http::HeaderMap;
 use axum::routing::post;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::schema::SchemaValue;
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -193,7 +193,7 @@ async fn go_parallel_http_from_goroutines_replays(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let agent_id = agent_id!("HttpAgent", "go-parallel-1");
+    let agent_id = agent_key!("HttpAgent", "go-parallel-1");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
@@ -359,7 +359,7 @@ async fn go_http_truncated_response_body_is_an_error(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpAgent", "go-http-truncated-1");
+    let agent_id = agent_key!("HttpAgent", "go-http-truncated-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     executor
@@ -410,7 +410,7 @@ async fn go_http_failing_request_body_fails_the_request(
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
         .await?;
-    let agent_id = agent_id!("HttpAgent", "go-http-failing-body-1");
+    let agent_id = agent_key!("HttpAgent", "go-http-failing-body-1");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     executor

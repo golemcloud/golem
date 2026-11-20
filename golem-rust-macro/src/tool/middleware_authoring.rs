@@ -426,7 +426,7 @@ fn expand_tool_middleware(
             stdin: ::std::option::Option<#golem_rust::tool::InputStream>,
             stdout: ::std::option::Option<#golem_rust::tool::OutputStream>,
             stderr: ::std::option::Option<#golem_rust::tool::OutputStream>,
-            principal: #golem_rust::tool::Principal,
+            context: #golem_rust::tool::InvocationContext,
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
             ::std::boxed::Box::pin(async move {
@@ -439,7 +439,7 @@ fn expand_tool_middleware(
                     stdin,
                     stdout,
                     stderr,
-                    principal,
+                    context,
                     underlying,
                 )
                 .await
@@ -618,7 +618,7 @@ fn expand_universal_tool_middleware(
             stdin: ::std::option::Option<#golem_rust::tool::InputStream>,
             stdout: ::std::option::Option<#golem_rust::tool::OutputStream>,
             stderr: ::std::option::Option<#golem_rust::tool::OutputStream>,
-            principal: #golem_rust::tool::Principal,
+            context: #golem_rust::tool::InvocationContext,
             underlying: #golem_rust::tool::UnderlyingTool,
         ) -> #golem_rust::tool::ToolMiddlewareInvokeFuture {
             ::std::boxed::Box::pin(async move {
@@ -632,7 +632,7 @@ fn expand_universal_tool_middleware(
                     stdin,
                     stdout,
                     stderr,
-                    principal,
+                    context,
                     underlying,
                 ).await
             })
@@ -717,7 +717,7 @@ fn validate_universal_function(item_fn: &ItemFn) -> syn::Result<()> {
         type_is_container(inputs[offset + 6], "Option", |inner| {
             type_is_ident(inner, "OutputStream")
         }),
-        type_is_ident(inputs[offset + 7], "Principal"),
+        type_is_ident(inputs[offset + 7], "InvocationContext"),
         type_is_ident(inputs[offset + 8], "UnderlyingTool"),
     ];
     if let Some((index, _)) = expected.iter().enumerate().find(|(_, valid)| !**valid) {
@@ -891,7 +891,7 @@ mod tests {
                     stdin: Option<golem_rust::tool::InputStream>,
                     _stdout: Option<golem_rust::tool::OutputStream>,
                     _stderr: Option<golem_rust::tool::OutputStream>,
-                    _principal: golem_rust::tool::Principal,
+                    _context: golem_rust::tool::InvocationContext,
                     underlying: golem_rust::tool::UnderlyingTool,
                 ) -> Result<
                     golem_rust::tool::InvocationResult,
@@ -1041,7 +1041,7 @@ mod tests {
                     stdin: Option<golem_rust::tool::InputStream>,
                     stdout: Option<golem_rust::tool::OutputStream>,
                     stderr: Option<golem_rust::tool::OutputStream>,
-                    principal: golem_rust::tool::Principal,
+                    context: golem_rust::tool::InvocationContext,
                     underlying: golem_rust::tool::UnderlyingTool,
                 ) -> Result<
                     golem_rust::tool::InvocationResult,
@@ -1176,7 +1176,7 @@ mod tests {
                 stdin: Option<InputStream>,
                 stdout: Option<OutputStream>,
                 stderr: Option<OutputStream>,
-                principal: Principal,
+                context: InvocationContext,
                 underlying: UnderlyingTool,
             ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
                 unimplemented!()

@@ -15,7 +15,7 @@ golem repl
 The REPL auto-generates TypeScript classes for all agents in the application. You can create or get agents, invoke their methods, and see results directly:
 
 ```shell
->>> const c1 = await CounterAgent.get("c1")
+>>> const c1 = CounterAgent.upsert("c1")
 >>> await c1.increment()
 1
 >>> await c1.increment()
@@ -52,7 +52,7 @@ cat test.ts
 ```
 
 ```typescript
-const c2 = await CounterAgent.get("c2")
+const c2 = CounterAgent.upsert("c2")
 await c2.increment()
 await c2.increment()
 ```

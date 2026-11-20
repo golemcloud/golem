@@ -15,22 +15,21 @@ use golem_common::model::oplog::{
     DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostPayloadPair, HostRequest,
     HostRequestNoInput, HostResponse, HostResponseGolemApiFork, OplogEntry, OplogIndex,
 };
-use golem_common::model::{AgentFingerprint, OwnedAgentId, Timestamp};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::warn;
-use uuid::Uuid;
 
 pub(crate) fn request_hash(
     source: &OwnedAgentId,
     fingerprint: AgentFingerprint,
     cut: OplogIndex,
     selected: Option<(StreamId, Option<StreamOffset>)>,
-    guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
+    guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
 ) -> Result<[u8; 32], String> {
     let bytes = golem_common::serialization::serialize(&(
         "golem-fork-request-v1".to_string(),
         source.environment_id,
-        source.agent_id.clone(),
+        source.agent_id,
         fingerprint,
         cut,
         selected,
@@ -87,7 +86,7 @@ pub(crate) fn missing_baseline_answer(
 
 /// The error of a fork whose target exists and is not a fork of its request.
 pub(crate) fn conflict(target: &OwnedAgentId) -> WorkerExecutorError {
-    WorkerExecutorError::worker_already_exists(target.agent_id.clone())
+    WorkerExecutorError::worker_already_exists(target.agent_id)
 }
 
 /// Reconcile without opening a writer or depending on the fork still being suspended. A fork
@@ -207,11 +206,11 @@ pub(crate) async fn write_guest_result(
     oplog: &dyn Oplog,
     copied_scope_start: Option<OplogIndex>,
     invocation_id: Option<DurableInvocationId>,
-    forked_phantom_id: Uuid,
+    forked_agent_id: &AgentId,
 ) -> Result<(), WorkerExecutorError> {
     let request = HostRequest::NoInput(HostRequestNoInput {});
     let response = HostResponse::GolemApiFork(HostResponseGolemApiFork {
-        forked_phantom_id,
+        forked_agent_id: Some(*forked_agent_id),
         result: Ok(golem_common::model::ForkResult::Forked),
     });
     let request_payload = oplog

@@ -67,7 +67,7 @@ class PublicationMatrixSpec extends munit.FunSuite {
 
   test("every local Scala publication runs the golemPublishLocal alias") {
     val paths = Seq(
-      ".github/workflows/ci.yaml",
+      "Makefile.sdk-validation.toml",
       ".github/actions/run-skill-harness/action.yml",
       "Makefile.toml"
     )

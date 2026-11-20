@@ -12,6 +12,8 @@ extend = [{ path = "Makefile.sdk-validation.toml" }, { path = "Makefile.main-val
 # - `cargo make check`: runs rustfmt and clippy checks without applying any fix
 # - `cargo make fix`: runs rustfmt and clippy checks and applies fixes
 # - `cargo make unit-tests`: runs unit tests only
+# - `cargo make js-guest-tests`: bundles fresh SDK fixture sources and runs process-free JS guest tests; see golem-js-guest-tests/README.md
+# - `cargo make prepare-js-guest-tests`: prepares only the JS bundles for native test iteration
 # - `cargo make worker-executor-tests`: runs worker executor tests only
 # - `cargo make worker-executor-tests-ignite-service`: runs ignite service tests only (requires GOLEM_IGNITE_URL)
 # - `cargo make integration-tests`: runs integration tests only
@@ -68,7 +70,7 @@ WORKER_TEST_THREAD_OPTS = ""
 CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
 CI = "true"
-# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
+# CARGO_LOG="cargo::compiler::fingerprint=trace"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -254,12 +256,14 @@ elseif ${dev_release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
     exec --fail-on-error cargo build --profile dev-release -p golem --bin golem -p golem-cli --bin golem-cli
 elseif ${dev_release_ci_profile}
-    set_env GOLEM_BUILD_SKIP_SHADOW 1
+    set_env GOLEM_BUILD_SKIP_SHADOW 0
     exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem -p golem-cli --bin golem-cli
 else
     echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
     trigger_error unsupported-cli-test-bin-profile
 end
+exec --fail-on-error ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/${profile}/golem --version
+exec --fail-on-error ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/${profile}/golem-cli --version
 '''
 
 [tasks.build-cli-test-bins-non-ci]
@@ -673,6 +677,29 @@ args = [
 
 ## ** TEST **
 
+[tasks.js-guest-tests]
+description = "Bundles fresh inputs and runs in-process JS guest tests on prebuilt SDK templates"
+dependencies = ["prepare-js-guest-tests"]
+env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-js-guest-tests --test js-guest -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.prepare-js-guest-tests]
+description = "Bundles current SDK fixture sources into ignored native test inputs"
+env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
+script_runner = "@duckscript"
+script = '''
+root = pwd
+rm -r ${GOLEM_JS_GUEST_BUNDLE_DIR}
+cd sdks/ts
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk run build
+exec --fail-on-error pnpm --filter @golemcloud/golem-ts-sdk exec vitest run tests/component-bundle.test.mjs -t "builds JS guest bundle fixtures"
+cd ${root}/sdks/effect
+exec --fail-on-error npm exec -- vitest run test/component-build.test.ts -t "builds JS guest bundle fixtures"
+'''
+
 [tasks.test]
 description = "Runs all unit tests, worker executor tests and integration tests"
 dependencies = [
@@ -757,12 +784,13 @@ args = [
 
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit", "ensure-builtin-artifacts"]
-description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
+description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests, and the size-analysis retention test"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-size-analysis --test retention -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --skip key_value_storage --skip indexed_storage --skip oplog_blob_archive --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
@@ -871,7 +899,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_postgres" -- --nocapture --test-threads=2 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group3]
@@ -917,7 +945,7 @@ script = '''
 exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
-# CI runs the sequential sharding suite as two jobs (see the `it` matrix in ci.yaml): the
+# Main validation runs the sequential sharding suite as two tasks: the
 # coordinated scenarios and everything else. Together they cover exactly `integration-tests-group6`.
 [tasks.integration-tests-group6-coordinated]
 description = "Runs integration tests (group 6/11 - sharding, coordinated scenarios only)"
@@ -1016,7 +1044,7 @@ description = "Runs all CLI integration tests with the dev-release golem binary"
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
-# it-cli CI shards, split by test-r tags (see the it-cli matrix in ci.yaml and the `tag_suite!`
+# CLI integration shards, split by test-r tags (see Main validation's CLI tasks and the `tag_suite!`
 # and `#[tag]` declarations under cli/golem-cli/tests). Shards that are a subset of a module-level
 # tag use `--skip` on the more specific tag so every test is in exactly one shard.
 [tasks.cli-integration-tests-agents]
@@ -3073,8 +3101,8 @@ echo "validated ${artifact_count} external built-in artifacts"
 
 [tasks.component-size-report]
 description = "Builds representative components and assembles a local size and retention report"
-command = "python3"
-args = ["test-components/size-analysis/report.py", "--out", "tmp/component-size-report"]
+command = "cargo"
+args = ["run", "--package", "golem-size-analysis", "--", "report", "--out", "tmp/component-size-report", "${@}"]
 
 ## ** BUILD TEST COMPONENTS **
 

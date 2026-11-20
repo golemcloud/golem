@@ -181,7 +181,7 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, HydratedUpdate, InvocationContext, LastError,
+    AgentConfig, ExecutionStatus, FailureProvenance, HydratedUpdate, InvocationContext, LastError,
     SnapshotReplayPurpose, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
@@ -246,14 +246,12 @@ use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::TypedAgentConfigEntry;
-use golem_common::model::agent::{
-    AgentMode, AgentPrincipal, ParsedAgentKey, Principal, ResolvedOwnerContext,
-};
+use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
 };
-use golem_common::model::component::{CanonicalFilePath, ComponentId, ComponentRevision};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
@@ -274,6 +272,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::type_id::TypeId;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
@@ -610,7 +609,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 parent,
                 call_mode,
                 activation: scope.activation().clone(),
-                principal: self.invocation_principal(),
+                caller: self.invocation_caller(),
                 descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
                     golem_common::model::entity::ToolInvocationDescriptor {
                         attempt_ordinal: 0,
@@ -960,6 +959,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     /// Whether the worker is currently being interrupted through the Golem API
     /// (`ExecutionStatus::Interrupting`), independent of the invocation-deadline latch.
+    /// The index of the oplog entry that replay consumed last.
+    pub fn last_replayed_index(&self) -> OplogIndex {
+        self.state.replay_state.last_replayed_index()
+    }
+
     pub fn is_interrupting(&self) -> bool {
         matches!(
             &*self.execution_status.read().unwrap(),
@@ -1057,6 +1061,8 @@ struct ReplayFailure {
     /// Whether the replay after an application snapshot diverged from the oplog with a typed
     /// divergence while the start still replayed it.
     diverged: bool,
+    /// Where the failure of the replayed invocation came from, when an invocation failed.
+    provenance: Option<FailureProvenance>,
 }
 
 /// Why a pending automatic update did not reach the end of its replay.
@@ -1184,6 +1190,8 @@ struct PrivateDurableWorkerState {
     /// The hostnames that this Store's completed address lookups linked to addresses, for the
     /// grant check of socket connects and datagrams.
     resolved_names: sockets::resolved_names::SharedResolvedNames,
+    /// The resolver of the Store's `golem:network/dns` lookups, built at the first lookup.
+    dns_resolver: Option<hickory_resolver::TokioResolver>,
     open_tcp_input_streams: HashSet<u32>,
     open_tcp_output_streams: HashSet<u32>,
     /// Deadlines of executor-owned P2 timer pollables, removed only after resource deletion.
@@ -1291,8 +1299,6 @@ struct PrivateDurableWorkerState {
     /// wallet-independent calls must not extend target-only history while that outcome is pending.
     automatic_update_unsettled: bool,
 
-    /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
-    current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
     /// The baseline of the start: the column of the start outcome table.
     baseline_role: BaselineRole,
@@ -1350,7 +1356,7 @@ impl WakeupScheduler {
         let promise_id = self
             .promise_service
             .create(
-                &self.owned_agent_id.agent_id,
+                &self.owned_agent_id,
                 self.target_worker_fingerprint,
                 self.oplog.current_oplog_index().await,
             )
@@ -1635,6 +1641,7 @@ impl PrivateDurableWorkerState {
             .is_some_and(|phase| phase.main.is_some())
         {
             Err(WorkerExecutorError::unexpected_oplog_entry(
+                self.replay_state.last_replayed_index().next(),
                 "a direct read call of the core initializer",
                 format!(
                     "the core initializer may make only direct reads outside the permission-card and fork families, because recovery replays its bootstrap block before it loads a snapshot, but it called {call}"
@@ -1765,7 +1772,7 @@ impl PrivateDurableWorkerState {
 
     pub async fn get_workers(
         &self,
-        component_id: &ComponentId,
+        type_id: TypeId,
         filter: Option<AgentFilter>,
         cursor: ScanCursor,
         count: u64,
@@ -1774,7 +1781,7 @@ impl PrivateDurableWorkerState {
         self.worker_enumeration_service
             .get(
                 &self.owned_agent_id.environment_id,
-                component_id,
+                type_id,
                 filter,
                 cursor,
                 count,
@@ -1928,9 +1935,7 @@ macro_rules! get_oplog_entry {
                 })+
                 _ => {
                     tracing::error!("Unexpected oplog entry - expected {}, got {:?}", stringify!($($cases |)+), oplog_entry);
-                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(
-                        stringify!($($cases |)+),
-                        format!("{:?}", oplog_entry),
+                    break Err(golem_service_base::error::worker_executor::WorkerExecutorError::unexpected_oplog_entry(oplog_index, format!("{:?}", oplog_entry), stringify!($($cases |)+),
                     ));
                 }
             }

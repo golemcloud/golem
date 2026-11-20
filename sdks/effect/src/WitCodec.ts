@@ -35,6 +35,7 @@ import {
   type VariantCaseType,
 } from "./internal/schema-model/model.js"
 import { validateSchemaGraph } from "./internal/schema-model/validation.js"
+import { PrincipalRef } from "./InvocationContext.js"
 import {
   GuestQuotaTokenHandle,
   isGuestQuotaTokenHandle,
@@ -42,7 +43,6 @@ import {
 } from "./internal/schema-model/quotaTokenHandle.js"
 import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
 import { WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY } from "./internal/schema-model/annotations.js"
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import {
   schemaGraphToWit,
@@ -57,7 +57,7 @@ import { withCapabilityTransaction } from "./internal/schema-model/capabilityTra
 import {
   variantCaseNameAnnotationKey,
   witNumericRestrictionsKey,
-  witPrincipalAnnotationKey,
+  witPrincipalRefAnnotationKey,
   witQuotaTokenAnnotationKey,
   witTypeAnnotationKey,
   witTypedArrayAnnotationKey,
@@ -676,157 +676,37 @@ const isQuotaTokenAST = (a: SchemaAST.AST): boolean =>
 const quotaTokenResourceNameOf = (a: SchemaAST.AST): string | undefined =>
   annotationOf<string>(a, WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY)
 
-const isPrincipalAST = (a: SchemaAST.AST): boolean =>
-  annotationOf<boolean>(a, witPrincipalAnnotationKey) === true
+const isPrincipalRefAST = (a: SchemaAST.AST): boolean =>
+  annotationOf<boolean>(a, witPrincipalRefAnnotationKey) === true
 
-// ---------- Principal (WIT `golem:agent/common` `principal` variant) ----------
+// ---------- PrincipalRef (the named record `principal-ref { issuer, subject }`) ----------
 //
-// A `Principal` carried as ordinary structured data (a method param / return),
-// as opposed to the `Principal` capability service. The graph mirrors the host
-// `Principal` shape exactly (case order oidc/agent/golem-user/anonymous), and
-// the value pair round-trips a host `Principal` <-> `SchemaValue`.
+// A `PrincipalRef` is the identity of a principal as plain data. Every SDK emits the same named
+// record, so a cross-SDK call with a `PrincipalRef` argument decodes the same everywhere. A
+// `Principal` or a `Caller` is a live value and has no schema.
 
-type HostUuid = CoreTypes.Uuid
+const PRINCIPAL_REF_TYPE_ID = "principal-ref"
 
-// --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType => t.uuid()
-const componentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
-const agentIdType = (): SchemaType =>
-  t.record([field("componentId", componentIdType()), field("agentId", t.string())])
-const accountIdType = (): SchemaType => t.record([field("uuid", uuidType())])
-const oidcType = (): SchemaType =>
-  t.record([
-    field("sub", t.string()),
-    field("issuer", t.string()),
-    field("email", t.option(t.string())),
-    field("name", t.option(t.string())),
-    field("emailVerified", t.option(t.bool())),
-    field("givenName", t.option(t.string())),
-    field("familyName", t.option(t.string())),
-    field("picture", t.option(t.string())),
-    field("preferredUsername", t.option(t.string())),
-    field("claims", t.string()),
-  ])
-const agentPrincipalType = (): SchemaType => t.record([field("agentId", agentIdType())])
-const golemUserType = (): SchemaType => t.record([field("accountId", accountIdType())])
-
-// --- SchemaValue field accessors (positional record reads) ---
-const recFields = (sv: SchemaValue): ReadonlyArray<SchemaValue> =>
-  (sv as { tag: "record"; fields: ReadonlyArray<SchemaValue> }).fields
-const strOf = (f: SchemaValue): string => (f as { tag: "string"; value: string }).value
-const boolOf = (f: SchemaValue): boolean => (f as { tag: "bool"; value: boolean }).value
-const optOf = (f: SchemaValue): SchemaValue | undefined =>
-  (f as { tag: "option"; value?: SchemaValue }).value
-
-// --- codec helpers (round-trip via the host shape) ---
-const uuidToValue = (u: HostUuid): SchemaValue => v.uuid(u)
-const uuidFromValue = (sv: SchemaValue): HostUuid =>
-  (sv as Extract<SchemaValue, { tag: "uuid" }>).value
-
-const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue =>
-  v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)])
-const agentIdFromValue = (sv: SchemaValue): AgentCommon.AgentId => {
-  const f = recFields(sv)
-  const uuid = uuidFromValue(recFields(f[0]!)[0]!)
-  return { componentId: { uuid }, agentId: strOf(f[1]!) }
-}
-
-const accountIdToValue = (a: AgentCommon.AccountId): SchemaValue => v.record([uuidToValue(a.uuid)])
-const accountIdFromValue = (sv: SchemaValue): AgentCommon.AccountId => ({
-  uuid: uuidFromValue(recFields(sv)[0]!),
-})
-
-const oidcToValue = (o: AgentCommon.OidcPrincipal): SchemaValue => {
-  const optStr = (x: string | undefined): SchemaValue =>
-    v.option(x === undefined ? undefined : v.string(x))
-  return v.record([
-    v.string(o.sub),
-    v.string(o.issuer),
-    optStr(o.email),
-    optStr(o.name),
-    v.option(o.emailVerified === undefined ? undefined : v.bool(o.emailVerified)),
-    optStr(o.givenName),
-    optStr(o.familyName),
-    optStr(o.picture),
-    optStr(o.preferredUsername),
-    v.string(o.claims),
-  ])
-}
-const oidcFromValue = (sv: SchemaValue): AgentCommon.OidcPrincipal => {
-  const f = recFields(sv)
-  const optStr = (fld: SchemaValue): string | undefined => {
-    const val = optOf(fld)
-    return val === undefined ? undefined : strOf(val)
-  }
-  const out: AgentCommon.OidcPrincipal = {
-    sub: strOf(f[0]!),
-    issuer: strOf(f[1]!),
-    claims: strOf(f[9]!),
-  }
-  const email = optStr(f[2]!)
-  if (email !== undefined) out.email = email
-  const name = optStr(f[3]!)
-  if (name !== undefined) out.name = name
-  const ev = optOf(f[4]!)
-  if (ev !== undefined) out.emailVerified = boolOf(ev)
-  const givenName = optStr(f[5]!)
-  if (givenName !== undefined) out.givenName = givenName
-  const familyName = optStr(f[6]!)
-  if (familyName !== undefined) out.familyName = familyName
-  const picture = optStr(f[7]!)
-  if (picture !== undefined) out.picture = picture
-  const preferredUsername = optStr(f[8]!)
-  if (preferredUsername !== undefined) out.preferredUsername = preferredUsername
-  return out
-}
-
-/**
- * Type + value bridge for the `principal` data variant. The graph root mirrors
- * the host `Principal` shape (case order oidc/agent/golem-user/anonymous); the
- * value pair lowers a host `Principal` into the matching `v.variant(...)` and
- * lifts it back out.
- */
-const principalNode = (): { type: SchemaType; pair: ValuePair } => ({
-  type: t.variant([
-    variantCase("oidc", oidcType()),
-    variantCase("agent", agentPrincipalType()),
-    variantCase("golem-user", golemUserType()),
-    variantCase("anonymous"),
-  ]),
-  pair: {
-    toValue: (p: AgentCommon.Principal) => {
-      switch (p.tag) {
-        case "oidc":
-          return v.variant(0, oidcToValue(p.val))
-        case "agent":
-          return v.variant(1, v.record([agentIdToValue(p.val.agentId)]))
-        case "golem-user":
-          return v.variant(2, v.record([accountIdToValue(p.val.accountId)]))
-        case "anonymous":
-          return v.variant(3)
-      }
+const principalRefNode = (
+  defs: Map<string, { name?: string; body: SchemaType }>,
+): { type: SchemaType; pair: ValuePair } => {
+  defs.set(PRINCIPAL_REF_TYPE_ID, {
+    body: t.record([field("issuer", t.string()), field("subject", t.string())]),
+  })
+  return {
+    type: t.ref(PRINCIPAL_REF_TYPE_ID),
+    pair: {
+      toValue: (value: PrincipalRef) => v.record([v.string(value.issuer), v.string(value.subject)]),
+      fromValue: (sv) => {
+        const fields = (sv as { tag: "record"; fields: ReadonlyArray<SchemaValue> }).fields
+        return new PrincipalRef(
+          (fields[0] as { tag: "string"; value: string }).value,
+          (fields[1] as { tag: "string"; value: string }).value,
+        )
+      },
     },
-    fromValue: (sv): AgentCommon.Principal => {
-      const vv = sv as { caseIndex: number; payload?: SchemaValue }
-      switch (vv.caseIndex) {
-        case 0:
-          return { tag: "oidc", val: oidcFromValue(vv.payload as SchemaValue) }
-        case 1:
-          return {
-            tag: "agent",
-            val: { agentId: agentIdFromValue(recFields(vv.payload as SchemaValue)[0]!) },
-          }
-        case 2:
-          return {
-            tag: "golem-user",
-            val: { accountId: accountIdFromValue(recFields(vv.payload as SchemaValue)[0]!) },
-          }
-        default:
-          return { tag: "anonymous" }
-      }
-    },
-  },
-})
+  }
+}
 
 /**
  * Type + value bridge for the opaque `quota-token` capability node. The graph
@@ -1457,10 +1337,10 @@ const walk = (
             if (isQuotaTokenAST(a)) {
               return quotaTokenNode(quotaTokenResourceNameOf(a))
             }
-            // A `Principal` carried as data (annotated via `PrincipalSchema`):
-            // emit the `principal` variant rather than an unknown declared type.
-            if (isPrincipalAST(a)) {
-              return principalNode()
+            // A `PrincipalRef` carried as data (annotated via `PrincipalRefSchema`):
+            // emit the named `principal-ref` record rather than an unknown declared type.
+            if (isPrincipalRefAST(a)) {
+              return principalRefNode(defs)
             }
             // Typed-array hints (Uint8ArraySchema, …) take precedence — emit a
             // dedicated `list<primN>` shape rather than an unknown declared type.

@@ -212,7 +212,7 @@ impl OplogConstructor for CreateOplogConstructor {
 
                 let transfer_fiber = new_transfer_fiber();
                 self.service
-                    .register_transfer(self.owned_agent_id.agent_id.clone(), &transfer_fiber);
+                    .register_transfer(self.owned_agent_id.agent_id, &transfer_fiber);
                 let (start_tx, start_rx) = tokio::sync::oneshot::channel();
                 let transfer = EphemeralOplog::spawn_background_transfer(
                     self.owned_agent_id.clone(),

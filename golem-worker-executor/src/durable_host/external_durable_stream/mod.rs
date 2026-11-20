@@ -31,7 +31,6 @@ use crate::services::external_durable_stream::{
 use crate::services::{HasActiveAgents, HasExternalDurableStreamService, HasWorker};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::card::SecretVerb;
-use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::host_functions::{
     GolemAgentDurableStreamReaderNew, GolemAgentDurableStreamReaderRead,
     GolemAgentDurableStreamWriterAppend, GolemAgentDurableStreamWriterNew,
@@ -43,6 +42,7 @@ use golem_common::model::oplog::payload::{
     HostResponseDurableStreamAppend, HostResponseDurableStreamRead,
     HostResponseDurableStreamResource,
 };
+use golem_common::model::oplog::{DurableFunctionType, OplogIndex};
 use golem_common::schema::SchemaValue;
 use golem_schema::schema::wit::SecretHandleRep;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -129,9 +129,14 @@ impl DurableStreamWriterEntry {
     }
 }
 
-fn validate_resource_id(expected: &str, recorded: &str) -> anyhow::Result<()> {
+fn validate_resource_id(
+    start_index: OplogIndex,
+    expected: &str,
+    recorded: &str,
+) -> anyhow::Result<()> {
     if expected != recorded {
         return Err(WorkerExecutorError::unexpected_oplog_entry(
+            start_index,
             "matching durable stream resource identity",
             "different durable stream descriptor or pinned authentication",
         )
@@ -170,12 +175,17 @@ impl<Ctx: WorkerCtx> wit::HostDurableStreamReader for DurableWorkerCtx<Ctx> {
                 .map_err(|error| call.trap(error))?;
             let restored = DurableStreamReaderEntry::from_request(recorded)
                 .map_err(|error| call.trap(error))?;
-            validate_resource_id(&entry.resource_id, &restored.resource_id)
-                .map_err(|error| call.trap(error))?;
+            validate_resource_id(
+                call.start_index(),
+                &entry.resource_id,
+                &restored.resource_id,
+            )
+            .map_err(|error| call.trap(error))?;
             entry = restored;
+            let start_index = call.start_index();
             match call.replay(self).await? {
                 CallReplayOutcome::Replayed(response) => {
-                    validate_resource_id(&entry.resource_id, &response.resource_id)?;
+                    validate_resource_id(start_index, &entry.resource_id, &response.resource_id)?;
                     return Ok(self.table().push(entry)?);
                 }
                 CallReplayOutcome::Incomplete(live) => call = live,
@@ -225,12 +235,17 @@ impl<Ctx: WorkerCtx> wit::HostDurableStreamWriter for DurableWorkerCtx<Ctx> {
                 .map_err(|error| call.trap(error))?;
             let restored = DurableStreamWriterEntry::from_request(recorded)
                 .map_err(|error| call.trap(error))?;
-            validate_resource_id(&entry.resource_id, &restored.resource_id)
-                .map_err(|error| call.trap(error))?;
+            validate_resource_id(
+                call.start_index(),
+                &entry.resource_id,
+                &restored.resource_id,
+            )
+            .map_err(|error| call.trap(error))?;
             entry = restored;
+            let start_index = call.start_index();
             match call.replay(self).await? {
                 CallReplayOutcome::Replayed(response) => {
-                    validate_resource_id(&entry.resource_id, &response.resource_id)?;
+                    validate_resource_id(start_index, &entry.resource_id, &response.resource_id)?;
                     return Ok(self.table().push(entry)?);
                 }
                 CallReplayOutcome::Incomplete(live) => call = live,

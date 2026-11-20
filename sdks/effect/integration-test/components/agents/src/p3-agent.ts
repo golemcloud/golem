@@ -123,7 +123,7 @@ defineAgent({
   methods: (name) => ({
     typedArrayRoundtrip: () =>
       Effect.gen(function* () {
-        const target = yield* StreamTarget.client.get({ name })
+        const target = yield* StreamTarget.client.upsert({ name })
         const prefix = Array.from({ length: 300 }, (_, i) => (i * 13 + 7) % 256)
         const bytes = Uint8Array.from({ length: 10000 }, (_, i) => (i * 37 + 19) % 256)
         const output = yield* target.transformBytes({ prefix, bytes })
@@ -135,7 +135,7 @@ defineAgent({
       }).pipe(Effect.orDie, Effect.scoped),
     streamRoundtrip: () =>
       Effect.gen(function* () {
-        const target = yield* StreamTarget.client.get({ name })
+        const target = yield* StreamTarget.client.upsert({ name })
         const output = yield* target.doubled({ values: Stream.fromIterable([1, 2, 3]) })
         return yield* output.pipe(
           Stream.runCollect,
@@ -144,7 +144,7 @@ defineAgent({
       }).pipe(Effect.orDie, Effect.scoped),
     nestedStreamCancellation: () =>
       Effect.gen(function* () {
-        const target = yield* StreamTarget.client.get({ name })
+        const target = yield* StreamTarget.client.upsert({ name })
         const pulls = yield* Ref.make(0)
         const closed = yield* Ref.make(false)
         const items = [
@@ -178,24 +178,26 @@ defineAgent({
       }).pipe(Effect.orDie, Effect.scoped),
     ephemeralRoundtrip: () =>
       Effect.gen(function* () {
-        const first = yield* EphemeralProbe.client.newPhantom({ label: name })
-        const second = yield* EphemeralProbe.client.newPhantom({ label: name })
+        const first = yield* EphemeralProbe.client.upsert({ label: name })
+        const second = yield* EphemeralProbe.client.upsert({ label: name })
         const firstResult = yield* first.echo({ value: "one" })
         const secondResult = yield* second.echo({ value: "two" })
         return {
-          firstAgentId: firstResult.metadata.agentId,
-          secondAgentId: secondResult.metadata.agentId,
-          identitiesDiffer: firstResult.metadata.agentId !== secondResult.metadata.agentId,
+          firstAgentId: firstResult.metadata.agentId.uuid,
+          secondAgentId: secondResult.metadata.agentId.uuid,
+          identitiesDiffer:
+            firstResult.metadata.agentId.uuid !== secondResult.metadata.agentId.uuid,
           invocationIdsMatchAgents:
-            firstResult.metadata.invocationId.agentId === firstResult.metadata.agentId &&
-            secondResult.metadata.invocationId.agentId === secondResult.metadata.agentId &&
+            firstResult.metadata.invocationId.agentId.uuid === firstResult.metadata.agentId.uuid &&
+            secondResult.metadata.invocationId.agentId.uuid ===
+              secondResult.metadata.agentId.uuid &&
             firstResult.metadata.invocationId.uuid !== secondResult.metadata.invocationId.uuid,
           values: [firstResult.value, secondResult.value],
         }
       }).pipe(Effect.orDie, Effect.scoped),
     cancelledSchedule: () =>
       Effect.gen(function* () {
-        const target = yield* StreamTarget.client.get({ name })
+        const target = yield* StreamTarget.client.upsert({ name })
         const scheduled = yield* target.markScheduled.schedule(Date.now() + 1_000, {})
         yield* scheduled.cancel()
         yield* Effect.sleep("1500 millis")

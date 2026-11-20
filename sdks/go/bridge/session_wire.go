@@ -33,7 +33,7 @@ import (
 
 const (
 	sessionSubprotocol = "golem.agent-invocation.v1"
-	sessionEndpoint    = "/v1/agents/invoke-agent-session"
+	sessionEndpoint    = "/invoke-agent-session"
 
 	maxMessageBytes  = 32 << 20
 	maxMetadataBytes = 16 << 10

@@ -270,7 +270,7 @@ func TestWithConfigEncodesLocalsSkipsSecrets(t *testing.T) {
 		cfgConfiguredAgent[demoAppConfig](d)
 		noDefErrs(t, d)
 
-		var o clientOpts
+		var o createOpts
 		withConfig(demoAppConfig{
 			Greeting: "hi",
 			Db:       demoDBConfig{Url: "db://prod"},
@@ -307,7 +307,7 @@ func TestWithConfigEncodesLocalsSkipsSecrets(t *testing.T) {
 func TestWithConfigEntriesSendsOnlyTheGivenPaths(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
-		var o clientOpts
+		var o createOpts
 		WithConfigEntries(ConfigEntryOf([]string{"limits", "max-items"}, uint16(7)))(&o)
 		got, err := buildAgentConfig(d, d.agents["CounterAgent"], o.configs)
 		if err != nil {
@@ -329,7 +329,7 @@ func TestWithConfigEntriesSendsOnlyTheGivenPaths(t *testing.T) {
 func TestWithConfigUndeclaredRejected(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		cfgConfiguredAgent[NoConfig](d) // agent "Cfg" declares no config
-		var o clientOpts
+		var o createOpts
 		o.configs = append(o.configs, func(dd *definitions) ([]common.TypedAgentConfigValue, error) {
 			return encodeConfigOverrides(dd, demoAppConfig{Greeting: "x"})
 		})

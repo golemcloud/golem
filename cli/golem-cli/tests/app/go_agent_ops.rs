@@ -109,7 +109,7 @@ async fn test_go_agent_ops() {
     };
 
     let own = invoke("self", &[]).await;
-    assert!(own.contains(r#"OpsAgent("o") running"#), "{own}");
+    assert!(own.contains("OpsAgent running true"), "{own}");
 
     let retried = invoke("retryUntil3", &["\"retry\""]).await;
     assert!(retried.contains('3'), "{retried}");
@@ -122,16 +122,9 @@ async fn test_go_agent_ops() {
 
     let counters = invoke("counters", &[]).await;
     assert!(
-        counters.contains(r#"CounterAgent("retry")"#)
-            && counters.contains(r#"CounterAgent("undo")"#),
+        counters.contains("retry:true,undo:true|only-counters:true"),
         "{counters}"
     );
-    // The CLI's own log names the invoked agent; only the result line counts.
-    let listed = counters
-        .lines()
-        .find(|line| line.contains("CounterAgent("))
-        .unwrap_or_default();
-    assert!(!listed.contains("OpsAgent"), "{counters}");
 
     let invocations = invoke("invocations", &[]).await;
     let n: i64 = invocations

@@ -628,6 +628,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             ),
             created_at: Default::default(),
             wasm_hash: value.wasm_hash,
+            package_metadata: None,
             hash: value.final_hash,
             object_store_key: "".to_string(),
         }

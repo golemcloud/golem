@@ -12,8 +12,8 @@ declare module 'golem:agent/invocation-context@2.0.0' {
    */
   export function invocationId(): CurrentInvocationId | undefined;
   /**
-   * Returns the principals that caused the running invocation. Code that runs without a
-   * recorded principal, such as snapshot save and load, gets the agent itself as both principals.
+   * Returns the caller of the running invocation. Code that runs without a recorded caller
+   * gets the agent itself in both roles.
    */
   export function caller(): InvocationCaller;
   export type CurrentInvocationId = golemCore200Types.InvocationId;

@@ -55,7 +55,7 @@ sdks/moonbit/
 │   ├── interface/                     # WIT-generated MoonBit types and host-import bindings
 │   │   └── golem/
 │   │       ├── core/types/            # The schema model WIT types (golem:core/types@2.0.0)
-│   │       ├── agent/common/          # AgentType, AgentError, Principal, HTTP details, etc.
+│   │       ├── agent/common/          # AgentType, AgentError, Caller, Principal, HTTP details, etc.
 │   │       ├── agent/host/            # Host import: get_all_agent_types
 │   │       ├── api/                   # host, context, oplog, retry bindings
 │   │       ├── durability/durability/ # Durability host imports
@@ -97,7 +97,8 @@ sdks/moonbit/
 │   │   ├── agents.mbt                # AgentState, RegisteredAgent, RawAgent/Snapshottable traits, register_agent
 │   │   ├── agent_type.mbt            # AgentTypeDef/Method/Constructor/Config defs -> @common.AgentType
 │   │   ├── dispatch.mbt              # encode/decode invocation input/output via @schema
-│   │   └── principal_json.mbt        # Principal/UUID <-> JSON helpers
+│   │   └── legacy_principal.mbt      # validates and drops the 1.6 snapshot principal
+│   ├── caller/                        # Caller, Principal, PrincipalRef, TokenProvenance, InvocationContext
 │   ├── config/                        # Code-first configuration (Config[T], Secret[T])
 │   ├── errors/                        # AgentError construction/decoding helpers
 │   ├── rpc/                           # Agent-to-agent RPC client helpers (AgentClient)
@@ -126,7 +127,7 @@ sdks/moonbit/
 │   │   ├── multimodal_emit.mbt       # MultimodalModality impl emitter
 │   │   ├── config_emit.mbt           # Config declaration emitter
 │   │   ├── clients_emit.mbt          # RPC client stub emitter
-│   │   ├── http_validation.mbt       # HTTP mount/endpoint validation (Principal rules, path vars)
+│   │   ├── http_validation.mbt       # HTTP mount/endpoint validation (InvocationContext rules, path vars)
 │   │   ├── ast_helpers.mbt           # AST construction helpers
 │   │   ├── pkg.mbt                   # moon.pkg parser/updater (link section, imports)
 │   │   └── *_test.mbt                # Tests for parsing, emission, validation
@@ -144,7 +145,7 @@ sdks/moonbit/
         ├── config_agent.mbt          # ConfiguredAgent + #derive.config + @config.Secret
         ├── http_agent.mbt            # WeatherAgent (HTTP mount + endpoints)
         ├── multimodal_agent.mbt      # VisionAgent + TextOrImage (#derive.multimodal)
-        ├── audit_agent.mbt           # AuditLog (constructor Principal injection)
+        ├── audit_agent.mbt           # AuditLog (constructor InvocationContext injection)
         ├── rpc_example.mbt           # RpcExampleAgent (calls generated client stubs)
         ├── webhook_agent.mbt         # WebhookAgent (@logging + @webhook)
         ├── golem_reexports.mbt       # Generated — re-exports WASM entry points from SDK gen package
@@ -217,16 +218,20 @@ The core pattern (in `agents/agents.mbt`):
    `AgentInstance?`.
 2. Each agent type calls `register_agent(...)` during the generated `fn init {}` to register itself.
 3. When the host calls `initialize(agent_type, input)`, the SDK looks up the registered agent by
-   name, calls its `construct` function with the decoded constructor input + `Principal`, and stores
+   name, calls its `construct` function with the decoded constructor input + the `InvocationContext`, and stores
    the resulting `AgentInstance`.
 4. When the host calls `invoke(method_name, input)`, the SDK delegates to the instance's
    `RawAgent::invoke`.
 5. `discover_agent_types()` returns all registered agent types.
 6. `get_definition()` returns the current instance's type.
 
-The guest exports take no principal. The export entry points (`agent-exports`, `tool-exports`,
-`tool-middleware-exports`) read `caller().immediate` from `golem:agent/invocation-context` and pass
-it to `construct`, `RawAgent::invoke`, tool invokers, and middleware invocations.
+The guest exports take no caller. The export entry points (`agent-exports`, `tool-exports`,
+`tool-middleware-exports`) build a lazy `InvocationContext` that reads `caller()` from
+`golem:agent/invocation-context` only when the code asks for it, and pass it to `construct`,
+`RawAgent::invoke`, tool invokers, and middleware invocations. A method or constructor reads it with
+an `InvocationContext` parameter and `ctx.caller()`; `Principal`, `Caller` and `TokenProvenance` are
+live values and are refused in any signature or value type. Store `ctx.caller().original.principal_ref()`
+(a `PrincipalRef`) when an identity must be kept as data.
 
 ### The RawAgent Trait
 
@@ -236,7 +241,7 @@ pub(open) trait RawAgent {
     Self,
     method_name : String,
     input : @types.SchemaValueTree,
-    principal : @common.Principal,
+    context : InvocationContext,
   ) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }
 ```
@@ -296,11 +301,15 @@ pub(open) trait FromSchema {
   `Result[T, E]`, `Map[K, V]`, and tuples of arity 2–8; the rich types `Path`, `Url`, `Text[S]`,
   `Duration`, `Quantity[U]`, `Uuid`, and `Datetime`; and `UnstructuredText[L]` /
   `UnstructuredBinary[M]` (see below).
-- `Uuid` is the SDK's UUID type, used by every user-facing API (phantom ids, idempotency keys,
+- `Uuid` is the SDK's UUID type, used by every user-facing API (agent IDs, idempotency keys,
   permission holders). It has `parse` (hyphenated, case-insensitive), `Show` (lowercase
   hyphenated), `Eq`/`Compare`/`Hash`, `random` (version 4 from `wasi:random/random`, which Golem
   records durably), and `from_wit`/`to_wit`. The raw `@types.Uuid` record appears only at WIT
   boundaries and in `@model.SchemaValue::Uuid`.
+- `AgentId` is the SDK's agent ID: an opaque UUID that Golem issues. Its text form (`Show`,
+  `to_string`, `parse`) is the UUID; it has `from_uuid`/`uuid` and `from_wit`/`to_wit`. Clients
+  return it from `agent_id()`, invocation metadata carries it, and `@api` agent operations take it.
+  It carries no agent type and no constructor parameters, so the SDK never derives an ID offline.
 - `Datetime` is the SDK's point in time (seconds since the Unix epoch plus nanoseconds, UTC year
   `0000..9999`). It has `new`, `parse` (RFC 3339 with any offset, converted to UTC), `Show`
   (canonical UTC `Z` form with up to nine fraction digits), `Eq`/`Compare`/`Hash`, and
@@ -420,6 +429,14 @@ Generates, from source annotations:
 4. **`golem_exports.mbt`** — source-derived runtime hooks for the full agent/tool/middleware world.
    Both subcommands are required, including for empty and tool-only components. There is no role
    argument or role-specific world. Generated imports are removed when a category disappears.
+
+Each `<Name>Client` connects through `upsert(params)` (the keyed agent, created when missing; the
+only entry point of an ephemeral agent). A durable client also has `get_by_id(agent_id)` (never
+creates; an unknown or wrong-type ID raises `RpcError::NotFound`), async
+`create(params, keyed?, config?, env?)` (a keyed create of an existing key raises
+`RpcError::Conflict`; `config?` exists only when the agent has overridable config), async
+`agent_id()`, `bind_self()` and the `scoped_upsert` / `scoped_get_by_id` / `scoped_create`
+helpers. `upsert` takes no overrides, and no client copies the caller's environment.
 
 Awaited RPC methods and scoped client helpers are generated as `async`; trigger and scheduling
 methods remain synchronous because they only enqueue work.

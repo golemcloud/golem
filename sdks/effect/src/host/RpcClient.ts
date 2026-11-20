@@ -1,6 +1,5 @@
 /** Thin injectable façade over the schema-native agent RPC host. */
 import { Context, Effect, Layer } from "effect"
-import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import { WasmRpc } from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
@@ -27,6 +26,8 @@ export interface RpcCancellationToken {
 }
 
 export interface RpcConnection {
+  /** Mirrors `wasm-rpc.agent-id`. On a client of `upsert` it creates the agent when it is missing. */
+  readonly agentId: () => Promise<CoreTypes.AgentId>
   readonly invokeAndAwait: (
     methodName: string,
     input: CoreTypes.SchemaValueTree,
@@ -54,14 +55,30 @@ export interface RpcConnection {
   readonly drop: () => void
 }
 
+/** A connection to the agent that `create` made, with the ID that Golem issued for it. */
+export interface RpcCreated {
+  readonly connection: RpcConnection
+  readonly agentId: CoreTypes.AgentId
+}
+
 export interface RpcClientShape {
-  readonly bindSelf: () => Effect.Effect<readonly [string, RpcConnection], RpcHostError>
-  readonly connect: (
+  readonly bindSelf: () => Effect.Effect<readonly [CoreTypes.AgentId, RpcConnection], RpcHostError>
+  /** Mirrors `wasm-rpc.upsert`. */
+  readonly upsert: (
     agentTypeName: string,
     constructorValue: CoreTypes.SchemaValueTree,
-    phantomId: CoreTypes.Uuid | undefined,
-    agentConfig: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
   ) => Effect.Effect<RpcConnection, RpcHostError>
+  /** Mirrors `wasm-rpc.get-by-id`. */
+  readonly getById: (
+    agentTypeName: string,
+    agentId: CoreTypes.AgentId,
+  ) => Effect.Effect<RpcConnection, RpcHostError>
+  /** Mirrors `wasm-rpc.create`. */
+  readonly create: (
+    agentTypeName: string,
+    constructorValue: CoreTypes.SchemaValueTree,
+    options: AgentHost.CreateOptions,
+  ) => Effect.Effect<RpcCreated, RpcHostError>
 }
 
 export class RpcClient extends Context.Service<RpcClient, RpcClientShape>()(
@@ -77,6 +94,7 @@ const dispose = (resource: unknown): void => {
 }
 
 const wrapWasmRpc = (rpc: WasmRpc): RpcConnection => ({
+  agentId: () => rpc.agentId(),
   invokeAndAwait: (methodName, input, scopeCard) =>
     rpc.invokeAndAwait(methodName, input, scopeCard),
   invoke: (methodName, input) => rpc.invoke(methodName, input, undefined),
@@ -115,10 +133,22 @@ export const RpcLive: Layer.Layer<RpcClient> = Layer.succeed(
         },
         catch: (cause) => new RpcHostError(cause, "WasmRpc.bindSelf"),
       }),
-    connect: (agentTypeName, constructorValue, phantomId, agentConfig) =>
+    upsert: (agentTypeName, constructorValue) =>
       Effect.try({
-        try: () =>
-          wrapWasmRpc(WasmRpc.create(agentTypeName, constructorValue, phantomId, [...agentConfig])),
+        try: () => wrapWasmRpc(WasmRpc.upsert(agentTypeName, constructorValue)),
+        catch: (cause) => new RpcHostError(cause, "WasmRpc.upsert"),
+      }),
+    getById: (agentTypeName, agentId) =>
+      Effect.try({
+        try: () => wrapWasmRpc(WasmRpc.getById(agentTypeName, agentId)),
+        catch: (cause) => new RpcHostError(cause, "WasmRpc.getById"),
+      }),
+    create: (agentTypeName, constructorValue, options) =>
+      Effect.tryPromise({
+        try: async () => {
+          const created = await WasmRpc.create(agentTypeName, constructorValue, options)
+          return { connection: wrapWasmRpc(created.client), agentId: created.agentId }
+        },
         catch: (cause) => new RpcHostError(cause, "WasmRpc.create"),
       }),
   }),

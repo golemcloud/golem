@@ -2,7 +2,7 @@ use golem_rust::bindings::golem::api::oplog::{
     AgentInvocation, OplogEntry, OplogIndex, PublicOplogEntry, enrich_oplog_entries,
 };
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
-use golem_rust::schema::wit::wire::{AgentId, ComponentId};
+use golem_rust::schema::wit::wire::AgentId;
 use golem_rust::wasip3::http::{client, types};
 use golem_rust::wasip3::{wit_future, wit_stream};
 use uuid::Uuid;
@@ -13,12 +13,12 @@ use std::collections::HashMap;
 /// Per-batch delivery record posted to the callback URL.
 #[derive(serde::Serialize)]
 struct BatchCallback {
-    /// Source worker identity
+    /// Source agent ID
     source_worker_id: String,
-    /// Account that owns the worker
+    /// Account that owns the agent
     account_id: String,
-    /// Component the worker belongs to
-    component_id: String,
+    /// Agent type of the source agent
+    agent_type: Option<String>,
     /// Index of the first entry in this batch
     first_entry_index: u64,
     /// Number of entries in this batch
@@ -64,8 +64,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
     async fn process(
         account_info: golem_rust::oplog_processor::exports::golem::api::oplog_processor::AccountInfo,
         config: Vec<(String, String)>,
-        component_id: ComponentId,
-        worker_id: AgentId,
+        agent_id: AgentId,
         metadata: golem_rust::oplog_processor::host::AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
@@ -84,7 +83,8 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             account_info.account_id.uuid.low_bits,
         );
 
-        let comp_id = Uuid::from_u64_pair(component_id.uuid.high_bits, component_id.uuid.low_bits);
+        let source_agent_id =
+            Uuid::from_u64_pair(agent_id.uuid.high_bits, agent_id.uuid.low_bits).to_string();
 
         let mut invocations: Vec<InvocationRecord> = Vec::new();
         let mut durable_entries: Vec<DurableEntryRecord> = Vec::new();
@@ -101,7 +101,7 @@ impl OplogProcessorGuest for OplogProcessorComponent {
             .collect();
         let enriched_entries = enrich_oplog_entries(
             metadata.environment_id.clone(),
-            &metadata.agent_id.clone(),
+            metadata.agent_id.clone(),
             indexed_entries,
             metadata.component_revision,
         )
@@ -145,11 +145,11 @@ impl OplogProcessorGuest for OplogProcessorComponent {
                 };
                 CURRENT_INVOCATIONS.with(|ci| {
                     ci.borrow_mut()
-                        .insert(format!("{worker_id:?}"), function_name);
+                        .insert(source_agent_id.clone(), function_name);
                 });
             } else if let PublicOplogEntry::AgentInvocationFinished(_params) = entry {
                 let function_name = if let Some(function_name) =
-                    CURRENT_INVOCATIONS.with(|ci| ci.borrow_mut().remove(&format!("{worker_id:?}")))
+                    CURRENT_INVOCATIONS.with(|ci| ci.borrow_mut().remove(&source_agent_id.clone()))
                 {
                     function_name
                 } else {
@@ -172,9 +172,9 @@ impl OplogProcessorGuest for OplogProcessorComponent {
 
         if let Some(url) = callback_url {
             let batch = BatchCallback {
-                source_worker_id: format!("{}", worker_id.agent_id),
+                source_worker_id: source_agent_id,
                 account_id: account_id.to_string(),
-                component_id: comp_id.to_string(),
+                agent_type: metadata.agent_type_name.clone(),
                 first_entry_index,
                 entry_count,
                 invocations,

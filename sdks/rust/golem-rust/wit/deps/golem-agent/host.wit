@@ -1,7 +1,7 @@
 package golem:agent@2.0.0;
 
 interface host {
-    use golem:core/types@2.0.0.{uuid, promise-id, schema-graph, schema-value-tree, typed-schema-value, permission-card, invocation-id};
+    use golem:core/types@2.0.0.{agent-id, promise-id, schema-graph, schema-value-tree, permission-card, invocation-id};
     use wasi:clocks/system-clock@0.3.0.{instant as datetime};
     use common.{agent-error, agent-type, registered-agent-type, typed-agent-config-value};
 
@@ -11,22 +11,9 @@ interface host {
     /// Get a specific registered agent type by name
     get-agent-type: func(agent-type-name: string) -> option<registered-agent-type>;
 
-    /// Gets the registered agent type used by an existing agent, identified by its agent ID.
-    get-agent-type-by-agent-id: func(agent-id: string) -> option<registered-agent-type>;
-
-    /// Constructs a string agent-id from the agent type and its constructor parameters
-    /// and an optional phantom ID.
-    ///
-    /// `input` is a value tree whose root encodes the constructor's parameter list.
-    make-agent-id: func(agent-type-name: string, input: schema-value-tree, phantom-id: option<uuid>) -> result<string, agent-error>;
-
-    /// Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
-    /// and an optional phantom ID.
-    ///
-    /// The constructor parameters are returned as a self-contained typed value
-    /// (graph + value tree) so the receiver can interpret them without an
-    /// external schema registry.
-    parse-agent-id: func(agent-id: string) -> result<tuple<string, typed-schema-value, option<uuid>>, agent-error>;
+    /// Gets the deployed agent type that the type tag of an agent ID names. Returns `none`
+    /// when no deployed agent type has that tag.
+    get-agent-type-by-agent-id: func(agent-id: agent-id) -> option<registered-agent-type>;
 
     /// Creates a webhook that can be used to integrate with webhook driven apis.
     /// When the created url is called with a post request, the provided promise-id is completed with the body of the post request.
@@ -53,13 +40,39 @@ interface host {
       /// Internal error on the remote side
       remote-internal-error(string),
       /// The remote endpoint returned an agent-domain error
-      remote-agent-error(agent-error)
+      remote-agent-error(agent-error),
+      /// A keyed create found an agent that already has the key, or the agent at the ID
+      /// that a key derives has another key
+      conflict(string)
+    }
+
+    /// Gets the ID of the keyed agent of the given type and constructor parameters, or
+    /// `none` when no such agent exists. Never creates the agent.
+    ///
+    /// `input` is a value tree whose root encodes the constructor's parameter list.
+    lookup-agent-id: func(agent-type-name: string, input: schema-value-tree) -> result<option<agent-id>, rpc-error>;
+
+    /// Options of `wasm-rpc.create`
+    record create-options {
+      /// Creates the keyed agent of the constructor parameters, and fails with `conflict`
+      /// when it already exists. Otherwise the new agent has no key and a new ID.
+      keyed: bool,
+      /// Overrides of the agent type's local configuration values
+      agent-config: list<typed-agent-config-value>,
+      /// Environment variables added to the ones the manifest defines
+      env: list<tuple<string, string>>,
+    }
+
+    /// An agent created by `wasm-rpc.create`
+    record created {
+      client: wasm-rpc,
+      agent-id: agent-id,
     }
 
     /// Final identity allocated for one remote invocation. For an ephemeral
-    /// target, `agent-id` contains the generated one-shot phantom ID.
+    /// target, `agent-id` is the ID of the one-shot instance that ran it.
     record invocation-metadata {
-      agent-id: string,
+      agent-id: agent-id,
       invocation-id: invocation-id,
     }
 
@@ -89,28 +102,32 @@ interface host {
 
     /// An RPC client for invoking remote agents
     resource wasm-rpc {
-      /// Creates an RPC client connecting to the given target agent.
+      /// Creates an RPC client connecting to the keyed agent of the given type and
+      /// constructor parameters.
       ///
       /// For durable targets, creates the target if missing and returns after successful
       /// initialization. An initialized target is reused without rerunning its constructor.
       /// Use `bind-self` to schedule on self from inside an unfinished constructor.
+      /// For ephemeral targets, each invocation runs on a new one-shot instance.
       ///
       /// `constructor` is a value tree whose root encodes the target agent
-      /// constructor's parameter list. This fail-fast form traps if the client
-      /// cannot be created and is intended for statically generated clients.
-      constructor(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>);
+      /// constructor's parameter list.
+      upsert: static func(agent-type-name: string, %constructor: schema-value-tree) -> result<wasm-rpc, rpc-error>;
 
-      /// Creates an RPC client connecting to the given target agent.
-      ///
-      /// For durable targets, creates the target if missing and returns after successful
-      /// initialization. An initialized target is reused without rerunning its constructor.
-      /// Use `bind-self` to schedule on self from inside an unfinished constructor.
+      /// Creates an RPC client connecting to the existing agent with the given ID. Never
+      /// creates the agent. Fails with `not-found` when no agent of the given type has the ID.
+      get-by-id: static func(agent-type-name: string, agent-id: agent-id) -> result<wasm-rpc, rpc-error>;
+
+      /// Creates a durable agent of the given type, and returns after its successful
+      /// initialization. The creation is durable: replay returns the same agent.
       ///
       /// `constructor` is a value tree whose root encodes the target agent
-      /// constructor's parameter list. This fallible form returns an RPC error
-      /// if the client cannot be created and is intended for reflective and
-      /// other dynamic clients.
-      create: static func(agent-type-name: string, %constructor: schema-value-tree, phantom-id: option<uuid>, agent-config: list<typed-agent-config-value>) -> result<wasm-rpc, rpc-error>;
+      /// constructor's parameter list.
+      create: static async func(agent-type-name: string, %constructor: schema-value-tree, options: create-options) -> result<created, rpc-error>;
+
+      /// The ID of the agent this client connects to. On a client of `upsert` it creates the
+      /// agent when it is missing, without invoking a method.
+      agent-id: async func() -> result<agent-id, rpc-error>;
 
       /// Binds the current durable agent incarnation without creating it or waiting
       /// for its constructor to finish.
@@ -125,7 +142,7 @@ interface host {
       /// after construction finishes. Method calls still require method authority.
       /// Typed clients must validate the returned agent type. The returned ID and
       /// connection preserve the recorded incarnation during replay.
-      bind-self: static func() -> result<tuple<string, wasm-rpc>, rpc-error>;
+      bind-self: static func() -> result<tuple<agent-id, wasm-rpc>, rpc-error>;
 
       /// Invokes a remote method with the given parameters, and awaits the result.
       ///

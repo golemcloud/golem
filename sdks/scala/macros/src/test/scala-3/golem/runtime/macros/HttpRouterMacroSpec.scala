@@ -19,7 +19,7 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     fileResponseHeaders = Array(("Content-Security-Policy", "default-src 'self'"), ("Referrer-Policy", "same-origin"))
   )
   trait Website {
-    @httpHandler def arbitraryName(request: HttpRequest, principal: golem.Principal): Future[HttpResponse]
+    @httpHandler def arbitraryName(request: HttpRequest, context: golem.InvocationContext): Future[HttpResponse]
     @openApiProvider def description(): Future[String]
   }
   @httpRouter("files", "/", staticBindings = Array(("/", "/index.html")))
@@ -74,6 +74,74 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("HttpRouterMacroSpec")(
+    test("agent endpoints reject tool-only declaration options") {
+      val prefix: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/clean")
+          @endpoint("POST", "/run", prefix="/ignored") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val id: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/clean")
+          @endpoint("POST", "/run", routeId="ignored") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generate[A]
+      """)
+      val headers: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/clean")
+          @endpoint("POST", "/run", responseHeaders=Array(("X-Result", "ignored"))) def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      assertTrue(
+        prefix.exists(_.message.contains("tool-only endpoint option")),
+        id.exists(_.message.contains("tool-only endpoint option")),
+        headers.exists(_.message.contains("tool-only endpoint option"))
+      )
+    },
+    test("agent checks every endpoint in either annotation order, including explicit empty options") {
+      val prefix: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/run", prefix="")
+          @endpoint("POST", "/clean") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val id: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/run", routeId="")
+          @endpoint("POST", "/clean") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generate[A]
+      """)
+      val headers: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/a") trait A {
+          class Id()
+          @endpoint("POST", "/run", responseHeaders=Array.empty)
+          @endpoint("POST", "/clean") def run(): Unit
+        }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      assertTrue(
+        prefix.exists(_.message.contains("tool-only endpoint option")),
+        id.exists(_.message.contains("tool-only endpoint option")),
+        headers.exists(_.message.contains("tool-only endpoint option"))
+      )
+    },
     test("query selector names are preserved exactly, including whitespace-only names") {
       val padded     = AgentDefinitionMacro.generateWire[PaddedQuery]
       val whitespace = AgentDefinitionMacro.generateWire[WhitespaceQuery]
@@ -175,12 +243,12 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
         )
       )
     },
-    test("reject caller-dependent live-file identities even when Principal is not mounted") {
+    test("reject caller-dependent live-file identities even when InvocationContext is not mounted") {
       val errors: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
         import golem.runtime.annotations.*
         import golem.runtime.macros.AgentDefinitionMacro
         @agentDefinition(mount = "/", exposeFiles = Array(("/*", "/public/$1")))
-        trait Bad { class Id(val principal: golem.Principal) }
+        trait Bad { class Id(val context: golem.InvocationContext) }
         AgentDefinitionMacro.generate[Bad]
       """)
       assertTrue(errors.exists(_.message.contains("filesystem-constructor")))

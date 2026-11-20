@@ -6,14 +6,15 @@ use golem_api_grpc::proto::golem::worker::{
     StreamEnd, StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result, stream_terminal,
 };
+use golem_common::model::agent::AgentMode;
 use golem_common::model::agent::extraction::extract_component_metadata;
-use golem_common::model::agent::{AgentMode, GolemUserPrincipal, Principal};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::schema::{SchemaGraph, SchemaType, TypedSchemaValue};
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{HasOplog, HasOplogService};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::start_with_resource_limits_and_overrides;
 use test_r::{inherit_test_dep, test};
 use tokio_stream::wrappers::ReceiverStream;
@@ -98,12 +99,12 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     let id = executor
         .start_agent(
             &caller_component.id,
-            agent_id!("ToolStreamingCaller", "monthly-quiet-stdin"),
+            agent_key!("ToolStreamingCaller", "monthly-quiet-stdin"),
         )
         .await?;
-    wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    wait_for_invocation_pair(&executor, &id.agent_id, OplogIndex::INITIAL).await?;
     let worker = executor
-        .production_active_agent(&OwnedAgentId::new(context.default_environment_id, &id))
+        .production_active_agent(&id.clone())
         .await
         .unwrap()
         .primary();
@@ -120,9 +121,9 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
         Some(&key),
     );
     let stored_key = executor
-        .finalized_invocation_key(&id, &request_key, "tool:streaming/run")
+        .finalized_invocation_key(&id.agent_id, &request_key, "tool:streaming/run")
         .await?;
-    let mut result_wait = crate::invocation_waits::result_wait(&id, &stored_key);
+    let mut result_wait = crate::invocation_waits::result_wait(&id.agent_id, &stored_key);
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -139,15 +140,10 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
     sender
         .send(InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
-                agent_id: Some(id.clone().into()),
+                target: Some(crate::agent::id_target(&id)),
                 idempotency_key: Some(key.clone().into()),
                 auth_ctx: Some(executor.auth_ctx().into()),
-                principal: Some(
-                    Principal::GolemUser(GolemUserPrincipal {
-                        account_id: context.account_id,
-                    })
-                    .into(),
-                ),
+                caller: Some(callers::account(context.account_id).into()),
                 environment_id: Some(context.default_environment_id.into()),
                 component_owner_account_id: Some(context.account_id.into()),
                 expected_callee_fingerprint: Some(fingerprint.0.into()),
@@ -369,7 +365,7 @@ async fn durable_native_stdin_memory_quota_preserves_accepted_session(
             .await?
             == stopped_prefix
     );
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let owned = id.clone();
     let service = worker.oplog_service();
     let tip = service.get_last_index(&owned, AgentMode::Durable).await?;
     let committed = service

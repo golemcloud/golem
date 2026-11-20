@@ -16,7 +16,6 @@ import {
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type * as TypesHost from "golem:permissions/types@0.1.0"
-import * as AgentIdentity from "../src/AgentIdentity.js"
 import { defineAgent } from "../src/Agent.js"
 import * as Bridge from "../src/Bridge.js"
 import * as Capability from "../src/Capability.js"
@@ -51,7 +50,7 @@ import { schemaValueMatches } from "../src/internal/reflection/schemaValidation.
 import { t, v } from "../src/internal/schema-model/model.js"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
-import { hostInvocationMetadata } from "./invocation-metadata.js"
+import { agentIdFor, hostAgentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
 
 interface FakeCard {
   readonly serial: number
@@ -84,6 +83,7 @@ const makeHost = (
   derivedKind: TypesHost.PersistentCard["tag"] = "concrete",
 ) => {
   const events: string[] = []
+  const recipients: TypesHost.Holder[] = []
   const failures = new Map<string, unknown>()
   let serial = 0
   const mint = (
@@ -164,6 +164,7 @@ const makeHost = (
     walletVersion: () => ({ walletIdHash: new Uint8Array([1, 2]), generation: 5n }),
     install: (card, target) => {
       events.push(`install:${fake(card).serial}:${target.tag}`)
+      recipients.push(target)
       fail("install")
     },
     listModules: () => [{ className: "kv", verbs: ["read", "write"] }],
@@ -177,6 +178,7 @@ const makeHost = (
   }
   return {
     events,
+    recipients,
     failures,
     layer: Layer.succeed(PermissionsClient, PermissionsClient.of(shape)),
     serialOf: (card: CoreTypes.PermissionCard | undefined) =>
@@ -290,10 +292,7 @@ describe("Permissions", () => {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const scope = yield* Permissions.deriveScope([walletCard], {})
       const asCard = scope as unknown as Permissions.PermissionCard
-      const target = Permissions.Holder.agent({
-        componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-        agentId: "Target(1)",
-      })
+      const target = Permissions.Holder.agent(agentIdFor("target"))
       for (const effect of [
         Permissions.revoke(asCard),
         Permissions.install(asCard, target),
@@ -355,10 +354,7 @@ describe("Permissions", () => {
   it.effect("moves the card on install and reports a recipient mismatch", () => {
     const host = makeHost()
     return Effect.gen(function* () {
-      const target = Permissions.Holder.agent({
-        componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-        agentId: "Target(1)",
-      })
+      const target = Permissions.Holder.agent(agentIdFor("target"))
       const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
         yield* Permissions.deriveFromWallet({}),
       )
@@ -375,6 +371,9 @@ describe("Permissions", () => {
         "install:3:agent",
         "install:4:agent",
       ])
+      expect(host.recipients).toEqual(
+        Array.from({ length: 2 }, () => ({ tag: "agent", val: hostAgentIdFor("target") })),
+      )
     }).pipe(Effect.provide(host.layer))
   })
 
@@ -502,31 +501,6 @@ describe("Permissions", () => {
         { className: "kv", verbs: ["read", "write"] },
       ])
     }).pipe(Effect.provide(makeHost().layer)),
-  )
-
-  it.effect("resolves an agent holder through the registered agent type", () =>
-    Effect.gen(function* () {
-      const identity = { typeName: "Reader", encoded: 'Reader("a")' } as AgentIdentity.Identity
-      const holder = yield* Permissions.agentHolder(identity)
-      expect(holder).toEqual({
-        _tag: "Agent",
-        agentId: { componentId: { uuid: { highBits: 9n, lowBits: 9n } }, agentId: 'Reader("a")' },
-      })
-      const missing = { typeName: "Missing", encoded: "Missing()" } as AgentIdentity.Identity
-      expect(failureOf(yield* Effect.exit(Permissions.agentHolder(missing)))).toBeInstanceOf(
-        Permissions.PermissionsHostError,
-      )
-    }).pipe(
-      Effect.provideService(
-        AgentHostClient,
-        AgentHostClient.of({
-          getAgentType: (name: string) =>
-            name === "Reader"
-              ? ({ implementedBy: { uuid: { highBits: 9n, lowBits: 9n } } } as never)
-              : undefined,
-        } as never),
-      ),
-    ),
   )
 })
 
@@ -683,10 +657,7 @@ describe("wallet card kinds and polymorphic cards", () => {
     return Effect.gen(function* () {
       const template = cardOf((yield* Permissions.wallet)[0], "Template")
       host.failures.set("install", { tag: "install-recipient-mismatch", val: "wrong recipient" })
-      const target = Permissions.Holder.agent({
-        componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-        agentId: "Target(1)",
-      })
+      const target = Permissions.Holder.agent(agentIdFor("target"))
       expect(failureOf(yield* Effect.exit(Permissions.install(template, target)))).toMatchObject({
         kind: "install-recipient-mismatch",
       })
@@ -878,6 +849,7 @@ const rpcLayer = (
   const cardsOf = (input: CoreTypes.SchemaValueTree) =>
     input.valueNodes.flatMap((node) => (node.tag === "permission-card-handle" ? [node.val] : []))
   const connection: RpcConnection = {
+    agentId: () => Promise.resolve(hostAgentIdFor("reader")),
     invokeAndAwait: () => {
       throw new Error("unused")
     },
@@ -908,14 +880,17 @@ const rpcLayer = (
       RpcClient,
       RpcClient.of({
         bindSelf: () => Effect.die("unexpected self binding"),
-        connect: () => Effect.succeed(connection),
+        upsert: () => Effect.succeed(connection),
+        getById: () => Effect.succeed(connection),
+        create: () => Effect.die("unexpected create"),
       }),
     ),
     Layer.succeed(
       AgentHostClient,
       AgentHostClient.of({
-        makeAgentId: () => "reader",
-        parseAgentId: () => ["PermissionReader", { value: { root: 0, valueNodes: [] } }, undefined],
+        getAgentTypeByAgentId: () => ({
+          agentType: { typeName: "PermissionReader", mode: "durable" },
+        }),
       } as never),
     ),
   )
@@ -929,9 +904,9 @@ describe("scope cards on awaited calls", () => {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const defaultCard = yield* Permissions.deriveScope([walletCard], {})
       const perCall = yield* Permissions.deriveScope([walletCard], {})
-      const plain = yield* Reader.client.get({ name: "a" })
+      const plain = yield* Reader.client.upsert({ name: "a" })
       yield* plain.read({})
-      const reader = yield* Reader.client.get({ name: "a" }, { scopeCard: defaultCard })
+      const reader = yield* Reader.client.upsert({ name: "a" }, { scopeCard: defaultCard })
       yield* reader.read({})
       yield* reader.read.withScopeCard(perCall)({})
       yield* reader.read.trigger({})
@@ -964,17 +939,11 @@ describe("scope cards on awaited calls", () => {
       const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
         yield* Permissions.deriveFromWallet({}),
       )
-      const reader = yield* Reader.client.get({ name: "a" })
+      const reader = yield* Reader.client.upsert({ name: "a" })
       expect(
         failureOf(yield* Effect.exit(reader.give.withScopeCard(scope)({ card }))),
       ).toMatchObject({ _tag: "ScopeCardUnavailableError" })
-      const handle = yield* Bridge.resolveRemoteAgent(
-        "PermissionReader",
-        emptyRecord,
-        undefined,
-        [],
-        "durable",
-      )
+      const handle = yield* Bridge.upsertRemoteAgent("PermissionReader", emptyRecord)
       expect(
         failureOf(
           yield* Effect.exit(
@@ -1004,12 +973,7 @@ describe("scope cards on awaited calls", () => {
       const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
         yield* Permissions.deriveFromWallet({}),
       )
-      const connection = yield* (yield* RpcClient).connect(
-        "PermissionReader",
-        {} as never,
-        undefined,
-        [],
-      )
+      const connection = yield* (yield* RpcClient).upsert("PermissionReader", {} as never)
       const encodeThenRelease = Effect.promise(() => schemaValueToWitAsync(cardRecord(card))).pipe(
         Effect.tap(() => Effect.orDie(Permissions.release(scope))),
       )
@@ -1027,12 +991,7 @@ describe("scope cards on awaited calls", () => {
       const [concrete, templateEntry] = yield* Permissions.wallet
       const template = cardOf(templateEntry, "Template")
       const scope = yield* Permissions.deriveScope([cardOf(concrete, "Concrete")], {})
-      const connection = yield* (yield* RpcClient).connect(
-        "PermissionReader",
-        {} as never,
-        undefined,
-        [],
-      )
+      const connection = yield* (yield* RpcClient).upsert("PermissionReader", {} as never)
       const encodeThenRelease = Effect.promise(() =>
         schemaValueToWitAsync({
           tag: "record",
@@ -1047,7 +1006,7 @@ describe("scope cards on awaited calls", () => {
       expect(Schema.is(WitTypes.PolymorphicPermissionCard)(template)).toBe(true)
       yield* Permissions.inspect(template)
 
-      const reader = yield* Reader.client.get({ name: "a" })
+      const reader = yield* Reader.client.upsert({ name: "a" })
       yield* reader.giveTemplate({ card: template })
       expect(calls.map((call) => call.cards.map((raw) => host.serialOf(raw as never)))).toEqual([
         [2],
@@ -1063,7 +1022,7 @@ describe("scope cards on awaited calls", () => {
     const calls: Array<RecordedCall> = []
     return Effect.gen(function* () {
       const template = cardOf((yield* Permissions.wallet)[0], "Template")
-      const reader = yield* Reader.client.get({ name: "a" })
+      const reader = yield* Reader.client.upsert({ name: "a" })
       expect(failureOf(yield* Effect.exit(reader.giveTemplate({ card: template })))).toMatchObject({
         _tag: "RpcCallError",
       })
@@ -1083,20 +1042,13 @@ describe("scope cards on awaited calls", () => {
     return Effect.gen(function* () {
       const walletCard = cardOf((yield* Permissions.wallet)[0], "Concrete")
       const scope = yield* Permissions.deriveScope([walletCard], {})
-      const handle = yield* Bridge.resolveRemoteAgent(
-        "PermissionReader",
-        emptyRecord,
-        undefined,
-        [],
-        "ephemeral",
-      )
+      const handle = yield* Bridge.upsertRemoteAgent("PermissionReader", emptyRecord)
       yield* handle.invokeAndAwait("read", emptyRecord, () => undefined)
       yield* handle.invokeAndAwaitWithMetadata("read", emptyRecord, () => undefined, {
         scopeCard: scope,
       })
       yield* handle.invoke("read", emptyRecord)
-      const identity = yield* AgentIdentity.parse('PermissionReader("a")')
-      const dynamic = yield* DynamicClient.bind(identity)
+      const dynamic = yield* DynamicClient.bind(agentIdFor("reader"))
       yield* dynamic.method("read").invoke({ root: 0, valueNodes: [] }, { scopeCard: scope })
       yield* dynamic.method("read").invoke({ root: 0, valueNodes: [] })
       expect(calls.map((call) => [call.kind, host.serialOf(call.scopeCard as never)])).toEqual([
@@ -1118,12 +1070,7 @@ describe("scope cards on awaited calls", () => {
       const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
         yield* Permissions.deriveFromWallet({}),
       )
-      const connection = yield* (yield* RpcClient).connect(
-        "PermissionReader",
-        {} as never,
-        undefined,
-        [],
-      )
+      const connection = yield* (yield* RpcClient).upsert("PermissionReader", {} as never)
       const encodeThenRelease = Effect.promise(() => schemaValueToWitAsync(cardRecord(card))).pipe(
         Effect.tap(() => Effect.orDie(Permissions.release(card))),
         Effect.tap(() => Effect.orDie(Permissions.release(scope))),
@@ -1145,12 +1092,7 @@ describe("scope cards on awaited calls", () => {
       const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
         yield* Permissions.deriveFromWallet({}),
       )
-      const connection = yield* (yield* RpcClient).connect(
-        "PermissionReader",
-        {} as never,
-        undefined,
-        [],
-      )
+      const connection = yield* (yield* RpcClient).upsert("PermissionReader", {} as never)
       let openGate: () => void = () => {}
       const gate = new Promise<void>((resolve) => {
         openGate = resolve
@@ -1182,7 +1124,7 @@ describe("scope cards on awaited calls", () => {
       const card = Schema.decodeUnknownSync(WitTypes.PermissionCard)(
         yield* Permissions.deriveFromWallet({}),
       )
-      const reader = yield* Reader.client.get({ name: "a" })
+      const reader = yield* Reader.client.upsert({ name: "a" })
       expect(failureOf(yield* Effect.exit(reader.give({ card })))).toMatchObject({
         _tag: "RpcCallError",
       })
@@ -1256,8 +1198,7 @@ describe("scope cards on awaited calls", () => {
       const cardNode = tree.valueNodes.find((node) => node.tag === "permission-card-handle")!
       const raw = cardNode.val
       yield* Permissions.release(scope)
-      const identity = yield* AgentIdentity.parse('PermissionReader("a")')
-      const dynamic = yield* DynamicClient.bind(identity)
+      const dynamic = yield* DynamicClient.bind(agentIdFor("reader"))
       expect(
         failureOf(yield* Effect.exit(dynamic.method("give").invoke(tree, { scopeCard: scope }))),
       ).toMatchObject({ _tag: "ScopeCardUnavailableError" })
@@ -1265,12 +1206,7 @@ describe("scope cards on awaited calls", () => {
 
       // The same holds when the scope card is released after the tree was accepted.
       const later = yield* Permissions.deriveScope([walletCard], {})
-      const connection = yield* (yield* RpcClient).connect(
-        "PermissionReader",
-        {} as never,
-        undefined,
-        [],
-      )
+      const connection = yield* (yield* RpcClient).upsert("PermissionReader", {} as never)
       const supplied = Effect.succeed(tree).pipe(
         Effect.tap(() => Effect.orDie(Permissions.release(later))),
       )

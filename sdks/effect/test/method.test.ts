@@ -14,7 +14,12 @@ import {
 } from "../src/Method.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
-import { Principal, PrincipalSchema, type PrincipalValue } from "../src/Principal.js"
+import {
+  Caller,
+  InvocationContext,
+  PrincipalRef,
+  PrincipalRefSchema,
+} from "../src/InvocationContext.js"
 
 const Person = Schema.Struct({ name: Schema.String, age: Schema.Number })
 const greet = defineMethod({
@@ -27,72 +32,57 @@ const greet = defineMethod({
 describe("Method", () => {
   for (const mixed of [false, true]) {
     it.effect(
-      `injects the current principal through invokeMethod (${mixed ? "mixed" : "principal-only"})`,
+      `hands the invocation context to a handler (${mixed ? "mixed" : "empty"} input)`,
       () =>
         Effect.gen(function* () {
           const compiled = yield* compileMethodSpec(
             "caller",
             method({
-              input: mixed
-                ? { user: Schema.String, caller: PrincipalSchema }
-                : { caller: PrincipalSchema },
+              input: mixed ? { user: Schema.String } : {},
               success: Schema.String,
             }),
           )
-          expect(compiled.inputSchema.val.map((field) => field.name)).toEqual(
-            mixed ? ["user", "caller"] : ["caller"],
-          )
+          // The invocation context is injected, so it is never part of the input.
+          expect(compiled.inputSchema.val.map((field) => field.name)).toEqual(mixed ? ["user"] : [])
+          expect(
+            compiled.inputSchema.val.every((field) => field.source.tag === "user-supplied"),
+          ).toBe(true)
           const wire = schemaValueToWit(v.record(mixed ? [v.string("Ada")] : []))
           const decoded = yield* compiled.inputCodec.decode(wire)
           expect(decoded).toEqual(mixed ? { user: "Ada" } : {})
-          expect(decoded.caller).toBeUndefined()
-          const principals: PrincipalValue[] = [
-            { tag: "anonymous" },
-            {
-              tag: "agent",
-              val: {
-                agentId: {
-                  componentId: { uuid: { highBits: 1n, lowBits: 2n } },
-                  agentId: "current",
-                },
-              },
-            },
-          ]
-          for (const principal of principals) {
-            const output = yield* invokeMethod(
-              compiled,
-              (input) => {
-                expect(input).toEqual(
-                  mixed ? { user: "Ada", caller: principal } : { caller: principal },
-                )
-                return Effect.succeed(input.caller.tag)
-              },
-              wire,
-            ).pipe(Effect.provideService(Principal, principal))
-            expect(schemaValueFromWit(output!)).toEqual(v.string(principal.tag))
-          }
+          const context = { caller: Caller.anonymous() }
+          const output = yield* invokeMethod(
+            compiled,
+            () =>
+              Effect.map(InvocationContext, (current) => {
+                expect(current).toBe(context)
+                return current.caller.immediate.kind
+              }),
+            wire,
+          ).pipe(Effect.provideService(InvocationContext, context))
+          expect(schemaValueFromWit(output!)).toEqual(v.string("anonymous"))
         }),
     )
   }
 
-  it.effect("projects caller codec types while retaining full handler input", () =>
+  it.effect("keeps a PrincipalRef as ordinary method data", () =>
     Effect.gen(function* () {
       const compiled = yield* compileMethodSpec(
-        "mixed",
-        method({ input: { user: Schema.String, caller: PrincipalSchema }, success: Schema.String }),
+        "owner",
+        method({
+          input: { owner: PrincipalRefSchema },
+          success: PrincipalRefSchema,
+        }),
       )
-      const wire = yield* compiled.inputCodec.encode({ user: "Ada" })
+      const owner = new PrincipalRef("https://example.test", "alice")
+      const wire = yield* compiled.inputCodec.encode({ owner })
       const decoded = yield* compiled.inputCodec.decode(wire)
-      // @ts-expect-error caller codecs do not decode host-injected fields
-      expect(decoded.caller).toBeUndefined()
-      expect(decoded.user).toBe("Ada")
-      const principal: PrincipalValue = { tag: "anonymous" }
-      const output = yield* invokeMethod(
-        compiled,
-        ({ user, caller }) => Effect.succeed(`${user}:${caller.tag}`),
-        wire,
-      ).pipe(Effect.provideService(Principal, principal))
-      expect(schemaValueFromWit(output!)).toEqual(v.string("Ada:anonymous"))
+      expect(decoded.owner).toBeInstanceOf(PrincipalRef)
+      expect(decoded.owner.equals(owner)).toBe(true)
+      const output = yield* invokeMethod(compiled, (input) => Effect.succeed(input.owner), wire)
+      expect(schemaValueFromWit(output!)).toEqual(
+        v.record([v.string("https://example.test"), v.string("alice")]),
+      )
     }),
   )
 
@@ -201,7 +191,7 @@ describe("Method", () => {
       const noCache = yield* compileMethodSpec(
         "no-cache",
         method({
-          input: { principal: PrincipalSchema },
+          input: {},
           success: Schema.String,
           readOnly: { cache: "no-cache" },
         }),
@@ -210,15 +200,9 @@ describe("Method", () => {
         "ttl",
         method({ input: {}, success: Schema.String, readOnly: { cache: { ttlNanos: 42n } } }),
       )
-      expect(defaultPolicy.readOnly).toEqual({
-        cachePolicy: { tag: "until-write" },
-        usesPrincipal: false,
-      })
-      expect(noCache.readOnly).toEqual({
-        cachePolicy: { tag: "no-cache" },
-        usesPrincipal: true,
-      })
-      expect(ttl.readOnly).toEqual({ cachePolicy: { tag: "ttl", val: 42n }, usesPrincipal: false })
+      expect(defaultPolicy.readOnly).toEqual({ cachePolicy: { tag: "until-write" } })
+      expect(noCache.readOnly).toEqual({ cachePolicy: { tag: "no-cache" } })
+      expect(ttl.readOnly).toEqual({ cachePolicy: { tag: "ttl", val: 42n } })
     }),
   )
 

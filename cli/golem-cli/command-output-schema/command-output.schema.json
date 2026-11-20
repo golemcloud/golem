@@ -58,6 +58,9 @@
       "$ref": "#/definitions/agent.cancel-invocation"
     },
     {
+      "$ref": "#/definitions/agent.create"
+    },
+    {
       "$ref": "#/definitions/agent.delete"
     },
     {
@@ -85,10 +88,10 @@
       "$ref": "#/definitions/agent.list"
     },
     {
-      "$ref": "#/definitions/agent.new"
+      "$ref": "#/definitions/agent.oplog"
     },
     {
-      "$ref": "#/definitions/agent.oplog"
+      "$ref": "#/definitions/agent.oplog-export"
     },
     {
       "$ref": "#/definitions/agent.oplog-export-header"
@@ -122,6 +125,9 @@
     },
     {
       "$ref": "#/definitions/agent.update"
+    },
+    {
+      "$ref": "#/definitions/agent.upsert"
     },
     {
       "$ref": "#/definitions/api-token.delete"
@@ -212,6 +218,9 @@
     },
     {
       "$ref": "#/definitions/component.manifest-trace"
+    },
+    {
+      "$ref": "#/definitions/package.digest"
     },
     {
       "$ref": "#/definitions/deploy.deployment"
@@ -1842,10 +1851,44 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "idempotencyKey": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.create": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem agent create`: the ID and fingerprint of the created agent.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent create",
+      "required": [
+        "$type",
+        "componentName",
+        "agentType",
+        "agentId",
+        "agentFingerprint"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.create"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "agentType": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentFingerprint": {
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -1868,7 +1911,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -1927,7 +1971,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "path": {
           "type": "string"
@@ -2005,7 +2050,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -2112,7 +2158,7 @@
       "required": [
         "$type",
         "agents",
-        "cursors"
+        "cursor"
       ],
       "properties": {
         "$type": {
@@ -2124,39 +2170,9 @@
             "$ref": "#/definitions/AgentMetadataView"
           }
         },
-        "cursors": {
-          "type": "object",
-          "description": "Without `--page`: the scan cursor of each component that has more agents. Pass one back as `--scan-cursor` with that component selected.",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
         "cursor": {
-          "type": "string",
-          "description": "With `--page`: the cursor of the next page, which names the component and its scan cursor. Pass it back unchanged as `--scan-cursor` with `--page`. Absent on the last page."
-        }
-      },
-      "additionalProperties": false
-    },
-    "agent.new": {
-      "type": "object",
-      "description": "Single structured output document emitted by `golem agent new`.",
-      "x-golem-output-mode": "single",
-      "x-golem-command": "agent new",
-      "required": [
-        "$type",
-        "componentName",
-        "agentId"
-      ],
-      "properties": {
-        "$type": {
-          "const": "agent.new"
-        },
-        "componentName": {
-          "type": "string"
-        },
-        "agentId": {
-          "type": "string"
+          "description": "Opaque cursor of the next page, covering every listed agent type that has more results; null when every listed agent type was fully listed.",
+          "type": ["string", "null"]
         }
       },
       "additionalProperties": false
@@ -2192,6 +2208,36 @@
               "$ref": "#/definitions/OmittedOplogEntryContent"
             }
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.oplog-export": {
+      "type": "object",
+      "description": "One complete bounded obfuscated oplog report, returned by the `agent_oplog_export` MCP tool: the header, every entry of the inclusive range `from` to `to` in index order, and the coverage of the whole range. Customer values are tokens; tokens are equal only inside one report. A call that cannot read the whole range within the scan budget of the server, or whose report is larger than the result limit, fails and returns no report.",
+      "x-golem-output-mode": "single",
+      "x-golem-mcp-tool": "agent_oplog_export",
+      "required": [
+        "$type",
+        "header",
+        "entries",
+        "coverage"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.oplog-export"
+        },
+        "header": {
+          "$ref": "#/definitions/OplogExportReportHeader"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/OplogExportReportEntry"
+          }
+        },
+        "coverage": {
+          "$ref": "#/definitions/OplogExportReportCoverage"
         }
       },
       "additionalProperties": false
@@ -2338,6 +2384,136 @@
       "type": "string",
       "description": "A keyed token, `<domain>:<32 lower-case hex chars>`. Tokens are equal only inside one export.",
       "pattern": "^[a-z]+(:[a-z]+)*:[0-9a-f]{32}$"
+    },
+    "OplogExportReportCoverage": {
+      "type": "object",
+      "required": [
+        "incomplete",
+        "hydrationFailures",
+        "startUnknown",
+        "schemaLessRpcValues",
+        "hostTypeMismatches",
+        "notes"
+      ],
+      "properties": {
+        "incomplete": {
+          "type": "boolean"
+        },
+        "hydrationFailures": {
+          "$ref": "#/definitions/OplogExportOmittedEntryRefList"
+        },
+        "startUnknown": {
+          "$ref": "#/definitions/OplogExportStartUnknownRefList"
+        },
+        "schemaLessRpcValues": {
+          "$ref": "#/definitions/OplogExportSchemaLessRpcValueRefList"
+        },
+        "hostTypeMismatches": {
+          "$ref": "#/definitions/OplogExportHostTypeMismatchRefList"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "description": "The coverage of a bounded obfuscated oplog report: the entries and values of the whole range that the report does not show in full."
+    },
+    "OplogExportReportEntry": {
+      "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "body"
+          ]
+        },
+        {
+          "required": [
+            "omitted"
+          ]
+        }
+      ],
+      "required": [
+        "index",
+        "timestamp",
+        "kind"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "attribution": {
+          "$ref": "#/definitions/ReportNode"
+        },
+        "body": {
+          "$ref": "#/definitions/ReportNode"
+        },
+        "omitted": {
+          "$ref": "#/definitions/ReportOmission"
+        }
+      },
+      "additionalProperties": false,
+      "description": "One oplog entry of a bounded obfuscated oplog report: either a rendered `body` or an `omitted` marker. `attribution` is present only for an entry attributed to an entity."
+    },
+    "OplogExportReportHeader": {
+      "type": "object",
+      "required": [
+        "obfuscate",
+        "keepScalars",
+        "keepShape",
+        "keepErrorText",
+        "filtered",
+        "root",
+        "cliVersion",
+        "generatedAt",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "obfuscate": {
+          "type": "boolean"
+        },
+        "keepScalars": {
+          "type": "boolean"
+        },
+        "keepShape": {
+          "type": "boolean"
+        },
+        "keepErrorText": {
+          "type": "boolean"
+        },
+        "filtered": {
+          "type": "boolean"
+        },
+        "root": {
+          "$ref": "#/definitions/ReportAgentRef"
+        },
+        "cliVersion": {
+          "type": "string"
+        },
+        "generatedAt": {
+          "type": "string"
+        },
+        "from": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "to": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false,
+      "description": "The header of a bounded obfuscated oplog report: the keep flags, the root agent reference, and the inclusive range `from` to `to` that the report covers. `filtered` is always false."
     },
     "ReportAgentRef": {
       "type": "object",
@@ -3131,7 +3307,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "plugin": {
           "type": "string"
@@ -3194,7 +3371,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -3217,7 +3395,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         },
         "lastOplogIndex": {
           "type": "integer",
@@ -3248,7 +3427,8 @@
           "type": "boolean"
         },
         "agentId": {
-          "type": "string"
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -3328,6 +3508,39 @@
           "items": {
             "$ref": "#/definitions/AgentActionError"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent.upsert": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem agent upsert`: the ID and fingerprint of the keyed agent, created when it did not exist.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "agent upsert",
+      "required": [
+        "$type",
+        "componentName",
+        "agentType",
+        "agentId",
+        "agentFingerprint"
+      ],
+      "properties": {
+        "$type": {
+          "const": "agent.upsert"
+        },
+        "componentName": {
+          "type": "string"
+        },
+        "agentType": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agentFingerprint": {
+          "type": "string",
+          "format": "uuid"
         }
       },
       "additionalProperties": false
@@ -4487,6 +4700,19 @@
             "$ref": "#/definitions/ComponentView"
           }
         }
+      },
+      "additionalProperties": false
+    },
+    "package.digest": {
+      "type": "object",
+      "description": "The SHA-256 digest of a Golem package's OCI manifest.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "package pack",
+      "x-golem-commands": ["package pack", "publish"],
+      "required": ["$type", "digest"],
+      "properties": {
+        "$type": { "const": "package.digest" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       },
       "additionalProperties": false
     },
@@ -5654,12 +5880,66 @@
     },
     "Tool": {
       "type": "object",
-      "required": ["version", "requires_filesystem", "commands", "schema"],
+      "required": ["version", "requires_filesystem", "http_mount", "commands", "schema"],
       "properties": {
         "version": { "type": "string" },
         "requires_filesystem": { "type": "boolean" },
+        "http_mount": { "oneOf": [{ "$ref": "#/definitions/ToolHttpMount" }, { "type": "null" }] },
         "commands": { "$ref": "#/definitions/CommandTree" },
         "schema": { "$ref": "#/definitions/SchemaGraph" }
+      },
+      "additionalProperties": false
+    },
+    "ToolHttpMount": {
+      "type": "object",
+      "required": ["path_prefix"],
+      "properties": {
+        "path_prefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+      },
+      "additionalProperties": false
+    },
+    "CommandHttp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "endpoint" },
+            "value": { "$ref": "#/definitions/ToolHttpEndpoint" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "prefix" },
+            "value": { "$ref": "#/definitions/ToolHttpPrefix" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ToolHttpPrefix": {
+      "type": "object",
+      "required": ["path_suffix"],
+      "properties": {
+        "path_suffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolHttpEndpoint": {
+      "type": "object",
+      "required": ["route_id", "http_method", "path_suffix", "query_vars", "header_vars", "response_headers", "mode", "durable_streams"],
+      "properties": {
+        "route_id": { "type": ["string", "null"] },
+        "http_method": { "$ref": "#/definitions/HttpMethod" },
+        "path_suffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "query_vars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
+        "header_vars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
+        "response_headers": { "type": "array", "items": { "$ref": "#/definitions/FileResponseHeader" } },
+        "mode": { "oneOf": [{ "$ref": "#/definitions/HttpRouteMode" }, { "type": "null" }] },
+        "durable_streams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
@@ -5673,11 +5953,12 @@
     },
     "CommandNode": {
       "type": "object",
-      "required": ["name", "aliases", "doc", "globals", "subcommands", "body"],
+      "required": ["name", "aliases", "doc", "http", "globals", "subcommands", "body"],
       "properties": {
         "name": { "type": "string" },
         "aliases": { "type": "array", "items": { "type": "string" } },
         "doc": { "$ref": "#/definitions/ToolDoc" },
+        "http": { "oneOf": [{ "$ref": "#/definitions/CommandHttp" }, { "type": "null" }] },
         "globals": { "$ref": "#/definitions/ToolGlobals" },
         "subcommands": {
           "type": "array",
@@ -6486,6 +6767,9 @@
       "required": [
         "componentName",
         "agentId",
+        "agentType",
+        "agentKey",
+        "fingerprint",
         "createdBy",
         "environmentId",
         "env",
@@ -6504,7 +6788,10 @@
       ],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
+        "agentType": { "type": ["string", "null"] },
+        "agentKey": { "type": ["string", "null"] },
+        "fingerprint": { "type": "string", "format": "uuid" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -6512,6 +6799,7 @@
         "config": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigEntryDto" } },
         "defaultConfig": { "type": "array", "items": { "$ref": "#/definitions/AgentConfigEntryDto" } },
         "status": { "type": "string" },
+        "underlyingStatus": { "type": ["string", "null"] },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "retryCount": { "type": "integer", "minimum": 0 },
         "pendingInvocationCount": { "type": "integer", "minimum": 0 },
@@ -6569,7 +6857,7 @@
         },
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails", "failureClass", "divergence"],
           "properties": {
             "type": { "const": "FailedUpdate" },
             "timestamp": { "type": "string" },
@@ -6577,7 +6865,9 @@
             "details": { "type": ["string", "null"] },
             "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
             "mode": { "$ref": "#/definitions/AgentUpdateMode" },
-            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] },
+            "failureClass": { "$ref": "#/definitions/UpdateFailureClass" },
+            "divergence": { "anyOf": [{ "$ref": "#/definitions/ReplayDivergence" }, { "type": "null" }] }
           },
           "additionalProperties": false
         }
@@ -6745,13 +7035,8 @@
       ]
     },
     "AgentId": {
-      "type": "object",
-      "required": ["componentId", "agentId"],
-      "properties": {
-        "componentId": { "type": "string" },
-        "agentId": { "type": "string" }
-      },
-      "additionalProperties": false
+      "type": "string",
+      "format": "uuid"
     },
     "PluginInstallationDescription": {
       "type": "object",
@@ -6776,11 +7061,12 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
+      "required": ["type", "timestamp", "agentId", "agentTypeName", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId", "neverLive"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
+        "agentTypeName": { "type": ["string", "null"] },
         "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
@@ -6792,8 +7078,8 @@
         "componentSize": { "type": "integer", "minimum": 0 },
         "initialTotalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "initialActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } },
-        "originalPhantomId": { "type": ["string", "null"] },
-        "instanceId": { "type": "string" }
+        "instanceId": { "type": "string" },
+        "neverLive": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -6911,7 +7197,9 @@
         "invocationId": { "type": ["string", "null"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
-        "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] }
+        "retryPolicyState": { "oneOf": [{ "$ref": "#/definitions/PublicRetryPolicyState" }, { "type": "null" }] },
+        "retryAt": { "type": ["string", "null"] },
+        "retryingStartIndex": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6941,9 +7229,50 @@
     },
     "PublicOplogEntryFailedUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex"],
-      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 } },
+      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex", "failureClass", "divergence"],
+      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 }, "failureClass": { "$ref": "#/definitions/UpdateFailureClass" }, "divergence": { "anyOf": [{ "$ref": "#/definitions/ReplayDivergence" }, { "type": "null" }] } },
       "additionalProperties": false
+    },
+    "UpdateFailureClass": {
+      "type": "string",
+      "enum": ["divergence", "target-trap", "not-replayable", "target-rejected", "interrupted", "operational", "other"]
+    },
+    "ReplayDivergence": {
+      "type": "object",
+      "required": ["oplogIndex", "expected", "actual", "mismatched"],
+      "properties": {
+        "oplogIndex": { "type": "integer", "minimum": 0 },
+        "expected": { "$ref": "#/definitions/ReplayStep" },
+        "actual": { "$ref": "#/definitions/ReplayStep" },
+        "mismatched": { "type": "array", "items": { "$ref": "#/definitions/StartIdentityField" } }
+      },
+      "additionalProperties": false
+    },
+    "ReplayStep": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "functionName", "durableFunctionType", "parentStartIndex", "invocationId", "observationalOwner", "carriesRequest", "request"],
+          "properties": {
+            "type": { "const": "HostCall" },
+            "functionName": { "type": "string" },
+            "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
+            "parentStartIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "invocationId": { "anyOf": [{ "$ref": "#/definitions/DurableInvocationId" }, { "type": "null" }] },
+            "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
+            "carriesRequest": { "type": "boolean" },
+            "request": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "InvocationEnd" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "EndOfHistory" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "description"], "properties": { "type": { "const": "Other" }, "description": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "StartIdentityField": {
+      "type": "string",
+      "enum": ["function-name", "function-type", "invocation-id", "observational-owner", "request-presence", "parent"]
     },
     "PublicOplogEntryGrowMemory": {
       "type": "object",
@@ -7424,7 +7753,7 @@
       "required": ["componentName", "agentId"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" }
+        "agentId": { "type": "string", "format": "uuid" }
       },
       "additionalProperties": false
     },
@@ -7433,7 +7762,7 @@
       "required": ["componentName", "agentId", "error"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
         "error": { "type": "string" }
       },
       "additionalProperties": false
@@ -7443,7 +7772,7 @@
       "required": ["componentName", "agentId", "fromRevision", "revision"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
         "fromRevision": { "type": "integer", "minimum": 0 },
         "revision": { "type": "integer", "minimum": 0 }
       },
@@ -7451,10 +7780,11 @@
     },
     "AgentRedeploymentMeta": {
       "type": "object",
-      "required": ["componentName", "agentId", "fromRevision", "revision"],
+      "required": ["componentName", "agentId", "recreatedAgentId", "fromRevision", "revision"],
       "properties": {
         "componentName": { "type": "string" },
-        "agentId": { "type": "string" },
+        "agentId": { "type": "string", "format": "uuid" },
+        "recreatedAgentId": { "type": "string", "format": "uuid" },
         "fromRevision": { "type": "integer", "minimum": 0 },
         "revision": { "type": "integer", "minimum": 0 }
       },
@@ -7617,9 +7947,10 @@
     },
     "ComponentDiffPayload": {
       "type": "object",
-      "required": ["wasmChanged", "componentConfigChanged"],
+      "required": ["wasmChanged", "packageMetadataChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "packageMetadataChanged": { "type": "boolean" },
         "agentTypeChanges": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/AgentTypeDiffMapValue" }
@@ -8071,25 +8402,14 @@
           "required": ["tag"],
           "properties": { "tag": { "const": "user-supplied" } },
           "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["tag", "value"],
-          "properties": { "tag": { "const": "auto-injected" }, "value": { "$ref": "#/definitions/AutoInjectedKind" } },
-          "additionalProperties": false
         }
       ]
     },
-    "AutoInjectedKind": {
-      "type": "string",
-      "enum": ["principal"]
-    },
     "ReadOnlyConfig": {
       "type": "object",
-      "required": ["cachePolicy", "usesPrincipal"],
+      "required": ["cachePolicy"],
       "properties": {
-        "cachePolicy": { "$ref": "#/definitions/CachePolicy" },
-        "usesPrincipal": { "type": "boolean" }
+        "cachePolicy": { "$ref": "#/definitions/CachePolicy" }
       },
       "additionalProperties": false
     },
@@ -8680,7 +9000,7 @@
           "type": "object",
           "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
           "properties": {
-            "agentId": { "type": "object" },
+            "agentId": { "type": "string", "format": "uuid" },
             "idempotencyKey": { "type": "string" },
             "result": { "type": ["object", "null"] },
             "status": {},
@@ -8723,11 +9043,10 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind", "componentId", "agentId"],
+          "required": ["kind", "agentId"],
           "properties": {
             "kind": { "const": "agent" },
-            "componentId": { "type": "string", "format": "uuid" },
-            "agentId": { "type": "string" }
+            "agentId": { "type": "string", "format": "uuid" }
           },
           "additionalProperties": false
         },
@@ -10781,6 +11100,10 @@
       "rustType": "AgentCancelInvocationResult"
     },
     {
+      "type": "agent.create",
+      "rustType": "AgentCreateView"
+    },
+    {
       "type": "agent.delete",
       "rustType": "AgentDeleteView"
     },
@@ -10817,12 +11140,12 @@
       "rustType": "AgentsMetadataResponseView"
     },
     {
-      "type": "agent.new",
-      "rustType": "AgentCreateView"
-    },
-    {
       "type": "agent.oplog",
       "rustType": "AgentOplogEntryView"
+    },
+    {
+      "type": "agent.oplog-export",
+      "rustType": "AgentOplogExportReportView"
     },
     {
       "type": "agent.oplog-export-header",
@@ -10867,6 +11190,10 @@
     {
       "type": "agent.update",
       "rustType": "TryUpdateAllWorkersView"
+    },
+    {
+      "type": "agent.upsert",
+      "rustType": "AgentUpsertView"
     },
     {
       "type": "api-token.delete",
@@ -10987,6 +11314,10 @@
     {
       "type": "component.manifest-trace",
       "rustType": "ComponentManifestTraceView"
+    },
+    {
+      "type": "package.digest",
+      "rustType": "PackageDigest"
     },
     {
       "type": "deploy.deployment",

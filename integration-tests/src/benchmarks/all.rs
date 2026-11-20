@@ -14,11 +14,10 @@
 
 use clap::Parser;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::AgentId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
-use golem_common::{agent_id, data_value};
+use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
     BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
@@ -40,6 +39,7 @@ use integration_tests::benchmarks::density::{
 };
 use integration_tests::benchmarks::{
     self, cleanup_account, cleanup_user_state, delete_workers, invoke_and_await_agent,
+    lookup_keyed_agent,
 };
 use integration_tests::chaos;
 use std::collections::{BTreeMap, BTreeSet};
@@ -818,7 +818,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
         }
     };
 
-    let warmup_agent: ParsedAgentKey = agent_id!(WARMUP_AGENT_TYPE, WARMUP_AGENT_INSTANCE);
+    let warmup_agent: ParsedAgentKey = agent_key!(WARMUP_AGENT_TYPE, WARMUP_AGENT_INSTANCE);
 
     // Bound the 50 invocations with a total wall-clock budget.
     let invoke_result = tokio::time::timeout(WARMUP_BUDGET, async {
@@ -847,7 +847,7 @@ async fn cloud_preflight_warmup(mode: &TestMode, verbosity: Level, otlp: bool) {
         );
     }
 
-    if let Ok(worker_id) = AgentId::from_agent_id(component.id, &warmup_agent) {
+    if let Ok(worker_id) = lookup_keyed_agent(&user, &component, &warmup_agent).await {
         delete_workers(&user, &[worker_id], &recorder).await;
     }
     cleanup_user_state(&user, &env.id, &recorder).await;

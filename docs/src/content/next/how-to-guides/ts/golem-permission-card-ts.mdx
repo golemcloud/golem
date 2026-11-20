@@ -132,19 +132,15 @@ and use them as `Map` / `Set` keys.
 ## Installing a card on another agent
 
 ```typescript
-import { getSelfMetadata } from '@golemcloud/golem-ts-sdk';
-
-const target = permissions.Holder.agent({
-  componentId: getSelfMetadata().agentId.componentId,
-  agentId: Worker.agentId({ name: 'w1' }).value,
-});
+const worker = Worker.client.upsert({ name: 'w1' });
+const target = permissions.Holder.agent(await worker.agentId());
 const installed = card.install(target); // card is moved, even on error
 if (installed.isErr() && installed.unwrapErr().kind === 'install-recipient-mismatch') {
   // the card's recipient patterns do not cover the target agent
 }
 ```
 
-The caller needs `card:install` for the target. The host supports only agent holders today:
+`Holder.agent` takes a typed `AgentId`, such as the `agentId()` of a client or `this.getId()`. The caller needs `card:install` for the target. The host supports only agent holders today:
 `Holder.account` and `Holder.app` targets return `not-permitted`.
 
 ## Scope cards on RPC calls
@@ -178,10 +174,10 @@ const template = entry.card;
 const scope = permissions.deriveScope([template], { lowerPositive: [readSecretEnv] }).unwrap();
 
 // Per call:
-await Worker.client.get({ name: 'w1' }).run({ job }, { scopeCard: scope });
+await Worker.client.upsert({ name: 'w1' }).run({ job }, { scopeCard: scope });
 
 // As the client default; `scopeCard: null` on a call sends no scope card:
-const scoped = Worker.client.get({ name: 'w1' }, undefined, { scopeCard: scope });
+const scoped = Worker.client.upsert({ name: 'w1' }, { scopeCard: scope });
 await scoped.run({ job });
 await scoped.run({ job }, { scopeCard: null });
 
@@ -190,8 +186,8 @@ template.release();
 ```
 
 Reflected and dynamic clients take the scope card as a trailing argument:
-`method.invokeValue(input, signal, scope)`. `agentId.client(Def, config, { scopeCard })` sets a
-default on a client bound to an existing identity.
+`method.invokeValue(input, signal, scope)`. `await Def.client.getById(agentId, { scopeCard })` sets a
+default on a client bound to an existing agent; `create(id, { scopeCard })` takes it too.
 
 ## Cards in agent and tool schemas
 

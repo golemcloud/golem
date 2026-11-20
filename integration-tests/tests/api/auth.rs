@@ -51,9 +51,10 @@ async fn standalone_services_answer_missing_credentials_with_json_401(
             registry.http_port()
         ),
         format!(
-            "http://{}:{}/v1/components/{}/workers/agent",
+            "http://{}:{}/v1/runtime/envs/{}/agents/{}",
             worker.http_host(),
             worker.http_port(),
+            uuid::Uuid::new_v4(),
             uuid::Uuid::new_v4()
         ),
     ];

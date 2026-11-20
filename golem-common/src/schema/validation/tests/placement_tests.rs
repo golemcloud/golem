@@ -242,7 +242,7 @@ mod agent {
     use crate::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
     use crate::schema::agent::{
         AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema, AgentTypeSchema,
-        AutoInjectedKind, InputSchema, NamedField, OutputSchema,
+        InputSchema, NamedField, OutputSchema,
     };
     use crate::schema::schema_type::SecretSpec;
     use crate::schema::validation::placement::{
@@ -277,27 +277,6 @@ mod agent {
     fn empty_agent_passes_placement() {
         let agent = empty_agent("a");
         validate_agent_type_placement(&agent).expect("empty agent should pass");
-    }
-
-    #[test]
-    fn auto_injected_method_stream_fails_agent_placement_validation() {
-        let mut agent = empty_agent("a");
-        agent.methods.push(AgentMethodSchema {
-            name: "invalid".into(),
-            description: String::new(),
-            prompt_hint: None,
-            input_schema: InputSchema::Parameters(vec![NamedField::auto_injected(
-                "principal",
-                AutoInjectedKind::Principal,
-                SchemaType::stream(Some(SchemaType::string())),
-            )]),
-            output_schema: OutputSchema::Unit,
-            http_endpoint: vec![],
-            read_only: None,
-        });
-
-        validate_agent_type_placement(&agent)
-            .expect_err("method input streams must be in caller-supplied fields");
     }
 
     #[test]

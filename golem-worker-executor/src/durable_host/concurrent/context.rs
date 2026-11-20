@@ -196,6 +196,10 @@ pub(crate) trait DurableAccess<T: 'static, D: HasData + ?Sized>: Sync {
         get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
         observed_by_custom_invocation: bool,
     ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError>;
+
+    /// The runtime activity that runs this access, which a passive wait registers with the
+    /// suspension coordinator. `None` when the access runs outside a Store's runtime.
+    fn runtime_activity(&self) -> Option<wasmtime::component::RuntimeActivityId>;
 }
 
 pub(crate) struct ContextWindow<'a, T> {
@@ -233,6 +237,10 @@ impl<T: 'static, D: HasData + ?Sized> DurableAccess<T, D> for Accessor<T, D> {
         observed_by_custom_invocation: bool,
     ) -> Result<Option<golem_common::model::oplog::DurableInvocationId>, WorkerExecutorError> {
         super::call::guest_import_invocation_id(self, get_ctx, observed_by_custom_invocation)
+    }
+
+    fn runtime_activity(&self) -> Option<wasmtime::component::RuntimeActivityId> {
+        Accessor::runtime_activity(self)
     }
 }
 
@@ -311,6 +319,10 @@ impl<Ctx: WorkerCtx> DurableAccess<Ctx, wasmtime::component::HasSelf<Ctx>>
         self.with_worker_ctx(|ctx| {
             super::call::import_invocation_id(get_ctx(ctx), None).map(|source| source.reserved())
         })
+    }
+
+    fn runtime_activity(&self) -> Option<wasmtime::component::RuntimeActivityId> {
+        None
     }
 }
 
@@ -543,13 +555,7 @@ mod tests {
 
     #[test]
     fn shared_context_drops_before_its_registration() {
-        let owner = OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "owner".into(),
-            },
-        );
+        let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
         let activation = Arc::new(
             EntityActivation::new(
                 ExecutableTarget::new(ComponentId::new(), 1_u64.try_into().unwrap()),
@@ -575,11 +581,7 @@ mod tests {
             EntityInvocationId::new(entity, OplogIndex::from_u64(2)).unwrap(),
             OplogIndex::from_u64(1),
             activation,
-            golem_common::model::agent::Principal::Agent(
-                golem_common::model::agent::AgentPrincipal {
-                    agent_id: owner.agent_id,
-                },
-            ),
+            crate::test_callers::agent_principal(owner.agent_id),
             InvocationExecutionMode::Live,
             uuid::Uuid::new_v4().into(),
             false,

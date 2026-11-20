@@ -22,7 +22,7 @@ Golem ships with the following built-in plugins, automatically registered and av
 | `endpoint` | Yes | OTLP collector endpoint URL (must start with `http://` or `https://`) |
 | `headers` | No | Comma-separated `key=value` pairs sent as HTTP headers (e.g., `x-api-key=secret,auth=token`) |
 | `signals` | No | Comma-separated telemetry types to export: `traces`, `logs`, `metrics`. Default: `traces` |
-| `service-name-mode` | No | How to set the `service.name` attribute: `agent-id` (default) uses `<component UUID>/<agent identity>`, `agent-type` extracts the agent type name from the identity |
+| `service-name-mode` | No | How to set the `service.name` attribute: `agent-id` (default) uses the agent ID (a UUID), `agent-type` uses the agent type name |
 
 ## Installing Plugins via golem.yaml
 

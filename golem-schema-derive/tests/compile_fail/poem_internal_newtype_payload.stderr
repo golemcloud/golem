@@ -1,0 +1,51 @@
+error: PoemSchema does not support `#[serde(tag)]` or `#[serde(content)]` on structs
+  --> tests/compile_fail/poem_internal_newtype_payload.rs:38:8
+   |
+38 | struct TaggedPayload {
+   |        ^^^^^^^^^^^^^
+
+error: PoemSchema does not support `#[serde(tag)]` or `#[serde(content)]` on structs
+  --> tests/compile_fail/poem_internal_newtype_payload.rs:44:8
+   |
+44 | struct ContentPayload {
+   |        ^^^^^^^^^^^^^^
+
+error: PoemSchema does not support `#[serde(tag)]` or `#[serde(content)]` on structs
+  --> tests/compile_fail/poem_internal_newtype_payload.rs:50:8
+   |
+50 | struct TaggedNewtype(String);
+   |        ^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `__golem_poem_object_schema` found for struct `std::string::String` in the current scope
+ --> tests/compile_fail/poem_internal_newtype_payload.rs:7:34
+  |
+7 | #[derive(Serialize, Deserialize, PoemSchema)]
+  |                                  ^^^^^^^^^^ associated function or constant not found in `std::string::String`
+  |
+note: if you're trying to build a new `std::string::String` consider using one of the following associated functions:
+      std::string::String::new
+      std::string::String::with_capacity
+      std::string::String::try_with_capacity
+      std::string::String::from_utf8
+      and $N others
+ --> $RUST/alloc/src/string.rs
+  = note: this error originates in the derive macro `PoemSchema` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant, associated function, or constant named `__golem_poem_object_schema` found for enum `Composed` in the current scope
+  --> tests/compile_fail/poem_internal_newtype_payload.rs:19:34
+   |
+15 | enum Composed {
+   | ------------- variant, associated function, or constant `__golem_poem_object_schema` not found for this enum
+...
+19 | #[derive(Serialize, Deserialize, PoemSchema)]
+   |                                  ^^^^^^^^^^ variant, associated function, or constant not found in `Composed`
+   |
+   = note: this error originates in the derive macro `PoemSchema` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no variant, associated function, or constant named `__golem_poem_object_schema` found for enum `std::option::Option<T>` in the current scope
+  --> tests/compile_fail/poem_internal_newtype_payload.rs:30:34
+   |
+30 | #[derive(Serialize, Deserialize, PoemSchema)]
+   |                                  ^^^^^^^^^^ variant, associated function, or constant not found in `std::option::Option<ObjectPayload>`
+   |
+   = note: this error originates in the derive macro `PoemSchema` (in Nightly builds, run with -Z macro-backtrace for more info)

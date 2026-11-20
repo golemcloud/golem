@@ -17,7 +17,7 @@
 //! `cleanup_pending` lifecycle. Task spawning, Store destruction, cleanup handoff, terminal
 //! validation and live rollback admission are integration contracts, not proved by manually
 //! constructing `PendingTransactionDrop` here. The worker-executor suites are
-//! `tests/rdbms.rs::rdbms_postgres_snapshot_changes_transaction_drop_schedule` and
+//! `tests/rdbms_guest.rs::rdbms_postgres_snapshot_changes_transaction_drop_schedule` and
 //! `tests/tool_streaming/rdbms_drop.rs::{trapped_tool_transaction_drop_survives_replay_store_disposal,
 //! trapped_tool_transaction_drop_retains_terminal_read_failure_after_disposal}`.
 

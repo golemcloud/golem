@@ -17,7 +17,7 @@ use golem_common::model::InvocationId;
 use super::*;
 use golem_common::model::Timestamp;
 use golem_common::model::card::{AccountCardHolder, CardHolder, CardId};
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
     DURABLE_STREAM_FORMAT_VERSION, StreamConsumerDeletingRecord, StreamSessionRecord,
 };
@@ -90,10 +90,7 @@ fn stream_entry() -> OplogEntry {
             StreamConsumerDeletingRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 consumer_environment_id: EnvironmentId(Uuid::from_u128(1)),
-                consumer: AgentId {
-                    component_id: ComponentId(Uuid::from_u128(2)),
-                    agent_id: "consumer".to_string(),
-                },
+                consumer: AgentId::from_parts(7, 1),
                 consumer_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
                 deleting_at_millis: 100,
             },
@@ -178,6 +175,8 @@ fn failed_snapshot_update_boundary_is_rejected() {
                 None,
                 None,
                 None,
+                golem_common::model::oplog::UpdateFailureClass::Other,
+                None,
             ),
         ),
     ]);
@@ -207,6 +206,8 @@ fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
             Some("failed".to_string()),
             None,
             None,
+            None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
             None,
         ),
     ] {
@@ -298,7 +299,15 @@ fn a_cut_between_a_manual_admission_and_its_failure_without_a_pending_update_is_
         ),
         (
             idx(3),
-            OplogEntry::failed_update(target_revision, None, None, Some(idx(2)), None),
+            OplogEntry::failed_update(
+                target_revision,
+                None,
+                None,
+                Some(idx(2)),
+                None,
+                golem_common::model::oplog::UpdateFailureClass::Other,
+                None,
+            ),
         ),
     ]);
 
@@ -375,6 +384,8 @@ fn a_failure_whose_attempt_index_names_an_update_behind_the_head_ends_nothing() 
             None,
             None,
             Some(idx(attempt)),
+            None,
+            golem_common::model::oplog::UpdateFailureClass::Other,
             None,
         )
     };
