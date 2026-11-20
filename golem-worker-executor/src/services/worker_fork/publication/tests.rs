@@ -67,18 +67,18 @@ fn a_missing_baseline_answers_by_the_target_that_the_reconciliation_found() {
 }
 
 #[test]
-fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
+fn request_identity_binds_source_generation_exact_cut_result_kind_and_mark() {
     let source = owner("source");
     let generation = AgentFingerprint(Uuid::from_u128(3));
     let cut = OplogIndex::from_u64(7);
-    let hash = request_hash(&source, generation, cut, None, None).unwrap();
+    let hash = request_hash(&source, generation, cut, None, None, false).unwrap();
     assert_eq!(
         hash,
-        request_hash(&source, generation, cut, None, None).unwrap()
+        request_hash(&source, generation, cut, None, None, false).unwrap()
     );
     assert_ne!(
         hash,
-        request_hash(&owner("other"), generation, cut, None, None).unwrap()
+        request_hash(&owner("other"), generation, cut, None, None, false).unwrap()
     );
     assert_ne!(
         hash,
@@ -87,13 +87,19 @@ fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
             AgentFingerprint(Uuid::from_u128(4)),
             cut,
             None,
-            None
+            None,
+            false
         )
         .unwrap()
     );
     assert_ne!(
         hash,
-        request_hash(&source, generation, cut.next(), None, None).unwrap()
+        request_hash(&source, generation, cut.next(), None, None, false).unwrap()
+    );
+    assert_ne!(
+        hash,
+        request_hash(&source, generation, cut, None, None, true).unwrap(),
+        "a never-live fork and a live fork of the same cut must conflict"
     );
     assert_ne!(
         hash,
@@ -102,12 +108,21 @@ fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
             generation,
             cut,
             None,
-            Some((None, None, Uuid::nil()))
+            Some((None, None, Uuid::nil())),
+            false
         )
         .unwrap()
     );
     let selected = StreamId(Uuid::from_u128(9));
-    let empty = request_hash(&source, generation, cut, Some((selected, None)), None).unwrap();
+    let empty = request_hash(
+        &source,
+        generation,
+        cut,
+        Some((selected, None)),
+        None,
+        false,
+    )
+    .unwrap();
     assert_ne!(hash, empty);
     assert_ne!(
         empty,
@@ -116,7 +131,8 @@ fn request_identity_binds_source_generation_exact_cut_and_result_kind() {
             generation,
             cut,
             Some((selected, Some(StreamOffset::new(cut, 0)))),
-            None
+            None,
+            false
         )
         .unwrap()
     );
@@ -146,6 +162,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
         cut,
         None,
         Some((None, None, phantom)),
+        false,
     )
     .unwrap();
     assert_eq!(

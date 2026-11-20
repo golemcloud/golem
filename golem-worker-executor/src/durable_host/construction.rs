@@ -262,6 +262,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentMode::Durable => None,
             AgentMode::Ephemeral => Some(config.suspend.ephemeral_max_sleep),
         };
+        let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             stdin.clone(),
@@ -269,10 +270,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             stderr,
             |duration| wasmtime::Error::from(SuspendForSleep(duration)),
             suspend_threshold,
-            config
-                .agent_sockets
-                .enabled
-                .then(|| SocketPolicy::new(&config)),
+            config.agent_sockets.enabled.then(|| {
+                let policy = SocketPolicy::new(&config);
+                if replay_state.is_never_live() {
+                    policy.never_live(replay_state.generation_taint())
+                } else {
+                    policy
+                }
+            }),
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
         let wasi_http = WasiHttpCtx::new();
@@ -280,7 +285,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             connection_pool: http_connection_pool,
             is_replay: Arc::new(AtomicBool::new(false)),
         };
-        let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
         // A primary Store starts with the links of its whole history, so a connect that
         // continues live on any path reads them. The replay horizon is a fold of this status.
         let resolved_names = match &runtime {
@@ -465,6 +469,8 @@ impl PrivateDurableWorkerState {
         published_authority_generation: Arc<AtomicU64>,
         resolved_names: sockets::resolved_names::SharedResolvedNames,
     ) -> Result<Self, WorkerExecutorError> {
+        // The replay cursor carries the mark of the owner, also into entity Stores.
+        let never_live = replay_state.is_never_live();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
         let entity_replay_wallet = match (&runtime, entity_execution_mode) {
             (
@@ -604,6 +610,7 @@ impl PrivateDurableWorkerState {
             p2_timer_deadlines: HashMap::new(),
             socket_entries: sockets::SocketEntries::default(),
             snapshotting_mode: false,
+            never_live,
             last_state_change: None,
             operator_authorized_oplog_processor_invocation: Arc::new(AtomicBool::new(false)),
             component_metadata,

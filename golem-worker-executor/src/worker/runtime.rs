@@ -312,12 +312,25 @@ impl RunningWorker {
         head: Option<&PendingUpdateRef>,
         error: start_outcome::RawStartError<'_>,
     ) -> start_outcome::StartAction {
+        Self::start_action_in(parent, role, head, error, false)
+    }
+
+    /// [`Self::start_action`] in a generation that `tainted` says observed a result that the
+    /// oplog does not record.
+    fn start_action_in<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        role: &start_outcome::BaselineRole,
+        head: Option<&PendingUpdateRef>,
+        error: start_outcome::RawStartError<'_>,
+        tainted: bool,
+    ) -> start_outcome::StartAction {
         start_outcome::decide(
             role,
             head,
             error,
             &parent.owned_agent_id.agent_id,
             parent.retired_for_lost_shard(),
+            tainted,
         )
     }
     /// Performs `action` of a failed start. `Ok` means that the start runs again: a failed
@@ -376,7 +389,13 @@ impl RunningWorker {
         cleanup: impl AsyncFnOnce(WorkerExecutorError) -> CreateWorkerInstanceError,
     ) -> CreateWorkerInstanceError {
         let raw = error.passed_through();
-        match Self::start_action(parent, role, head, error) {
+        // Guest code of this generation ran only if its replay generation is installed.
+        let tainted = parent
+            .owner_execution()
+            .replay_and_wallet()
+            .await
+            .is_ok_and(|(replay, _)| replay.generation_taint().is_tainted());
+        match Self::start_action_in(parent, role, head, error, tainted) {
             start_outcome::StartAction::Error(error) => cleanup(error).await,
             start_outcome::StartAction::ShardLost => {
                 cleanup(WorkerExecutorError::Interrupted {
@@ -1070,6 +1089,7 @@ impl RunningWorker {
                 skip_through,
                 target,
                 tail,
+                parent.never_live(),
             )
             .await
             {
@@ -1131,7 +1151,9 @@ impl RunningWorker {
                     &parent,
                     &role,
                     pending_update_ref.as_ref(),
-                    if diverged {
+                    if failure.error.is_never_live_refusal() {
+                        start_outcome::RawStartError::NeverLiveRefused(&failure.error)
+                    } else if diverged {
                         start_outcome::RawStartError::Replay {
                             error: &failure.error,
                             diverged: true,

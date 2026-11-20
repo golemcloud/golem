@@ -323,6 +323,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::AgentAlreadyExists { .. } => {
                 Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
             }
+            WorkerExecutorError::AgentNeverLive { .. } => {
+                Self::conflict(api::error_code::AGENT_NEVER_LIVE, error)
+            }
             WorkerExecutorError::CreateIdempotencyKeyConflict { .. } => {
                 Self::unprocessable_entity(api::error_code::CREATE_IDEMPOTENCY_KEY_CONFLICT, error)
             }

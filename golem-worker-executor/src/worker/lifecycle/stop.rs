@@ -19,6 +19,15 @@ use golem_common::model::InvocationId;
 use super::state::{RunningStop, StopPhase, StoppingStop};
 use crate::worker::*;
 
+/// What [`Worker::stop_marked_unless_update_pending`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::worker) enum MarkedStop {
+    /// An update is pending: the generation continues.
+    Continue,
+    /// No update is pending: the generation stopped.
+    Stopped,
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
     /// the stop through an arbitrary handle, and a handle kept past its generation is exactly what
@@ -96,6 +105,45 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.complete_startup(startup_attempt, Err(startup_error));
         }
     }
+    /// The only way a never-live agent stops for having no pending update. Under the instance
+    /// lock it reads the pending updates with the status actor's FIFO read, and either returns
+    /// [`MarkedStop::Continue`] or stops the generation with the held guard. An update request
+    /// commits under the same lock (`lock_non_stopping_worker`), so an update committed before
+    /// this read is seen here, and one committed after it waits for the stop, finds the agent
+    /// unloaded and starts it. The guard is dropped before the stop result is handled, because
+    /// the invocation loop can reenter the stop. The stop writes nothing to the oplog.
+    pub(in crate::worker) async fn stop_marked_unless_update_pending(
+        &self,
+        start_attempt: Uuid,
+    ) -> MarkedStop {
+        let mut instance_guard = self.instance.lock().await;
+        if self.state_actor.status().await.may_start() {
+            return MarkedStop::Continue;
+        }
+        let stop_result = self
+            .stop_internal_locked(
+                &mut instance_guard,
+                StopOrigin::InvocationLoop,
+                None,
+                UnloadRequest::ordinary(UnloadReason::ExplicitStop),
+                FinalWorkerState::Unloaded {
+                    startup_failure: None,
+                },
+                PendingLiveInvocationDisposition::Preserve,
+            )
+            .await;
+        acknowledge_no_store_interruption(&mut self.execution_status.write().unwrap(), None);
+        drop(instance_guard);
+        self.handle_stop_result(stop_result).await;
+        self.complete_startup(
+            start_attempt,
+            Err(WorkerExecutorError::AgentNeverLive {
+                agent_id: self.owned_agent_id.agent_id.clone(),
+            }),
+        );
+        MarkedStop::Stopped
+    }
+
     pub(in crate::worker) async fn acknowledge_startup_interruption(&self, kind: InterruptKind) {
         let _lifecycle = self.instance.lock().await;
         acknowledge_no_store_interruption(&mut self.execution_status.write().unwrap(), Some(kind));
@@ -754,6 +802,7 @@ impl UnloadReason {
             InterruptKind::Suspend(_) => Self::Suspend,
             InterruptKind::Interrupt(_) => Self::Interrupt,
             InterruptKind::ShardLost => Self::ShardLost,
+            InterruptKind::NeverLive => Self::ExplicitStop,
         }
     }
 }

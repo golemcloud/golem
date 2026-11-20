@@ -285,7 +285,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             InterruptKind::Suspend(_) => OplogEntry::suspend(),
             InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
-            InterruptKind::Restart | InterruptKind::Jump | InterruptKind::ShardLost => {
+            InterruptKind::Restart
+            | InterruptKind::Jump
+            | InterruptKind::ShardLost
+            | InterruptKind::NeverLive => {
                 return Ok(());
             }
         };

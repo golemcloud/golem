@@ -90,6 +90,8 @@ message ForkWorkerRequest {
   reserved "principal";
   golem.component.Caller caller = 9;
   string component_owner_account_email = 8;
+  // The target is a never-live sandbox fork. A fork of a never-live source is never-live too.
+  bool never_live = 10;
 }
 
 message ForkWorkerResponse {

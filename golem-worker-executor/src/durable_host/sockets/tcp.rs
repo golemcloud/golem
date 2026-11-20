@@ -93,6 +93,9 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         remote_address: IpSocketAddress,
     ) -> Result<(), SocketError> {
         authorize_connect(self, &remote_address).await?;
+        self.state
+            .refuse_native_peer_effect("sockets::tcp::start_connect")
+            .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
         self.observe_function_call("sockets::tcp", "start_connect");
         let rep = self_.rep();
         let mut view = self.as_wasi_view();

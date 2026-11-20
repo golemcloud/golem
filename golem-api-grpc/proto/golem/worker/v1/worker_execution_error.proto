@@ -42,7 +42,21 @@ message WorkerExecutionError {
     ComponentServiceRefused component_service_refused = 30;
     CreateIdempotencyKeyConflict create_idempotency_key_conflict = 31;
     StaleCursor stale_cursor = 32;
+    AgentNeverLive agent_never_live = 33;
+    NeverLiveEffectRefused never_live_effect_refused = 34;
   }
+}
+
+// The agent is a never-live sandbox fork: it refuses new work and reads that need a running
+// instance.
+message AgentNeverLive {
+  AgentId agent_id = 1;
+}
+
+// A never-live agent reached a host call or a native operation that would reach a peer. The
+// boundary names the host function or the native operation.
+message NeverLiveEffectRefused {
+  string boundary = 1;
 }
 
 // An oplog read refuses its cursor: the cursor did not come from a page of this read.

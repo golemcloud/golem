@@ -244,7 +244,7 @@ pub fn create_context(
         builder
             .allow_tcp(true)
             .allow_udp(true)
-            .allow_ip_name_lookup(true)
+            .allow_ip_name_lookup(!policy.is_never_live())
             .socket_addr_check(move |address, usage| {
                 let allowed = policy.allows(address, usage);
                 Box::pin(async move { allowed })

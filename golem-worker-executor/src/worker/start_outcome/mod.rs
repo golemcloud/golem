@@ -60,6 +60,10 @@ pub(crate) const UPDATE_TARGET_REFUSED: &str = "UPDATE_TARGET_REFUSED";
 /// The blob storage refused the executor a read of an initial-file source of the target revision,
 /// at the update point or at the start of a pending snapshot-based manual update.
 pub(crate) const UPDATE_BLOB_STORAGE_REFUSED: &str = "UPDATE_BLOB_STORAGE_REFUSED";
+/// The replay of a never-live agent needs a peer effect, which the agent may not make: a refused
+/// host call, native operation or live continuation in a load hook, the core initializer or the
+/// history.
+pub(crate) const UPDATE_NOT_REPLAYABLE: &str = "UPDATE_NOT_REPLAYABLE";
 
 /// The baseline of a start: the column of the outcome table, without the head of a plain
 /// automatic update, which [`decide`] takes on its own.
@@ -114,6 +118,9 @@ pub(crate) enum SnapshotRecoveryResult {
     /// The payload of the application snapshot of the selected record of a snapshot-assisted
     /// update is missing or does not decode: the record is lost.
     Lost(WorkerExecutorError),
+    /// The load hook of a never-live agent reached a refused peer effect, or a live
+    /// continuation.
+    Refused(WorkerExecutorError),
     Retry(RetryDecision),
 }
 
@@ -159,6 +166,9 @@ pub(crate) enum RawStartError<'a> {
         diverged: bool,
         provenance: Option<FailureProvenance>,
     },
+    /// A never-live agent reached a refused peer effect, or the end of its replay where a live
+    /// continuation would begin, in the history or the core initializer.
+    NeverLiveRefused(&'a WorkerExecutorError),
     /// The update of the instance to the target revision failed.
     UpdateState(&'a UpdateStateError),
     /// The agent filesystem did not finish its reconstruction after the replay, when the update
@@ -188,14 +198,16 @@ pub(crate) enum StartAction {
 }
 
 /// Decides what a start does with `error`. `role` is the baseline of the start, `head` the update
-/// at the head of its queue, `agent_id` the agent, and `lost_shard` whether this executor lost
-/// the shard of the agent.
+/// at the head of its queue, `agent_id` the agent, `lost_shard` whether this executor lost the
+/// shard of the agent, and `tainted` whether the generation of the start observed a result that
+/// the oplog does not record.
 pub(crate) fn decide(
     role: &BaselineRole,
     head: Option<&PendingUpdateRef>,
     error: RawStartError<'_>,
     agent_id: &AgentId,
     lost_shard: bool,
+    tainted: bool,
 ) -> StartAction {
     let Some(column) = column(role, head) else {
         return StartAction::Error(WorkerExecutorError::runtime(format!(
@@ -219,9 +231,7 @@ pub(crate) fn decide(
                     head,
                     details(failure.code, &cause(column, head, &error)),
                     failure.fault,
-                    // No source records an unrecorded observation of the guest yet, so every
-                    // generation is untainted.
-                    failure_class(problem, &error, false),
+                    failure_class(problem, &error, tainted),
                     error.divergence(),
                 ),
                 reject: failure
@@ -485,6 +495,8 @@ enum StartProblem {
     /// the row of every such error, whatever the
     /// step of the start that read the oplog.
     OplogFailed,
+    /// A never-live agent reached a refused peer effect or a live continuation.
+    NeverLiveRefused,
 }
 
 impl StartProblem {
@@ -520,6 +532,7 @@ impl StartProblem {
                 | FilesystemError::RuntimeInvalidated => Self::Reconstruction,
             },
             RawStartError::Finish(_) => Self::AfterReplay,
+            RawStartError::NeverLiveRefused(_) => Self::NeverLiveRefused,
             RawStartError::Instantiation(failure) => Self::Instantiation {
                 interrupted: matches!(failure.error, WorkerExecutorError::Interrupted { .. }),
                 target_trap: failure.stage == InstanceCreationStage::Initializer
@@ -533,6 +546,7 @@ impl StartProblem {
                     _ => Self::LoadUnavailable,
                 },
                 SnapshotRecoveryResult::Lost(_) => Self::LoadLost,
+                SnapshotRecoveryResult::Refused(_) => Self::NeverLiveRefused,
                 SnapshotRecoveryResult::Failed(_, _) => Self::LoadFailed,
                 SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                     Self::ReplayError
@@ -604,6 +618,7 @@ enum Code {
     TargetRefused(ComponentServiceRefusal),
     TargetUnsupported,
     BlobStorageRefused(BlobRefusal),
+    NotReplayable,
 }
 
 impl Code {
@@ -654,6 +669,10 @@ impl Code {
             Self::BlobStorageRefused(refusal) => format!(
                 "{UPDATE_BLOB_STORAGE_REFUSED}: the executor cannot read blob storage \
                  ({refusal}); request the update again after the storage is fixed"
+            ),
+            Self::NotReplayable => format!(
+                "{UPDATE_NOT_REPLAYABLE}: replaying the agent's history needs a peer effect, \
+                 which a never-live agent may not make"
             ),
         }
     }
@@ -724,6 +743,18 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
         FetchProblem::Other => fail,
     };
     let replay_failed = coded(Code::ReplayFailed);
+    // A refusal of a never-live agent fails the pending update, which is the only reason such
+    // an agent starts. A periodic record is never selected while an update is pending, so the
+    // `Periodic` cell is a contract only: a failed load rejects the record.
+    if problem == Problem::NeverLiveRefused {
+        return match column {
+            Column::Periodic => Cell::Reject,
+            Column::ManualPending | Column::AutomaticPending(_) | Column::AssistedPending => {
+                coded(Code::NotReplayable)
+            }
+            Column::ManualPromoted | Column::AssistedPromoted | Column::InitialFiles => Cell::Pass,
+        };
+    }
     match column {
         Column::Periodic => match problem {
             Problem::Restore(_) => Cell::Skip,
@@ -890,6 +921,9 @@ fn failure_class(
 ) -> UpdateFailureClass {
     use FailureProvenance as Provenance;
     use UpdateFailureClass as Class;
+    if problem == StartProblem::NeverLiveRefused {
+        return Class::NotReplayable;
+    }
     let class = match (error, error.provenance()) {
         (
             RawStartError::Replay {
@@ -952,6 +986,7 @@ fn problem_class(problem: StartProblem) -> UpdateFailureClass {
         | Problem::ReplayError
         | Problem::AfterReplay
         | Problem::OplogFailed => Class::Operational,
+        Problem::NeverLiveRefused => Class::NotReplayable,
         Problem::StaleSource
         | Problem::Disabled
         | Problem::Restore(_)
@@ -1029,6 +1064,7 @@ fn cause(column: Column, head: &PendingUpdateRef, error: &RawStartError<'_>) -> 
         },
         RawStartError::TargetFetch(_)
         | RawStartError::TargetLoad(_)
+        | RawStartError::NeverLiveRefused(_)
         | RawStartError::TargetUnsupported(_)
         | RawStartError::Disabled
         | RawStartError::Filesystem(_)
@@ -1046,6 +1082,7 @@ fn raw_text(error: &RawStartError<'_>) -> String {
         ),
         RawStartError::TargetFetch(error)
         | RawStartError::TargetLoad(error)
+        | RawStartError::NeverLiveRefused(error)
         | RawStartError::Replay { error, .. } => error.to_string(),
         RawStartError::Instantiation(failure) => failure.error.to_string(),
         RawStartError::TargetUnsupported(reason) => reason.to_string(),
@@ -1055,7 +1092,8 @@ fn raw_text(error: &RawStartError<'_>) -> String {
         RawStartError::Load(result) => match result {
             SnapshotRecoveryResult::Failed(error, _)
             | SnapshotRecoveryResult::Unavailable(error, _)
-            | SnapshotRecoveryResult::Lost(error) => error.to_string(),
+            | SnapshotRecoveryResult::Lost(error)
+            | SnapshotRecoveryResult::Refused(error) => error.to_string(),
             SnapshotRecoveryResult::NotAttempted => {
                 "the update did not attempt its required snapshot".to_string()
             }
@@ -1082,12 +1120,14 @@ impl RawStartError<'_> {
         match self {
             RawStartError::TargetFetch(error)
             | RawStartError::TargetLoad(error)
+            | RawStartError::NeverLiveRefused(error)
             | RawStartError::Replay { error, .. } => Some(*error),
             RawStartError::Instantiation(failure) => Some(&failure.error),
             RawStartError::Load(
                 SnapshotRecoveryResult::Failed(error, _)
                 | SnapshotRecoveryResult::Unavailable(error, _)
-                | SnapshotRecoveryResult::Lost(error),
+                | SnapshotRecoveryResult::Lost(error)
+                | SnapshotRecoveryResult::Refused(error),
             ) => Some(error),
             _ => None,
         }
@@ -1147,6 +1187,7 @@ impl RawStartError<'_> {
             RawStartError::TargetFetch(_)
             | RawStartError::TargetLoad(_)
             | RawStartError::Instantiation(_)
+            | RawStartError::NeverLiveRefused(_)
             | RawStartError::Replay { .. }
             | RawStartError::StaleSource(_)
             | RawStartError::TargetUnsupported(_)

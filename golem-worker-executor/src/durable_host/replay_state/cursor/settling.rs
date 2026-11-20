@@ -29,6 +29,19 @@ impl ReplayCursor {
     pub(super) fn is_live_published(&self) -> bool {
         self.transition_phase.load() == ReplayTransitionPhase::Live
     }
+
+    /// Whether the replay is settled: live, or ended for a never-live owner.
+    pub(super) fn is_settled(&self) -> bool {
+        matches!(
+            self.transition_phase.load(),
+            ReplayTransitionPhase::Live | ReplayTransitionPhase::Ended
+        )
+    }
+
+    fn end_replay(&self) {
+        self.transition_phase.end_replay();
+        self.progress.notify_waiters();
+    }
 }
 
 impl CursorTx<'_> {
@@ -88,6 +101,13 @@ impl CursorTx<'_> {
                 LivePublicationOutcome::ReplayResumed
             });
         }
+        if phase == ReplayTransitionPhase::Ended {
+            return Ok(if last_replayed_index == expected_target {
+                LivePublicationOutcome::AlreadyEndedAtSameTarget
+            } else {
+                LivePublicationOutcome::ReplayResumed
+            });
+        }
         if phase != ReplayTransitionPhase::Settling {
             return Ok(LivePublicationOutcome::ReplayResumed);
         }
@@ -141,10 +161,15 @@ impl CursorTx<'_> {
         }
 
         let owner_tool_operations = self.cursor.owner_tool_operations.clone();
+        let never_live = self.cursor.never_live;
         if owner_tool_operations.commit_if_owner_open(|| {
             self.exhaust_replay_prefix();
-            linear_memory.switch_to_live();
-            self.cursor.publish_live();
+            if never_live {
+                self.cursor.end_replay();
+            } else {
+                linear_memory.switch_to_live();
+                self.cursor.publish_live();
+            }
         }) {
             Ok(LivePublicationOutcome::Published)
         } else {
@@ -339,6 +364,11 @@ impl ReplayState {
                     mismatched: Vec::new(),
                 }))
             }
+            BootstrapTail::Live if self.cursor.never_live => {
+                Err(WorkerExecutorError::Interrupted {
+                    kind: golem_service_base::error::worker_executor::InterruptKind::NeverLive,
+                })
+            }
             BootstrapTail::Live => {
                 let replay_target = self.exhaust_cursor_replay_prefix().await?;
                 self.cursor.publish_live();
@@ -352,10 +382,29 @@ impl ReplayState {
         self.exhaust_cursor_replay_prefix().await
     }
 
+    /// Marks whether the core initializer runs on this main cursor.
+    pub(crate) fn set_initializer_running(&self, running: bool) {
+        self.cursor
+            .initializer_running
+            .store(running, std::sync::atomic::Ordering::Release);
+    }
+
     pub(crate) async fn publish_primary_live(
         &self,
         linear_memory: &crate::services::linear_memory::LinearMemoryTracker,
     ) -> Result<ReplayToLiveOutcome, WorkerExecutorError> {
+        // A never-live owner's initializer cannot reach the end of the history: success there
+        // would be unfounded, since nothing after the bootstrap block has replayed.
+        if self.cursor.never_live
+            && self
+                .cursor
+                .initializer_running
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err(WorkerExecutorError::Interrupted {
+                kind: golem_service_base::error::worker_executor::InterruptKind::NeverLive,
+            });
+        }
         self.validate_consumed_replay_prefix().await?;
         let replay_target = self.begin_primary_settling().await?;
         self.finish_settling_to_live(linear_memory, replay_target)
@@ -388,6 +437,12 @@ impl ReplayState {
                 })
                 .await?;
             match publication {
+                LivePublicationOutcome::Published if self.cursor.never_live => {
+                    return Ok(ReplayToLiveOutcome::Ended);
+                }
+                LivePublicationOutcome::AlreadyEndedAtSameTarget => {
+                    return Ok(ReplayToLiveOutcome::Ended);
+                }
                 LivePublicationOutcome::Published => break,
                 LivePublicationOutcome::AlreadyLiveAtSameTarget => {
                     linear_memory.switch_to_live();
@@ -440,6 +495,16 @@ impl ReplayState {
     /// settlement. Cursor exhaustion alone is intentionally not sufficient.
     pub(crate) fn is_live_published(&self) -> bool {
         self.cursor.is_live_published()
+    }
+
+    /// Whether the owner of this cursor is a never-live sandbox fork.
+    pub(crate) fn is_never_live(&self) -> bool {
+        self.cursor.never_live
+    }
+
+    /// The taint of the generation that this cursor replays for.
+    pub(crate) fn generation_taint(&self) -> crate::durable_host::never_live::GenerationTaint {
+        self.cursor.taint.clone()
     }
 
     /// Returns whether the cursor still has recorded entries to replay.

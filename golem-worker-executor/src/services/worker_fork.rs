@@ -96,6 +96,9 @@ use wasmtime_wasi_http::HttpConnectionPool;
 pub trait WorkerForkService: Send + Sync {
     async fn fork_stream_slot(&self, request: ForkStreamSlotRequest) -> ForkStreamSlotResponse;
     // TODO: this should be restricted to targets within the same component
+    /// Forks the source at the cut. With `never_live`, the target is a never-live sandbox fork.
+    /// A fork of a never-live source is always never-live.
+    #[allow(clippy::too_many_arguments)]
     async fn fork(
         &self,
         fork_account_id: AccountId,
@@ -104,6 +107,7 @@ pub trait WorkerForkService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        never_live: bool,
     ) -> Result<(), WorkerExecutorError>;
 
     // TODO: this should be restricted to targets within the same component
@@ -596,6 +600,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
         fork_request: &CreateRequest,
+        never_live: bool,
     ) -> Result<
         (
             Arc<dyn Oplog>,
@@ -662,6 +667,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // that genuinely does not exist.
         let instance_id = stage_id;
         let source_oplog_metadata = initial_source_worker_metadata.clone();
+        // The caller computed the mark from the same immutable source `Create`; a fork of a
+        // never-live source is always never-live.
+        let never_live = never_live || initial_source_worker_metadata.last_known_status.never_live;
+        let mut target_status = initial_source_worker_metadata.last_known_status.clone();
+        target_status.never_live = never_live;
 
         // Use the source worker's `created_by` (the component owner) rather
         // than `fork_account_id` (the fork caller). This ensures the forked
@@ -681,7 +691,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             config: initial_source_worker_metadata.config,
             created_at: Timestamp::now_utc(),
             parent: None,
-            last_known_status: initial_source_worker_metadata.last_known_status.clone(),
+            last_known_status: target_status,
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
@@ -792,6 +802,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             &target_agent_id,
             instance_id,
             fork_request.clone(),
+            never_live,
         )
         .ok_or(WorkerExecutorError::unknown(
             "Failed to update worker id in oplog entry",
@@ -1069,6 +1080,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn perform_fork(
         &self,
         fork_account_id: AccountId,
@@ -1078,6 +1090,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        never_live: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.validate_worker_forking(
             source.environment_id,
@@ -1092,9 +1105,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id.clone()))?
             .initial_worker_metadata;
-        let hash =
-            publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
-                .map_err(WorkerExecutorError::runtime)?;
+        let never_live = never_live || source_metadata.last_known_status.never_live;
+        let hash = publication::request_hash(
+            source,
+            source_metadata.fingerprint,
+            cut,
+            None,
+            guest_result,
+            never_live,
+        )
+        .map_err(WorkerExecutorError::runtime)?;
         let target = OwnedAgentId::new(source.environment_id, target_agent_id);
         let reconcile =
             || publication::existing_fork(self.oplog_service.as_ref(), &target, cut, hash);
@@ -1121,9 +1141,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     hash,
                     guest_result,
                     &fork_request,
+                    never_live,
                 )
                 .await?;
             }
+        }
+        // A never-live target is never resumed: it starts only for a pending update. The mark of
+        // the published target is the mark of this request, since the request hash includes it.
+        if never_live {
+            return Ok(());
         }
         // Resume can fail after publication, so retries reconcile the immutable marker and
         // retry this operation without replacing the fork or appending a second synthetic result.
@@ -1151,6 +1177,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         hash: [u8; 32],
         guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>, Uuid)>,
         fork_request: &CreateRequest,
+        never_live: bool,
     ) -> Result<(), WorkerExecutorError> {
         let reconcile =
             || publication::existing_fork(self.oplog_service.as_ref(), target, cut, hash);
@@ -1169,6 +1196,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     None,
                     None,
                     fork_request,
+                    never_live,
                 )
                 .await?;
             if let Some((scope, invocation_id, phantom)) = guest_result {
@@ -1237,12 +1265,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     }
 
     /// Rewrites the source's Create entry for the fork target. The target records the fork
-    /// request, not the request that created the source.
+    /// request, not the request that created the source, and the never-live mark of the fork.
     pub fn update_agent_id(
         entry: OplogEntry,
         agent_id: &AgentId,
         instance_id: Uuid,
         fork_request: CreateRequest,
+        never_live: bool,
     ) -> Option<OplogEntry> {
         match entry {
             OplogEntry::Create {
@@ -1253,6 +1282,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 parameters.instance_id = instance_id;
                 parameters.canonical_key = None;
                 parameters.create_request = fork_request;
+                parameters.never_live = never_live;
                 Some(OplogEntry::Create {
                     timestamp,
                     parameters,
@@ -1334,6 +1364,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
         fork_request: CreateRequest,
+        never_live: bool,
     ) -> Result<(), WorkerExecutorError> {
         self.perform_fork(
             fork_account_id,
@@ -1343,6 +1374,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             None,
             auth_ctx,
             fork_request,
+            never_live,
         )
         .await
     }
@@ -1367,6 +1399,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             Some((copied_scope_start, invocation_id, forked_phantom_id)),
             auth_ctx,
             fork_request,
+            false,
         )
         .await
     }
@@ -1619,11 +1652,13 @@ mod tests {
             &target,
             instance_id,
             fork_request.clone(),
+            true,
         ) {
             Some(OplogEntry::Create { parameters, .. }) => {
                 assert_eq!(parameters.agent_id, target);
                 assert_eq!(parameters.instance_id, instance_id);
                 assert_eq!(parameters.create_request, fork_request);
+                assert!(parameters.never_live);
             }
             other => panic!("expected a Create entry, got {other:?}"),
         }

@@ -329,6 +329,7 @@ async fn marker_record_over(oplog: Arc<InMemoryOplog>) -> CompletionMarkerRecord
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         seed_oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -480,6 +481,7 @@ async fn a_fenced_completion_marker_is_reported_rather_than_panicked() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         seed_oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -526,6 +528,7 @@ async fn completion_delivery_markers_preserve_handoff_order() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         seed_oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -1140,6 +1143,7 @@ async fn tail_gated_token_over_crash_tail(
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         oplog_dyn.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");
@@ -1783,6 +1787,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         crate::durable_host::tool::operation::OwnerToolOperations::new(),
         persist_oplog.current_oplog_index().await,
         None,
+        false,
     )
     .await
     .expect("failed to build replay state");

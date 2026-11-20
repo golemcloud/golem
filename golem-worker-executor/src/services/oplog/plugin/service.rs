@@ -80,6 +80,12 @@ impl OplogConstructor for CreateOplogConstructor {
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        // A never-live agent's oplog reaches no oplog processor: it gets the plain oplog.
+        let never_live = self.initial_worker_metadata.last_known_status.never_live
+            || matches!(
+                &self.initial_entry,
+                Some(OplogEntry::Create { parameters, .. }) if parameters.never_live
+            );
         let inner = if let Some(initial_entry) = self.initial_entry {
             if self.fresh {
                 self.inner
@@ -130,6 +136,9 @@ impl OplogConstructor for CreateOplogConstructor {
                 return Err(error);
             }
         };
+        if never_live {
+            return Ok(inner);
+        }
         // Taken from the opened inner oplog, not read up front: the inner open claims the shard
         // epoch, so an index read before it could be behind a losing executor's last commit, and
         // the forwarding buffer would then label its entries with indexes already in use.

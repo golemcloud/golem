@@ -139,6 +139,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // Never retried here: a retry in place would reopen the oplog with the same stale
             // epoch. The worker service resumes the agent on the shard's owner.
             TrapType::Interrupt(InterruptKind::ShardLost) => Some(RetryDecision::None),
+            TrapType::Interrupt(InterruptKind::NeverLive) => Some(RetryDecision::None),
             TrapType::Exit => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::OutOfMemory,
@@ -762,6 +763,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         );
         let trap_type = terminal_trap.as_ref().unwrap_or(trap_type);
 
+        // A never-live agent writes nothing for the end of its replay: no drain, no entry, no
+        // status change. The invocation loop stops it or runs its next update.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::NeverLive)) {
+            return InvocationFailureDecision::Retry(RetryDecision::None);
+        }
+
         // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
         // ordinary semantic dropped-call close, which could await replay scopes or append
         // terminals into the suffix the accepted cut is about to erase.
@@ -924,6 +931,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Restart) => None,
             // The oplog is the new owner's; a stale writer must leave no trace in it.
             TrapType::Interrupt(InterruptKind::ShardLost) => None,
+            TrapType::Interrupt(InterruptKind::NeverLive) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error {
                 error: AgentError::PermissionDenied(_),

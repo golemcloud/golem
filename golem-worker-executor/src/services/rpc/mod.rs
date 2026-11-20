@@ -415,6 +415,9 @@ impl From<WorkerExecutorError> for RpcError {
             WorkerExecutorError::ComponentNotFound { component_id } => RpcError::NotFound {
                 details: format!("Component {component_id} not found"),
             },
+            error @ WorkerExecutorError::AgentNeverLive { .. } => RpcError::Denied {
+                details: error.to_string(),
+            },
             WorkerExecutorError::InvalidAccount => RpcError::Denied {
                 details: "Invalid account".to_string(),
             },

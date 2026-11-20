@@ -754,7 +754,7 @@ impl ReplayState {
 
     pub(crate) fn take_new_replay_events_for(&self, root: bool) -> Vec<ReplayEvent> {
         let mut pending = self.cursor.pending_replay_events.lock().unwrap();
-        if root && self.is_live_published() {
+        if root && self.cursor.is_settled() {
             std::mem::take(&mut *pending)
         } else {
             let events = std::mem::take(&mut *pending);

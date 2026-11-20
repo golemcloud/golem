@@ -864,7 +864,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 "Worker initialization no longer owns its lifecycle phase",
                             )),
                         };
-                        if published.is_ok() {
+                        // A never-live agent runs no stream maintenance: it would send
+                        // cancellations and append repairs.
+                        if published.is_ok() && !worker.never_live() {
                             Self::start_durable_stream_attachment_reconciler(&worker);
                         }
                         drop(instance);
@@ -1226,6 +1228,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(agent_id) = worker.owner_context.agent()
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && !reconstructed_ephemeral
+            && !worker.initial_worker_metadata.last_known_status.never_live
         {
             let create_request = &worker.initial_worker_metadata.create_request;
             let invocation_context = create_request.invocation_context();

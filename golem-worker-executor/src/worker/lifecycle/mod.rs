@@ -124,6 +124,17 @@ fn update_decision(status: &AgentStatus, mode: UpdateMode, disable_wakeup: bool)
     }
 }
 
+/// The automatic update decision for a never-live agent. Its folded status says only where its
+/// history stops; it runs no live work to interrupt. So every update queues and starts a replay,
+/// except for an exited agent and with `disable_wakeup`.
+fn never_live_update_decision(status: &AgentStatus, disable_wakeup: bool) -> UpdateDecision {
+    match status {
+        AgentStatus::Exited => UpdateDecision::Ignore,
+        _ if disable_wakeup => UpdateDecision::Queue,
+        _ => UpdateDecision::QueueAndStart,
+    }
+}
+
 pub(super) fn has_duplicate_pending_update(
     status: &golem_common::model::AgentStatusRecord,
     target_revision: ComponentRevision,
@@ -342,7 +353,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        if metadata.last_known_status.component_revision == target_revision {
+        let never_live = metadata.last_known_status.never_live;
+        // A never-live agent replays its history on its current revision too; a manual update
+        // would run its save hook live, so it is refused.
+        if never_live && mode == UpdateMode::Manual {
+            return Err(WorkerExecutorError::invalid_request(
+                "A never-live agent cannot take a manual update",
+            ));
+        }
+        if !never_live && metadata.last_known_status.component_revision == target_revision {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is already at the target version",
             ));
@@ -409,7 +428,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         }
 
-        let decision = update_decision(&metadata.last_known_status.status, mode, disable_wakeup);
+        let decision = if never_live {
+            never_live_update_decision(&metadata.last_known_status.status, disable_wakeup)
+        } else {
+            update_decision(&metadata.last_known_status.status, mode, disable_wakeup)
+        };
         match (mode, decision) {
             (UpdateMode::Automatic, UpdateDecision::Ignore) => Err(
                 WorkerExecutorError::invalid_request("Cannot update an exited worker"),

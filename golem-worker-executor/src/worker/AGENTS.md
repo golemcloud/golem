@@ -83,3 +83,13 @@ without its terminal uses ordinary incomplete-call recovery. A retained accessor
 its `CompletionDelivered`/`CompletionDiscarded` marker uses replay-tail delivery. Outcomes beyond
 the cut do not constrain these calls. `cut_point.rs` still rejects cuts splitting a remote-transaction
 outcome; audit new paired constructs against that validation.
+
+## Never-live agents
+
+A never-live agent (`AgentStatusRecord::never_live`) starts only for a pending update and never
+publishes Live. Do not add a start, wake or recovery path that skips `may_start()` or
+`Worker::stop_marked_unless_update_pending`. Every new durable call gets a decision in
+`durable_host/never_live/mod.rs::allows_execution`; the match is exhaustive, so refusal is the
+default. Every new guest import or host-side effect that has no durable call is either a native
+peer boundary, which calls `refuse_native_peer_effect` before the native call, or has no peer
+effect. Mark which in the change.

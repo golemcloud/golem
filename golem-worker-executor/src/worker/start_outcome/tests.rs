@@ -285,7 +285,8 @@ fn shared_memory_target_is_refused_without_a_snapshot_fault() {
                 Some(&head),
                 RawStartError::TargetUnsupported(reason),
                 &agent_id(),
-                true
+                true,
+                false
             ),
             StartAction::ShardLost
         ));
@@ -941,7 +942,7 @@ fn decide_now(
     head: Option<&PendingUpdateRef>,
     error: RawStartError<'_>,
 ) -> StartAction {
-    decide(role, head, error, &agent_id(), false)
+    decide(role, head, error, &agent_id(), false, false)
 }
 
 fn failed_entry(action: StartAction) -> (OplogEntry, Option<OplogIndex>) {
@@ -1169,7 +1170,8 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
             Some(&head),
             RawStartError::Filesystem(&lost),
             &agent_id(),
-            true
+            true,
+            false
         ),
         StartAction::ShardLost
     ));
@@ -1390,6 +1392,7 @@ fn a_pending_manual_update_whose_restore_fails_for_good_fails_and_other_baseline
                     RawStartError::Filesystem(&errors(error)),
                     &agent_id(),
                     lost_shard,
+                    false,
                 ))
             };
             assert_eq!(
@@ -1677,12 +1680,14 @@ fn a_baseline_on_an_executor_without_snapshots_fails_a_pending_update_or_the_sta
         RawStartError::Disabled,
         &agent_id,
         false,
+        false,
     );
     let periodic = decide(
         &BaselineRole::Periodic(OplogIndex::from_u64(10)),
         None,
         RawStartError::Disabled,
         &agent_id,
+        false,
         false,
     );
     assert_eq!(
@@ -1719,6 +1724,7 @@ fn a_baseline_on_an_executor_without_snapshots_fails_a_pending_update_or_the_sta
             Some(head),
             RawStartError::Disabled,
             &agent_id,
+            false,
             false,
         ));
         let (_, details, _, attempt, fault) = entry_fields(&entry);
@@ -2068,6 +2074,7 @@ fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
                 RawStartError::ManualLoad(&ManualLoadResult::Interrupted(kind)),
                 &agent_id(),
                 lost_shard,
+                false,
             );
             assert!(
                 matches!(
@@ -2113,6 +2120,7 @@ fn an_interrupted_manual_load_keeps_the_update_pending_and_an_exit_fails_it() {
             RawStartError::ManualLoad(&ManualLoadResult::Exited),
             &agent_id(),
             true,
+            false,
         ),
         StartAction::ShardLost
     ));

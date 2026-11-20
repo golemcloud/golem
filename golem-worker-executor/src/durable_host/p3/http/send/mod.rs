@@ -637,6 +637,16 @@ where
         return replay_send_response::<Ctx, U>(store, response.result);
     }
 
+    if let Err(error) = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .state
+            .refuse_native_peer_effect("http::client::send")
+    }) {
+        return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+            handle.trap(error),
+        )));
+    }
+
     // Inject the Golem-managed headers into the request resource before the
     // live send. This runs both for a fresh live call and for an
     // incomplete-replay re-execution, and derives identical values in both

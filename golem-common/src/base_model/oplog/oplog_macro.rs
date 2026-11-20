@@ -296,6 +296,15 @@ macro_rules! host_payload_pairs {
             ),*
         }
 
+        impl HostFunctionName {
+            /// Every named host function, without `Custom`.
+            pub const NAMED: &'static [HostFunctionName] = &[
+                $(
+                    HostFunctionName::$typename
+                ),*
+            ];
+        }
+
         impl From<&str> for HostFunctionName {
             fn from(s: &str) -> Self {
                 match s {

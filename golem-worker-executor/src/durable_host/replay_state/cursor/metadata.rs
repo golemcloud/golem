@@ -55,6 +55,7 @@ impl ReplayState {
         owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
         last_oplog_index: OplogIndex,
         wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
+        never_live: bool,
     ) -> Result<Self, WorkerExecutorError> {
         Self::build(
             owned_agent_id,
@@ -65,6 +66,7 @@ impl ReplayState {
             last_oplog_index,
             wallet,
             None,
+            never_live,
         )
         .await
     }
@@ -81,6 +83,7 @@ impl ReplayState {
         skip_through: OplogIndex,
         target: OplogIndex,
         tail: BootstrapTail,
+        never_live: bool,
     ) -> Result<Self, WorkerExecutorError> {
         let mut skipped_regions = DeletedRegions::from_regions(deleted_regions.regions().cloned());
         if skip_through > OplogIndex::INITIAL {
@@ -97,6 +100,7 @@ impl ReplayState {
             target,
             None,
             Some(tail),
+            never_live,
         )
         .await
     }
@@ -110,6 +114,7 @@ impl ReplayState {
         last_oplog_index: OplogIndex,
         wallet: Option<Arc<crate::worker::owner_wallet::OwnerWallet>>,
         bootstrap: Option<BootstrapTail>,
+        never_live: bool,
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let mut tool_attachment_reconstruction = ToolAttachmentReconstruction::default();
@@ -143,6 +148,9 @@ impl ReplayState {
             oplog,
             wallet,
             bootstrap,
+            never_live,
+            initializer_running: AtomicBool::new(false),
+            taint: Default::default(),
             owner_tool_operations,
             advance_gate: Arc::new(tokio::sync::Mutex::new(())),
             delivery_in_progress: AtomicBool::new(false),
@@ -194,7 +202,9 @@ impl ReplayState {
             tx.move_replay_idx(OplogIndex::INITIAL).await?; // By this we handle initial skipped regions applied by manual updates correctly
             tx.skip_forward().await?;
         }
-        if cursor.bootstrap.is_none() && cursor.at_replay_tail() {
+        // A never-live cursor at the tail does not publish live: it ends through primary
+        // settling, which releases its replay events.
+        if cursor.bootstrap.is_none() && !cursor.never_live && cursor.at_replay_tail() {
             cursor.publish_live();
         }
         Ok(Self {

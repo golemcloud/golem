@@ -203,6 +203,11 @@ impl DefaultWorkerService {
     }
 
     pub(crate) fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
+        // A never-live agent recovers only to finish a pending update, whatever its folded
+        // status. Its copied invocations and stream cancellations never run.
+        if status.never_live {
+            return !status.pending_updates.is_empty();
+        }
         matches!(
             status.status,
             AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Interrupted

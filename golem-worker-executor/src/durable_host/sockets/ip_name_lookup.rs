@@ -118,6 +118,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
 
+            // A native lookup reaches a resolver. The refusal comes before the retry and the
+            // serialization, so it never becomes a recorded socket error.
+            self.state
+                .refuse_native_peer_effect("sockets::ip_name_lookup::resolve_addresses")
+                .map_err(|error| SocketError::trap(wasmtime::Error::from(error)))?;
             let result = loop {
                 let network_borrow = Resource::new_borrow(network.rep());
                 let result = resolve_and_drain_addresses(self, network_borrow, name.clone()).await;
