@@ -99,3 +99,111 @@ fn remote_reads_and_socket_checks_are_refused() {
         assert!(!allows_execution(&name), "{name}");
     }
 }
+
+fn is_refusal(error: &golem_service_base::error::worker_executor::WorkerExecutorError) -> bool {
+    matches!(
+        error,
+        golem_service_base::error::worker_executor::WorkerExecutorError::NeverLiveEffectRefused { .. }
+    )
+}
+
+#[test]
+async fn the_refusing_key_value_service_lets_reads_through_and_never_writes() {
+    use crate::services::key_value::refusing::RefusingKeyValueService;
+    use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
+    use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+    use golem_common::model::environment::EnvironmentId;
+    use std::sync::Arc;
+
+    let environment_id = EnvironmentId::new();
+    let inner: Arc<dyn KeyValueService> = Arc::new(DefaultKeyValueService::new(Arc::new(
+        InMemoryKeyValueStorage::new(),
+    )));
+    inner
+        .set(environment_id, "b".into(), "k".into(), b"before".to_vec())
+        .await
+        .unwrap();
+    let refusing = RefusingKeyValueService {
+        inner: inner.clone(),
+    };
+
+    for result in [
+        refusing
+            .set(environment_id, "b".into(), "k".into(), b"after".to_vec())
+            .await,
+        refusing
+            .set_many(
+                environment_id,
+                "b".into(),
+                Arc::from(vec![("k".to_string(), b"after".to_vec())]),
+            )
+            .await,
+        refusing
+            .delete(environment_id, "b".into(), "k".into())
+            .await,
+        refusing
+            .delete_many(environment_id, "b".into(), Arc::from(vec!["k".to_string()]))
+            .await,
+    ] {
+        let error = result.unwrap_err();
+        assert!(is_refusal(error.downcast_ref().unwrap()), "{error:?}");
+    }
+
+    assert_eq!(
+        refusing
+            .get(environment_id, "b".into(), "k".into())
+            .await
+            .unwrap(),
+        Some(b"before".to_vec())
+    );
+    assert_eq!(
+        inner
+            .get(environment_id, "b".into(), "k".into())
+            .await
+            .unwrap(),
+        Some(b"before".to_vec())
+    );
+}
+
+#[test]
+async fn the_refusing_promise_service_never_creates_or_completes() {
+    use crate::services::promise::refusing::RefusingPromiseService;
+    use crate::services::promise::{PromiseService, PromiseServiceMock};
+    use golem_common::base_model::component::ComponentId;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{AgentFingerprint, AgentId, PromiseId};
+    use std::sync::Arc;
+
+    let mock = Arc::new(PromiseServiceMock::new());
+    let refusing = RefusingPromiseService {
+        inner: mock.clone(),
+    };
+    let agent_id = AgentId {
+        component_id: ComponentId(uuid::Uuid::new_v4()),
+        agent_id: "never-live".to_string(),
+    };
+    let promise_id = PromiseId {
+        agent_id: agent_id.clone(),
+        fingerprint: AgentFingerprint::new(),
+        oplog_idx: OplogIndex::from_u64(1),
+    };
+
+    // The mock panics on `create`, so a refusal proves the inner service was not called.
+    let created = refusing
+        .create(&agent_id, AgentFingerprint::new(), OplogIndex::from_u64(1))
+        .await;
+    assert!(is_refusal(&created.unwrap_err()));
+    assert!(is_refusal(
+        &refusing
+            .complete(promise_id.clone(), vec![1])
+            .await
+            .unwrap_err()
+    ));
+    assert!(is_refusal(
+        &refusing
+            .complete_without_wakeup(promise_id, vec![1])
+            .await
+            .unwrap_err()
+    ));
+    assert!(mock.all_completed().await.is_empty());
+}

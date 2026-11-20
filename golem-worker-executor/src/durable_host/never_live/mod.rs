@@ -26,6 +26,7 @@
 //! The match is exhaustive, so a new host function does not compile until it has a decision.
 
 use golem_common::model::oplog::host_functions::HostFunctionName;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::{Arc, OnceLock};
 
 /// The taint of one generation: set once, with its first source, when the guest of the
@@ -43,6 +44,14 @@ impl GenerationTaint {
 
     pub(crate) fn is_tainted(&self) -> bool {
         self.0.get().is_some()
+    }
+}
+
+/// The refusal of a peer effect at `boundary` for a never-live owner.
+pub(crate) fn refusal(boundary: &str) -> WorkerExecutorError {
+    tracing::warn!(boundary, "a never-live owner refused a peer effect");
+    WorkerExecutorError::NeverLiveEffectRefused {
+        boundary: boundary.to_string(),
     }
 }
 

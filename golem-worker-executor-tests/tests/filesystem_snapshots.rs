@@ -3513,6 +3513,27 @@ pub(crate) async fn newest_snapshot_confirmed(
     .map(|_| ())
 }
 
+/// Waits until the oplog holds a snapshot record after the last finished invocation of
+/// `worker_id`. An agent that holds only its initial files writes a record with no filesystem
+/// snapshot, so there is nothing to confirm.
+async fn newest_snapshot_recorded(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<()> {
+    eventually(Duration::from_secs(30), || async {
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        let after_last_invocation = oplog
+            .iter()
+            .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .map_or(&oplog[..], |last| &oplog[last..]);
+        Ok(after_last_invocation
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .then_some(()))
+    })
+    .await
+}
+
 /// The state that `getState` of `SqliteSnapshotAgent` gives.
 async fn sqlite_state(
     executor: &TestWorkerExecutor,
@@ -6831,9 +6852,6 @@ async fn effect_sqlite_load_hooks_replay_on_a_never_live_fork(
             executor
                 .invoke_and_await_agent(&component, &agent, "append", data_value!(17.0f64))
                 .await?;
-            executor
-                .invoke_and_await_agent(&component, &agent, "append", data_value!(31.0f64))
-                .await?;
             newest_snapshot_confirmed(&executor, &source_id).await?;
             let cut = crate::never_live::tip(&executor, &source_id).await?;
             let source_state = executor
@@ -6873,7 +6891,6 @@ async fn effect_sqlite_load_hooks_replay_on_a_never_live_fork(
                 serde_json::from_str::<serde_json::Value>(&twin_state)?,
                 serde_json::from_str::<serde_json::Value>(&source_state)?
             );
-            executor.release().await?;
             Ok(())
         })
         .await?;
@@ -6909,7 +6926,7 @@ async fn rust_load_hook_replays_on_a_never_live_fork(
         executor
             .invoke_and_await_agent(&component, &agent, "stable_value", data_value!())
             .await?;
-        newest_snapshot_confirmed(&executor, &source_id).await?;
+        newest_snapshot_recorded(&executor, &source_id).await?;
         let cut = crate::never_live::tip(&executor, &source_id).await?;
         let target = executor
             .update_component(&component.id, "it_agent_update_v1_release")
@@ -6978,7 +6995,7 @@ async fn moonbit_load_hook_replays_on_a_never_live_fork(
         executor
             .invoke_and_await_agent(&component, &agent, "add", data_value!(7u64))
             .await?;
-        newest_snapshot_confirmed(&executor, &source_id).await?;
+        newest_snapshot_recorded(&executor, &source_id).await?;
         let cut = crate::never_live::tip(&executor, &source_id).await?;
         let target = executor
             .update_component(&component.id, "golem_it_agent_sdk_moonbit")

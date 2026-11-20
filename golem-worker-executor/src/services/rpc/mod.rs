@@ -88,6 +88,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::debug;
 use wasmtime_wasi_http::HttpConnectionPool;
 
+pub(crate) mod refusing;
+
 /// Selects the component revision an invocation's method is validated against: `None` for the
 /// deployed revision, `Some` for the revision an existing agent is pinned to.
 ///

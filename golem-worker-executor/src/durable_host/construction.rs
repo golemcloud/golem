@@ -263,6 +263,58 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentMode::Ephemeral => Some(config.suspend.ephemeral_max_sleep),
         };
         let (replay_state, owner_wallet) = owner_execution.replay_and_wallet().await?;
+        // A never-live owner holds only the refusing form of each service that can reach a peer.
+        // It is chosen once, here, before any clone, so no continuation keeps the original.
+        let never_live = replay_state.is_never_live();
+        let promise_service: Arc<dyn PromiseService> = if never_live {
+            Arc::new(crate::services::promise::refusing::RefusingPromiseService {
+                inner: promise_service,
+            })
+        } else {
+            promise_service
+        };
+        let key_value_service: Arc<dyn KeyValueService> = if never_live {
+            Arc::new(
+                crate::services::key_value::refusing::RefusingKeyValueService {
+                    inner: key_value_service,
+                },
+            )
+        } else {
+            key_value_service
+        };
+        let blob_store_service: Arc<dyn BlobStoreService> = if never_live {
+            Arc::new(
+                crate::services::blob_store::refusing::RefusingBlobStoreService {
+                    inner: blob_store_service,
+                },
+            )
+        } else {
+            blob_store_service
+        };
+        let rdbms_service: Arc<dyn RdbmsService> = if never_live {
+            Arc::new(crate::services::rdbms::refusing::RefusingRdbmsService {
+                inner: rdbms_service,
+            })
+        } else {
+            rdbms_service
+        };
+        let card_service: Arc<dyn CardService> = if never_live {
+            Arc::new(crate::services::card::refusing::RefusingCardService {
+                inner: card_service,
+            })
+        } else {
+            card_service
+        };
+        let rpc: Arc<dyn Rpc> = if never_live {
+            Arc::new(crate::services::rpc::refusing::RefusingRpc)
+        } else {
+            rpc
+        };
+        let worker_proxy: Arc<dyn WorkerProxy> = if never_live {
+            Arc::new(crate::services::worker_proxy::refusing::RefusingWorkerProxy)
+        } else {
+            worker_proxy
+        };
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             stdin.clone(),
