@@ -498,6 +498,8 @@ struct AdapterState {
     /// The request sender of a client handler that stopped while an input ended after an
     /// invalid item still waits for its private cancellation.
     invalid_item_requests: Option<mpsc::Sender<AdmittedRequest>>,
+    /// The client handler stopped, so no ACK or cancellation reaches the client any more.
+    client_gone: bool,
 }
 
 impl AdapterState {
@@ -532,6 +534,7 @@ impl AdapterState {
             attachment_epoch: 0,
             invalid_items_ready: Arc::new(Notify::new()),
             invalid_item_requests: None,
+            client_gone: false,
         }
     }
 
@@ -1579,8 +1582,10 @@ async fn handle_client_messages<S>(
     // The private cancellation of an input ended after an invalid item waits for the ACKs
     // of its earlier items, which can arrive after the client is gone.
     let mut state = state.lock().await;
+    state.client_gone = true;
     if has_unsent_invalid_item(&state) {
         state.invalid_item_requests = Some(requests);
+        state.invalid_items_ready.notify_one();
     }
 }
 
@@ -2000,31 +2005,101 @@ async fn handle_private_responses<S>(
     token_key_id: String,
     attempt_id: Uuid,
 ) where
-    S: futures::Stream<Item = Result<InvocationResponse, tonic::Status>> + Unpin,
+    S: futures::Stream<Item = Result<InvocationResponse, tonic::Status>> + Unpin + Send + 'static,
 {
+    let mut responses = responses;
     forward_private_responses(
-        responses,
+        &mut responses,
         &requests,
-        outbound,
+        outbound.clone(),
         state.clone(),
-        keyring,
-        bindings,
-        token_key_id,
+        keyring.clone(),
+        bindings.clone(),
+        token_key_id.clone(),
         attempt_id,
     )
     .await;
-    // The executor still receives the cancellations whose public delivery failed.
-    match take_invalid_item_cancels(&state).await {
-        Ok((cancels, stashed)) => {
-            for (request, _) in cancels {
-                send_invalid_item_cancel(&requests, &stashed, request);
+    let public_gone = outbound.sender.is_closed();
+    drop(outbound);
+    {
+        let state = state.lock().await;
+        if !(public_gone || state.client_gone)
+            || state.protocol_state.is_complete()
+            || !state
+                .channels
+                .values()
+                .any(|channel| channel.invalid_item.is_some())
+        {
+            return;
+        }
+    }
+    // Without the client the ACKs of the earlier items are read but no longer published.
+    // The executor accepts the cancellation of an input only after it has sent those ACKs,
+    // and it reads further requests only while its responses are read, so the responses are
+    // read until they end, for a bounded time and independently of the closing session.
+    tokio::spawn(tokio::time::timeout(
+        CLIENT_GONE_DRAIN_TIMEOUT,
+        cancel_invalid_items_without_client(
+            responses,
+            requests,
+            state,
+            keyring,
+            bindings,
+            token_key_id,
+            attempt_id,
+        ),
+    ));
+}
+
+/// Reads the private responses of a session without a client, applying them to the adapter
+/// state without publishing them, and sends each invalid-item cancellation once it is ready.
+async fn cancel_invalid_items_without_client<S>(
+    mut responses: S,
+    requests: mpsc::WeakSender<AdmittedRequest>,
+    state: Arc<Mutex<AdapterState>>,
+    keyring: Arc<InvocationSessionTokenKeyring>,
+    bindings: InvocationSessionTokenBindings,
+    token_key_id: String,
+    attempt_id: Uuid,
+) where
+    S: futures::Stream<Item = Result<InvocationResponse, tonic::Status>> + Unpin,
+{
+    loop {
+        match take_invalid_item_cancels(&state).await {
+            Ok((cancels, stashed)) => {
+                for (request, _) in cancels {
+                    send_invalid_item_cancel(&requests, &stashed, request);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(
+                    attempt_id = %attempt_id,
+                    error = ?error,
+                    "Invocation session input cancellation failed"
+                );
+                return;
             }
         }
-        Err(error) => tracing::warn!(
-            attempt_id = %attempt_id,
-            error = ?error,
-            "Invocation session input cancellation failed"
-        ),
+        let Some(Ok(response)) = responses.next().await else {
+            return;
+        };
+        if let Err(error) = translate_private_response(
+            response,
+            &state,
+            &keyring,
+            &bindings,
+            &token_key_id,
+            attempt_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                error = ?error,
+                "Invocation session response translation failed"
+            );
+            return;
+        }
     }
 }
 
@@ -2048,11 +2123,18 @@ async fn forward_private_responses<S>(
                 None => break,
             },
             _ = invalid_items_ready.notified() => {
-                if !deliver_invalid_item_cancels(&state, &outbound, requests, attempt_id).await {
+                let client_gone = {
+                    let state = state.lock().await;
+                    state.client_gone && has_unsent_invalid_item(&state)
+                };
+                if client_gone
+                    || !deliver_invalid_item_cancels(&state, &outbound, requests, attempt_id).await
+                {
                     return;
                 }
                 continue;
             }
+            _ = outbound.sender.closed() => return,
         };
         let response = match response {
             Ok(response) => response,
@@ -3880,6 +3962,7 @@ mod tests {
             attachment_epoch: 1,
             invalid_items_ready: Arc::new(Notify::new()),
             invalid_item_requests: None,
+            client_gone: false,
         }))
     }
 
@@ -4276,125 +4359,154 @@ mod tests {
         assert_quiet!();
     }
 
-    /// The executor receives the durable cancellation of an input ended after an invalid item
-    /// when the client closes before the earlier items are acknowledged, and when the public
-    /// frames can no longer be delivered.
+    /// Without a connected client the executor still receives the durable cancellation of an
+    /// input ended after an invalid item. The ACKs of the earlier items are read but no longer
+    /// published, and the private responses keep being read so the executor reaches the
+    /// cancellation.
     #[test]
-    #[test_r::timeout("15s")]
+    #[test_r::timeout("30s")]
     async fn an_invalid_item_cancels_its_input_without_the_client() {
-        for client_closes in [true, false] {
-            let state = active_input_state_with_schema(restricted_u8());
-            let budgets = SessionBudgets::new();
-            let (wire, received) = mpsc::channel(CHANNEL_CAPACITY);
-            for (sequence, value) in [(0, 11), (1, 9)] {
-                let item = PublicClientMessage::InputStreamItem {
-                    channel: 1,
-                    sequence: DecimalU64(sequence),
-                    value: serde_json::json!({"kind": "u8", "value": value}),
-                    version: 1,
+        for pending in 0..=2_u64 {
+            for (client_closes, receiver_drops) in [(true, false), (false, true), (true, true)] {
+                let case = format!(
+                    "pending ACKs: {pending}, client closes: {client_closes}, \
+                     receiver drops: {receiver_drops}"
+                );
+                let state = active_input_state_with_schema(restricted_u8());
+                let budgets = SessionBudgets::new();
+                let (wire, received) = mpsc::channel(CHANNEL_CAPACITY);
+                for sequence in 0..=pending {
+                    let value = if sequence == pending {
+                        9
+                    } else {
+                        11 + sequence
+                    };
+                    let item = PublicClientMessage::InputStreamItem {
+                        channel: 1,
+                        sequence: DecimalU64(sequence),
+                        value: serde_json::json!({"kind": "u8", "value": value}),
+                        version: 1,
+                    };
+                    wire.send(Ok(Message::text(encode_text(&item).unwrap())))
+                        .await
+                        .unwrap();
+                }
+                if client_closes {
+                    wire.send(Ok(Message::Close(None))).await.unwrap();
+                }
+                let (incoming, messages) = mpsc::channel(CHANNEL_CAPACITY);
+                let reader = read_websocket(
+                    tokio_stream::wrappers::ReceiverStream::new(received),
+                    incoming,
+                    budgets.clone(),
+                );
+                let (requests, mut executor) = mpsc::channel(CHANNEL_CAPACITY);
+                let requests_for_responses = requests.downgrade();
+                let (sender, outgoing) = mpsc::channel(CHANNEL_CAPACITY);
+                let outbound = Outbound {
+                    sender,
+                    budgets: budgets.clone(),
                 };
-                wire.send(Ok(Message::text(encode_text(&item).unwrap())))
-                    .await
-                    .unwrap();
-            }
-            if client_closes {
-                wire.send(Ok(Message::Close(None))).await.unwrap();
-            }
-            let (incoming, messages) = mpsc::channel(CHANNEL_CAPACITY);
-            let reader = read_websocket(
-                tokio_stream::wrappers::ReceiverStream::new(received),
-                incoming,
-                budgets.clone(),
-            );
-            let (requests, mut executor) = mpsc::channel(CHANNEL_CAPACITY);
-            let requests_for_responses = requests.downgrade();
-            let (sender, outgoing) = mpsc::channel(CHANNEL_CAPACITY);
-            let outbound = Outbound {
-                sender,
-                budgets: budgets.clone(),
-            };
-            let attempt = Uuid::new_v4();
-            let client = handle_client_messages(
-                tokio_stream::wrappers::ReceiverStream::new(messages),
-                requests,
-                outbound.clone(),
-                state.clone(),
-                budgets.clone(),
-                attempt,
-            );
-            futures::pin_mut!(reader, client);
-            if client_closes {
-                (&mut reader).await.unwrap();
-                (&mut client).await;
-            } else {
-                for _ in 0..20 {
-                    assert!(futures::poll!(&mut reader).is_pending());
-                    assert!(futures::poll!(&mut client).is_pending());
-                    tokio::task::yield_now().await;
+                let attempt = Uuid::new_v4();
+                let client = handle_client_messages(
+                    tokio_stream::wrappers::ReceiverStream::new(messages),
+                    requests,
+                    outbound.clone(),
+                    state.clone(),
+                    budgets.clone(),
+                    attempt,
+                );
+                futures::pin_mut!(reader, client);
+                if client_closes {
+                    (&mut reader).await.unwrap();
+                    (&mut client).await;
+                } else {
+                    for _ in 0..20 {
+                        assert!(futures::poll!(&mut reader).is_pending());
+                        assert!(futures::poll!(&mut client).is_pending());
+                        tokio::task::yield_now().await;
+                    }
                 }
-            }
-            let invocation_request::Request::InputItem(item) =
-                executor.recv().await.unwrap().request.request.unwrap()
-            else {
-                panic!("expected an input item")
-            };
-            assert_eq!(item.sequence, 0);
-            assert_eq!(invalid_item_sequence(&state).await, Some(1));
-            // Without the public receiver the ACK and the public cancellation cannot be sent.
-            let mut outgoing = client_closes.then_some(outgoing);
-
-            let (responses, received_responses) = mpsc::channel(CHANNEL_CAPACITY);
-            responses.send(Ok(input_ack_for(7, 0, 5))).await.unwrap();
-            let keyring = Arc::new(keyring());
-            let server = handle_private_responses(
-                tokio_stream::wrappers::ReceiverStream::new(received_responses),
-                requests_for_responses,
-                outbound,
-                state.clone(),
-                keyring.clone(),
-                token_bindings(&AuthCtx::system()),
-                keyring.active_key_id().to_string(),
-                attempt,
-            );
-            futures::pin_mut!(server);
-            let next_request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                tokio::select! {
-                    request = executor.recv() => request,
-                    _ = &mut server => executor.recv().await,
+                for sequence in 0..pending {
+                    let invocation_request::Request::InputItem(item) =
+                        executor.recv().await.unwrap().request.request.unwrap()
+                    else {
+                        panic!("expected an input item ({case})")
+                    };
+                    assert_eq!(item.sequence, sequence, "{case}");
                 }
-            })
-            .await
-            .ok()
-            .flatten()
-            .and_then(|request| request.request.request);
-            let Some(invocation_request::Request::StreamCancel(private)) = next_request else {
-                panic!(
-                    "the executor did not receive the input cancellation (client closes: {client_closes})"
-                )
-            };
-            assert_eq!(
-                (private.transport_stream_id, private.producer_sequence),
-                (7, 1)
-            );
-            assert_eq!(private.role(), StreamCancelRole::InputProducer);
-            assert_eq!(private.reason(), StreamCancelReason::SourceUnavailable);
+                assert_eq!(invalid_item_sequence(&state).await, Some(pending), "{case}");
+                // A dropped receiver makes the public side unavailable before the first ACK.
+                let _outgoing = (!receiver_drops).then_some(outgoing);
 
-            if let Some(outgoing) = outgoing.as_mut() {
-                let ack = public_json(&outgoing.recv().await.unwrap());
-                assert_eq!(ack["type"], "inputStreamAck");
-                assert_eq!(ack["highestContiguousSequence"], "1");
-                let cancel = public_json(&outgoing.recv().await.unwrap());
-                assert_eq!(cancel["type"], "streamCancel");
-                assert_eq!(cancel["reason"], "invalid-item");
-                // Without the client the request stream ends after the cancellation.
-                let end = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                let (responses, received_responses) = mpsc::channel(CHANNEL_CAPACITY);
+                for sequence in 0..pending {
+                    responses
+                        .send(Ok(input_ack_for(7, sequence, 5 + sequence)))
+                        .await
+                        .unwrap();
+                }
+                let keyring = Arc::new(keyring());
+                let server = handle_private_responses(
+                    tokio_stream::wrappers::ReceiverStream::new(received_responses),
+                    requests_for_responses,
+                    outbound,
+                    state.clone(),
+                    keyring.clone(),
+                    token_bindings(&AuthCtx::system()),
+                    keyring.active_key_id().to_string(),
+                    attempt,
+                );
+                let server = futures::FutureExt::fuse(server);
+                futures::pin_mut!(server);
+                let next_request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
                     tokio::select! {
-                        request = executor.recv() => request.is_none(),
-                        _ = &mut server => panic!("private response handler stopped"),
+                        request = executor.recv() => request,
+                        _ = &mut server => executor.recv().await,
                     }
                 })
-                .await;
-                assert_eq!(end.ok(), Some(true), "the request stream stayed open");
+                .await
+                .ok()
+                .flatten()
+                .and_then(|request| request.request.request);
+                let Some(invocation_request::Request::StreamCancel(private)) = next_request else {
+                    panic!("the executor did not receive the input cancellation ({case})")
+                };
+                assert_eq!(
+                    (private.transport_stream_id, private.producer_sequence),
+                    (7, pending),
+                    "{case}"
+                );
+                assert_eq!(private.role(), StreamCancelRole::InputProducer, "{case}");
+                assert_eq!(
+                    private.reason(),
+                    StreamCancelReason::SourceUnavailable,
+                    "{case}"
+                );
+                // The executor reads the cancellation only while its responses are read.
+                for _ in 0..20 {
+                    let _ = futures::poll!(&mut server);
+                    tokio::task::yield_now().await;
+                }
+                assert!(
+                    !responses.is_closed(),
+                    "the private responses stopped being read ({case})"
+                );
+                if client_closes {
+                    // Without the client the request stream ends after the cancellation.
+                    let end = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        tokio::select! {
+                            request = executor.recv() => request.is_none(),
+                            _ = &mut server => executor.recv().await.is_none(),
+                        }
+                    })
+                    .await;
+                    assert_eq!(
+                        end.ok(),
+                        Some(true),
+                        "the request stream stayed open ({case})"
+                    );
+                }
             }
         }
     }
@@ -5177,6 +5289,7 @@ mod tests {
             attachment_epoch: 1,
             invalid_items_ready: Arc::new(Notify::new()),
             invalid_item_requests: None,
+            client_gone: false,
         }));
 
         translate_client_text(
